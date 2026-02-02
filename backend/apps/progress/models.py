@@ -1,0 +1,120 @@
+# apps/progress/models.py
+
+from django.db import models
+import uuid
+
+
+class TeacherProgress(models.Model):
+    """
+    Tracks teacher progress through courses and content.
+    """
+    STATUS_CHOICES = [
+        ('NOT_STARTED', 'Not Started'),
+        ('IN_PROGRESS', 'In Progress'),
+        ('COMPLETED', 'Completed'),
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    
+    # Relationships
+    teacher = models.ForeignKey('users.User', on_delete=models.CASCADE, related_name='progress')
+    course = models.ForeignKey('courses.Course', on_delete=models.CASCADE, related_name='progress')
+    content = models.ForeignKey('courses.Content', on_delete=models.CASCADE, related_name='progress', null=True, blank=True)
+    
+    # Progress tracking
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='NOT_STARTED')
+    progress_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    
+    # Timestamps
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    last_accessed = models.DateTimeField(auto_now=True)
+    
+    # Video-specific tracking
+    video_progress_seconds = models.PositiveIntegerField(default=0, help_text="Seconds watched")
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'teacher_progress'
+        unique_together = [('teacher', 'course', 'content')]
+        indexes = [
+            models.Index(fields=['teacher', 'course']),
+            models.Index(fields=['teacher', 'status']),
+            models.Index(fields=['course', 'status']),
+        ]
+    
+    def __str__(self):
+        return f"{self.teacher.email} - {self.course.title} - {self.status}"
+
+
+class Assignment(models.Model):
+    """
+    Assignments within courses.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    course = models.ForeignKey('courses.Course', on_delete=models.CASCADE, related_name='assignments')
+    module = models.ForeignKey('courses.Module', on_delete=models.CASCADE, related_name='assignments', null=True, blank=True)
+    
+    title = models.CharField(max_length=300)
+    description = models.TextField()
+    instructions = models.TextField(blank=True)
+    
+    # Due date
+    due_date = models.DateTimeField(null=True, blank=True)
+    
+    # Grading
+    max_score = models.DecimalField(max_digits=5, decimal_places=2, default=100)
+    passing_score = models.DecimalField(max_digits=5, decimal_places=2, default=70)
+    
+    is_mandatory = models.BooleanField(default=True)
+    is_active = models.BooleanField(default=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'assignments'
+        ordering = ['course', 'due_date']
+    
+    def __str__(self):
+        return f"{self.course.title} - {self.title}"
+
+
+class AssignmentSubmission(models.Model):
+    """
+    Teacher assignment submissions.
+    """
+    STATUS_CHOICES = [
+        ('PENDING', 'Pending'),
+        ('SUBMITTED', 'Submitted'),
+        ('GRADED', 'Graded'),
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    assignment = models.ForeignKey(Assignment, on_delete=models.CASCADE, related_name='submissions')
+    teacher = models.ForeignKey('users.User', on_delete=models.CASCADE, related_name='submissions')
+    
+    # Submission
+    submission_text = models.TextField(blank=True)
+    file_url = models.URLField(blank=True, help_text="S3 URL of uploaded file")
+    
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING')
+    
+    # Grading
+    score = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    feedback = models.TextField(blank=True)
+    graded_by = models.ForeignKey('users.User', on_delete=models.SET_NULL, null=True, blank=True, related_name='graded_submissions')
+    graded_at = models.DateTimeField(null=True, blank=True)
+    
+    submitted_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'assignment_submissions'
+        unique_together = [('assignment', 'teacher')]
+        ordering = ['-submitted_at']
+    
+    def __str__(self):
+        return f"{self.teacher.email} - {self.assignment.title}"

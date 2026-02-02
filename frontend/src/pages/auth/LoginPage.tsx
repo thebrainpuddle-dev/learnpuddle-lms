@@ -1,0 +1,158 @@
+// src/pages/auth/LoginPage.tsx
+
+import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Input } from '../../components/common/Input';
+import { Button } from '../../components/common/Button';
+import { Checkbox } from '../../components/common/Checkbox';
+import { useAuthStore } from '../../stores/authStore';
+import { authService } from '../../services/authService';
+import { EnvelopeIcon, LockClosedIcon } from '@heroicons/react/24/outline';
+
+export const LoginPage: React.FC = () => {
+  const navigate = useNavigate();
+  const { setAuth, setLoading } = useAuthStore();
+  
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [rememberMe, setRememberMe] = useState(false);
+  const [error, setError] = useState('');
+  const [loading, setLoadingState] = useState(false);
+  
+  // Get tenant name from theme or URL
+  const tenantName = 'Demo School'; // TODO: Get from theme config
+  
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setLoadingState(true);
+    setLoading(true);
+    
+    try {
+      // Call login API
+      const { user, tokens } = await authService.login({ email, password });
+      
+      // Store auth state
+      setAuth(user, tokens);
+      
+      // Redirect based on role
+      if (user.role === 'SCHOOL_ADMIN') {
+        navigate('/admin/dashboard');
+      } else {
+        navigate('/teacher/dashboard');
+      }
+    } catch (err: any) {
+      console.error('Login error:', err);
+      
+      if (err.response?.status === 400) {
+        setError('Invalid email or password');
+      } else if (err.response?.status === 403) {
+        setError('Your account has been disabled');
+      } else {
+        setError('An error occurred. Please try again.');
+      }
+    } finally {
+      setLoadingState(false);
+      setLoading(false);
+    }
+  };
+  
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-primary-50 to-secondary-50 flex items-center justify-center p-4">
+      <div className="max-w-md w-full">
+        {/* Logo and Title */}
+        <div className="text-center mb-8">
+          <div className="mx-auto h-16 w-16 bg-primary-600 rounded-full flex items-center justify-center mb-4">
+            <span className="text-2xl font-bold text-white">
+              {tenantName.charAt(0)}
+            </span>
+          </div>
+          <h1 className="text-3xl font-bold text-gray-900">{tenantName}</h1>
+          <p className="text-gray-600 mt-2">Learning Management System</p>
+        </div>
+        
+        {/* Login Card */}
+        <div className="bg-white rounded-xl shadow-lg p-8">
+          <h2 className="text-2xl font-bold text-gray-900 mb-6">
+            Sign in to your account
+          </h2>
+          
+          {/* Error Message */}
+          {error && (
+            <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg">
+              <p className="text-sm text-red-600">{error}</p>
+            </div>
+          )}
+          
+          {/* Login Form */}
+          <form onSubmit={handleSubmit} className="space-y-6">
+            <Input
+              label="Email Address"
+              type="email"
+              name="email"
+              id="email"
+              autoComplete="email"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              leftIcon={<EnvelopeIcon className="h-5 w-5 text-gray-400" />}
+              placeholder="teacher@school.com"
+            />
+            
+            <Input
+              label="Password"
+              type="password"
+              name="password"
+              id="password"
+              autoComplete="current-password"
+              required
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              leftIcon={<LockClosedIcon className="h-5 w-5 text-gray-400" />}
+              placeholder="••••••••"
+            />
+            
+            <div className="flex items-center justify-between">
+              <Checkbox
+                id="remember-me"
+                label="Remember me"
+                checked={rememberMe}
+                onChange={(e) => setRememberMe(e.target.checked)}
+              />
+              
+              <button
+                type="button"
+                className="text-sm font-medium text-primary-600 hover:text-primary-700"
+                onClick={() => {/* TODO: Implement forgot password */}}
+              >
+                Forgot password?
+              </button>
+            </div>
+            
+            <Button
+              type="submit"
+              variant="primary"
+              size="lg"
+              fullWidth
+              loading={loading}
+            >
+              Sign In
+            </Button>
+          </form>
+          
+          {/* Demo Credentials */}
+          <div className="mt-6 p-4 bg-gray-50 rounded-lg">
+            <p className="text-xs text-gray-600 font-medium mb-2">Demo Credentials:</p>
+            <p className="text-xs text-gray-500">Admin: admin@demo.com / demo123</p>
+            <p className="text-xs text-gray-500">Teacher: teacher@demo.com / demo123</p>
+          </div>
+        </div>
+        
+        {/* Footer */}
+        <p className="text-center text-sm text-gray-600 mt-8">
+          Powered by LMS Platform © 2024
+        </p>
+      </div>
+    </div>
+  );
+};
