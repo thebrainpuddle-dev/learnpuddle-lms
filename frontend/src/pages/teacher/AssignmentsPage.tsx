@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import { AssignmentCard } from '../../components/teacher';
 import { useToast } from '../../components/common';
 import { ClipboardDocumentListIcon } from '@heroicons/react/24/outline';
@@ -13,6 +14,7 @@ export const AssignmentsPage: React.FC = () => {
   const toast = useToast();
   const [activeTab, setActiveTab] = useState<TabFilter>('ALL');
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   
   // Fetch all assignments once for accurate counts
   const { data: allAssignments } = useQuery({
@@ -136,10 +138,19 @@ export const AssignmentsPage: React.FC = () => {
               status={assignment.submission_status}
               score={assignment.score ?? undefined}
               feedback={assignment.feedback || undefined}
+              isQuiz={Boolean((assignment as any).is_quiz)}
               onSubmit={() => {
+                if ((assignment as any).is_quiz) return;
                 submitMutation.mutate(assignment.id);
               }}
+              onStartQuiz={() => {
+                navigate(`/teacher/quizzes/${assignment.id}`);
+              }}
               onView={() => {
+                if ((assignment as any).is_quiz) {
+                  navigate(`/teacher/quizzes/${assignment.id}`);
+                  return;
+                }
                 // For now: fetch submission and log (UI modal can be added later)
                 teacherService.getSubmission(assignment.id).then((s) => console.log('Submission', s));
               }}

@@ -11,7 +11,7 @@ from .serializers import (
     ChangePasswordSerializer
 )
 from .tokens import get_tokens_for_user
-from utils.decorators import admin_only, tenant_required
+from utils.decorators import admin_only, tenant_required, check_tenant_limit
 
 
 @api_view(['POST'])
@@ -95,13 +95,26 @@ def refresh_token_view(request):
         )
 
 
-@api_view(['GET'])
+@api_view(['GET', 'PATCH'])
 @permission_classes([IsAuthenticated])
 def me_view(request):
     """
-    Get current user profile.
+    GET: Get current user profile.
+    PATCH: Update editable profile fields. Supports multipart for profile_picture.
     """
-    serializer = UserSerializer(request.user)
+    if request.method == 'PATCH':
+        allowed_text = {'first_name', 'last_name', 'department', 'subjects', 'grades', 'designation', 'bio'}
+        user = request.user
+        for key, value in request.data.items():
+            if key in allowed_text:
+                setattr(user, key, value)
+        # Handle profile picture upload
+        if 'profile_picture' in request.FILES:
+            user.profile_picture = request.FILES['profile_picture']
+        user.save()
+        return Response(UserSerializer(user, context={'request': request}).data, status=status.HTTP_200_OK)
+
+    serializer = UserSerializer(request.user, context={'request': request})
     return Response(serializer.data, status=status.HTTP_200_OK)
 
 
@@ -109,6 +122,7 @@ def me_view(request):
 @permission_classes([IsAuthenticated])
 @admin_only
 @tenant_required
+@check_tenant_limit("teachers")
 def register_teacher_view(request):
     """
     Admin endpoint to create teacher accounts.
@@ -159,19 +173,111 @@ def change_password_view(request):
 def request_password_reset_view(request):
     """
     Request password reset email.
+    Sends a time-limited token via email. Never reveals whether the email exists.
     """
+    from django.contrib.auth.tokens import default_token_generator
+    from django.utils.http import urlsafe_base64_encode
+    from django.utils.encoding import force_bytes
+    from django.core.mail import send_mail
+    from django.conf import settings
+    from .models import User
+
     email = request.data.get('email')
-    
     if not email:
         return Response(
             {'error': 'Email is required'},
             status=status.HTTP_400_BAD_REQUEST
         )
-    
-    # TODO: Generate reset token and send email
-    # For now, just return success (don't reveal if email exists)
-    
-    return Response(
-        {'message': 'Password reset email sent if account exists'},
-        status=status.HTTP_200_OK
+
+    # Always return success to avoid email enumeration
+    try:
+        user = User.objects.get(email=email, is_active=True)
+    except User.DoesNotExist:
+        return Response({'message': 'Password reset email sent if account exists'})
+
+    uid = urlsafe_base64_encode(force_bytes(user.pk))
+    token = default_token_generator.make_token(user)
+    domain = getattr(settings, 'PLATFORM_DOMAIN', 'lms.com')
+    scheme = 'https' if not settings.DEBUG else 'http'
+    port = ':3000' if settings.DEBUG else ''
+    subdomain = user.tenant.subdomain if user.tenant else ''
+    base = f"{scheme}://{subdomain + '.' if subdomain else ''}{domain}{port}"
+    reset_link = f"{base}/reset-password?uid={uid}&token={token}"
+
+    send_mail(
+        subject=f"Password reset — {getattr(settings, 'PLATFORM_NAME', 'Brain LMS')}",
+        message=(
+            f"Hi {user.first_name},\n\n"
+            f"Click the link below to reset your password:\n\n"
+            f"  {reset_link}\n\n"
+            f"This link expires in 24 hours.\n\n"
+            f"If you didn't request this, you can safely ignore this email."
+        ),
+        from_email=settings.DEFAULT_FROM_EMAIL,
+        recipient_list=[user.email],
+        fail_silently=True,
     )
+
+    return Response({'message': 'Password reset email sent if account exists'})
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def confirm_password_reset_view(request):
+    """
+    Confirm password reset with uid + token + new password.
+    """
+    from django.contrib.auth.tokens import default_token_generator
+    from django.contrib.auth.password_validation import validate_password
+    from django.core.exceptions import ValidationError
+    from django.utils.http import urlsafe_base64_decode
+    from .models import User
+
+    uid = request.data.get('uid')
+    token = request.data.get('token')
+    new_password = request.data.get('new_password')
+
+    if not uid or not token or not new_password:
+        return Response(
+            {'error': 'uid, token, and new_password are required'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    try:
+        user_id = urlsafe_base64_decode(uid).decode()
+        user = User.objects.get(pk=user_id, is_active=True)
+    except (TypeError, ValueError, OverflowError, User.DoesNotExist):
+        return Response({'error': 'Invalid reset link'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if not default_token_generator.check_token(user, token):
+        return Response({'error': 'Reset link has expired or is invalid'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        validate_password(new_password, user)
+    except ValidationError as e:
+        messages = getattr(e, 'messages', [str(e)])
+        return Response(
+            {'error': 'Password does not meet requirements', 'details': list(messages)},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    user.set_password(new_password)
+    user.save()
+
+    return Response({'message': 'Password has been reset successfully'})
+
+
+@api_view(['GET', 'PATCH'])
+@permission_classes([IsAuthenticated])
+def preferences_view(request):
+    """
+    GET: Return notification preferences.
+    PATCH: Update notification preferences.
+    """
+    user = request.user
+    if request.method == 'PATCH':
+        prefs = user.notification_preferences or {}
+        prefs.update(request.data)
+        user.notification_preferences = prefs
+        user.save(update_fields=['notification_preferences'])
+    return Response(user.notification_preferences or {})

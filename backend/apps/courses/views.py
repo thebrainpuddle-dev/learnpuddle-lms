@@ -54,7 +54,7 @@ def course_list_create(request):
         paginator = CoursePagination()
         page = paginator.paginate_queryset(courses, request)
         
-        serializer = CourseListSerializer(page, many=True)
+        serializer = CourseListSerializer(page, many=True, context={'request': request})
         return paginator.get_paginated_response(serializer.data)
     
     elif request.method == 'POST':

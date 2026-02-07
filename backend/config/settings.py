@@ -144,11 +144,66 @@ USE_TZ = True
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 
-MEDIA_URL = 'media/'
+MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
+
+# -----------------------------------------------------------------------------
+# Storage (local filesystem by default; S3/MinIO optional)
+# -----------------------------------------------------------------------------
+STORAGE_BACKEND = config("STORAGE_BACKEND", default="local")  # local|s3
+
+# Django 5 storage configuration uses STORAGES
+STORAGES = {
+    "default": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+        "OPTIONS": {
+            "location": str(MEDIA_ROOT),
+            "base_url": MEDIA_URL,
+        },
+    },
+    "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
+}
+
+if STORAGE_BACKEND.lower() == "s3":
+    # S3-compatible object storage (e.g. AWS S3, MinIO, Cloudflare R2)
+    AWS_ACCESS_KEY_ID = config("STORAGE_ACCESS_KEY", default="")
+    AWS_SECRET_ACCESS_KEY = config("STORAGE_SECRET_KEY", default="")
+    AWS_STORAGE_BUCKET_NAME = config("STORAGE_BUCKET", default="")
+    AWS_S3_REGION_NAME = config("STORAGE_REGION", default="")
+    AWS_S3_ENDPOINT_URL = config("STORAGE_ENDPOINT", default="")
+    AWS_S3_USE_SSL = config("STORAGE_USE_SSL", default=True, cast=bool)
+    AWS_QUERYSTRING_AUTH = config("STORAGE_QUERYSTRING_AUTH", default=False, cast=bool)
+    AWS_DEFAULT_ACL = None
+
+    STORAGES["default"] = {
+        "BACKEND": "storages.backends.s3boto3.S3Boto3Storage",
+        "OPTIONS": {
+            "access_key": AWS_ACCESS_KEY_ID,
+            "secret_key": AWS_SECRET_ACCESS_KEY,
+            "bucket_name": AWS_STORAGE_BUCKET_NAME,
+            "region_name": AWS_S3_REGION_NAME or None,
+            "endpoint_url": AWS_S3_ENDPOINT_URL or None,
+            "use_ssl": AWS_S3_USE_SSL,
+            "querystring_auth": AWS_QUERYSTRING_AUTH,
+        },
+    }
 
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# -----------------------------------------------------------------------------
+# File upload settings (large video files must stream to disk, not memory)
+# -----------------------------------------------------------------------------
+DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10MB before streaming to temp
+FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024
+MAX_VIDEO_UPLOAD_SIZE_MB = config("MAX_VIDEO_UPLOAD_SIZE_MB", default=500, cast=int)
+FILE_UPLOAD_HANDLERS = [
+    "django.core.files.uploadhandler.TemporaryFileUploadHandler",
+]
+
+# Ollama LLM for quiz generation (local, self-hosted)
+OLLAMA_BASE_URL = config("OLLAMA_BASE_URL", default="http://localhost:11434")
+OLLAMA_MODEL = config("OLLAMA_MODEL", default="mistral")
 
 # REST Framework Configuration
 REST_FRAMEWORK = {
@@ -227,6 +282,17 @@ LOGGING = {
     "root": {"handlers": ["console"], "level": config("LOG_LEVEL", default="INFO")},
 }
 
+# -----------------------------------------------------------------------------
+# Celery (async job queue) - used for video processing pipeline
+# -----------------------------------------------------------------------------
+CELERY_BROKER_URL = config("CELERY_BROKER_URL", default="redis://localhost:6379/0")
+CELERY_RESULT_BACKEND = config("CELERY_RESULT_BACKEND", default=CELERY_BROKER_URL)
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
+CELERY_TASK_TIME_LIMIT = config("CELERY_TASK_TIME_LIMIT", default=60 * 60 * 2, cast=int)  # 2h
+CELERY_TASK_SOFT_TIME_LIMIT = config("CELERY_TASK_SOFT_TIME_LIMIT", default=60 * 60 * 2 - 60, cast=int)
+
 # Email Configuration
 EMAIL_BACKEND = config('EMAIL_BACKEND', default='django.core.mail.backends.console.EmailBackend')
 EMAIL_HOST = config('EMAIL_HOST', default='')
@@ -235,3 +301,7 @@ EMAIL_USE_TLS = config('EMAIL_USE_TLS', default=True, cast=bool)
 EMAIL_HOST_USER = config('EMAIL_HOST_USER', default='')
 EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD', default='')
 DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default='noreply@lms.com')
+
+# Platform branding (used in emails and public pages)
+PLATFORM_NAME = config('PLATFORM_NAME', default='Brain LMS')
+PLATFORM_DOMAIN = config('PLATFORM_DOMAIN', default='lms.com')

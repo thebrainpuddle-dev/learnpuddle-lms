@@ -23,19 +23,24 @@ interface AdminSidebarProps {
   onClose?: () => void;
 }
 
-const navigation = [
-  { name: 'Dashboard', href: '/admin/dashboard', icon: HomeIcon },
-  { name: 'Courses', href: '/admin/courses', icon: AcademicCapIcon },
-  { name: 'Teachers', href: '/admin/teachers', icon: UserGroupIcon },
-  { name: 'Groups', href: '/admin/groups', icon: UsersIcon },
-  { name: 'Analytics', href: '/admin/analytics', icon: ChartBarIcon },
-  { name: 'Reminders', href: '/admin/reminders', icon: PaperAirplaneIcon },
-  { name: 'Settings', href: '/admin/settings', icon: Cog6ToothIcon },
+const ALL_NAV_ITEMS = [
+  { name: 'Dashboard', href: '/admin/dashboard', icon: HomeIcon, feature: null },
+  { name: 'Courses', href: '/admin/courses', icon: AcademicCapIcon, feature: null },
+  { name: 'Teachers', href: '/admin/teachers', icon: UserGroupIcon, feature: null },
+  { name: 'Groups', href: '/admin/groups', icon: UsersIcon, feature: 'groups' as const },
+  { name: 'Analytics', href: '/admin/analytics', icon: ChartBarIcon, feature: null },
+  { name: 'Reminders', href: '/admin/reminders', icon: PaperAirplaneIcon, feature: 'reminders' as const },
+  { name: 'Settings', href: '/admin/settings', icon: Cog6ToothIcon, feature: null },
 ];
 
 export const AdminSidebar: React.FC<AdminSidebarProps> = ({ open, onClose }) => {
   const { user, clearAuth, refreshToken } = useAuthStore();
-  const { theme } = useTenantStore();
+  const { theme, hasFeature } = useTenantStore();
+
+  // Filter navigation items based on tenant feature flags
+  const navigation = ALL_NAV_ITEMS.filter(
+    (item) => item.feature === null || hasFeature(item.feature)
+  );
   
   const handleLogout = async () => {
     try {

@@ -1,5 +1,6 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
 import { Button } from '../../components/common/Button';
 import { Input } from '../../components/common/Input';
 import { useToast } from '../../components/common';
@@ -16,17 +17,34 @@ type Tab = 'COURSE' | 'ASSIGNMENT';
 
 export const ReportsPage: React.FC = () => {
   const toast = useToast();
-  const [tab, setTab] = useState<Tab>('COURSE');
+  const [searchParams] = useSearchParams();
+  const tabParam = searchParams.get('tab');
+  const assignmentIdParam = searchParams.get('assignment_id');
+  const statusParam = searchParams.get('status');
+  const courseIdParam = searchParams.get('course_id');
 
-  const [courseId, setCourseId] = useState<string>('');
-  const [courseStatus, setCourseStatus] = useState<string>('');
+  const [tab, setTab] = useState<Tab>(tabParam === 'ASSIGNMENT' ? 'ASSIGNMENT' : 'COURSE');
+  const [courseId, setCourseId] = useState<string>(courseIdParam || '');
+  const [courseStatus, setCourseStatus] = useState<string>(statusParam || '');
   const [courseSearch, setCourseSearch] = useState<string>('');
   const [selectedTeacherIds, setSelectedTeacherIds] = useState<string[]>([]);
 
-  const [assignmentId, setAssignmentId] = useState<string>('');
-  const [assignmentStatus, setAssignmentStatus] = useState<string>('');
+  const [assignmentId, setAssignmentId] = useState<string>(assignmentIdParam || '');
+  const [assignmentStatus, setAssignmentStatus] = useState<string>(statusParam || '');
   const [assignmentSearch, setAssignmentSearch] = useState<string>('');
   const [selectedAssignmentTeacherIds, setSelectedAssignmentTeacherIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (tabParam === 'ASSIGNMENT' && assignmentIdParam) {
+      setTab('ASSIGNMENT');
+      setAssignmentId(assignmentIdParam);
+      if (statusParam) setAssignmentStatus(statusParam);
+    } else if (tabParam === 'COURSE' && courseIdParam) {
+      setTab('COURSE');
+      setCourseId(courseIdParam);
+      if (statusParam) setCourseStatus(statusParam);
+    }
+  }, [tabParam, assignmentIdParam, statusParam, courseIdParam]);
 
   const { data: courses } = useQuery({
     queryKey: ['reportCourses'],

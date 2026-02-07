@@ -48,6 +48,7 @@ class TenantMiddleware:
             '/api/users/auth/refresh/',
             '/api/users/auth/request-password-reset/',
             '/api/tenants/theme/',
+            '/api/super-admin/',  # Super admin endpoints (no tenant context needed)
             '/health/',
         ]
         

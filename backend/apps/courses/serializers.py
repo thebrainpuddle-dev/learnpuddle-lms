@@ -8,16 +8,31 @@ from apps.users.models import User
 
 class ContentSerializer(serializers.ModelSerializer):
     """Serializer for course content."""
-    
+    video_status = serializers.SerializerMethodField()
+
     class Meta:
         model = Content
         fields = [
             'id', 'title', 'content_type', 'order',
             'file_url', 'file_size', 'duration',
             'text_content', 'is_mandatory', 'is_active',
+            'video_status',
             'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def get_video_status(self, obj):
+        if obj.content_type != "VIDEO":
+            return None
+        asset = getattr(obj, "video_asset", None)
+        if asset is None:
+            # Not prefetched; try DB lookup
+            try:
+                from .video_models import VideoAsset
+                asset = VideoAsset.objects.filter(content=obj).first()
+            except Exception:
+                pass
+        return asset.status if asset else None
 
 
 class ModuleSerializer(serializers.ModelSerializer):
@@ -43,20 +58,33 @@ class CourseListSerializer(serializers.ModelSerializer):
     """Lightweight serializer for course listing."""
     
     module_count = serializers.SerializerMethodField()
+    content_count = serializers.SerializerMethodField()
     assigned_teacher_count = serializers.SerializerMethodField()
     completion_rate = serializers.SerializerMethodField()
     created_by_name = serializers.SerializerMethodField()
+    thumbnail_url = serializers.SerializerMethodField()
     
     class Meta:
         model = Course
         fields = [
-            'id', 'title', 'slug', 'description', 'thumbnail',
+            'id', 'title', 'slug', 'description', 'thumbnail', 'thumbnail_url',
             'is_mandatory', 'deadline', 'estimated_hours',
-            'is_published', 'is_active', 'module_count',
+            'is_published', 'is_active', 'module_count', 'content_count',
             'assigned_teacher_count', 'completion_rate',
             'created_by_name', 'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'slug', 'created_at', 'updated_at']
+    
+    def get_thumbnail_url(self, obj):
+        if not obj.thumbnail:
+            return None
+        request = self.context.get('request')
+        if request:
+            return request.build_absolute_uri(obj.thumbnail.url)
+        return obj.thumbnail.url
+
+    def get_content_count(self, obj):
+        return Content.objects.filter(module__course=obj, is_active=True).count()
     
     def get_module_count(self, obj):
         return obj.modules.filter(is_active=True).count()

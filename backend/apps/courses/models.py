@@ -162,3 +162,8 @@ class Content(models.Model):
     
     def __str__(self):
         return f"{self.module.title} - {self.title}"
+
+
+# Ensure Django registers video-related models that live in a separate module.
+# (Django auto-imports `apps.courses.models` but not sibling modules by default.)
+from .video_models import VideoAsset, VideoTranscript  # noqa: E402,F401

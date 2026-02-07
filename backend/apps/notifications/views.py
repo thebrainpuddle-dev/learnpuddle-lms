@@ -18,6 +18,7 @@ def notification_list(request):
     List notifications for the current teacher.
     Query params:
       - unread_only: true/false (default false)
+      - type: REMINDER|COURSE_ASSIGNED|ASSIGNMENT_DUE|ANNOUNCEMENT|SYSTEM (optional)
       - limit: number (default 20)
     """
     qs = Notification.objects.filter(teacher=request.user, tenant=request.tenant)
@@ -26,7 +27,15 @@ def notification_list(request):
     if unread_only:
         qs = qs.filter(is_read=False)
     
-    limit = int(request.GET.get('limit', 20))
+    notif_type = request.GET.get('type', '').upper()
+    valid_types = {choice[0] for choice in Notification.NOTIFICATION_TYPES}
+    if notif_type in valid_types:
+        qs = qs.filter(notification_type=notif_type)
+    
+    try:
+        limit = min(100, max(1, int(request.GET.get('limit', 20))))
+    except (ValueError, TypeError):
+        limit = 20
     qs = qs.order_by('-created_at')[:limit]
     
     return Response(NotificationSerializer(qs, many=True).data, status=status.HTTP_200_OK)
@@ -39,13 +48,19 @@ def notification_list(request):
 def notification_unread_count(request):
     """
     Get count of unread notifications for the current teacher.
+    Query params:
+      - type: REMINDER|COURSE_ASSIGNED|ASSIGNMENT_DUE|ANNOUNCEMENT|SYSTEM (optional)
     """
-    count = Notification.objects.filter(
+    qs = Notification.objects.filter(
         teacher=request.user,
         tenant=request.tenant,
         is_read=False
-    ).count()
-    return Response({'count': count}, status=status.HTTP_200_OK)
+    )
+    notif_type = request.GET.get('type', '').upper()
+    valid_types = {choice[0] for choice in Notification.NOTIFICATION_TYPES}
+    if notif_type in valid_types:
+        qs = qs.filter(notification_type=notif_type)
+    return Response({'count': qs.count()}, status=status.HTTP_200_OK)
 
 
 @api_view(['POST'])

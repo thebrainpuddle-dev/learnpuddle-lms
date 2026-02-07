@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { applyTheme, loadTenantTheme, DEFAULT_THEME } from './config/theme';
 import { ProtectedRoute, ToastProvider } from './components/common';
 import { LoginPage } from './pages/auth/LoginPage';
+import { SuperAdminLoginPage } from './pages/auth/SuperAdminLoginPage';
 import { AdminLayout } from './components/layout/AdminLayout';
 import { TeacherLayout } from './components/layout/TeacherLayout';
 import {
@@ -24,8 +25,17 @@ import {
   MyCoursesPage,
   CourseViewPage,
   AssignmentsPage,
+  RemindersPage as TeacherRemindersPage,
+  QuizPage,
   ProfilePage,
 } from './pages/teacher';
+import { SuperAdminLayout } from './components/layout/SuperAdminLayout';
+import {
+  SuperAdminDashboardPage,
+  SchoolsPage as SuperAdminSchoolsPage,
+  SchoolDetailPage as SuperAdminSchoolDetailPage,
+} from './pages/superadmin';
+import api from './config/api';
 import { useAuthStore } from './stores/authStore';
 import { useTenantStore } from './stores/tenantStore';
 import './assets/styles/index.css';
@@ -41,16 +51,31 @@ const queryClient = new QueryClient({
 
 function AppContent() {
   const { isAuthenticated, user } = useAuthStore();
-  
+  const { setConfig } = useTenantStore();
+
+  // Fetch tenant config (features + limits) after login
+  React.useEffect(() => {
+    if (!isAuthenticated || user?.role === 'SUPER_ADMIN') return;
+    api.get('/tenants/config/')
+      .then((res) => setConfig(res.data))
+      .catch(() => {});
+  }, [isAuthenticated, user?.role, setConfig]);
+
   return (
     <Routes>
-      {/* Public Routes */}
+      {/* Public Routes — Tenant login (school admin + teachers) */}
       <Route
         path="/login"
         element={
           isAuthenticated ? (
             <Navigate
-              to={user?.role === 'SCHOOL_ADMIN' ? '/admin/dashboard' : '/teacher/dashboard'}
+              to={
+                user?.role === 'SUPER_ADMIN'
+                  ? '/super-admin/dashboard'
+                  : user?.role === 'SCHOOL_ADMIN'
+                  ? '/admin/dashboard'
+                  : '/teacher/dashboard'
+              }
               replace
             />
           ) : (
@@ -58,7 +83,35 @@ function AppContent() {
           )
         }
       />
+
+      {/* Public Routes — Super Admin login (platform admin) */}
+      <Route
+        path="/super-admin/login"
+        element={
+          isAuthenticated && user?.role === 'SUPER_ADMIN' ? (
+            <Navigate to="/super-admin/dashboard" replace />
+          ) : (
+            <SuperAdminLoginPage />
+          )
+        }
+      />
       
+      {/* Protected Super Admin (Command Center) Routes */}
+      <Route
+        path="/super-admin"
+        element={
+          <ProtectedRoute allowedRoles={['SUPER_ADMIN']}>
+            <SuperAdminLayout />
+          </ProtectedRoute>
+        }
+      >
+        <Route path="dashboard" element={<SuperAdminDashboardPage />} />
+        <Route path="schools" element={<SuperAdminSchoolsPage />} />
+        <Route path="schools/:tenantId" element={<SuperAdminSchoolDetailPage />} />
+        <Route index element={<Navigate to="/super-admin/dashboard" replace />} />
+        <Route path="*" element={<Navigate to="/super-admin/dashboard" replace />} />
+      </Route>
+
       {/* Protected Admin Routes with Layout */}
       <Route
         path="/admin"
@@ -95,6 +148,8 @@ function AppContent() {
         <Route path="courses" element={<MyCoursesPage />} />
         <Route path="courses/:courseId" element={<CourseViewPage />} />
         <Route path="assignments" element={<AssignmentsPage />} />
+        <Route path="reminders" element={<TeacherRemindersPage />} />
+        <Route path="quizzes/:assignmentId" element={<QuizPage />} />
         <Route path="profile" element={<ProfilePage />} />
         <Route index element={<Navigate to="/teacher/dashboard" replace />} />
         <Route path="*" element={<Navigate to="/teacher/dashboard" replace />} />
@@ -107,7 +162,9 @@ function AppContent() {
           <Navigate
             to={
               isAuthenticated
-                ? user?.role === 'SCHOOL_ADMIN'
+                ? user?.role === 'SUPER_ADMIN'
+                  ? '/super-admin/dashboard'
+                  : user?.role === 'SCHOOL_ADMIN'
                   ? '/admin/dashboard'
                   : '/teacher/dashboard'
                 : '/login'

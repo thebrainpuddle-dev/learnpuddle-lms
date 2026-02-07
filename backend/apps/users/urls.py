@@ -16,4 +16,6 @@ urlpatterns = [
     path('auth/register-teacher/', views.register_teacher_view, name='register_teacher'),
     path('auth/change-password/', views.change_password_view, name='change_password'),
     path('auth/request-password-reset/', views.request_password_reset_view, name='request_password_reset'),
+    path('auth/confirm-password-reset/', views.confirm_password_reset_view, name='confirm_password_reset'),
+    path('auth/preferences/', views.preferences_view, name='preferences'),
 ]

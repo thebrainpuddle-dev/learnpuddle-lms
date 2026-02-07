@@ -1,7 +1,7 @@
 from rest_framework import serializers
 
 from apps.courses.models import Course, Content
-from .models import TeacherProgress, Assignment, AssignmentSubmission
+from .models import TeacherProgress, Assignment, AssignmentSubmission, QuizSubmission
 
 
 class TeacherProgressSerializer(serializers.ModelSerializer):
@@ -31,6 +31,7 @@ class TeacherAssignmentListSerializer(serializers.ModelSerializer):
     submission_status = serializers.SerializerMethodField()
     score = serializers.SerializerMethodField()
     feedback = serializers.SerializerMethodField()
+    is_quiz = serializers.SerializerMethodField()
 
     class Meta:
         model = Assignment
@@ -49,6 +50,7 @@ class TeacherAssignmentListSerializer(serializers.ModelSerializer):
             "submission_status",
             "score",
             "feedback",
+            "is_quiz",
         ]
 
     def _submission(self, obj) -> AssignmentSubmission | None:
@@ -57,17 +59,41 @@ class TeacherAssignmentListSerializer(serializers.ModelSerializer):
             assignment=obj, teacher=teacher
         ).first()
 
+    def _quiz_submission(self, obj) -> QuizSubmission | None:
+        teacher = self.context["request"].user
+        quiz = getattr(obj, "quiz", None)
+        if not quiz:
+            return None
+        return QuizSubmission.objects.filter(quiz=quiz, teacher=teacher).first()
+
     def get_submission_status(self, obj):
+        # Quiz assignments derive status from QuizSubmission; reflection uses AssignmentSubmission.
+        if getattr(obj, "quiz", None):
+            qs = self._quiz_submission(obj)
+            if not qs:
+                return "PENDING"
+            # Only "GRADED" when graded_at is set (fully auto-graded or manually reviewed).
+            # Quizzes with short-answer questions stay "SUBMITTED" until admin reviews.
+            return "GRADED" if qs.graded_at is not None else "SUBMITTED"
         s = self._submission(obj)
         return s.status if s else "PENDING"
 
     def get_score(self, obj):
+        if getattr(obj, "quiz", None):
+            qs = self._quiz_submission(obj)
+            return float(qs.score) if (qs and qs.score is not None) else None
         s = self._submission(obj)
         return float(s.score) if (s and s.score is not None) else None
 
     def get_feedback(self, obj):
+        if getattr(obj, "quiz", None):
+            # Quiz feedback (if any) can be added later; keep empty for now.
+            return ""
         s = self._submission(obj)
         return s.feedback if s else ""
+
+    def get_is_quiz(self, obj):
+        return bool(getattr(obj, "quiz", None))
 
 
 class TeacherAssignmentSubmissionSerializer(serializers.ModelSerializer):

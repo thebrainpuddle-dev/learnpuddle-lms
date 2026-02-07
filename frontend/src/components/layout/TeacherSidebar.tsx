@@ -3,6 +3,7 @@
 import React, { Fragment } from 'react';
 import { Dialog, Transition } from '@headlessui/react';
 import { NavLink } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import {
   XMarkIcon,
   HomeIcon,
@@ -10,10 +11,12 @@ import {
   ClipboardDocumentListIcon,
   UserCircleIcon,
   ArrowRightOnRectangleIcon,
+  BellAlertIcon,
 } from '@heroicons/react/24/outline';
 import { useAuthStore } from '../../stores/authStore';
 import { authService } from '../../services/authService';
 import { useTenantStore } from '../../stores/tenantStore';
+import { notificationService } from '../../services/notificationService';
 
 interface TeacherSidebarProps {
   open: boolean;
@@ -24,12 +27,20 @@ const navigation = [
   { name: 'Dashboard', href: '/teacher/dashboard', icon: HomeIcon },
   { name: 'My Courses', href: '/teacher/courses', icon: BookOpenIcon },
   { name: 'Assignments', href: '/teacher/assignments', icon: ClipboardDocumentListIcon },
+  { name: 'Reminders', href: '/teacher/reminders', icon: BellAlertIcon, badgeKey: 'reminders' as const },
   { name: 'Profile', href: '/teacher/profile', icon: UserCircleIcon },
 ];
 
 export const TeacherSidebar: React.FC<TeacherSidebarProps> = ({ open, onClose }) => {
   const { user, clearAuth, refreshToken } = useAuthStore();
   const { theme } = useTenantStore();
+
+  // Poll unread reminder count for sidebar badge (every 30s)
+  const { data: unreadReminderCount = 0 } = useQuery({
+    queryKey: ['unreadReminderCount'],
+    queryFn: () => notificationService.getUnreadCount({ type: 'REMINDER' }),
+    refetchInterval: 30000,
+  });
   
   const handleLogout = async () => {
     try {
@@ -95,22 +106,30 @@ export const TeacherSidebar: React.FC<TeacherSidebarProps> = ({ open, onClose })
       
       {/* Navigation */}
       <nav className="flex-1 px-4 py-4 space-y-1 overflow-y-auto">
-        {navigation.map((item) => (
-          <NavLink
-            key={item.name}
-            to={item.href}
-            className={({ isActive }) =>
-              `flex items-center px-4 py-3 text-sm font-medium rounded-lg transition-all duration-200 ${
-                isActive
-                  ? 'bg-emerald-500/20 text-emerald-400 shadow-lg shadow-emerald-500/10'
-                  : 'text-slate-300 hover:bg-slate-700/50 hover:text-white'
-              }`
-            }
-          >
-            <item.icon className="h-5 w-5 mr-3" />
-            {item.name}
-          </NavLink>
-        ))}
+        {navigation.map((item) => {
+          const badge = ('badgeKey' in item && item.badgeKey === 'reminders') ? unreadReminderCount : 0;
+          return (
+            <NavLink
+              key={item.name}
+              to={item.href}
+              className={({ isActive }) =>
+                `flex items-center px-4 py-3 text-sm font-medium rounded-lg transition-all duration-200 ${
+                  isActive
+                    ? 'bg-emerald-500/20 text-emerald-400 shadow-lg shadow-emerald-500/10'
+                    : 'text-slate-300 hover:bg-slate-700/50 hover:text-white'
+                }`
+              }
+            >
+              <item.icon className="h-5 w-5 mr-3" />
+              {item.name}
+              {badge > 0 && (
+                <span className="ml-auto inline-flex items-center justify-center h-5 min-w-[1.25rem] px-1.5 rounded-full bg-red-500 text-white text-xs font-medium">
+                  {badge > 99 ? '99+' : badge}
+                </span>
+              )}
+            </NavLink>
+          );
+        })}
       </nav>
       
       {/* Logout */}

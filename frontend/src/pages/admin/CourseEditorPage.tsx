@@ -1,9 +1,11 @@
 // src/pages/admin/CourseEditorPage.tsx
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button, Input, Loading, useToast } from '../../components/common';
+import { useTenantStore } from '../../stores/tenantStore';
+import { adminService } from '../../services/adminService';
 import api from '../../config/api';
 import {
   ArrowLeftIcon,
@@ -21,6 +23,11 @@ import {
   XMarkIcon,
   UserGroupIcon,
   UsersIcon,
+  ArrowPathIcon,
+  CheckCircleIcon,
+  ExclamationCircleIcon,
+  EyeIcon,
+  GlobeAltIcon,
 } from '@heroicons/react/24/outline';
 
 interface Teacher {
@@ -48,6 +55,7 @@ interface Content {
   is_mandatory: boolean;
   duration: number | null;
   file_size: number | null;
+  video_status?: 'UPLOADED' | 'PROCESSING' | 'READY' | 'FAILED' | null;
 }
 
 interface Module {
@@ -154,8 +162,48 @@ export const CourseEditorPage: React.FC = () => {
   const queryClient = useQueryClient();
   const thumbnailInputRef = useRef<HTMLInputElement>(null);
   const contentFileInputRef = useRef<HTMLInputElement>(null);
-  
+  const { hasFeature } = useTenantStore();
+  const canUploadVideo = hasFeature('video_upload');
+
   const isEditing = !!courseId && courseId !== 'new';
+
+  // Video upload progress + processing status polling
+  const [uploadPhase, setUploadPhase] = useState<'idle' | 'uploading' | 'processing' | 'done'>('idle');
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [pollingContentId, setPollingContentId] = useState<string | null>(null);
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Poll video-status until READY or FAILED
+  const stopPolling = useCallback(() => {
+    if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null; }
+    setPollingContentId(null);
+  }, []);
+
+  // pollingModuleId is set alongside pollingContentId
+  const [pollingModuleId, setPollingModuleId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!pollingContentId || !pollingModuleId || !courseId) return;
+    pollingRef.current = setInterval(async () => {
+      try {
+        const data = await adminService.getVideoStatus(courseId, pollingModuleId, pollingContentId);
+        const st = data.video_asset?.status;
+        if (st === 'READY') {
+          stopPolling();
+          setUploadPhase('done');
+          toast.success('Video ready!', 'HLS streaming, transcript, and assignments have been created.');
+          queryClient.invalidateQueries({ queryKey: ['adminCourse', courseId] });
+          setTimeout(() => setUploadPhase('idle'), 3000);
+        } else if (st === 'FAILED') {
+          stopPolling();
+          setUploadPhase('idle');
+          toast.error('Video processing failed', data.video_asset?.error_message || 'Unknown error');
+          queryClient.invalidateQueries({ queryKey: ['adminCourse', courseId] });
+        }
+      } catch { /* ignore polling errors */ }
+    }, 5000);
+    return () => stopPolling();
+  }, [pollingContentId, pollingModuleId, courseId, stopPolling, toast, queryClient]);
   
   const [activeTab, setActiveTab] = useState<'details' | 'content' | 'assignment'>('details');
   const [thumbnailPreview, setThumbnailPreview] = useState<string | null>(null);
@@ -347,6 +395,25 @@ export const CourseEditorPage: React.FC = () => {
     },
   });
 
+  // Publish / unpublish
+  const publishMutation = useMutation({
+    mutationFn: async (publish: boolean) => {
+      const res = await api.patch(`/courses/${courseId}/`, { is_published: publish });
+      return res.data;
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['adminCourse', courseId] });
+      queryClient.invalidateQueries({ queryKey: ['adminCourses'] });
+      queryClient.invalidateQueries({ queryKey: ['adminDashboardStats'] });
+      toast.success(data.is_published ? 'Course published' : 'Course unpublished',
+        data.is_published ? 'Teachers can now access this course.' : 'Course is now in draft mode.');
+    },
+    onError: () => toast.error('Failed to update status', 'Please try again.'),
+  });
+
+  // Content preview
+  const [previewContent, setPreviewContent] = useState<Content | null>(null);
+
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
     const { name, value, type } = e.target;
     setFormData(prev => ({
@@ -405,11 +472,64 @@ export const CourseEditorPage: React.FC = () => {
   const handleAddContent = async (moduleId: string) => {
     if (!newContentData.title.trim() || !courseId) return;
     
+    const module = course?.modules?.find(m => m.id === moduleId);
+    const order = (module?.contents?.length || 0) + 1;
+
+    // Video uses dedicated endpoint (HLS + transcript + assignments pipeline)
+    if (newContentData.content_type === 'VIDEO') {
+      if (!contentFile) {
+        toast.error('Missing video file', 'Please choose a video to upload.');
+        return;
+      }
+      const fd = new FormData();
+      fd.append('file', contentFile);
+      fd.append('title', newContentData.title);
+      fd.append('order', String(order));
+      fd.append('is_mandatory', String(newContentData.is_mandatory));
+      fd.append('language', 'en');
+
+      try {
+        setUploadPhase('uploading');
+        setUploadProgress(0);
+        const res = await api.post(`/courses/${courseId}/modules/${moduleId}/contents/video-upload/`, fd, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+          timeout: 600000, // 10 min for large files
+          onUploadProgress: (e) => {
+            setUploadProgress(Math.round((e.loaded / (e.total || 1)) * 100));
+          },
+        });
+        setUploadPhase('processing');
+        await queryClient.invalidateQueries({ queryKey: ['adminCourse', courseId] });
+        // Start polling for processing status
+        const newContentId = res.data?.content?.id;
+        if (newContentId) {
+          setPollingContentId(newContentId);
+          setPollingModuleId(moduleId);
+        }
+        setAddingContentToModule(null);
+        setNewContentData({
+          title: '',
+          content_type: 'VIDEO',
+          text_content: '',
+          file_url: '',
+          is_mandatory: true,
+        });
+        setContentFile(null);
+        toast.success('Video uploaded', 'Processing started — HLS, transcript, and assignments will be generated automatically.');
+      } catch (err: any) {
+        setUploadPhase('idle');
+        const msg = err?.response?.data?.error || 'Please try again.';
+        toast.error('Video upload failed', msg);
+      }
+      return;
+    }
+
     const data = new FormData();
     data.append('title', newContentData.title);
     data.append('content_type', newContentData.content_type);
     data.append('is_mandatory', String(newContentData.is_mandatory));
-    
+    data.append('order', String(order));
+
     if (newContentData.content_type === 'TEXT') {
       data.append('text_content', newContentData.text_content);
     } else if (newContentData.content_type === 'LINK') {
@@ -419,10 +539,7 @@ export const CourseEditorPage: React.FC = () => {
       const fileUrl = await uploadFile(contentFile, 'content');
       data.append('file_url', fileUrl);
     }
-    
-    const module = course?.modules?.find(m => m.id === moduleId);
-    data.append('order', String((module?.contents?.length || 0) + 1));
-    
+
     contentMutation.mutate({ courseId, moduleId, data });
   };
 
@@ -476,15 +593,28 @@ export const CourseEditorPage: React.FC = () => {
 
         <div className="flex items-center space-x-3">
           {isEditing && (
-            <span
-              className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                course?.is_published
-                  ? 'bg-green-100 text-green-800'
-                  : 'bg-yellow-100 text-yellow-800'
-              }`}
-            >
-              {course?.is_published ? 'Published' : 'Draft'}
-            </span>
+            <>
+              <span
+                className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                  course?.is_published
+                    ? 'bg-green-100 text-green-800'
+                    : 'bg-yellow-100 text-yellow-800'
+                }`}
+              >
+                {course?.is_published ? 'Published' : 'Draft'}
+              </span>
+              <Button
+                variant="outline"
+                onClick={() => publishMutation.mutate(!course?.is_published)}
+                loading={publishMutation.isPending}
+              >
+                {course?.is_published ? (
+                  <><EyeIcon className="h-4 w-4 mr-1.5" /> Unpublish</>
+                ) : (
+                  <><GlobeAltIcon className="h-4 w-4 mr-1.5" /> Publish</>
+                )}
+              </Button>
+            </>
           )}
           <Button
             variant="primary"
@@ -729,16 +859,39 @@ export const CourseEditorPage: React.FC = () => {
                       {module.contents?.map((content, contentIndex) => (
                         <div
                           key={content.id}
-                          className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
+                          className="flex items-center justify-between p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors"
                         >
-                          <div className="flex items-center">
+                          <div className="flex items-center min-w-0">
                             {getContentIcon(content.content_type)}
-                            <span className="ml-3 text-sm text-gray-900">{content.title}</span>
-                            <span className="ml-2 text-xs text-gray-500 uppercase">
+                            <span className="ml-3 text-sm text-gray-900 truncate">{content.title}</span>
+                            <span className="ml-2 text-xs text-gray-500 uppercase flex-shrink-0">
                               {content.content_type}
                             </span>
+                            {/* Video processing status badge */}
+                            {content.content_type === 'VIDEO' && content.video_status && (
+                              content.video_status === 'READY' ? (
+                                <span className="ml-2 inline-flex items-center gap-1 text-xs font-medium text-emerald-700 bg-emerald-50 rounded-full px-2 py-0.5">
+                                  <CheckCircleIcon className="h-3 w-3" /> Ready
+                                </span>
+                              ) : content.video_status === 'FAILED' ? (
+                                <span className="ml-2 inline-flex items-center gap-1 text-xs font-medium text-red-700 bg-red-50 rounded-full px-2 py-0.5" title="Processing failed">
+                                  <ExclamationCircleIcon className="h-3 w-3" /> Failed
+                                </span>
+                              ) : (
+                                <span className="ml-2 inline-flex items-center gap-1 text-xs font-medium text-amber-700 bg-amber-50 rounded-full px-2 py-0.5 animate-pulse">
+                                  <ArrowPathIcon className="h-3 w-3 animate-spin" /> Processing
+                                </span>
+                              )
+                            )}
                           </div>
-                          <div className="flex items-center space-x-2">
+                          <div className="flex items-center space-x-1 flex-shrink-0">
+                            <button
+                              onClick={() => setPreviewContent(content)}
+                              className="p-1 text-gray-400 hover:text-primary-600 rounded"
+                              title="Preview"
+                            >
+                              <EyeIcon className="h-4 w-4" />
+                            </button>
                             <button
                               onClick={() => {
                                 if (window.confirm('Delete this content?')) {
@@ -773,7 +926,7 @@ export const CourseEditorPage: React.FC = () => {
                               onChange={(e) => setNewContentData(prev => ({ ...prev, content_type: e.target.value as Content['content_type'] }))}
                               className="px-3 py-2 border border-gray-300 rounded-lg"
                             >
-                              <option value="VIDEO">Video</option>
+                              <option value="VIDEO" disabled={!canUploadVideo}>Video{!canUploadVideo ? ' (Upgrade)' : ''}</option>
                               <option value="DOCUMENT">Document</option>
                               <option value="TEXT">Text</option>
                               <option value="LINK">Link</option>
@@ -819,6 +972,35 @@ export const CourseEditorPage: React.FC = () => {
                             </div>
                           )}
 
+                          {/* Upload progress bar (video only) */}
+                          {uploadPhase !== 'idle' && newContentData.content_type === 'VIDEO' && (
+                            <div className="space-y-2">
+                              {uploadPhase === 'uploading' && (
+                                <div>
+                                  <div className="flex justify-between text-sm mb-1">
+                                    <span className="text-blue-700 font-medium">Uploading video...</span>
+                                    <span className="text-blue-600">{uploadProgress}%</span>
+                                  </div>
+                                  <div className="h-2 bg-blue-100 rounded-full overflow-hidden">
+                                    <div className="h-full bg-blue-600 rounded-full transition-all" style={{ width: `${uploadProgress}%` }} />
+                                  </div>
+                                </div>
+                              )}
+                              {uploadPhase === 'processing' && (
+                                <div className="flex items-center gap-2 text-amber-700 text-sm font-medium">
+                                  <ArrowPathIcon className="h-4 w-4 animate-spin" />
+                                  Processing video (HLS, transcript, assignments)...
+                                </div>
+                              )}
+                              {uploadPhase === 'done' && (
+                                <div className="flex items-center gap-2 text-emerald-700 text-sm font-medium">
+                                  <CheckCircleIcon className="h-4 w-4" />
+                                  Video ready!
+                                </div>
+                              )}
+                            </div>
+                          )}
+
                           <div className="flex justify-end space-x-2">
                             <Button
                               variant="outline"
@@ -826,7 +1008,9 @@ export const CourseEditorPage: React.FC = () => {
                               onClick={() => {
                                 setAddingContentToModule(null);
                                 setContentFile(null);
+                                setUploadPhase('idle');
                               }}
+                              disabled={uploadPhase === 'uploading' || uploadPhase === 'processing'}
                             >
                               <XMarkIcon className="h-4 w-4 mr-1" />
                               Cancel
@@ -835,11 +1019,11 @@ export const CourseEditorPage: React.FC = () => {
                               variant="primary"
                               size="sm"
                               onClick={() => handleAddContent(module.id)}
-                              loading={contentMutation.isPending}
-                              disabled={!newContentData.title.trim()}
+                              loading={contentMutation.isPending || uploadPhase === 'uploading'}
+                              disabled={!newContentData.title.trim() || uploadPhase === 'uploading' || uploadPhase === 'processing'}
                             >
                               <CheckIcon className="h-4 w-4 mr-1" />
-                              Add
+                              {uploadPhase === 'uploading' ? `Uploading ${uploadProgress}%` : 'Add'}
                             </Button>
                           </div>
                         </div>
@@ -991,6 +1175,129 @@ export const CourseEditorPage: React.FC = () => {
                 : `${formData.assigned_groups.length} group(s) and ${formData.assigned_teachers.length} individual teacher(s) selected.`}
             </p>
           </div>
+
+          {/* Content Preview Modal */}
+          {previewContent && (() => {
+            const backendOrigin = (process.env.REACT_APP_API_URL || 'http://localhost:8000/api').replace(/\/api\/?$/, '');
+            const resolveUrl = (u: string | null) => {
+              if (!u) return '';
+              if (u.startsWith('http')) return u;
+              return `${backendOrigin}${u.startsWith('/') ? '' : '/'}${u}`;
+            };
+            const c = previewContent;
+            return (
+              <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setPreviewContent(null)}>
+                <div className="bg-white rounded-xl max-w-3xl w-full mx-4 max-h-[85vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+                  <div className="flex items-center justify-between p-4 border-b border-gray-200">
+                    <div className="flex items-center gap-2">
+                      {getContentIcon(c.content_type)}
+                      <h3 className="text-lg font-semibold text-gray-900 truncate">{c.title}</h3>
+                      <span className="text-xs text-gray-500 uppercase">{c.content_type}</span>
+                    </div>
+                    <button onClick={() => setPreviewContent(null)} className="p-1 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100">
+                      <XMarkIcon className="h-5 w-5" />
+                    </button>
+                  </div>
+                  <div className="p-6 overflow-y-auto flex-1">
+                    {c.content_type === 'VIDEO' ? (
+                      c.video_status === 'READY' && c.file_url ? (
+                        <video
+                          src={resolveUrl(c.file_url)}
+                          controls
+                          className="w-full rounded-lg bg-black aspect-video"
+                          controlsList="nodownload"
+                        >
+                          Your browser does not support the video tag.
+                        </video>
+                      ) : c.video_status === 'PROCESSING' ? (
+                        <div className="flex flex-col items-center justify-center py-16 text-amber-600">
+                          <ArrowPathIcon className="h-12 w-12 animate-spin mb-3" />
+                          <p className="font-medium">Video is still processing...</p>
+                          <p className="text-sm text-gray-500 mt-1">HLS transcoding, transcript, and assignments are being generated.</p>
+                        </div>
+                      ) : c.video_status === 'FAILED' ? (
+                        <div className="flex flex-col items-center justify-center py-16 text-red-600">
+                          <ExclamationCircleIcon className="h-12 w-12 mb-3" />
+                          <p className="font-medium">Video processing failed</p>
+                          <p className="text-sm text-gray-500 mt-1">Try re-uploading the video.</p>
+                        </div>
+                      ) : (
+                        <div className="flex flex-col items-center justify-center py-16 text-gray-400">
+                          <PlayCircleIcon className="h-12 w-12 mb-3" />
+                          <p className="text-sm">Video uploaded, waiting for processing...</p>
+                        </div>
+                      )
+                    ) : c.content_type === 'DOCUMENT' ? (
+                      c.file_url ? (
+                        <div className="space-y-4">
+                          {c.file_url.match(/\.pdf(\?|$)/i) ? (
+                            <iframe
+                              src={resolveUrl(c.file_url)}
+                              className="w-full h-[60vh] rounded-lg border border-gray-200"
+                              title={c.title}
+                            />
+                          ) : (
+                            <div className="flex flex-col items-center justify-center py-16">
+                              <DocumentTextIcon className="h-12 w-12 text-orange-400 mb-3" />
+                              <p className="font-medium text-gray-900">{c.title}</p>
+                              <a
+                                href={resolveUrl(c.file_url)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="mt-3 inline-flex items-center gap-1.5 text-sm text-primary-600 hover:text-primary-700 font-medium"
+                              >
+                                Open document in new tab
+                              </a>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <p className="text-gray-400 text-center py-8">No file uploaded</p>
+                      )
+                    ) : c.content_type === 'LINK' ? (
+                      c.file_url ? (
+                        <div className="space-y-4">
+                          <div className="p-4 bg-purple-50 rounded-lg">
+                            <div className="flex items-center gap-2 mb-2">
+                              <LinkIcon className="h-5 w-5 text-purple-500" />
+                              <span className="font-medium text-gray-900">{c.title}</span>
+                            </div>
+                            <a
+                              href={c.file_url.startsWith('http') ? c.file_url : `https://${c.file_url}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-sm text-primary-600 hover:underline break-all"
+                            >
+                              {c.file_url}
+                            </a>
+                          </div>
+                          <iframe
+                            src={c.file_url.startsWith('http') ? c.file_url : `https://${c.file_url}`}
+                            className="w-full h-[50vh] rounded-lg border border-gray-200"
+                            title={c.title}
+                            sandbox="allow-scripts allow-same-origin"
+                          />
+                        </div>
+                      ) : (
+                        <p className="text-gray-400 text-center py-8">No URL provided</p>
+                      )
+                    ) : c.content_type === 'TEXT' ? (
+                      <div className="prose prose-sm max-w-none">
+                        <div className="p-4 bg-gray-50 rounded-lg whitespace-pre-wrap text-gray-700 leading-relaxed">
+                          {c.text_content || 'No text content'}
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-gray-400 text-center py-8">Preview not available for this content type</p>
+                    )}
+                  </div>
+                  <div className="p-4 border-t border-gray-200 flex justify-end">
+                    <Button variant="outline" onClick={() => setPreviewContent(null)}>Close</Button>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Inline Create Group Modal */}
           {createGroupOpen && (

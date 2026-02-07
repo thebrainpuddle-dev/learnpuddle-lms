@@ -1,6 +1,6 @@
 // src/pages/admin/CoursesPage.tsx
 
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { Button, Loading, useToast } from '../../components/common';
@@ -18,6 +18,9 @@ import {
   UserGroupIcon,
   CalendarIcon,
   ClockIcon,
+  TableCellsIcon,
+  ViewColumnsIcon,
+  Bars3Icon,
 } from '@heroicons/react/24/outline';
 
 interface Course {
@@ -26,6 +29,7 @@ interface Course {
   slug: string;
   description: string;
   thumbnail: string | null;
+  thumbnail_url: string | null;
   is_mandatory: boolean;
   deadline: string | null;
   estimated_hours: number;
@@ -78,6 +82,79 @@ const togglePublish = async (course: Course): Promise<Course> => {
   return response.data;
 };
 
+/* ── Thumbnail helper ─────────────────────────────────────────────── */
+function thumbSrc(course: Course): string | null {
+  if (course.thumbnail_url) return course.thumbnail_url;
+  if (!course.thumbnail) return null;
+  // If thumbnail is a relative path, prepend the backend origin
+  if (course.thumbnail.startsWith('http')) return course.thumbnail;
+  const backendOrigin = (process.env.REACT_APP_API_URL || 'http://localhost:8000/api').replace(/\/api\/?$/, '');
+  return `${backendOrigin}${course.thumbnail.startsWith('/') ? '' : '/'}${course.thumbnail}`;
+}
+
+/* ── Kanban card ──────────────────────────────────────────────────── */
+const KanbanCard: React.FC<{
+  course: Course;
+  onEdit: () => void;
+  onPublish: () => void;
+  onDelete: () => void;
+  onDragStart: (e: React.DragEvent) => void;
+}> = ({ course, onEdit, onPublish, onDelete, onDragStart }) => {
+  const src = thumbSrc(course);
+  return (
+    <div
+      draggable
+      onDragStart={onDragStart}
+      className="bg-white rounded-lg border border-gray-200 shadow-sm hover:shadow-md transition-shadow cursor-grab active:cursor-grabbing"
+    >
+      {/* Thumbnail strip */}
+      <div className="h-28 rounded-t-lg bg-gradient-to-br from-primary-50 to-primary-100 relative overflow-hidden">
+        {src ? (
+          <img src={src} alt="" className="w-full h-full object-cover" />
+        ) : (
+          <div className="flex items-center justify-center h-full">
+            <AcademicCapIcon className="h-10 w-10 text-primary-300" />
+          </div>
+        )}
+        {course.is_mandatory && (
+          <span className="absolute top-2 left-2 px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-500 text-white uppercase">
+            Mandatory
+          </span>
+        )}
+      </div>
+      <div className="p-3 space-y-2">
+        <h4 className="text-sm font-semibold text-gray-900 truncate" title={course.title}>{course.title}</h4>
+        <div className="flex items-center gap-3 text-xs text-gray-500">
+          <span className="flex items-center gap-0.5"><ClockIcon className="h-3 w-3" />{course.estimated_hours}h</span>
+          <span>{course.module_count} mod</span>
+          <span>{course.content_count ?? 0} items</span>
+        </div>
+        <div className="flex items-center gap-1 text-xs text-gray-500">
+          <UserGroupIcon className="h-3 w-3" />
+          {course.assigned_to_all ? 'All teachers' : `${course.assigned_teacher_count} teachers`}
+        </div>
+        {course.deadline && (
+          <div className="flex items-center gap-1 text-xs text-gray-500">
+            <CalendarIcon className="h-3 w-3" />
+            {new Date(course.deadline).toLocaleDateString()}
+          </div>
+        )}
+        <div className="flex items-center justify-end gap-1 pt-1 border-t border-gray-100">
+          <button onClick={onPublish} className="p-1 text-gray-400 hover:text-gray-600 rounded" title={course.is_published ? 'Unpublish' : 'Publish'}>
+            {course.is_published ? <EyeSlashIcon className="h-4 w-4" /> : <EyeIcon className="h-4 w-4" />}
+          </button>
+          <button onClick={onEdit} className="p-1 text-gray-400 hover:text-primary-600 rounded" title="Edit">
+            <PencilSquareIcon className="h-4 w-4" />
+          </button>
+          <button onClick={onDelete} className="p-1 text-gray-400 hover:text-red-600 rounded" title="Delete">
+            <TrashIcon className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 export const CoursesPage: React.FC = () => {
   const toast = useToast();
   const navigate = useNavigate();
@@ -88,6 +165,8 @@ export const CoursesPage: React.FC = () => {
   const [mandatoryFilter, setMandatoryFilter] = useState<string>('');
   const [page, setPage] = useState(1);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<'table' | 'board'>('table');
+  const dragCourseRef = useRef<Course | null>(null);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['adminCourses', search, publishedFilter, mandatoryFilter, page],
@@ -145,13 +224,39 @@ export const CoursesPage: React.FC = () => {
     setPage(1);
   };
 
+  /* ── Kanban drag handlers ─────────────────────────────────────── */
+  const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); e.currentTarget.classList.add('ring-2', 'ring-primary-400'); };
+  const handleDragLeave = (e: React.DragEvent) => { e.currentTarget.classList.remove('ring-2', 'ring-primary-400'); };
+  const handleDrop = (targetPublished: boolean) => (e: React.DragEvent) => {
+    e.preventDefault();
+    e.currentTarget.classList.remove('ring-2', 'ring-primary-400');
+    const c = dragCourseRef.current;
+    if (c && c.is_published !== targetPublished) {
+      publishMutation.mutate(c);
+    }
+    dragCourseRef.current = null;
+  };
+
   if (error) {
+    const isAuthError = (error as { response?: { status?: number } })?.response?.status === 401;
     return (
       <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-        <p className="text-red-700">Failed to load courses. Please try again.</p>
+        <p className="text-red-700">
+          {isAuthError
+            ? 'Your session has expired. Redirecting to login…'
+            : 'Failed to load courses. Please try again.'}
+        </p>
+        {!isAuthError && (
+          <Button variant="outline" size="sm" className="mt-3" onClick={() => window.location.reload()}>
+            Retry
+          </Button>
+        )}
       </div>
     );
   }
+
+  const draftCourses = data?.results.filter(c => !c.is_published) || [];
+  const publishedCourses = data?.results.filter(c => c.is_published) || [];
 
   return (
     <div className="space-y-6">
@@ -159,24 +264,17 @@ export const CoursesPage: React.FC = () => {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Courses</h1>
-          <p className="mt-1 text-gray-500">
-            Manage your training courses
-          </p>
+          <p className="mt-1 text-gray-500">Manage your training courses</p>
         </div>
-
-        <Button
-          variant="primary"
-          onClick={() => navigate('/admin/courses/new')}
-        >
+        <Button variant="primary" onClick={() => navigate('/admin/courses/new')}>
           <PlusIcon className="h-5 w-5 mr-2" />
           Create Course
         </Button>
       </div>
 
-      {/* Filters */}
+      {/* Filters + View Toggle */}
       <div className="bg-white rounded-xl border border-gray-200 p-4">
         <div className="flex flex-col lg:flex-row gap-4">
-          {/* Search */}
           <form onSubmit={handleSearch} className="flex-1">
             <div className="relative">
               <MagnifyingGlassIcon className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-gray-400" />
@@ -190,125 +288,168 @@ export const CoursesPage: React.FC = () => {
             </div>
           </form>
 
-          {/* Status Filters */}
           <div className="flex items-center gap-3">
             <FunnelIcon className="h-5 w-5 text-gray-400" />
-            
             <select
               value={publishedFilter}
-              onChange={(e) => {
-                setPublishedFilter(e.target.value);
-                setPage(1);
-              }}
+              onChange={(e) => { setPublishedFilter(e.target.value); setPage(1); }}
               className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-primary-500 focus:border-primary-500"
             >
               <option value="">All Status</option>
               <option value="true">Published</option>
               <option value="false">Draft</option>
             </select>
-
             <select
               value={mandatoryFilter}
-              onChange={(e) => {
-                setMandatoryFilter(e.target.value);
-                setPage(1);
-              }}
+              onChange={(e) => { setMandatoryFilter(e.target.value); setPage(1); }}
               className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-primary-500 focus:border-primary-500"
             >
               <option value="">All Types</option>
               <option value="true">Mandatory</option>
               <option value="false">Optional</option>
             </select>
+
+            {/* View toggle */}
+            <div className="flex bg-gray-100 rounded-lg p-0.5 ml-2">
+              <button
+                onClick={() => setViewMode('table')}
+                className={`p-1.5 rounded-md ${viewMode === 'table' ? 'bg-white shadow text-primary-600' : 'text-gray-400 hover:text-gray-600'}`}
+                title="Table view"
+              >
+                <TableCellsIcon className="h-4 w-4" />
+              </button>
+              <button
+                onClick={() => setViewMode('board')}
+                className={`p-1.5 rounded-md ${viewMode === 'board' ? 'bg-white shadow text-primary-600' : 'text-gray-400 hover:text-gray-600'}`}
+                title="Board view"
+              >
+                <ViewColumnsIcon className="h-4 w-4" />
+              </button>
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Courses Table */}
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-        {isLoading ? (
-          <div className="flex items-center justify-center py-12">
-            <Loading />
+      {/* Content */}
+      {isLoading ? (
+        <div className="flex items-center justify-center py-12"><Loading /></div>
+      ) : data?.results.length === 0 ? (
+        <div className="bg-white rounded-xl border border-gray-200 text-center py-12">
+          <AcademicCapIcon className="h-12 w-12 mx-auto text-gray-400 mb-4" />
+          <h3 className="text-lg font-medium text-gray-900 mb-1">No courses found</h3>
+          <p className="text-gray-500 mb-4">
+            {search ? 'Try adjusting your search or filters' : 'Get started by creating your first course'}
+          </p>
+          {!search && (
+            <Button variant="primary" onClick={() => navigate('/admin/courses/new')}>
+              <PlusIcon className="h-5 w-5 mr-2" /> Create Course
+            </Button>
+          )}
+        </div>
+      ) : viewMode === 'board' ? (
+        /* ════════ BOARD VIEW (Kanban) ════════ */
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* Draft column */}
+          <div
+            className="rounded-xl border-2 border-dashed border-yellow-200 bg-yellow-50/50 p-4 min-h-[300px] transition-all"
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop(false)}
+          >
+            <div className="flex items-center gap-2 mb-4">
+              <span className="h-2.5 w-2.5 rounded-full bg-yellow-400" />
+              <h3 className="font-semibold text-gray-900">Draft</h3>
+              <span className="ml-auto text-xs text-gray-500 bg-yellow-100 rounded-full px-2 py-0.5">{draftCourses.length}</span>
+            </div>
+            <div className="space-y-3">
+              {draftCourses.map((course) => (
+                <KanbanCard
+                  key={course.id}
+                  course={course}
+                  onEdit={() => navigate(`/admin/courses/${course.id}/edit`)}
+                  onPublish={() => publishMutation.mutate(course)}
+                  onDelete={() => setDeleteConfirm(course.id)}
+                  onDragStart={() => { dragCourseRef.current = course; }}
+                />
+              ))}
+              {draftCourses.length === 0 && (
+                <p className="text-center text-sm text-gray-400 py-8">Drop courses here to unpublish</p>
+              )}
+            </div>
           </div>
-        ) : data?.results.length === 0 ? (
-          <div className="text-center py-12">
-            <AcademicCapIcon className="h-12 w-12 mx-auto text-gray-400 mb-4" />
-            <h3 className="text-lg font-medium text-gray-900 mb-1">No courses found</h3>
-            <p className="text-gray-500 mb-4">
-              {search ? 'Try adjusting your search or filters' : 'Get started by creating your first course'}
-            </p>
-            {!search && (
-              <Button variant="primary" onClick={() => navigate('/admin/courses/new')}>
-                <PlusIcon className="h-5 w-5 mr-2" />
-                Create Course
-              </Button>
-            )}
+
+          {/* Published column */}
+          <div
+            className="rounded-xl border-2 border-dashed border-green-200 bg-green-50/50 p-4 min-h-[300px] transition-all"
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop(true)}
+          >
+            <div className="flex items-center gap-2 mb-4">
+              <span className="h-2.5 w-2.5 rounded-full bg-green-500" />
+              <h3 className="font-semibold text-gray-900">Published</h3>
+              <span className="ml-auto text-xs text-gray-500 bg-green-100 rounded-full px-2 py-0.5">{publishedCourses.length}</span>
+            </div>
+            <div className="space-y-3">
+              {publishedCourses.map((course) => (
+                <KanbanCard
+                  key={course.id}
+                  course={course}
+                  onEdit={() => navigate(`/admin/courses/${course.id}/edit`)}
+                  onPublish={() => publishMutation.mutate(course)}
+                  onDelete={() => setDeleteConfirm(course.id)}
+                  onDragStart={() => { dragCourseRef.current = course; }}
+                />
+              ))}
+              {publishedCourses.length === 0 && (
+                <p className="text-center text-sm text-gray-400 py-8">Drop courses here to publish</p>
+              )}
+            </div>
           </div>
-        ) : (
-          <>
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-gray-200">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Course
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Status
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Assignment
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Content
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Deadline
-                    </th>
-                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Actions
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
-                  {data?.results.map((course) => (
+        </div>
+      ) : (
+        /* ════════ TABLE VIEW ════════ */
+        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Course</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Assignment</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Content</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Deadline</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {data?.results.map((course) => {
+                  const src = thumbSrc(course);
+                  return (
                     <tr key={course.id} className="hover:bg-gray-50">
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="flex items-center">
-                          <div className="flex-shrink-0 h-10 w-10 bg-primary-100 rounded-lg flex items-center justify-center">
-                            {course.thumbnail ? (
-                              <img
-                                src={course.thumbnail}
-                                alt=""
-                                className="h-10 w-10 rounded-lg object-cover"
-                              />
+                          <div className="flex-shrink-0 h-10 w-10 bg-primary-100 rounded-lg flex items-center justify-center overflow-hidden">
+                            {src ? (
+                              <img src={src} alt="" className="h-10 w-10 rounded-lg object-cover" />
                             ) : (
                               <AcademicCapIcon className="h-5 w-5 text-primary-600" />
                             )}
                           </div>
                           <div className="ml-4">
-                            <div className="text-sm font-medium text-gray-900">
-                              {course.title}
-                            </div>
+                            <div className="text-sm font-medium text-gray-900">{course.title}</div>
                             <div className="text-sm text-gray-500 flex items-center">
                               <ClockIcon className="h-3.5 w-3.5 mr-1" />
                               {course.estimated_hours} hrs
                               {course.is_mandatory && (
-                                <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800">
-                                  Mandatory
-                                </span>
+                                <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800">Mandatory</span>
                               )}
                             </div>
                           </div>
                         </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <span
-                          className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                            course.is_published
-                              ? 'bg-green-100 text-green-800'
-                              : 'bg-yellow-100 text-yellow-800'
-                          }`}
-                        >
+                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${course.is_published ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}`}>
                           {course.is_published ? 'Published' : 'Draft'}
                         </span>
                       </td>
@@ -323,7 +464,7 @@ export const CoursesPage: React.FC = () => {
                         </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {course.module_count} modules, {course.content_count} items
+                        {course.module_count} modules, {course.content_count ?? 0} items
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                         {course.deadline ? (
@@ -337,99 +478,48 @@ export const CoursesPage: React.FC = () => {
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                         <div className="flex items-center justify-end space-x-2">
-                          <button
-                            onClick={() => publishMutation.mutate(course)}
-                            className="p-1.5 text-gray-400 hover:text-gray-600 rounded"
-                            title={course.is_published ? 'Unpublish' : 'Publish'}
-                          >
-                            {course.is_published ? (
-                              <EyeSlashIcon className="h-5 w-5" />
-                            ) : (
-                              <EyeIcon className="h-5 w-5" />
-                            )}
+                          <button onClick={() => publishMutation.mutate(course)} className="p-1.5 text-gray-400 hover:text-gray-600 rounded" title={course.is_published ? 'Unpublish' : 'Publish'}>
+                            {course.is_published ? <EyeSlashIcon className="h-5 w-5" /> : <EyeIcon className="h-5 w-5" />}
                           </button>
-                          <button
-                            onClick={() => navigate(`/admin/courses/${course.id}/edit`)}
-                            className="p-1.5 text-gray-400 hover:text-primary-600 rounded"
-                            title="Edit"
-                          >
+                          <button onClick={() => navigate(`/admin/courses/${course.id}/edit`)} className="p-1.5 text-gray-400 hover:text-primary-600 rounded" title="Edit">
                             <PencilSquareIcon className="h-5 w-5" />
                           </button>
-                          <button
-                            onClick={() => duplicateMutation.mutate(course.id)}
-                            className="p-1.5 text-gray-400 hover:text-blue-600 rounded"
-                            title="Duplicate"
-                            disabled={duplicateMutation.isPending}
-                          >
+                          <button onClick={() => duplicateMutation.mutate(course.id)} className="p-1.5 text-gray-400 hover:text-blue-600 rounded" title="Duplicate" disabled={duplicateMutation.isPending}>
                             <DocumentDuplicateIcon className="h-5 w-5" />
                           </button>
-                          <button
-                            onClick={() => setDeleteConfirm(course.id)}
-                            className="p-1.5 text-gray-400 hover:text-red-600 rounded"
-                            title="Delete"
-                          >
+                          <button onClick={() => setDeleteConfirm(course.id)} className="p-1.5 text-gray-400 hover:text-red-600 rounded" title="Delete">
                             <TrashIcon className="h-5 w-5" />
                           </button>
                         </div>
                       </td>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
 
-            {/* Pagination */}
-            {data && (data.next || data.previous) && (
-              <div className="bg-white px-4 py-3 flex items-center justify-between border-t border-gray-200 sm:px-6">
-                <div className="flex-1 flex justify-between sm:hidden">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={!data.previous}
-                    onClick={() => setPage((p) => p - 1)}
-                  >
-                    Previous
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={!data.next}
-                    onClick={() => setPage((p) => p + 1)}
-                  >
-                    Next
-                  </Button>
-                </div>
-                <div className="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
-                  <div>
-                    <p className="text-sm text-gray-700">
-                      Showing page <span className="font-medium">{page}</span> of{' '}
-                      <span className="font-medium">{Math.ceil(data.count / 10)}</span>
-                    </p>
-                  </div>
-                  <div className="flex space-x-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={!data.previous}
-                      onClick={() => setPage((p) => p - 1)}
-                    >
-                      Previous
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={!data.next}
-                      onClick={() => setPage((p) => p + 1)}
-                    >
-                      Next
-                    </Button>
-                  </div>
+          {/* Pagination */}
+          {data && (data.next || data.previous) && (
+            <div className="bg-white px-4 py-3 flex items-center justify-between border-t border-gray-200 sm:px-6">
+              <div className="flex-1 flex justify-between sm:hidden">
+                <Button variant="outline" size="sm" disabled={!data.previous} onClick={() => setPage((p) => p - 1)}>Previous</Button>
+                <Button variant="outline" size="sm" disabled={!data.next} onClick={() => setPage((p) => p + 1)}>Next</Button>
+              </div>
+              <div className="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
+                <p className="text-sm text-gray-700">
+                  Showing page <span className="font-medium">{page}</span> of{' '}
+                  <span className="font-medium">{Math.ceil(data.count / 10)}</span>
+                </p>
+                <div className="flex space-x-2">
+                  <Button variant="outline" size="sm" disabled={!data.previous} onClick={() => setPage((p) => p - 1)}>Previous</Button>
+                  <Button variant="outline" size="sm" disabled={!data.next} onClick={() => setPage((p) => p + 1)}>Next</Button>
                 </div>
               </div>
-            )}
-          </>
-        )}
-      </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Delete Confirmation Modal */}
       {deleteConfirm && (
@@ -440,15 +530,8 @@ export const CoursesPage: React.FC = () => {
               Are you sure you want to delete this course? This action cannot be undone.
             </p>
             <div className="flex justify-end space-x-3">
-              <Button variant="outline" onClick={() => setDeleteConfirm(null)}>
-                Cancel
-              </Button>
-              <Button
-                variant="primary"
-                className="bg-red-600 hover:bg-red-700"
-                loading={deleteMutation.isPending}
-                onClick={() => deleteMutation.mutate(deleteConfirm)}
-              >
+              <Button variant="outline" onClick={() => setDeleteConfirm(null)}>Cancel</Button>
+              <Button variant="primary" className="bg-red-600 hover:bg-red-700" loading={deleteMutation.isPending} onClick={() => deleteMutation.mutate(deleteConfirm)}>
                 Delete
               </Button>
             </div>

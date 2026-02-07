@@ -70,6 +70,8 @@ export interface TeacherCourseDetail {
       content_type: 'VIDEO' | 'DOCUMENT' | 'LINK' | 'TEXT';
       order: number;
       file_url?: string;
+      hls_url?: string;
+      thumbnail_url?: string;
       file_size?: number | null;
       duration?: number | null;
       text_content?: string;
@@ -79,6 +81,8 @@ export interface TeacherCourseDetail {
       progress_percentage: number;
       video_progress_seconds: number;
       is_completed: boolean;
+      has_transcript?: boolean;
+      transcript_vtt_url?: string;
     }>;
   }>;
 }
@@ -98,6 +102,7 @@ export interface TeacherAssignmentListItem {
   submission_status: 'PENDING' | 'SUBMITTED' | 'GRADED';
   score: number | null;
   feedback: string;
+  is_quiz: boolean;
 }
 
 export interface TeacherAssignmentSubmission {
@@ -156,6 +161,51 @@ export const teacherService = {
   async getSubmission(assignmentId: string) {
     const res = await api.get(`/teacher/assignments/${assignmentId}/submission/`);
     return res.data as TeacherAssignmentSubmission;
+  },
+
+  async getVideoTranscript(contentId: string) {
+    const res = await api.get(`/teacher/videos/${contentId}/transcript/`);
+    return res.data as {
+      content_id: string;
+      language: string;
+      full_text: string;
+      segments: Array<{ start: number; end: number; text: string }>;
+      vtt_url: string;
+      generated_at: string | null;
+    };
+  },
+
+  async getQuiz(assignmentId: string) {
+    const res = await api.get(`/teacher/quizzes/${assignmentId}/`);
+    return res.data as {
+      assignment_id: string;
+      quiz_id: string;
+      schema_version: number;
+      questions: Array<{
+        id: string;
+        order: number;
+        question_type: 'MCQ' | 'SHORT_ANSWER';
+        prompt: string;
+        options: string[];
+        points: number;
+      }>;
+      submission: null | {
+        answers: Record<string, any>;
+        score: number | null;
+        graded_at: string | null;
+        submitted_at: string;
+      };
+    };
+  },
+
+  async submitQuiz(assignmentId: string, answers: Record<string, any>) {
+    const res = await api.post(`/teacher/quizzes/${assignmentId}/submit/`, { answers });
+    return res.data as {
+      quiz_id: string;
+      assignment_id: string;
+      score: number | null;
+      graded_at: string | null;
+    };
   },
 };
 

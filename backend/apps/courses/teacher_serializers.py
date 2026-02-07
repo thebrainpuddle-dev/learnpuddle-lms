@@ -13,6 +13,10 @@ class TeacherContentProgressSerializer(serializers.ModelSerializer):
     progress_percentage = serializers.SerializerMethodField()
     video_progress_seconds = serializers.SerializerMethodField()
     is_completed = serializers.SerializerMethodField()
+    hls_url = serializers.SerializerMethodField()
+    thumbnail_url = serializers.SerializerMethodField()
+    has_transcript = serializers.SerializerMethodField()
+    transcript_vtt_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Content
@@ -22,6 +26,8 @@ class TeacherContentProgressSerializer(serializers.ModelSerializer):
             "content_type",
             "order",
             "file_url",
+            "hls_url",
+            "thumbnail_url",
             "file_size",
             "duration",
             "text_content",
@@ -31,10 +37,16 @@ class TeacherContentProgressSerializer(serializers.ModelSerializer):
             "progress_percentage",
             "video_progress_seconds",
             "is_completed",
+            "has_transcript",
+            "transcript_vtt_url",
         ]
 
     def _progress_map(self):
         return self.context.get("progress_by_content_id", {})
+
+    def _video_asset(self, obj):
+        assets = self.context.get("video_assets_by_content_id", {}) or {}
+        return assets.get(str(obj.id))
 
     def get_status(self, obj):
         p = self._progress_map().get(str(obj.id))
@@ -51,6 +63,39 @@ class TeacherContentProgressSerializer(serializers.ModelSerializer):
     def get_is_completed(self, obj):
         p = self._progress_map().get(str(obj.id))
         return bool(p and p.status == "COMPLETED")
+
+    def _abs(self, url: str) -> str:
+        if not url:
+            return ""
+        if url.startswith("http://") or url.startswith("https://"):
+            return url
+        req = self.context.get("request")
+        return req.build_absolute_uri(url) if req else url
+
+    def get_hls_url(self, obj):
+        if obj.content_type != "VIDEO":
+            return ""
+        asset = self._video_asset(obj)
+        return self._abs(getattr(asset, "hls_master_url", "") or "") if asset else ""
+
+    def get_thumbnail_url(self, obj):
+        if obj.content_type != "VIDEO":
+            return ""
+        asset = self._video_asset(obj)
+        return self._abs(getattr(asset, "thumbnail_url", "") or "") if asset else ""
+
+    def get_has_transcript(self, obj):
+        if obj.content_type != "VIDEO":
+            return False
+        asset = self._video_asset(obj)
+        return bool(asset and getattr(asset, "transcript", None))
+
+    def get_transcript_vtt_url(self, obj):
+        if obj.content_type != "VIDEO":
+            return ""
+        asset = self._video_asset(obj)
+        transcript = getattr(asset, "transcript", None) if asset else None
+        return self._abs(getattr(transcript, "vtt_url", "") or "") if transcript else ""
 
 
 class TeacherModuleSerializer(serializers.ModelSerializer):

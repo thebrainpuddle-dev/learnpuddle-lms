@@ -18,7 +18,9 @@ interface AssignmentCardProps {
   status: 'PENDING' | 'SUBMITTED' | 'GRADED';
   score?: number;
   feedback?: string;
+  isQuiz?: boolean;
   onSubmit?: () => void;
+  onStartQuiz?: () => void;
   onView?: () => void;
   loading?: boolean;
 }
@@ -33,7 +35,9 @@ export const AssignmentCard: React.FC<AssignmentCardProps> = ({
   status,
   score,
   feedback,
+  isQuiz = false,
   onSubmit,
+  onStartQuiz,
   onView,
   loading,
 }) => {
@@ -149,12 +153,21 @@ export const AssignmentCard: React.FC<AssignmentCardProps> = ({
           Max Score: {maxScore}
         </span>
         
-        {status === 'PENDING' && (
+        {status === 'PENDING' && !isQuiz && (
           <button
             onClick={onSubmit}
             className="px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700 transition-colors"
           >
             Submit
+          </button>
+        )}
+
+        {status === 'PENDING' && isQuiz && (
+          <button
+            onClick={onStartQuiz}
+            className="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition-colors"
+          >
+            Start Quiz
           </button>
         )}
         

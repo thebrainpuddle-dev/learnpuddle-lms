@@ -8,15 +8,26 @@ from django.contrib.auth.password_validation import validate_password
 
 class UserSerializer(serializers.ModelSerializer):
     """Basic user serializer for returning user info."""
-    
+    profile_picture_url = serializers.SerializerMethodField()
+
     class Meta:
         model = User
         fields = [
             'id', 'email', 'first_name', 'last_name', 'role',
             'employee_id', 'subjects', 'grades', 'department',
+            'designation', 'bio', 'profile_picture', 'profile_picture_url',
+            'date_of_joining',
             'is_active', 'email_verified', 'created_at'
         ]
         read_only_fields = ['id', 'created_at']
+
+    def get_profile_picture_url(self, obj):
+        if not obj.profile_picture:
+            return None
+        request = self.context.get('request')
+        if request:
+            return request.build_absolute_uri(obj.profile_picture.url)
+        return obj.profile_picture.url
 
 
 class LoginSerializer(serializers.Serializer):
@@ -24,10 +35,17 @@ class LoginSerializer(serializers.Serializer):
     
     email = serializers.EmailField()
     password = serializers.CharField(write_only=True)
+    portal = serializers.ChoiceField(
+        choices=['super_admin', 'tenant'],
+        default='tenant',
+        required=False,
+        help_text="Which portal the login is coming from. 'super_admin' only accepts SUPER_ADMIN users; 'tenant' only accepts tenant users.",
+    )
     
     def validate(self, data):
         email = data.get('email')
         password = data.get('password')
+        portal = data.get('portal', 'tenant')
         
         if not email or not password:
             raise serializers.ValidationError("Email and password are required")
@@ -44,6 +62,17 @@ class LoginSerializer(serializers.Serializer):
         
         if not user.is_active:
             raise serializers.ValidationError("User account is disabled")
+        
+        # Portal-aware role validation: prevent cross-portal logins
+        if portal == 'super_admin' and user.role != 'SUPER_ADMIN':
+            raise serializers.ValidationError(
+                "This login page is for platform administrators only. "
+                "Please use your school's login page."
+            )
+        if portal == 'tenant' and user.role == 'SUPER_ADMIN':
+            raise serializers.ValidationError(
+                "Super admin accounts must log in at the platform admin portal."
+            )
         
         data['user'] = user
         return data

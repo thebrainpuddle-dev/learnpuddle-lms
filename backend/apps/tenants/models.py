@@ -30,7 +30,37 @@ class Tenant(models.Model):
     is_active = models.BooleanField(default=True)
     is_trial = models.BooleanField(default=True)
     trial_end_date = models.DateField(null=True, blank=True)
-    
+
+    # Subscription plan
+    PLAN_CHOICES = [
+        ('FREE', 'Free'),
+        ('STARTER', 'Starter'),
+        ('PRO', 'Professional'),
+        ('ENTERPRISE', 'Enterprise'),
+    ]
+    plan = models.CharField(max_length=20, choices=PLAN_CHOICES, default='FREE')
+    plan_started_at = models.DateTimeField(null=True, blank=True)
+    plan_expires_at = models.DateTimeField(null=True, blank=True)
+
+    # Limits (configurable per school by super admin)
+    max_teachers = models.PositiveIntegerField(default=10, help_text="Max teacher accounts")
+    max_courses = models.PositiveIntegerField(default=5, help_text="Max courses")
+    max_storage_mb = models.PositiveIntegerField(default=500, help_text="Max storage in MB")
+    max_video_duration_minutes = models.PositiveIntegerField(default=60, help_text="Max single video duration (min)")
+
+    # Feature flags (granular toggles, controlled by super admin)
+    feature_video_upload = models.BooleanField(default=False)
+    feature_auto_quiz = models.BooleanField(default=False)
+    feature_transcripts = models.BooleanField(default=False)
+    feature_reminders = models.BooleanField(default=True)
+    feature_custom_branding = models.BooleanField(default=False)
+    feature_reports_export = models.BooleanField(default=False)
+    feature_groups = models.BooleanField(default=True)
+    feature_certificates = models.BooleanField(default=False)
+
+    # Super admin internal notes
+    internal_notes = models.TextField(blank=True, default='')
+
     # Metadata
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

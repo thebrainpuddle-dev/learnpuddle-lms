@@ -1,15 +1,19 @@
+import csv
+import io
+
 from django.db import models
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
 
-from utils.decorators import admin_only, tenant_required
+from utils.decorators import admin_only, tenant_required, check_feature
 
 from apps.users.models import User
 from apps.courses.models import Course
-from apps.progress.models import TeacherProgress, Assignment, AssignmentSubmission
+from apps.progress.models import TeacherProgress, Assignment, AssignmentSubmission, QuizSubmission
 
 
 def _tenant_teachers_qs(tenant):
@@ -173,4 +177,94 @@ def list_assignments_for_reports(request):
         [{"id": a.id, "title": a.title, "course_id": a.course_id, "due_date": a.due_date} for a in qs[:200]],
         status=status.HTTP_200_OK,
     )
+
+
+def _rows_to_csv_response(rows: list[dict], filename: str) -> HttpResponse:
+    if not rows:
+        return HttpResponse("No data", content_type="text/csv")
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=rows[0].keys())
+    writer.writeheader()
+    writer.writerows(rows)
+    resp = HttpResponse(output.getvalue(), content_type="text/csv")
+    resp["Content-Disposition"] = f'attachment; filename="{filename}"'
+    return resp
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+@admin_only
+@tenant_required
+@check_feature("feature_reports_export")
+def course_progress_export(request):
+    """Export course progress report as CSV."""
+    course_id = request.GET.get("course_id")
+    if not course_id:
+        return Response({"error": "course_id required"}, status=400)
+    course = get_object_or_404(Course, id=course_id, tenant=request.tenant)
+    teachers = _course_assigned_teachers(course)
+    progress_map = {p.teacher_id: p for p in TeacherProgress.objects.filter(course=course, content__isnull=True, teacher__in=teachers)}
+    rows = []
+    for t in teachers.order_by("last_name", "first_name"):
+        p = progress_map.get(t.id)
+        rows.append({
+            "Teacher Name": t.get_full_name() or t.email,
+            "Email": t.email,
+            "Course": course.title,
+            "Status": p.status if p else "NOT_STARTED",
+            "Completed At": str(p.completed_at or "") if p else "",
+        })
+    return _rows_to_csv_response(rows, f"course_progress_{course.slug}.csv")
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+@admin_only
+@tenant_required
+@check_feature("feature_reports_export")
+def assignment_status_export(request):
+    """Export assignment status report as CSV."""
+    assignment_id = request.GET.get("assignment_id")
+    if not assignment_id:
+        return Response({"error": "assignment_id required"}, status=400)
+    assignment = get_object_or_404(Assignment, id=assignment_id, course__tenant=request.tenant)
+    teachers = _course_assigned_teachers(assignment.course)
+
+    # Check if this is a quiz-type assignment
+    is_quiz = hasattr(assignment, "quiz") and assignment.quiz is not None
+
+    if is_quiz:
+        quiz_subs_map = {
+            qs.teacher_id: qs
+            for qs in QuizSubmission.objects.filter(quiz=assignment.quiz, teacher__in=teachers)
+        }
+    else:
+        regular_subs_map = {
+            s.teacher_id: s
+            for s in AssignmentSubmission.objects.filter(assignment=assignment, teacher__in=teachers)
+        }
+
+    rows = []
+    for t in teachers.order_by("last_name", "first_name"):
+        if is_quiz:
+            qs = quiz_subs_map.get(t.id)
+            if not qs:
+                derived_status = "PENDING"
+                submitted_at = ""
+            else:
+                derived_status = "GRADED" if qs.graded_at is not None else "SUBMITTED"
+                submitted_at = str(qs.submitted_at or "")
+        else:
+            s = regular_subs_map.get(t.id)
+            derived_status = s.status if s else "PENDING"
+            submitted_at = str(s.submitted_at or "") if s else ""
+
+        rows.append({
+            "Teacher Name": t.get_full_name() or t.email,
+            "Email": t.email,
+            "Assignment": assignment.title,
+            "Status": derived_status,
+            "Submitted At": submitted_at,
+        })
+    return _rows_to_csv_response(rows, f"assignment_status_{assignment_id}.csv")
 

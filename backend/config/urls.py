@@ -11,6 +11,7 @@ urlpatterns = [
     path('health/', health_view),
     
     # API endpoints
+    path('api/super-admin/', include('apps.tenants.superadmin_urls')),
     path('api/tenants/', include('apps.tenants.urls')),
     path('api/users/', include('apps.users.urls')),
     path('api/', include('apps.users.admin_urls')),

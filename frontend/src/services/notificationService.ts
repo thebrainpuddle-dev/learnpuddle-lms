@@ -18,20 +18,24 @@ export const notificationService = {
   /**
    * Get notifications for current teacher
    */
-  getNotifications: async (params?: { unread_only?: boolean; limit?: number }): Promise<Notification[]> => {
+  getNotifications: async (params?: { unread_only?: boolean; limit?: number; type?: string }): Promise<Notification[]> => {
     const queryParams = new URLSearchParams();
     if (params?.unread_only) queryParams.append('unread_only', 'true');
     if (params?.limit) queryParams.append('limit', params.limit.toString());
+    if (params?.type) queryParams.append('type', params.type);
     
     const response = await api.get(`/notifications/?${queryParams.toString()}`);
     return response.data;
   },
 
   /**
-   * Get unread notification count
+   * Get unread notification count (optionally filtered by type)
    */
-  getUnreadCount: async (): Promise<number> => {
-    const response = await api.get('/notifications/unread-count/');
+  getUnreadCount: async (params?: { type?: string }): Promise<number> => {
+    const queryParams = new URLSearchParams();
+    if (params?.type) queryParams.append('type', params.type);
+    const qs = queryParams.toString();
+    const response = await api.get(`/notifications/unread-count/${qs ? `?${qs}` : ''}`);
     return response.data.count;
   },
 

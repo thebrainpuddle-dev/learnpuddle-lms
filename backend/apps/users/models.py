@@ -60,11 +60,14 @@ class User(AbstractUser):
     role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='TEACHER')
     
     # Teacher-specific fields
-    employee_id = models.CharField(max_length=50, blank=True, help_text="School employee ID")
-    subjects = models.JSONField(default=list, blank=True, help_text="List of subjects taught")
-    grades = models.JSONField(default=list, blank=True, help_text="List of grades taught")
-    department = models.CharField(max_length=100, blank=True)
+    employee_id = models.CharField(max_length=50, blank=True, help_text="School-assigned Teacher ID")
+    subjects = models.JSONField(default=list, blank=True, help_text="List of subjects taught e.g. ['Mathematics', 'Physics']")
+    grades = models.JSONField(default=list, blank=True, help_text="List of grades/classes e.g. ['Class 9', 'Class 10']")
+    department = models.CharField(max_length=100, blank=True, help_text="e.g. Science, Mathematics, Languages")
+    designation = models.CharField(max_length=100, blank=True, help_text="e.g. PGT, TGT, PRT, HOD, Vice Principal")
     date_of_joining = models.DateField(null=True, blank=True)
+    bio = models.TextField(blank=True, default='', help_text="Short profile description")
+    profile_picture = models.ImageField(upload_to='profile_pictures/', blank=True, null=True)
     
     # Groups (for course assignment)
     teacher_groups = models.ManyToManyField('courses.TeacherGroup', related_name='members', blank=True)
@@ -72,7 +75,10 @@ class User(AbstractUser):
     # Status
     is_active = models.BooleanField(default=True)
     email_verified = models.BooleanField(default=False)
-    
+
+    # Notification preferences (JSON: {"email_courses": true, "email_assignments": true, ...})
+    notification_preferences = models.JSONField(blank=True, default=dict)
+
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

@@ -16,15 +16,20 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
   const { isAuthenticated, user } = useAuthStore();
   const location = useLocation();
   
-  // Not authenticated - redirect to login
+  // Not authenticated - redirect to the correct login page
   if (!isAuthenticated || !user) {
-    return <Navigate to="/login" state={{ from: location }} replace />;
+    const loginPath = location.pathname.startsWith('/super-admin')
+      ? '/super-admin/login'
+      : '/login';
+    return <Navigate to={loginPath} state={{ from: location }} replace />;
   }
   
   // Check role if specified
   if (allowedRoles && !allowedRoles.includes(user.role)) {
     // Wrong role - redirect to appropriate dashboard
-    if (user.role === 'SCHOOL_ADMIN') {
+    if (user.role === 'SUPER_ADMIN') {
+      return <Navigate to="/super-admin/dashboard" replace />;
+    } else if (user.role === 'SCHOOL_ADMIN') {
       return <Navigate to="/admin/dashboard" replace />;
     } else {
       return <Navigate to="/teacher/dashboard" replace />;

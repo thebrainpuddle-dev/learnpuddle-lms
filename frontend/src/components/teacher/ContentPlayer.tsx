@@ -1,6 +1,7 @@
 // src/components/teacher/ContentPlayer.tsx
 
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import Hls from 'hls.js';
 import {
   PlayIcon,
   DocumentTextIcon,
@@ -8,6 +9,7 @@ import {
   CheckCircleIcon,
 } from '@heroicons/react/24/solid';
 import { ArrowTopRightOnSquareIcon } from '@heroicons/react/24/outline';
+import { teacherService } from '../../services/teacherService';
 
 interface ContentPlayerProps {
   content: {
@@ -15,8 +17,12 @@ interface ContentPlayerProps {
     title: string;
     content_type: 'VIDEO' | 'DOCUMENT' | 'LINK' | 'TEXT';
     file_url?: string;
+    hls_url?: string;
+    thumbnail_url?: string;
     text_content?: string;
     duration?: number;
+    has_transcript?: boolean;
+    transcript_vtt_url?: string;
   };
   isCompleted?: boolean;
   onComplete?: () => void;
@@ -31,24 +37,121 @@ export const ContentPlayer: React.FC<ContentPlayerProps> = ({
 }) => {
   const [, setIsPlaying] = useState(false);
   const [, setCurrentTime] = useState(0);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+
+  const [activeTab, setActiveTab] = useState<'video' | 'transcript'>('video');
+  const [transcriptLoading, setTranscriptLoading] = useState(false);
+  const [transcriptError, setTranscriptError] = useState<string | null>(null);
+  const [transcript, setTranscript] = useState<null | {
+    full_text: string;
+    segments: Array<{ start: number; end: number; text: string }>;
+  }>(null);
+
+  const videoSrc = useMemo(() => {
+    return content.hls_url || content.file_url || '';
+  }, [content.hls_url, content.file_url]);
   
   const formatDuration = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
+
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  // Attach HLS source when needed
+  useEffect(() => {
+    if (content.content_type !== 'VIDEO') return;
+    const video = videoRef.current;
+    if (!video) return;
+    if (!videoSrc) return;
+
+    // Native HLS (Safari) or MP4 fallback
+    if (!videoSrc.endsWith('.m3u8') || video.canPlayType('application/vnd.apple.mpegurl')) {
+      video.src = videoSrc;
+      return;
+    }
+
+    if (!Hls.isSupported()) {
+      video.src = videoSrc;
+      return;
+    }
+
+    const hls = new Hls({ enableWorker: true });
+    hls.loadSource(videoSrc);
+    hls.attachMedia(video);
+    return () => {
+      hls.destroy();
+    };
+  }, [content.content_type, content.id, videoSrc]);
+
+  // Reset transcript state when content changes
+  useEffect(() => {
+    setTranscript(null);
+    setTranscriptError(null);
+    setTranscriptLoading(false);
+    setActiveTab('video');
+  }, [content.id]);
+
+  useEffect(() => {
+    if (content.content_type !== 'VIDEO') return;
+    if (activeTab !== 'transcript') return;
+    if (!content.has_transcript) return;
+    if (transcript || transcriptLoading) return;
+
+    setTranscriptLoading(true);
+    setTranscriptError(null);
+    teacherService
+      .getVideoTranscript(content.id)
+      .then((data) => {
+        setTranscript({ full_text: data.full_text, segments: data.segments || [] });
+      })
+      .catch(() => setTranscriptError('Could not load transcript.'))
+      .finally(() => setTranscriptLoading(false));
+  }, [activeTab, content.content_type, content.has_transcript, content.id, transcript, transcriptLoading]);
   
   // Video player
   if (content.content_type === 'VIDEO') {
     return (
       <div className="bg-slate-900 rounded-xl overflow-hidden">
-        {/* Video container */}
-        <div className="relative aspect-video bg-black">
-          {content.file_url ? (
+        {/* Tabs */}
+        <div className="flex border-b border-slate-800">
+          <button
+            onClick={() => setActiveTab('video')}
+            className={`px-4 py-2 text-sm font-medium ${
+              activeTab === 'video' ? 'text-white bg-slate-800' : 'text-slate-300 hover:text-white'
+            }`}
+          >
+            Video
+          </button>
+          <button
+            onClick={() => setActiveTab('transcript')}
+            disabled={!content.has_transcript}
+            className={`px-4 py-2 text-sm font-medium ${
+              !content.has_transcript
+                ? 'text-slate-600 cursor-not-allowed'
+                : activeTab === 'transcript'
+                ? 'text-white bg-slate-800'
+                : 'text-slate-300 hover:text-white'
+            }`}
+            title={content.has_transcript ? 'View transcript' : 'Transcript not ready yet'}
+          >
+            Transcript
+          </button>
+        </div>
+
+        {/* Video container — always mounted so videoRef stays valid for transcript seek */}
+        <div className={`relative aspect-video bg-black ${activeTab !== 'video' ? 'hidden' : ''}`}>
+          {videoSrc ? (
             <video
+              ref={videoRef}
               className="w-full h-full"
-              src={content.file_url}
               controls
+              poster={content.thumbnail_url || undefined}
               onTimeUpdate={(e) => {
                 const video = e.currentTarget;
                 setCurrentTime(Math.floor(video.currentTime));
@@ -57,14 +160,66 @@ export const ContentPlayer: React.FC<ContentPlayerProps> = ({
               onEnded={() => onComplete?.()}
               onPlay={() => setIsPlaying(true)}
               onPause={() => setIsPlaying(false)}
-            />
+            >
+              {content.transcript_vtt_url && (
+                <track
+                  kind="captions"
+                  src={content.transcript_vtt_url}
+                  srcLang="en"
+                  label="Captions"
+                  default
+                />
+              )}
+            </video>
           ) : (
             <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-400">
-              <PlayIcon className="h-16 w-16 mb-4" />
-              <p>Video unavailable</p>
+              <div className="animate-pulse">
+                <PlayIcon className="h-16 w-16 mb-4 mx-auto" />
+              </div>
+              <p className="font-medium">Video is being processed</p>
+              <p className="text-sm mt-1">HLS streaming will be available shortly. Please check back in a few minutes.</p>
             </div>
           )}
         </div>
+
+        {/* Transcript panel */}
+        {activeTab === 'transcript' && (
+          <div className="bg-slate-950 max-h-[28rem] overflow-y-auto p-4">
+            {transcriptLoading ? (
+              <p className="text-slate-300 text-sm">Loading transcript...</p>
+            ) : transcriptError ? (
+              <p className="text-red-300 text-sm">{transcriptError}</p>
+            ) : transcript ? (
+              <div className="space-y-3">
+                {transcript.segments.length > 0 ? (
+                  transcript.segments.map((seg, idx) => (
+                    <button
+                      key={idx}
+                      className="w-full text-left rounded-lg p-3 hover:bg-slate-900 transition-colors"
+                      onClick={() => {
+                        const v = videoRef.current;
+                        if (v) {
+                          v.currentTime = seg.start;
+                          v.play().catch(() => undefined);
+                          setActiveTab('video');
+                        }
+                      }}
+                    >
+                      <div className="text-xs text-slate-400 mb-1">
+                        {formatTime(seg.start)} - {formatTime(seg.end)}
+                      </div>
+                      <div className="text-sm text-slate-100">{seg.text}</div>
+                    </button>
+                  ))
+                ) : (
+                  <p className="text-slate-300 text-sm whitespace-pre-wrap">{transcript.full_text}</p>
+                )}
+              </div>
+            ) : (
+              <p className="text-slate-300 text-sm">Transcript not available.</p>
+            )}
+          </div>
+        )}
         
         {/* Video info */}
         <div className="p-4 flex items-center justify-between">

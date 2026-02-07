@@ -2,11 +2,12 @@
 
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuthStore } from '../../stores/authStore';
 import { ProgressCard, CourseCard } from '../../components/teacher';
 import { Button } from '../../components/common/Button';
 import { teacherService } from '../../services/teacherService';
+import { notificationService, Notification } from '../../services/notificationService';
 import {
   AcademicCapIcon,
   BookOpenIcon,
@@ -14,11 +15,31 @@ import {
   ClockIcon,
   ArrowRightIcon,
   CalendarDaysIcon,
+  BellAlertIcon,
+  CheckIcon,
+  MegaphoneIcon,
 } from '@heroicons/react/24/outline';
 import { PlayIcon } from '@heroicons/react/24/solid';
+import { formatDistanceToNow } from 'date-fns';
+
+const NotifIcon: React.FC<{ type: Notification['notification_type'] }> = ({ type }) => {
+  switch (type) {
+    case 'COURSE_ASSIGNED':
+      return <AcademicCapIcon className="h-5 w-5 text-blue-500" />;
+    case 'ASSIGNMENT_DUE':
+      return <ClockIcon className="h-5 w-5 text-amber-500" />;
+    case 'REMINDER':
+      return <BellAlertIcon className="h-5 w-5 text-red-500" />;
+    case 'ANNOUNCEMENT':
+      return <MegaphoneIcon className="h-5 w-5 text-purple-500" />;
+    default:
+      return <BellAlertIcon className="h-5 w-5 text-gray-500" />;
+  }
+};
 
 export const DashboardPage: React.FC = () => {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { user } = useAuthStore();
   
   const { data: dashboard, isLoading: statsLoading } = useQuery({
@@ -30,6 +51,37 @@ export const DashboardPage: React.FC = () => {
     queryKey: ['teacherCourses'],
     queryFn: teacherService.listCourses,
   });
+
+  // Unread notifications for the dashboard banner
+  const { data: unreadNotifications = [] } = useQuery({
+    queryKey: ['dashboardNotifications'],
+    queryFn: () => notificationService.getNotifications({ unread_only: true, limit: 5 }),
+  });
+
+  const markReadMutation = useMutation({
+    mutationFn: notificationService.markAsRead,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['dashboardNotifications'] });
+      queryClient.invalidateQueries({ queryKey: ['notificationUnreadCount'] });
+      queryClient.invalidateQueries({ queryKey: ['notifications'] });
+    },
+  });
+
+  const markAllReadMutation = useMutation({
+    mutationFn: notificationService.markAllAsRead,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['dashboardNotifications'] });
+      queryClient.invalidateQueries({ queryKey: ['notificationUnreadCount'] });
+      queryClient.invalidateQueries({ queryKey: ['notifications'] });
+    },
+  });
+
+  const handleNotifClick = (n: Notification) => {
+    if (!n.is_read) markReadMutation.mutate(n.id);
+    if (n.course) navigate(`/teacher/courses/${n.course}`);
+    else if (n.assignment) navigate('/teacher/assignments');
+    else if (n.notification_type === 'REMINDER') navigate('/teacher/reminders');
+  };
   
   const deadlines = dashboard?.deadlines ?? [];
   const continueCourse = dashboard?.continue_learning;
@@ -79,6 +131,70 @@ export const DashboardPage: React.FC = () => {
         )}
       </div>
       
+      {/* Unread Notifications / Reminders */}
+      {unreadNotifications.length > 0 && (
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+          <div className="flex items-center justify-between px-5 py-3 border-b border-gray-100 bg-red-50/60">
+            <div className="flex items-center gap-2">
+              <BellAlertIcon className="h-5 w-5 text-red-500" />
+              <h2 className="text-sm font-semibold text-gray-900">
+                {unreadNotifications.length} new notification{unreadNotifications.length !== 1 ? 's' : ''}
+              </h2>
+            </div>
+            <div className="flex items-center gap-3">
+              {unreadNotifications.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => markAllReadMutation.mutate()}
+                  disabled={markAllReadMutation.isPending}
+                  className="text-xs text-emerald-600 hover:text-emerald-700 flex items-center gap-1"
+                >
+                  <CheckIcon className="h-3.5 w-3.5" />
+                  Mark all read
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => navigate('/teacher/reminders')}
+                className="text-xs text-emerald-600 hover:text-emerald-700 flex items-center gap-1"
+              >
+                View all
+                <ArrowRightIcon className="h-3 w-3" />
+              </button>
+            </div>
+          </div>
+          <div className="divide-y divide-gray-50">
+            {unreadNotifications.map((n) => (
+              <button
+                key={n.id}
+                type="button"
+                onClick={() => handleNotifClick(n)}
+                className="w-full flex items-start gap-3 px-5 py-3 text-left hover:bg-gray-50 transition-colors"
+              >
+                <div className="flex-shrink-0 mt-0.5">
+                  <NotifIcon type={n.notification_type} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-gray-900">{n.title}</p>
+                  <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{n.message}</p>
+                  <p className="text-xs text-gray-400 mt-1">
+                    {formatDistanceToNow(new Date(n.created_at), { addSuffix: true })}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); markReadMutation.mutate(n.id); }}
+                  className="flex-shrink-0 text-xs text-gray-400 hover:text-emerald-600 mt-1"
+                  title="Dismiss"
+                >
+                  <CheckIcon className="h-4 w-4" />
+                </button>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Stats Grid */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <ProgressCard
@@ -265,6 +381,7 @@ export const DashboardPage: React.FC = () => {
           )}
         </div>
       </div>
+
     </div>
   );
 };

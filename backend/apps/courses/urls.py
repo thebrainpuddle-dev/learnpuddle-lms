@@ -2,6 +2,7 @@
 
 from django.urls import path
 from . import views
+from . import video_views
 
 app_name = 'courses'
 
@@ -19,4 +20,26 @@ urlpatterns = [
     # Content CRUD
     path('<uuid:course_id>/modules/<uuid:module_id>/contents/', views.content_list_create, name='content_list_create'),
     path('<uuid:course_id>/modules/<uuid:module_id>/contents/<uuid:content_id>/', views.content_detail, name='content_detail'),
+
+    # Video upload + processing (admin)
+    path(
+        "<uuid:course_id>/modules/<uuid:module_id>/contents/video-upload/",
+        video_views.upload_video_content,
+        name="upload_video_content",
+    ),
+    path(
+        "<uuid:course_id>/modules/<uuid:module_id>/contents/<uuid:content_id>/video-status/",
+        video_views.video_status,
+        name="video_status",
+    ),
+    path(
+        "<uuid:course_id>/modules/<uuid:module_id>/contents/<uuid:content_id>/video/regenerate-transcript/",
+        video_views.regenerate_transcript,
+        name="regenerate_transcript",
+    ),
+    path(
+        "<uuid:course_id>/modules/<uuid:module_id>/contents/<uuid:content_id>/video/regenerate-assignments/",
+        video_views.regenerate_assignments,
+        name="regenerate_assignments",
+    ),
 ]

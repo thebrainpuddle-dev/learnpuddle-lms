@@ -37,11 +37,15 @@ export const TeacherHeader: React.FC<TeacherHeaderProps> = ({ onMenuClick }) => 
   const queryClient = useQueryClient();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLDivElement>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchResults, setSearchResults] = useState<{ courses: any[]; assignments: any[] }>({ courses: [], assignments: [] });
 
   // Fetch unread count (poll every 30 seconds)
   const { data: unreadCount = 0 } = useQuery({
     queryKey: ['notificationUnreadCount'],
-    queryFn: notificationService.getUnreadCount,
+    queryFn: () => notificationService.getUnreadCount(),
     refetchInterval: 30000,
   });
 
@@ -76,10 +80,27 @@ export const TeacherHeader: React.FC<TeacherHeaderProps> = ({ onMenuClick }) => 
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
         setDropdownOpen(false);
       }
+      if (searchRef.current && !searchRef.current.contains(event.target as Node)) {
+        setSearchOpen(false);
+      }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  // Debounced search
+  useEffect(() => {
+    if (searchQuery.length < 2) { setSearchResults({ courses: [], assignments: [] }); setSearchOpen(false); return; }
+    const timer = setTimeout(async () => {
+      try {
+        const { default: api } = await import('../../config/api');
+        const res = await api.get('/teacher/search/', { params: { q: searchQuery } });
+        setSearchResults(res.data);
+        setSearchOpen(true);
+      } catch { /* ignore */ }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
 
   const handleNotificationClick = (notification: Notification) => {
     // Mark as read
@@ -87,11 +108,14 @@ export const TeacherHeader: React.FC<TeacherHeaderProps> = ({ onMenuClick }) => 
       markAsReadMutation.mutate(notification.id);
     }
     
-    // Navigate based on type
+    // Navigate based on type / linked objects
     if (notification.course) {
       navigate(`/teacher/courses/${notification.course}`);
     } else if (notification.assignment) {
       navigate('/teacher/assignments');
+    } else if (notification.notification_type === 'REMINDER') {
+      // Generic reminders (e.g. "get started") → go to courses list
+      navigate('/teacher/courses');
     }
     
     setDropdownOpen(false);
@@ -110,11 +134,8 @@ export const TeacherHeader: React.FC<TeacherHeaderProps> = ({ onMenuClick }) => 
       
       <div className="flex flex-1 justify-between px-4 sm:px-6 lg:px-8">
         {/* Search */}
-        <div className="flex flex-1">
-          <form className="flex w-full md:ml-0" action="#" method="GET">
-            <label htmlFor="teacher-search" className="sr-only">
-              Search courses
-            </label>
+        <div className="flex flex-1" ref={searchRef}>
+          <div className="relative w-full md:ml-0">
             <div className="relative w-full text-gray-400 focus-within:text-gray-600">
               <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center">
                 <MagnifyingGlassIcon className="h-5 w-5" />
@@ -122,12 +143,39 @@ export const TeacherHeader: React.FC<TeacherHeaderProps> = ({ onMenuClick }) => 
               <input
                 id="teacher-search"
                 className="block h-full w-full border-transparent py-2 pl-8 pr-3 text-gray-900 placeholder-gray-500 focus:border-transparent focus:placeholder-gray-400 focus:outline-none focus:ring-0 sm:text-sm"
-                placeholder="Search courses..."
+                placeholder="Search courses & assignments..."
                 type="search"
-                name="search"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onFocus={() => { if (searchQuery.length >= 2) setSearchOpen(true); }}
               />
             </div>
-          </form>
+            {/* Search results dropdown */}
+            {searchOpen && (searchResults.courses.length > 0 || searchResults.assignments.length > 0) && (
+              <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-50 max-h-80 overflow-y-auto">
+                {searchResults.courses.length > 0 && (
+                  <div className="p-2">
+                    <p className="text-xs font-medium text-gray-500 px-2 py-1">Courses</p>
+                    {searchResults.courses.map((c: any) => (
+                      <button key={c.id} onClick={() => { navigate(`/teacher/courses/${c.id}`); setSearchOpen(false); setSearchQuery(''); }} className="w-full text-left px-3 py-2 text-sm text-gray-900 hover:bg-gray-50 rounded">
+                        {c.title}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {searchResults.assignments.length > 0 && (
+                  <div className="p-2 border-t border-gray-100">
+                    <p className="text-xs font-medium text-gray-500 px-2 py-1">Assignments</p>
+                    {searchResults.assignments.map((a: any) => (
+                      <button key={a.id} onClick={() => { navigate('/teacher/assignments'); setSearchOpen(false); setSearchQuery(''); }} className="w-full text-left px-3 py-2 text-sm text-gray-900 hover:bg-gray-50 rounded">
+                        {a.title}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
         
         {/* Right side */}

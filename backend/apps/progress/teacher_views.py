@@ -8,7 +8,12 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from apps.courses.models import Course, Content
-from apps.progress.models import TeacherProgress, Assignment, AssignmentSubmission
+from apps.progress.models import (
+    TeacherProgress,
+    Assignment,
+    AssignmentSubmission,
+    QuizSubmission,
+)
 from utils.decorators import tenant_required, teacher_or_admin
 
 from .teacher_serializers import (
@@ -265,20 +270,36 @@ def assignment_list(request):
     """
     status_filter = request.GET.get("status")
     courses = _teacher_assigned_courses_qs(request)
-    qs = Assignment.objects.filter(course__in=courses, is_active=True).select_related("course")
+    qs = (
+        Assignment.objects.filter(course__in=courses, is_active=True)
+        .select_related("course")
+        .select_related("quiz")
+    )
 
-    # Prefetch teacher submissions
+    # Prefetch teacher submissions (both regular and quiz)
     submissions = AssignmentSubmission.objects.filter(teacher=request.user, assignment__in=qs).select_related("assignment")
     submissions_map = {s.assignment_id: s for s in submissions}
+
+    quiz_submissions = QuizSubmission.objects.filter(teacher=request.user, quiz__assignment__in=qs).select_related("quiz")
+    quiz_submissions_map = {qs_item.quiz.assignment_id: qs_item for qs_item in quiz_submissions}
+
+    def _derive_status(assignment):
+        """Derive display status for an assignment, handling both quiz and regular types."""
+        if getattr(assignment, "quiz", None):
+            qs_item = quiz_submissions_map.get(assignment.id)
+            if not qs_item:
+                return "PENDING"
+            return "GRADED" if qs_item.graded_at is not None else "SUBMITTED"
+        sub = submissions_map.get(assignment.id)
+        return sub.status if sub else "PENDING"
 
     # Apply filter by derived status
     if status_filter in {"PENDING", "SUBMITTED", "GRADED"}:
         filtered = []
         for a in qs:
-            sub = submissions_map.get(a.id)
-            derived = sub.status if sub else "PENDING"
+            derived = _derive_status(a)
             if derived == status_filter:
-                setattr(a, "_submission_for_teacher", sub)
+                setattr(a, "_submission_for_teacher", submissions_map.get(a.id))
                 filtered.append(a)
         serializer = TeacherAssignmentListSerializer(filtered, many=True, context={"request": request})
         return Response(serializer.data, status=status.HTTP_200_OK)
@@ -343,4 +364,180 @@ def assignment_submission_detail(request, assignment_id):
 
     submission = get_object_or_404(AssignmentSubmission, assignment=assignment, teacher=request.user)
     return Response(TeacherAssignmentSubmissionSerializer(submission).data, status=status.HTTP_200_OK)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+@teacher_or_admin
+@tenant_required
+def quiz_detail(request, assignment_id):
+    """
+    Fetch quiz questions for a quiz-type assignment.
+    (Does not return correct answers.)
+    """
+    assignment = get_object_or_404(
+        Assignment,
+        id=assignment_id,
+        is_active=True,
+        course__tenant=request.tenant,
+        course__is_published=True,
+        course__is_active=True,
+    )
+    if not _teacher_assigned_to_course(request.user, assignment.course):
+        return Response({"error": "Not assigned to this course"}, status=status.HTTP_403_FORBIDDEN)
+
+    quiz = getattr(assignment, "quiz", None)
+    if not quiz:
+        return Response({"error": "Quiz not found for assignment"}, status=status.HTTP_404_NOT_FOUND)
+
+    submission = QuizSubmission.objects.filter(quiz=quiz, teacher=request.user).first()
+
+    questions = []
+    for q in quiz.questions.all().order_by("order"):
+        questions.append(
+            {
+                "id": str(q.id),
+                "order": q.order,
+                "question_type": q.question_type,
+                "prompt": q.prompt,
+                "options": q.options or [],
+                "points": q.points,
+            }
+        )
+
+    return Response(
+        {
+            "assignment_id": str(assignment.id),
+            "quiz_id": str(quiz.id),
+            "schema_version": quiz.schema_version,
+            "questions": questions,
+            "submission": (
+                {
+                    "answers": submission.answers,
+                    "score": float(submission.score) if submission.score is not None else None,
+                    "graded_at": submission.graded_at,
+                    "submitted_at": submission.submitted_at,
+                }
+                if submission
+                else None
+            ),
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@teacher_or_admin
+@tenant_required
+def quiz_submit(request, assignment_id):
+    """
+    Submit quiz answers. MCQs are auto-graded; short answers are stored for review.
+
+    Payload:
+      { "answers": { "<question_uuid>": { "option_index": 1 } | { "text": "..." } } }
+    """
+    assignment = get_object_or_404(
+        Assignment,
+        id=assignment_id,
+        is_active=True,
+        course__tenant=request.tenant,
+        course__is_published=True,
+        course__is_active=True,
+    )
+    if not _teacher_assigned_to_course(request.user, assignment.course):
+        return Response({"error": "Not assigned to this course"}, status=status.HTTP_403_FORBIDDEN)
+
+    quiz = getattr(assignment, "quiz", None)
+    if not quiz:
+        return Response({"error": "Quiz not found for assignment"}, status=status.HTTP_404_NOT_FOUND)
+
+    answers = request.data.get("answers") or {}
+    if not isinstance(answers, dict):
+        return Response({"error": "answers must be an object"}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Auto-grade MCQs; track whether manual review is needed for short-answer
+    all_questions = list(quiz.questions.all())
+    has_short_answer = any(q.question_type == "SHORT_ANSWER" for q in all_questions)
+    mcq_score = 0.0
+    for q in all_questions:
+        if q.question_type != "MCQ":
+            continue
+        try:
+            expected = int((q.correct_answer or {}).get("option_index"))
+        except Exception:
+            continue
+        got = answers.get(str(q.id)) or {}
+        if isinstance(got, dict):
+            try:
+                selected = int(got.get("option_index"))
+            except Exception:
+                selected = None
+            if selected is not None and selected == expected:
+                mcq_score += float(q.points or 1)
+
+    obj, _created = QuizSubmission.objects.get_or_create(
+        quiz=quiz,
+        teacher=request.user,
+        defaults={"answers": answers},
+    )
+    obj.answers = answers
+
+    if has_short_answer:
+        # Quiz needs manual review for short-answer questions.
+        # Store the MCQ partial score so it can be combined with manual grading later.
+        # Do NOT set graded_at — this keeps status as "SUBMITTED" until admin reviews.
+        obj.score = mcq_score
+        obj.graded_at = None
+    else:
+        # All questions are MCQ — fully auto-graded.
+        obj.score = mcq_score
+        obj.graded_at = _utcnow()
+
+    obj.save()
+
+    return Response(
+        {
+            "quiz_id": str(quiz.id),
+            "assignment_id": str(assignment.id),
+            "score": float(obj.score) if obj.score is not None else None,
+            "graded_at": obj.graded_at,
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+@teacher_or_admin
+@tenant_required
+def teacher_search(request):
+    """
+    Global search across courses and assignments for the current teacher.
+    Query param: q (required, min 2 chars)
+    """
+    q = (request.GET.get("q") or "").strip()
+    if len(q) < 2:
+        return Response({"courses": [], "assignments": []})
+
+    courses_qs = _teacher_assigned_courses_qs(request)
+    matched_courses = courses_qs.filter(
+        Q(title__icontains=q) | Q(description__icontains=q)
+    )[:10]
+
+    matched_assignments = Assignment.objects.filter(
+        course__in=courses_qs,
+        is_active=True,
+    ).filter(Q(title__icontains=q) | Q(description__icontains=q))[:10]
+
+    return Response({
+        "courses": [
+            {"id": str(c.id), "title": c.title, "type": "course"}
+            for c in matched_courses
+        ],
+        "assignments": [
+            {"id": str(a.id), "title": a.title, "course_id": str(a.course_id), "type": "assignment"}
+            for a in matched_assignments
+        ],
+    })
 

@@ -56,6 +56,15 @@ class Assignment(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     course = models.ForeignKey('courses.Course', on_delete=models.CASCADE, related_name='assignments')
     module = models.ForeignKey('courses.Module', on_delete=models.CASCADE, related_name='assignments', null=True, blank=True)
+
+    # Optional link to the content that generated this assignment (e.g. auto-generated from video)
+    content = models.ForeignKey(
+        'courses.Content',
+        on_delete=models.CASCADE,
+        related_name='assignments',
+        null=True,
+        blank=True,
+    )
     
     title = models.CharField(max_length=300)
     description = models.TextField()
@@ -67,6 +76,17 @@ class Assignment(models.Model):
     # Grading
     max_score = models.DecimalField(max_digits=5, decimal_places=2, default=100)
     passing_score = models.DecimalField(max_digits=5, decimal_places=2, default=70)
+
+    GENERATION_SOURCE_CHOICES = [
+        ("MANUAL", "Manual"),
+        ("VIDEO_AUTO", "Auto-generated from video"),
+    ]
+    generation_source = models.CharField(
+        max_length=20,
+        choices=GENERATION_SOURCE_CHOICES,
+        default="MANUAL",
+    )
+    generation_metadata = models.JSONField(blank=True, default=dict)
     
     is_mandatory = models.BooleanField(default=True)
     is_active = models.BooleanField(default=True)
@@ -80,6 +100,97 @@ class Assignment(models.Model):
     
     def __str__(self):
         return f"{self.course.title} - {self.title}"
+
+
+class Quiz(models.Model):
+    """
+    Quiz structure associated with an Assignment.
+    (Reflection assignments will not have a related Quiz.)
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    assignment = models.OneToOneField(Assignment, on_delete=models.CASCADE, related_name="quiz")
+
+    schema_version = models.PositiveSmallIntegerField(default=1)
+    is_auto_generated = models.BooleanField(default=False)
+    generation_model = models.CharField(max_length=100, blank=True, default="")
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "quizzes"
+
+    def __str__(self):
+        return f"Quiz({self.assignment_id})"
+
+
+class QuizQuestion(models.Model):
+    """
+    Quiz questions (MCQ and short-answer).
+    """
+
+    QUESTION_TYPE_CHOICES = [
+        ("MCQ", "Multiple Choice"),
+        ("SHORT_ANSWER", "Short Answer"),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    quiz = models.ForeignKey(Quiz, on_delete=models.CASCADE, related_name="questions")
+
+    order = models.PositiveIntegerField(default=0)
+    question_type = models.CharField(max_length=20, choices=QUESTION_TYPE_CHOICES)
+    prompt = models.TextField()
+
+    # For MCQ: options is a list of strings. For SHORT_ANSWER: typically empty.
+    options = models.JSONField(blank=True, default=list)
+
+    # For MCQ: {"option_index": 2}. For SHORT_ANSWER: {"text": "..."} (optional).
+    correct_answer = models.JSONField(blank=True, default=dict)
+    explanation = models.TextField(blank=True, default="")
+    points = models.PositiveIntegerField(default=1)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "quiz_questions"
+        ordering = ["quiz", "order"]
+        indexes = [
+            models.Index(fields=["quiz", "order"]),
+        ]
+
+    def __str__(self):
+        return f"QuizQuestion({self.quiz_id}) #{self.order}"
+
+
+class QuizSubmission(models.Model):
+    """
+    Teacher submissions for a quiz assignment.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    quiz = models.ForeignKey(Quiz, on_delete=models.CASCADE, related_name="submissions")
+    teacher = models.ForeignKey('users.User', on_delete=models.CASCADE, related_name="quiz_submissions")
+
+    # Answers keyed by question id: {"<question_uuid>": {...}}
+    answers = models.JSONField(blank=True, default=dict)
+    score = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
+    graded_at = models.DateTimeField(null=True, blank=True)
+
+    submitted_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "quiz_submissions"
+        unique_together = [("quiz", "teacher")]
+        ordering = ["-submitted_at"]
+        indexes = [
+            models.Index(fields=["teacher", "submitted_at"]),
+        ]
+
+    def __str__(self):
+        return f"QuizSubmission({self.teacher_id}, {self.quiz_id})"
 
 
 class AssignmentSubmission(models.Model):

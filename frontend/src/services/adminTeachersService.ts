@@ -20,5 +20,22 @@ export const adminTeachersService = {
     const res = await api.post('/users/auth/register-teacher/', payload);
     return res.data;
   },
-};
 
+  async updateTeacher(teacherId: string, data: Partial<User>): Promise<User> {
+    const res = await api.patch(`/teachers/${teacherId}/`, data);
+    return res.data;
+  },
+
+  async deactivateTeacher(teacherId: string): Promise<void> {
+    await api.delete(`/teachers/${teacherId}/`);
+  },
+
+  async bulkImportCSV(file: File) {
+    const fd = new FormData();
+    fd.append('file', file);
+    const res = await api.post('/teachers/bulk-import/', fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return res.data as { created: number; total_rows: number; results: Array<{ row: number; email: string; status: string; message?: string }> };
+  },
+};
