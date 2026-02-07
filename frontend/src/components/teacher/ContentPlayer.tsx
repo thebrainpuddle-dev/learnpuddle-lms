@@ -2,6 +2,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Hls from 'hls.js';
+import DOMPurify from 'dompurify';
 import {
   PlayIcon,
   DocumentTextIcon,
@@ -347,7 +348,7 @@ export const ContentPlayer: React.FC<ContentPlayerProps> = ({
         </div>
         
         <div className="p-6 prose prose-slate max-w-none">
-          <div dangerouslySetInnerHTML={{ __html: content.text_content || '' }} />
+          <div dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(content.text_content || '') }} />
         </div>
         
         {!isCompleted && onComplete && (

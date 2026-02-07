@@ -55,16 +55,16 @@ export const ProfilePage: React.FC = () => {
     first_name: user?.first_name || '',
     last_name: user?.last_name || '',
     email: user?.email || '',
-    department: (user as any)?.department || '',
-    employee_id: (user as any)?.employee_id || '',
-    designation: (user as any)?.designation || '',
-    bio: (user as any)?.bio || '',
-    subjects: (user as any)?.subjects || [],
-    grades: (user as any)?.grades || [],
+    department: user?.department || '',
+    employee_id: user?.employee_id || '',
+    designation: user?.designation || '',
+    bio: user?.bio || '',
+    subjects: user?.subjects || [],
+    grades: user?.grades || [],
   });
 
   const [profilePicPreview, setProfilePicPreview] = useState<string | null>(
-    (user as any)?.profile_picture_url || (user as any)?.profile_picture || null
+    user?.profile_picture_url || user?.profile_picture || null
   );
   const [profilePicFile, setProfilePicFile] = useState<File | null>(null);
 
@@ -391,7 +391,7 @@ export const ProfilePage: React.FC = () => {
                       <label className="relative inline-flex items-center cursor-pointer">
                         <input
                           type="checkbox"
-                          checked={(notifications as any)[item.key]}
+                          checked={notifications[item.key as keyof typeof notifications]}
                           onChange={(e) => setNotifications({ ...notifications, [item.key]: e.target.checked })}
                           className="sr-only peer"
                         />

@@ -4,6 +4,7 @@ import io
 from django.db import models
 from django.shortcuts import get_object_or_404
 from rest_framework.decorators import api_view, permission_classes, parser_classes
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -12,6 +13,12 @@ from rest_framework import status
 from utils.decorators import admin_only, tenant_required, check_tenant_limit
 from .models import User
 from .serializers import UserSerializer
+
+
+class TeacherPagination(PageNumberPagination):
+    page_size = 50
+    page_size_query_param = 'page_size'
+    max_page_size = 200
 
 
 @api_view(["GET"])
@@ -43,6 +50,11 @@ def teachers_list_view(request):
         )
 
     qs = qs.order_by("last_name", "first_name")
+
+    paginator = TeacherPagination()
+    page = paginator.paginate_queryset(qs, request)
+    if page is not None:
+        return paginator.get_paginated_response(UserSerializer(page, many=True).data)
     return Response(UserSerializer(qs, many=True).data, status=status.HTTP_200_OK)
 
 

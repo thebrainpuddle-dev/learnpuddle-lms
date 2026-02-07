@@ -40,7 +40,7 @@ export const TeacherHeader: React.FC<TeacherHeaderProps> = ({ onMenuClick }) => 
   const searchRef = useRef<HTMLDivElement>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
-  const [searchResults, setSearchResults] = useState<{ courses: any[]; assignments: any[] }>({ courses: [], assignments: [] });
+  const [searchResults, setSearchResults] = useState<{ courses: Array<{ id: string; title: string; type: string }>; assignments: Array<{ id: string; title: string; course_id: string; type: string }> }>({ courses: [], assignments: [] });
 
   // Fetch unread count (poll every 30 seconds)
   const { data: unreadCount = 0 } = useQuery({
@@ -156,7 +156,7 @@ export const TeacherHeader: React.FC<TeacherHeaderProps> = ({ onMenuClick }) => 
                 {searchResults.courses.length > 0 && (
                   <div className="p-2">
                     <p className="text-xs font-medium text-gray-500 px-2 py-1">Courses</p>
-                    {searchResults.courses.map((c: any) => (
+                    {searchResults.courses.map((c) => (
                       <button key={c.id} onClick={() => { navigate(`/teacher/courses/${c.id}`); setSearchOpen(false); setSearchQuery(''); }} className="w-full text-left px-3 py-2 text-sm text-gray-900 hover:bg-gray-50 rounded">
                         {c.title}
                       </button>
@@ -166,7 +166,7 @@ export const TeacherHeader: React.FC<TeacherHeaderProps> = ({ onMenuClick }) => 
                 {searchResults.assignments.length > 0 && (
                   <div className="p-2 border-t border-gray-100">
                     <p className="text-xs font-medium text-gray-500 px-2 py-1">Assignments</p>
-                    {searchResults.assignments.map((a: any) => (
+                    {searchResults.assignments.map((a) => (
                       <button key={a.id} onClick={() => { navigate('/teacher/assignments'); setSearchOpen(false); setSearchQuery(''); }} className="w-full text-left px-3 py-2 text-sm text-gray-900 hover:bg-gray-50 rounded">
                         {a.title}
                       </button>

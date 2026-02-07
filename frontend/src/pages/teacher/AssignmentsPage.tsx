@@ -138,21 +138,21 @@ export const AssignmentsPage: React.FC = () => {
               status={assignment.submission_status}
               score={assignment.score ?? undefined}
               feedback={assignment.feedback || undefined}
-              isQuiz={Boolean((assignment as any).is_quiz)}
+              isQuiz={Boolean(assignment.is_quiz)}
               onSubmit={() => {
-                if ((assignment as any).is_quiz) return;
+                if (assignment.is_quiz) return;
                 submitMutation.mutate(assignment.id);
               }}
               onStartQuiz={() => {
                 navigate(`/teacher/quizzes/${assignment.id}`);
               }}
               onView={() => {
-                if ((assignment as any).is_quiz) {
+                if (assignment.is_quiz) {
                   navigate(`/teacher/quizzes/${assignment.id}`);
                   return;
                 }
                 // For now: fetch submission and log (UI modal can be added later)
-                teacherService.getSubmission(assignment.id).then((s) => console.log('Submission', s));
+                teacherService.getSubmission(assignment.id);
               }}
             />
           ))}

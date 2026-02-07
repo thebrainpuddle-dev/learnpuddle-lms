@@ -17,21 +17,36 @@ services:
       POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    networks:
+      - backend
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
       interval: 10s
       timeout: 5s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
 
   # ── Redis (Celery broker + cache) ────────────────────────────────────
   redis:
     image: redis:7-alpine
     restart: always
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    networks:
+      - backend
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 3s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
 
   # ── Django API (gunicorn) ────────────────────────────────────────────
   web:
@@ -57,6 +72,8 @@ services:
       - CSRF_TRUSTED_ORIGINS=https://*.${PLATFORM_DOMAIN:-lms.com}
       - CORS_ALLOWED_ORIGIN_REGEX=https://.*\.${PLATFORM_DOMAIN:-lms.com}
       - SECURE_SSL_REDIRECT=False
+      - SECURE_HSTS_SECONDS=31536000
+      - SECURE_HSTS_PRELOAD=True
       - PLATFORM_DOMAIN=${PLATFORM_DOMAIN:-lms.com}
       - PLATFORM_NAME=${PLATFORM_NAME:-Brain LMS}
       - EMAIL_BACKEND=${EMAIL_BACKEND:-django.core.mail.backends.smtp.EmailBackend}
@@ -64,11 +81,20 @@ services:
       - EMAIL_HOST_USER=${EMAIL_HOST_USER:-}
       - EMAIL_HOST_PASSWORD=${EMAIL_HOST_PASSWORD:-}
       - DEFAULT_FROM_EMAIL=${DEFAULT_FROM_EMAIL:-noreply@lms.com}
+      - SENTRY_DSN=${SENTRY_DSN:-}
     volumes:
       - media_data:/app/media
       - static_data:/app/staticfiles
+    networks:
+      - backend
+      - frontend
     expose:
       - "8000"
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.5"
 
   # ── Celery worker (video processing, emails, etc.) ───────────────────
   worker:
@@ -76,7 +102,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     restart: always
-    command: celery -A config worker -l info --concurrency=2
+    command: celery -A config worker -l info --concurrency=${CELERY_CONCURRENCY:-2}
     depends_on:
       db:
         condition: service_healthy
@@ -96,8 +122,16 @@ services:
       - EMAIL_HOST=${EMAIL_HOST:-}
       - EMAIL_HOST_USER=${EMAIL_HOST_USER:-}
       - EMAIL_HOST_PASSWORD=${EMAIL_HOST_PASSWORD:-}
+      - SENTRY_DSN=${SENTRY_DSN:-}
     volumes:
       - media_data:/app/media
+    networks:
+      - backend
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2.0"
 
   # ── Celery beat (scheduled tasks: trial expiry, etc.) ────────────────
   beat:
@@ -120,6 +154,13 @@ services:
       - DB_HOST=db
       - DB_PORT=5432
       - CELERY_BROKER_URL=redis://redis:6379/0
+    networks:
+      - backend
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.25"
 
   # ── Nginx (reverse proxy + frontend + SSL) ───────────────────────────
   nginx:
@@ -136,9 +177,13 @@ services:
       - media_data:/var/www/media:ro
       - certbot_conf:/etc/letsencrypt:ro
       - certbot_www:/var/www/certbot:ro
-    # Frontend static files are baked into the nginx image or served from a volume.
-    # For simplicity, build frontend locally and copy build/ into a volume,
-    # or use a multi-stage frontend image.
+    networks:
+      - frontend
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
 
   # ── Certbot (SSL certificate renewal) ────────────────────────────────
   certbot:
@@ -147,6 +192,12 @@ services:
       - certbot_conf:/etc/letsencrypt
       - certbot_www:/var/www/certbot
     entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;'"
+
+networks:
+  backend:
+    driver: bridge
+  frontend:
+    driver: bridge
 
 volumes:
   postgres_data:

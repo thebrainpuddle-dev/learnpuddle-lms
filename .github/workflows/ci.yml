@@ -119,7 +119,14 @@ jobs:
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           script: |
             cd /opt/lms
+            # Pull new images
             docker compose -f docker-compose.prod.yml pull
+            # Run migrations BEFORE restarting app containers (prevents schema mismatch)
+            docker compose -f docker-compose.prod.yml up -d db redis
+            docker compose -f docker-compose.prod.yml run --rm -T web python manage.py migrate --noinput
+            docker compose -f docker-compose.prod.yml run --rm -T web python manage.py collectstatic --noinput
+            # Now restart all services with new code (migrations already applied)
             docker compose -f docker-compose.prod.yml up -d --remove-orphans
-            docker compose -f docker-compose.prod.yml exec -T web python manage.py migrate --noinput
-            docker compose -f docker-compose.prod.yml exec -T web python manage.py collectstatic --noinput
+            # Verify health
+            sleep 10
+            docker compose -f docker-compose.prod.yml exec -T web python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/')"

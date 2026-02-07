@@ -6,6 +6,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ContentPlayer } from '../../components/teacher';
 import { teacherService } from '../../services/teacherService';
 import type { TeacherCourseDetail } from '../../services/teacherService';
+// Types extended in ../../types/index.ts (ContentWithProgress, Assignment, etc.)
 import {
   ArrowLeftIcon,
   PlayCircleIcon,
@@ -44,12 +45,12 @@ export const CourseViewPage: React.FC = () => {
     if (course?.modules) {
       // Expand first incomplete module
       const incompleteModule = course.modules.find(m => 
-        m.contents.some((c: any) => !c.is_completed)
+        m.contents.some((c) => !c.is_completed)
       );
       if (incompleteModule) {
         setExpandedModules([incompleteModule.id]);
         // Select first incomplete content
-        const incompleteContent = incompleteModule.contents.find((c: any) => !c.is_completed);
+        const incompleteContent = incompleteModule.contents.find((c) => !c.is_completed);
         if (incompleteContent) {
           setSelectedContent(incompleteContent);
         }
@@ -128,8 +129,22 @@ export const CourseViewPage: React.FC = () => {
                   const d = res.data;
                   const w = window.open('', '_blank');
                   if (w) {
-                    w.document.write(`<html><head><title>Certificate</title><style>body{font-family:Georgia,serif;text-align:center;padding:60px;border:8px double #1F4788;margin:40px}h1{color:#1F4788;font-size:36px}h2{font-size:24px;color:#333}p{font-size:18px;color:#666}.id{font-size:12px;color:#999;margin-top:40px}</style></head><body><h1>Certificate of Completion</h1><p>This certifies that</p><h2>${d.teacher_name}</h2><p>has successfully completed</p><h2>${d.course_title}</h2><p>at <strong>${d.school_name}</strong></p><p>Completed on: ${d.completed_at ? new Date(d.completed_at).toLocaleDateString() : 'N/A'}</p><p class="id">ID: ${d.certificate_id}</p></body></html>`);
-                    w.document.close();
+                    const doc = w.document;
+                    doc.open();
+                    doc.write('<html><head><title>Certificate</title><style>body{font-family:Georgia,serif;text-align:center;padding:60px;border:8px double #1F4788;margin:40px}h1{color:#1F4788;font-size:36px}h2{font-size:24px;color:#333}p{font-size:18px;color:#666}.id{font-size:12px;color:#999;margin-top:40px}</style></head><body><div id="cert"></div></body></html>');
+                    doc.close();
+                    const container = doc.getElementById('cert');
+                    if (container) {
+                      const h1 = doc.createElement('h1'); h1.textContent = 'Certificate of Completion'; container.appendChild(h1);
+                      const p1 = doc.createElement('p'); p1.textContent = 'This certifies that'; container.appendChild(p1);
+                      const h2a = doc.createElement('h2'); h2a.textContent = d.teacher_name || ''; container.appendChild(h2a);
+                      const p2 = doc.createElement('p'); p2.textContent = 'has successfully completed'; container.appendChild(p2);
+                      const h2b = doc.createElement('h2'); h2b.textContent = d.course_title || ''; container.appendChild(h2b);
+                      const escMap: Record<string, string> = {'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'};
+                      const p3 = doc.createElement('p'); p3.innerHTML = 'at <strong>' + (d.school_name || '').replace(/[<>&"']/g, (ch: string) => escMap[ch] || ch) + '</strong>'; container.appendChild(p3);
+                      const p4 = doc.createElement('p'); p4.textContent = 'Completed on: ' + (d.completed_at ? new Date(d.completed_at).toLocaleDateString() : 'N/A'); container.appendChild(p4);
+                      const pId = doc.createElement('p'); pId.className = 'id'; pId.textContent = 'ID: ' + (d.certificate_id || ''); container.appendChild(pId);
+                    }
                     w.print();
                   }
                 } catch {
@@ -163,12 +178,12 @@ export const CourseViewPage: React.FC = () => {
                 title: selectedContent.title,
                 content_type: selectedContent.content_type,
                 file_url: selectedContent.file_url,
-                hls_url: (selectedContent as any).hls_url,
-                thumbnail_url: (selectedContent as any).thumbnail_url,
+                hls_url: selectedContent.hls_url,
+                thumbnail_url: selectedContent.thumbnail_url,
                 text_content: selectedContent.text_content,
                 duration: selectedContent.duration ?? undefined,
-                has_transcript: (selectedContent as any).has_transcript,
-                transcript_vtt_url: (selectedContent as any).transcript_vtt_url,
+                has_transcript: selectedContent.has_transcript,
+                transcript_vtt_url: selectedContent.transcript_vtt_url,
               }}
               isCompleted={selectedContent.is_completed}
               onComplete={async () => {
@@ -208,7 +223,7 @@ export const CourseViewPage: React.FC = () => {
             <div className="space-y-2">
               {course?.modules.map((module) => {
                 const isExpanded = expandedModules.includes(module.id);
-                const completedCount = module.contents.filter((c: any) => c.is_completed).length;
+                const completedCount = module.contents.filter((c) => c.is_completed).length;
                 const isModuleComplete = completedCount === module.contents.length;
                 
                 return (
@@ -246,7 +261,7 @@ export const CourseViewPage: React.FC = () => {
                               selectedContent?.id === content.id ? 'bg-emerald-50 border-l-2 border-emerald-500' : ''
                             }`}
                           >
-                            {getContentIcon(content.content_type, (content as any).is_completed)}
+                            {getContentIcon(content.content_type, !!content.is_completed)}
                             <div className="ml-3 flex-1 min-w-0">
                               <p className={`text-sm truncate ${
                                 selectedContent?.id === content.id ? 'text-emerald-700 font-medium' : 'text-gray-700'

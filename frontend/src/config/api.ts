@@ -35,17 +35,44 @@ api.interceptors.request.use(
 );
 
 /**
- * Response interceptor to handle token refresh
+ * Token refresh mutex -- ensures only one refresh happens at a time.
+ * Concurrent 401 responses queue behind the first refresh attempt.
+ */
+let isRefreshing = false;
+let refreshSubscribers: Array<{
+  resolve: (token: string) => void;
+  reject: (error: unknown) => void;
+}> = [];
+
+function subscribeTokenRefresh(
+  resolve: (token: string) => void,
+  reject: (error: unknown) => void,
+) {
+  refreshSubscribers.push({ resolve, reject });
+}
+
+function onRefreshed(token: string) {
+  refreshSubscribers.forEach((sub) => sub.resolve(token));
+  refreshSubscribers = [];
+}
+
+function onRefreshFailed(error: unknown) {
+  refreshSubscribers.forEach((sub) => sub.reject(error));
+  refreshSubscribers = [];
+}
+
+/**
+ * Response interceptor to handle token refresh (with mutex to prevent parallel refreshes)
  */
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
     const originalRequest = error.config;
-    
-    // If token expired and not already retrying
+
+    // If token expired and not already retrying this specific request
     if (error.response?.status === 401 && !originalRequest._retry) {
       originalRequest._retry = true;
-      
+
       const refreshToken = sessionStorage.getItem('refresh_token');
       // Determine which login page to redirect to based on current path
       const loginPath = window.location.pathname.startsWith('/super-admin')
@@ -60,18 +87,54 @@ api.interceptors.response.use(
         return Promise.reject(error);
       }
 
+      // If another request is already refreshing, queue this one
+      if (isRefreshing) {
+        return new Promise((resolve, reject) => {
+          subscribeTokenRefresh(
+            (newToken: string) => {
+              originalRequest.headers.Authorization = `Bearer ${newToken}`;
+              resolve(api(originalRequest));
+            },
+            (err: unknown) => {
+              reject(err);
+            },
+          );
+        });
+      }
+
+      isRefreshing = true;
+
       try {
         const response = await axios.post(`${API_BASE_URL}/users/auth/refresh/`, {
           refresh_token: refreshToken,
         });
-        
+
         const { access } = response.data;
         sessionStorage.setItem('access_token', access);
-        
+
+        // Update Zustand store if available
+        try {
+          const authData = sessionStorage.getItem('auth-storage');
+          if (authData) {
+            const parsed = JSON.parse(authData);
+            if (parsed?.state) {
+              parsed.state.accessToken = access;
+              sessionStorage.setItem('auth-storage', JSON.stringify(parsed));
+            }
+          }
+        } catch {
+          // Zustand sync is best-effort
+        }
+
+        isRefreshing = false;
+        onRefreshed(access);
+
         // Retry original request
         originalRequest.headers.Authorization = `Bearer ${access}`;
         return api(originalRequest);
       } catch (refreshError) {
+        isRefreshing = false;
+        onRefreshFailed(refreshError);
         // Refresh failed, logout user and redirect to login
         sessionStorage.removeItem('access_token');
         sessionStorage.removeItem('refresh_token');
@@ -79,7 +142,7 @@ api.interceptors.response.use(
         return Promise.reject(refreshError);
       }
     }
-    
+
     return Promise.reject(error);
   }
 );

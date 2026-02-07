@@ -168,12 +168,24 @@ def tenant_detail(request, tenant_id):
 @super_admin_only
 def tenant_impersonate(request, tenant_id):
     """Generate a short-lived admin JWT for the given tenant's SCHOOL_ADMIN."""
+    import logging
+    logger = logging.getLogger("audit.impersonation")
+
     tenant = get_object_or_404(Tenant, id=tenant_id)
     admin_user = User.objects.filter(tenant=tenant, role="SCHOOL_ADMIN", is_active=True).first()
     if not admin_user:
         return Response({"error": "No active admin found for this tenant"}, status=404)
 
     tokens = get_tokens_for_user(admin_user)
+
+    # Audit log
+    logger.warning(
+        "IMPERSONATION: super_admin=%s (%s) impersonated tenant=%s (%s) as user=%s (%s)",
+        request.user.id, request.user.email,
+        tenant.id, tenant.name,
+        admin_user.id, admin_user.email,
+    )
+
     return Response({
         "tokens": tokens,
         "user_email": admin_user.email,

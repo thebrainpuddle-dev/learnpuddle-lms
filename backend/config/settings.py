@@ -34,9 +34,9 @@ CSRF_COOKIE_SECURE = config("CSRF_COOKIE_SECURE", default=not DEBUG, cast=bool)
 SESSION_COOKIE_SAMESITE = config("SESSION_COOKIE_SAMESITE", default="Lax")
 CSRF_COOKIE_SAMESITE = config("CSRF_COOKIE_SAMESITE", default="Lax")
 
-SECURE_HSTS_SECONDS = config("SECURE_HSTS_SECONDS", default=0 if DEBUG else 60, cast=int)
+SECURE_HSTS_SECONDS = config("SECURE_HSTS_SECONDS", default=0 if DEBUG else 31536000, cast=int)
 SECURE_HSTS_INCLUDE_SUBDOMAINS = config("SECURE_HSTS_INCLUDE_SUBDOMAINS", default=not DEBUG, cast=bool)
-SECURE_HSTS_PRELOAD = config("SECURE_HSTS_PRELOAD", default=False, cast=bool)
+SECURE_HSTS_PRELOAD = config("SECURE_HSTS_PRELOAD", default=not DEBUG, cast=bool)
 
 SECURE_CONTENT_TYPE_NOSNIFF = True
 X_FRAME_OPTIONS = "DENY"
@@ -64,6 +64,7 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt.token_blacklist',  # Token blacklisting
     'corsheaders',
     'django_filters',
+    'django_celery_beat',  # Celery beat scheduler with DB backend
     
     # Local apps
     'apps.tenants',
@@ -123,6 +124,7 @@ DATABASES = {
         'PASSWORD': config('DB_PASSWORD'),
         'HOST': config('DB_HOST'),
         'PORT': config('DB_PORT'),
+        'CONN_MAX_AGE': config('DB_CONN_MAX_AGE', default=600, cast=int),  # Reuse connections for 10 min
     }
 }
 
@@ -236,6 +238,9 @@ REST_FRAMEWORK = {
     'DEFAULT_THROTTLE_RATES': {
         'anon': config('THROTTLE_ANON', default='200/minute'),
         'user': config('THROTTLE_USER', default='1000/minute'),
+        'login': '5/minute',
+        'password_reset': '3/minute',
+        'register': '10/minute',
     },
 }
 
@@ -246,6 +251,7 @@ SIMPLE_JWT = {
     'ROTATE_REFRESH_TOKENS': True,
     'BLACKLIST_AFTER_ROTATION': True,
     'ALGORITHM': 'HS256',
+    'SIGNING_KEY': config('JWT_SIGNING_KEY', default=SECRET_KEY),  # Separate from SECRET_KEY in prod
     'AUTH_HEADER_TYPES': ('Bearer',),
 }
 
@@ -292,6 +298,7 @@ CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TASK_TIME_LIMIT = config("CELERY_TASK_TIME_LIMIT", default=60 * 60 * 2, cast=int)  # 2h
 CELERY_TASK_SOFT_TIME_LIMIT = config("CELERY_TASK_SOFT_TIME_LIMIT", default=60 * 60 * 2 - 60, cast=int)
+CELERY_RESULT_EXPIRES = config("CELERY_RESULT_EXPIRES", default=60 * 60 * 24, cast=int)  # 24h
 
 # Email Configuration
 EMAIL_BACKEND = config('EMAIL_BACKEND', default='django.core.mail.backends.console.EmailBackend')
@@ -305,3 +312,19 @@ DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default='noreply@lms.com')
 # Platform branding (used in emails and public pages)
 PLATFORM_NAME = config('PLATFORM_NAME', default='Brain LMS')
 PLATFORM_DOMAIN = config('PLATFORM_DOMAIN', default='lms.com')
+
+# -----------------------------------------------------------------------------
+# Sentry error tracking (optional; set SENTRY_DSN to enable)
+# -----------------------------------------------------------------------------
+SENTRY_DSN = config('SENTRY_DSN', default='')
+if SENTRY_DSN:
+    try:
+        import sentry_sdk
+        sentry_sdk.init(
+            dsn=SENTRY_DSN,
+            traces_sample_rate=config('SENTRY_TRACES_RATE', default=0.1, cast=float),
+            send_default_pii=False,
+            environment=config('SENTRY_ENVIRONMENT', default='production'),
+        )
+    except ImportError:
+        pass  # sentry-sdk not installed; silently skip

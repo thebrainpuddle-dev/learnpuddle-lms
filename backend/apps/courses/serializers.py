@@ -129,15 +129,26 @@ class CourseDetailSerializer(serializers.ModelSerializer):
     modules = ModuleSerializer(many=True, read_only=True)
     assigned_groups = serializers.PrimaryKeyRelatedField(
         many=True,
-        queryset=TeacherGroup.objects.all(),
+        queryset=TeacherGroup.objects.none(),  # overridden in __init__
         required=False
     )
     assigned_teachers = serializers.PrimaryKeyRelatedField(
         many=True,
-        queryset=User.objects.filter(role='TEACHER'),
+        queryset=User.objects.none(),  # overridden in __init__
         required=False
     )
     stats = serializers.SerializerMethodField()
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        request = self.context.get('request')
+        if request and hasattr(request, 'tenant') and request.tenant:
+            self.fields['assigned_groups'].queryset = TeacherGroup.objects.filter(
+                tenant=request.tenant
+            )
+            self.fields['assigned_teachers'].queryset = User.objects.filter(
+                tenant=request.tenant, role='TEACHER', is_active=True
+            )
     
     class Meta:
         model = Course

@@ -5,7 +5,7 @@ FROM python:3.11-slim AS base
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-# System deps: ffmpeg (for video pipeline), pg client (for dbshell)
+# System deps: ffmpeg (for video pipeline), pg client libs
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         ffmpeg \
@@ -27,7 +27,15 @@ COPY . .
 # Collect static files (CSS, JS from Django admin etc.)
 RUN python manage.py collectstatic --noinput 2>/dev/null || true
 
+# Create non-root user for runtime
+RUN useradd -m -r -s /bin/false appuser && \
+    chown -R appuser:appuser /app
+USER appuser
+
 EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/')" || exit 1
 
 # Default: run gunicorn. Override in docker-compose for celery worker.
 CMD ["gunicorn", "config.wsgi:application", \

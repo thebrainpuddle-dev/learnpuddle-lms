@@ -1,9 +1,10 @@
 # apps/users/views.py
 
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import update_session_auth_hash
 from .serializers import (
@@ -14,8 +15,21 @@ from .tokens import get_tokens_for_user
 from utils.decorators import admin_only, tenant_required, check_tenant_limit
 
 
+class LoginThrottle(ScopedRateThrottle):
+    scope = 'login'
+
+
+class PasswordResetThrottle(ScopedRateThrottle):
+    scope = 'password_reset'
+
+
+class RegisterThrottle(ScopedRateThrottle):
+    scope = 'register'
+
+
 @api_view(['POST'])
 @permission_classes([AllowAny])
+@throttle_classes([LoginThrottle])
 def login_view(request):
     """
     User login endpoint.
@@ -108,9 +122,31 @@ def me_view(request):
         for key, value in request.data.items():
             if key in allowed_text:
                 setattr(user, key, value)
-        # Handle profile picture upload
+        # Handle profile picture upload (validate type + size)
         if 'profile_picture' in request.FILES:
-            user.profile_picture = request.FILES['profile_picture']
+            pic = request.FILES['profile_picture']
+            allowed_exts = {'.jpg', '.jpeg', '.png', '.webp', '.gif'}
+            allowed_mimes = {'image/jpeg', 'image/png', 'image/webp', 'image/gif'}
+            max_size = 5 * 1024 * 1024  # 5 MB
+
+            ext = ''
+            name = getattr(pic, 'name', '') or ''
+            if '.' in name:
+                ext = '.' + name.rsplit('.', 1)[-1].lower()
+            mime = getattr(pic, 'content_type', '') or ''
+            size = getattr(pic, 'size', 0) or 0
+
+            if ext and ext not in allowed_exts:
+                return Response(
+                    {'error': f"Image type '{ext}' not allowed. Accepted: {', '.join(sorted(allowed_exts))}"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            if mime and mime not in allowed_mimes:
+                return Response({'error': f"MIME type '{mime}' not allowed."}, status=status.HTTP_400_BAD_REQUEST)
+            if size > max_size:
+                return Response({'error': 'Profile picture must be under 5 MB.'}, status=status.HTTP_400_BAD_REQUEST)
+
+            user.profile_picture = pic
         user.save()
         return Response(UserSerializer(user, context={'request': request}).data, status=status.HTTP_200_OK)
 
@@ -120,6 +156,7 @@ def me_view(request):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+@throttle_classes([RegisterThrottle])
 @admin_only
 @tenant_required
 @check_tenant_limit("teachers")
@@ -170,6 +207,7 @@ def change_password_view(request):
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
+@throttle_classes([PasswordResetThrottle])
 def request_password_reset_view(request):
     """
     Request password reset email.
@@ -223,6 +261,7 @@ def request_password_reset_view(request):
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
+@throttle_classes([PasswordResetThrottle])
 def confirm_password_reset_view(request):
     """
     Confirm password reset with uid + token + new password.
