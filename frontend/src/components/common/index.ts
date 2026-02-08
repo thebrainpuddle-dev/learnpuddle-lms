@@ -6,3 +6,4 @@ export { Checkbox } from './Checkbox';
 export { Loading } from './Loading';
 export { ProtectedRoute } from './ProtectedRoute';
 export { ToastProvider, useToast } from './Toast';
+export { HlsVideoPlayer } from './HlsVideoPlayer';

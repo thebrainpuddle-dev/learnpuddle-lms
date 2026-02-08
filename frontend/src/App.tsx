@@ -19,6 +19,7 @@ import {
   SettingsPage,
   GroupsPage,
   RemindersPage,
+  MediaLibraryPage,
 } from './pages/admin';
 import {
   DashboardPage as TeacherDashboardPage,
@@ -125,6 +126,7 @@ function AppContent() {
         <Route path="courses" element={<AdminCoursesPage />} />
         <Route path="courses/new" element={<CourseEditorPage />} />
         <Route path="courses/:courseId/edit" element={<CourseEditorPage />} />
+        <Route path="media" element={<MediaLibraryPage />} />
         <Route path="teachers" element={<TeachersPage />} />
         <Route path="teachers/new" element={<CreateTeacherPage />} />
         <Route path="groups" element={<GroupsPage />} />

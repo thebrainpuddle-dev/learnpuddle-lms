@@ -10,3 +10,4 @@ export { CourseEditorPage } from './CourseEditorPage';
 export { GroupsPage } from './GroupsPage';
 export { RemindersPage } from './RemindersPage';
 export { ReportsPage } from './ReportsPage';
+export { MediaLibraryPage } from './MediaLibraryPage';

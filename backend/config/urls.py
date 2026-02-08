@@ -20,6 +20,7 @@ urlpatterns = [
     path('api/teacher/', include('apps.courses.teacher_urls')),
     path('api/teacher/', include('apps.progress.teacher_urls')),
     path('api/uploads/', include('apps.uploads.urls')),
+    path('api/media/', include('apps.media.urls')),
     path('api/reports/', include('apps.reports.urls')),
     path('api/reminders/', include('apps.reminders.urls')),
     path('api/notifications/', include('apps.notifications.urls')),

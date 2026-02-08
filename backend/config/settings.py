@@ -72,6 +72,7 @@ INSTALLED_APPS = [
     'apps.courses',
     'apps.progress',
     'apps.uploads',
+    'apps.media',
     'apps.reports',
     'apps.reminders',
     'apps.notifications',
@@ -89,6 +90,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'utils.media_xframe_middleware.MediaXFrameExemptMiddleware',
     
     # IMPORTANT: Tenant middleware must be after AuthenticationMiddleware
     'utils.tenant_middleware.TenantMiddleware',

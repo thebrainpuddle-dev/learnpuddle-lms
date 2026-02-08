@@ -3,9 +3,10 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Button, Input, Loading, useToast } from '../../components/common';
+import { Button, Input, Loading, useToast, HlsVideoPlayer } from '../../components/common';
 import { useTenantStore } from '../../stores/tenantStore';
 import { adminService } from '../../services/adminService';
+import { adminMediaService, type MediaAsset } from '../../services/adminMediaService';
 import api from '../../config/api';
 import {
   ArrowLeftIcon,
@@ -28,6 +29,8 @@ import {
   ExclamationCircleIcon,
   EyeIcon,
   GlobeAltIcon,
+  FolderIcon,
+  MagnifyingGlassIcon,
 } from '@heroicons/react/24/outline';
 
 interface Teacher {
@@ -89,7 +92,8 @@ const fetchCourse = async (id: string): Promise<Course> => {
 
 const fetchTeachers = async (): Promise<Teacher[]> => {
   const response = await api.get('/teachers/');
-  return response.data;
+  // Backend returns paginated response { results: [...], count, next, previous }
+  return response.data.results ?? response.data;
 };
 
 const fetchGroups = async (): Promise<TeacherGroup[]> => {
@@ -414,6 +418,11 @@ export const CourseEditorPage: React.FC = () => {
   // Content preview
   const [previewContent, setPreviewContent] = useState<Content | null>(null);
 
+  // Media library picker
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  const [librarySearch, setLibrarySearch] = useState('');
+  const [libraryAssets, setLibraryAssets] = useState<MediaAsset[]>([]);
+
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
     const { name, value, type } = e.target;
     setFormData(prev => ({
@@ -476,9 +485,10 @@ export const CourseEditorPage: React.FC = () => {
     const order = (module?.contents?.length || 0) + 1;
 
     // Video uses dedicated endpoint (HLS + transcript + assignments pipeline)
-    if (newContentData.content_type === 'VIDEO') {
+    // But if file_url is already set from library, use the regular content creation flow
+    if (newContentData.content_type === 'VIDEO' && !newContentData.file_url) {
       if (!contentFile) {
-        toast.error('Missing video file', 'Please choose a video to upload.');
+        toast.error('Missing video file', 'Please choose a video to upload or select from library.');
         return;
       }
       const fd = new FormData();
@@ -538,6 +548,9 @@ export const CourseEditorPage: React.FC = () => {
       // Upload file first
       const fileUrl = await uploadFile(contentFile, 'content');
       data.append('file_url', fileUrl);
+    } else if (newContentData.file_url) {
+      // file_url already set (e.g. from media library)
+      data.append('file_url', newContentData.file_url);
     }
 
     contentMutation.mutate({ courseId, moduleId, data });
@@ -886,7 +899,11 @@ export const CourseEditorPage: React.FC = () => {
                           </div>
                           <div className="flex items-center space-x-1 flex-shrink-0">
                             <button
-                              onClick={() => setPreviewContent(content)}
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setPreviewContent(content);
+                              }}
                               className="p-1 text-gray-400 hover:text-primary-600 rounded"
                               title="Preview"
                             >
@@ -923,7 +940,17 @@ export const CourseEditorPage: React.FC = () => {
                             />
                             <select
                               value={newContentData.content_type}
-                              onChange={(e) => setNewContentData(prev => ({ ...prev, content_type: e.target.value as Content['content_type'] }))}
+                              onChange={(e) => {
+                                const newType = e.target.value as Content['content_type'];
+                                setNewContentData(prev => ({
+                                  ...prev,
+                                  content_type: newType,
+                                  // Clear file_url when switching types to prevent stale values
+                                  file_url: '',
+                                  text_content: newType === 'TEXT' ? prev.text_content : '',
+                                }));
+                                setContentFile(null);
+                              }}
                               className="px-3 py-2 border border-gray-300 rounded-lg"
                             >
                               <option value="VIDEO" disabled={!canUploadVideo}>Video{!canUploadVideo ? ' (Upgrade)' : ''}</option>
@@ -954,7 +981,7 @@ export const CourseEditorPage: React.FC = () => {
                           )}
 
                           {(newContentData.content_type === 'VIDEO' || newContentData.content_type === 'DOCUMENT') && (
-                            <div>
+                            <div className="flex items-center gap-2">
                               <input
                                 ref={contentFileInputRef}
                                 type="file"
@@ -967,9 +994,41 @@ export const CourseEditorPage: React.FC = () => {
                                 size="sm"
                                 onClick={() => contentFileInputRef.current?.click()}
                               >
-                                {contentFile ? contentFile.name : 'Choose File'}
+                                {contentFile ? contentFile.name : newContentData.file_url ? 'From Library' : 'Choose File'}
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={async () => {
+                                  const mediaType = newContentData.content_type === 'VIDEO' ? 'VIDEO' : 'DOCUMENT';
+                                  try {
+                                    const res = await adminMediaService.listMedia({ media_type: mediaType, page_size: 50 });
+                                    setLibraryAssets(res.results);
+                                  } catch { setLibraryAssets([]); }
+                                  setLibraryOpen(true);
+                                }}
+                              >
+                                <FolderIcon className="h-4 w-4 mr-1" />
+                                From Library
                               </Button>
                             </div>
+                          )}
+
+                          {newContentData.content_type === 'LINK' && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={async () => {
+                                try {
+                                  const res = await adminMediaService.listMedia({ media_type: 'LINK', page_size: 50 });
+                                  setLibraryAssets(res.results);
+                                } catch { setLibraryAssets([]); }
+                                setLibraryOpen(true);
+                              }}
+                            >
+                              <FolderIcon className="h-4 w-4 mr-1" />
+                              From Library
+                            </Button>
                           )}
 
                           {/* Upload progress bar (video only) */}
@@ -1176,129 +1235,6 @@ export const CourseEditorPage: React.FC = () => {
             </p>
           </div>
 
-          {/* Content Preview Modal */}
-          {previewContent && (() => {
-            const backendOrigin = (process.env.REACT_APP_API_URL || 'http://localhost:8000/api').replace(/\/api\/?$/, '');
-            const resolveUrl = (u: string | null) => {
-              if (!u) return '';
-              if (u.startsWith('http')) return u;
-              return `${backendOrigin}${u.startsWith('/') ? '' : '/'}${u}`;
-            };
-            const c = previewContent;
-            return (
-              <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setPreviewContent(null)}>
-                <div className="bg-white rounded-xl max-w-3xl w-full mx-4 max-h-[85vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
-                  <div className="flex items-center justify-between p-4 border-b border-gray-200">
-                    <div className="flex items-center gap-2">
-                      {getContentIcon(c.content_type)}
-                      <h3 className="text-lg font-semibold text-gray-900 truncate">{c.title}</h3>
-                      <span className="text-xs text-gray-500 uppercase">{c.content_type}</span>
-                    </div>
-                    <button onClick={() => setPreviewContent(null)} className="p-1 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100">
-                      <XMarkIcon className="h-5 w-5" />
-                    </button>
-                  </div>
-                  <div className="p-6 overflow-y-auto flex-1">
-                    {c.content_type === 'VIDEO' ? (
-                      c.video_status === 'READY' && c.file_url ? (
-                        <video
-                          src={resolveUrl(c.file_url)}
-                          controls
-                          className="w-full rounded-lg bg-black aspect-video"
-                          controlsList="nodownload"
-                        >
-                          Your browser does not support the video tag.
-                        </video>
-                      ) : c.video_status === 'PROCESSING' ? (
-                        <div className="flex flex-col items-center justify-center py-16 text-amber-600">
-                          <ArrowPathIcon className="h-12 w-12 animate-spin mb-3" />
-                          <p className="font-medium">Video is still processing...</p>
-                          <p className="text-sm text-gray-500 mt-1">HLS transcoding, transcript, and assignments are being generated.</p>
-                        </div>
-                      ) : c.video_status === 'FAILED' ? (
-                        <div className="flex flex-col items-center justify-center py-16 text-red-600">
-                          <ExclamationCircleIcon className="h-12 w-12 mb-3" />
-                          <p className="font-medium">Video processing failed</p>
-                          <p className="text-sm text-gray-500 mt-1">Try re-uploading the video.</p>
-                        </div>
-                      ) : (
-                        <div className="flex flex-col items-center justify-center py-16 text-gray-400">
-                          <PlayCircleIcon className="h-12 w-12 mb-3" />
-                          <p className="text-sm">Video uploaded, waiting for processing...</p>
-                        </div>
-                      )
-                    ) : c.content_type === 'DOCUMENT' ? (
-                      c.file_url ? (
-                        <div className="space-y-4">
-                          {c.file_url.match(/\.pdf(\?|$)/i) ? (
-                            <iframe
-                              src={resolveUrl(c.file_url)}
-                              className="w-full h-[60vh] rounded-lg border border-gray-200"
-                              title={c.title}
-                            />
-                          ) : (
-                            <div className="flex flex-col items-center justify-center py-16">
-                              <DocumentTextIcon className="h-12 w-12 text-orange-400 mb-3" />
-                              <p className="font-medium text-gray-900">{c.title}</p>
-                              <a
-                                href={resolveUrl(c.file_url)}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="mt-3 inline-flex items-center gap-1.5 text-sm text-primary-600 hover:text-primary-700 font-medium"
-                              >
-                                Open document in new tab
-                              </a>
-                            </div>
-                          )}
-                        </div>
-                      ) : (
-                        <p className="text-gray-400 text-center py-8">No file uploaded</p>
-                      )
-                    ) : c.content_type === 'LINK' ? (
-                      c.file_url ? (
-                        <div className="space-y-4">
-                          <div className="p-4 bg-purple-50 rounded-lg">
-                            <div className="flex items-center gap-2 mb-2">
-                              <LinkIcon className="h-5 w-5 text-purple-500" />
-                              <span className="font-medium text-gray-900">{c.title}</span>
-                            </div>
-                            <a
-                              href={c.file_url.startsWith('http') ? c.file_url : `https://${c.file_url}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-sm text-primary-600 hover:underline break-all"
-                            >
-                              {c.file_url}
-                            </a>
-                          </div>
-                          <iframe
-                            src={c.file_url.startsWith('http') ? c.file_url : `https://${c.file_url}`}
-                            className="w-full h-[50vh] rounded-lg border border-gray-200"
-                            title={c.title}
-                            sandbox="allow-scripts allow-same-origin"
-                          />
-                        </div>
-                      ) : (
-                        <p className="text-gray-400 text-center py-8">No URL provided</p>
-                      )
-                    ) : c.content_type === 'TEXT' ? (
-                      <div className="prose prose-sm max-w-none">
-                        <div className="p-4 bg-gray-50 rounded-lg whitespace-pre-wrap text-gray-700 leading-relaxed">
-                          {c.text_content || 'No text content'}
-                        </div>
-                      </div>
-                    ) : (
-                      <p className="text-gray-400 text-center py-8">Preview not available for this content type</p>
-                    )}
-                  </div>
-                  <div className="p-4 border-t border-gray-200 flex justify-end">
-                    <Button variant="outline" onClick={() => setPreviewContent(null)}>Close</Button>
-                  </div>
-                </div>
-              </div>
-            );
-          })()}
-
           {/* Inline Create Group Modal */}
           {createGroupOpen && (
             <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
@@ -1363,6 +1299,198 @@ export const CourseEditorPage: React.FC = () => {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Content Preview Modal - outside tab conditionals so it can render from any tab */}
+      {previewContent && (() => {
+        const backendOrigin = (process.env.REACT_APP_API_URL || 'http://localhost:8000/api').replace(/\/api\/?$/, '');
+        const resolveUrl = (u: string | null) => {
+          if (!u) return '';
+          if (u.startsWith('http')) return u;
+          return `${backendOrigin}${u.startsWith('/') ? '' : '/'}${u}`;
+        };
+        const c = previewContent;
+        return (
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setPreviewContent(null)}>
+            <div className="bg-white rounded-xl max-w-3xl w-full mx-4 max-h-[85vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-center justify-between p-4 border-b border-gray-200">
+                <div className="flex items-center gap-2">
+                  {getContentIcon(c.content_type)}
+                  <h3 className="text-lg font-semibold text-gray-900 truncate">{c.title}</h3>
+                  <span className="text-xs text-gray-500 uppercase">{c.content_type}</span>
+                </div>
+                <button onClick={() => setPreviewContent(null)} className="p-1 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100">
+                  <XMarkIcon className="h-5 w-5" />
+                </button>
+              </div>
+              <div className="p-6 overflow-y-auto flex-1">
+                {c.content_type === 'VIDEO' ? (
+                  c.video_status === 'READY' && c.file_url ? (
+                    <HlsVideoPlayer
+                      src={resolveUrl(c.file_url)}
+                      className="w-full rounded-lg bg-black aspect-video"
+                    />
+                  ) : c.video_status === 'PROCESSING' ? (
+                    <div className="flex flex-col items-center justify-center py-16 text-amber-600">
+                      <ArrowPathIcon className="h-12 w-12 animate-spin mb-3" />
+                      <p className="font-medium">Video is still processing...</p>
+                      <p className="text-sm text-gray-500 mt-1">HLS transcoding, transcript, and assignments are being generated.</p>
+                    </div>
+                  ) : c.video_status === 'FAILED' ? (
+                    <div className="flex flex-col items-center justify-center py-16 text-red-600">
+                      <ExclamationCircleIcon className="h-12 w-12 mb-3" />
+                      <p className="font-medium">Video processing failed</p>
+                      <p className="text-sm text-gray-500 mt-1">Try re-uploading the video.</p>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col items-center justify-center py-16 text-gray-400">
+                      <PlayCircleIcon className="h-12 w-12 mb-3" />
+                      <p className="text-sm">Video uploaded, waiting for processing...</p>
+                    </div>
+                  )
+                ) : c.content_type === 'DOCUMENT' ? (
+                  c.file_url ? (
+                    <div className="space-y-4">
+                      {c.file_url.match(/\.pdf(\?|$)/i) ? (
+                        <iframe
+                          src={resolveUrl(c.file_url)}
+                          className="w-full h-[60vh] rounded-lg border border-gray-200"
+                          title={c.title}
+                        />
+                      ) : (
+                        <div className="flex flex-col items-center justify-center py-16">
+                          <DocumentTextIcon className="h-12 w-12 text-orange-400 mb-3" />
+                          <p className="font-medium text-gray-900">{c.title}</p>
+                          <a
+                            href={resolveUrl(c.file_url)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="mt-3 inline-flex items-center gap-1.5 text-sm text-primary-600 hover:text-primary-700 font-medium"
+                          >
+                            Open document in new tab
+                          </a>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="text-gray-400 text-center py-8">No file uploaded</p>
+                  )
+                ) : c.content_type === 'LINK' ? (
+                  c.file_url ? (
+                    <div className="space-y-4">
+                      <div className="p-4 bg-purple-50 rounded-lg">
+                        <div className="flex items-center gap-2 mb-2">
+                          <LinkIcon className="h-5 w-5 text-purple-500" />
+                          <span className="font-medium text-gray-900">{c.title}</span>
+                        </div>
+                        <a
+                          href={c.file_url.startsWith('http') ? c.file_url : `https://${c.file_url}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-sm text-primary-600 hover:underline break-all"
+                        >
+                          {c.file_url}
+                        </a>
+                      </div>
+                      <iframe
+                        src={c.file_url.startsWith('http') ? c.file_url : `https://${c.file_url}`}
+                        className="w-full h-[50vh] rounded-lg border border-gray-200"
+                        title={c.title}
+                        sandbox="allow-scripts allow-same-origin"
+                      />
+                    </div>
+                  ) : (
+                    <p className="text-gray-400 text-center py-8">No URL provided</p>
+                  )
+                ) : c.content_type === 'TEXT' ? (
+                  <div className="prose prose-sm max-w-none">
+                    <div className="p-4 bg-gray-50 rounded-lg whitespace-pre-wrap text-gray-700 leading-relaxed">
+                      {c.text_content || 'No text content'}
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-gray-400 text-center py-8">Preview not available for this content type</p>
+                )}
+              </div>
+              <div className="p-4 border-t border-gray-200 flex justify-end">
+                <Button variant="outline" onClick={() => setPreviewContent(null)}>Close</Button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Media Library Picker Modal */}
+      {libraryOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => { setLibraryOpen(false); setLibrarySearch(''); }}>
+          <div className="bg-white rounded-xl max-w-2xl w-full mx-4 max-h-[80vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-4 border-b border-gray-200">
+              <h3 className="text-lg font-semibold text-gray-900">Choose from Media Library</h3>
+              <button onClick={() => { setLibraryOpen(false); setLibrarySearch(''); }} className="p-1 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100">
+                <XMarkIcon className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="p-4 border-b border-gray-200">
+              <div className="relative">
+                <MagnifyingGlassIcon className="h-5 w-5 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={librarySearch}
+                  onChange={async (e) => {
+                    const v = e.target.value;
+                    setLibrarySearch(v);
+                    const mediaType = newContentData.content_type === 'LINK' ? 'LINK' : newContentData.content_type === 'VIDEO' ? 'VIDEO' : 'DOCUMENT';
+                    try {
+                      const res = await adminMediaService.listMedia({ media_type: mediaType, search: v, page_size: 50 });
+                      setLibraryAssets(res.results);
+                    } catch { /* ignore */ }
+                  }}
+                  placeholder="Search media..."
+                  className="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg text-sm"
+                />
+              </div>
+            </div>
+            <div className="overflow-y-auto flex-1 p-4">
+              {libraryAssets.length === 0 ? (
+                <div className="text-center py-12 text-gray-500">
+                  <FolderIcon className="h-12 w-12 mx-auto text-gray-300 mb-3" />
+                  <p className="text-sm">No assets found. Upload some in the Media Library first.</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                  {libraryAssets.map((asset) => (
+                    <button
+                      key={asset.id}
+                      onClick={() => {
+                        // Fill content form from library asset
+                        setNewContentData(prev => ({
+                          ...prev,
+                          title: prev.title || asset.title,
+                          file_url: asset.file_url,
+                        }));
+                        setContentFile(null); // clear any uploaded file
+                        setLibraryOpen(false);
+                        setLibrarySearch('');
+                        toast.success('Selected', `"${asset.title}" selected from library.`);
+                      }}
+                      className="flex flex-col items-center p-3 border border-gray-200 rounded-lg hover:border-primary-500 hover:bg-primary-50 transition-colors text-left"
+                    >
+                      <div className="h-16 w-full flex items-center justify-center bg-gray-50 rounded mb-2">
+                        {asset.media_type === 'VIDEO' && <PlayCircleIcon className="h-8 w-8 text-blue-500" />}
+                        {asset.media_type === 'DOCUMENT' && <DocumentTextIcon className="h-8 w-8 text-orange-500" />}
+                        {asset.media_type === 'LINK' && <LinkIcon className="h-8 w-8 text-purple-500" />}
+                      </div>
+                      <p className="text-xs font-medium text-gray-900 truncate w-full text-center">{asset.title}</p>
+                      {asset.file_name && (
+                        <p className="text-[10px] text-gray-400 truncate w-full text-center">{asset.file_name}</p>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>

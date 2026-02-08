@@ -133,6 +133,11 @@ class Content(models.Model):
     
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     module = models.ForeignKey(Module, on_delete=models.CASCADE, related_name='contents')
+    media_asset = models.ForeignKey(
+        'media.MediaAsset', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='course_contents',
+        help_text="Source media asset from the library (optional)",
+    )
     
     title = models.CharField(max_length=300)
     content_type = models.CharField(max_length=20, choices=CONTENT_TYPE_CHOICES)

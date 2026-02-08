@@ -13,6 +13,7 @@ import {
   ChartBarIcon,
   Cog6ToothIcon,
   ArrowRightOnRectangleIcon,
+  FolderIcon,
 } from '@heroicons/react/24/outline';
 import { useAuthStore } from '../../stores/authStore';
 import { authService } from '../../services/authService';
@@ -26,6 +27,7 @@ interface AdminSidebarProps {
 const ALL_NAV_ITEMS = [
   { name: 'Dashboard', href: '/admin/dashboard', icon: HomeIcon, feature: null },
   { name: 'Courses', href: '/admin/courses', icon: AcademicCapIcon, feature: null },
+  { name: 'Media', href: '/admin/media', icon: FolderIcon, feature: null },
   { name: 'Teachers', href: '/admin/teachers', icon: UserGroupIcon, feature: null },
   { name: 'Groups', href: '/admin/groups', icon: UsersIcon, feature: 'groups' as const },
   { name: 'Analytics', href: '/admin/analytics', icon: ChartBarIcon, feature: null },

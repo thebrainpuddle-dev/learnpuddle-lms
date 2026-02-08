@@ -5,7 +5,8 @@ import type { User } from '../types';
 export const adminTeachersService = {
   async listTeachers(params?: { search?: string; role?: string; is_active?: boolean }): Promise<User[]> {
     const res = await api.get('/teachers/', { params });
-    return res.data;
+    // Backend returns paginated response { results: [...], count, next, previous }
+    return res.data.results ?? res.data;
   },
 
   async createTeacher(payload: {
