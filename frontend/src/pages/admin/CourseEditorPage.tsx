@@ -102,16 +102,14 @@ const fetchGroups = async (): Promise<TeacherGroup[]> => {
 };
 
 const createCourse = async (data: FormData): Promise<Course> => {
-  const response = await api.post('/courses/', data, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-  });
+  // Axios automatically sets Content-Type with boundary for FormData
+  const response = await api.post('/courses/', data);
   return response.data;
 };
 
 const updateCourse = async ({ id, data }: { id: string; data: FormData }): Promise<Course> => {
-  const response = await api.patch(`/courses/${id}/`, data, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-  });
+  // Axios automatically sets Content-Type with boundary for FormData
+  const response = await api.patch(`/courses/${id}/`, data);
   return response.data;
 };
 
@@ -130,9 +128,8 @@ const deleteModule = async ({ courseId, moduleId }: { courseId: string; moduleId
 };
 
 const createContent = async ({ courseId, moduleId, data }: { courseId: string; moduleId: string; data: FormData }): Promise<Content> => {
-  const response = await api.post(`/courses/${courseId}/modules/${moduleId}/contents/`, data, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-  });
+  // Axios automatically sets Content-Type with boundary for FormData
+  const response = await api.post(`/courses/${courseId}/modules/${moduleId}/contents/`, data);
   return response.data;
 };
 
@@ -151,11 +148,10 @@ const deleteContent = async ({ courseId, moduleId, contentId }: { courseId: stri
 const uploadFile = async (file: File, type: 'thumbnail' | 'content'): Promise<string> => {
   const formData = new FormData();
   formData.append('file', file);
-  
+
   const endpoint = type === 'thumbnail' ? '/uploads/course-thumbnail/' : '/uploads/content-file/';
-  const response = await api.post(endpoint, formData, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-  });
+  // Axios automatically sets Content-Type with boundary for FormData
+  const response = await api.post(endpoint, formData);
   return response.data.url;
 };
 
@@ -287,7 +283,12 @@ export const CourseEditorPage: React.FC = () => {
         assigned_teachers: course.assigned_teachers || [],
       });
       if (course.thumbnail) {
-        setThumbnailPreview(course.thumbnail);
+        // Resolve thumbnail to full URL
+        const backendOrigin = (process.env.REACT_APP_API_URL || 'http://localhost:8000/api').replace(/\/api\/?$/, '');
+        const thumbnailUrl = course.thumbnail.startsWith('http')
+          ? course.thumbnail
+          : `${backendOrigin}${course.thumbnail.startsWith('/') ? '' : '/'}${course.thumbnail}`;
+        setThumbnailPreview(thumbnailUrl);
       }
       // Expand all modules by default when editing
       if (course.modules) {
@@ -449,12 +450,13 @@ export const CourseEditorPage: React.FC = () => {
     if (formData.deadline) data.append('deadline', formData.deadline);
     data.append('estimated_hours', String(formData.estimated_hours));
     data.append('assigned_to_all', String(formData.assigned_to_all));
-    
+
     if (!formData.assigned_to_all) {
+      // Append each ID separately - DRF's parser will combine into array
       formData.assigned_groups.forEach(id => data.append('assigned_groups', id));
       formData.assigned_teachers.forEach(id => data.append('assigned_teachers', id));
     }
-    
+
     if (thumbnailFile) {
       data.append('thumbnail', thumbnailFile);
     }
@@ -501,8 +503,8 @@ export const CourseEditorPage: React.FC = () => {
       try {
         setUploadPhase('uploading');
         setUploadProgress(0);
+        // Axios automatically sets Content-Type with boundary for FormData
         const res = await api.post(`/courses/${courseId}/modules/${moduleId}/contents/video-upload/`, fd, {
-          headers: { 'Content-Type': 'multipart/form-data' },
           timeout: 600000, // 10 min for large files
           onUploadProgress: (e) => {
             setUploadProgress(Math.round((e.loaded / (e.total || 1)) * 100));

@@ -32,9 +32,8 @@ const fetchTenantSettings = async (): Promise<TenantSettings> => {
 };
 
 const updateTenantSettings = async (data: FormData): Promise<TenantSettings> => {
-  const response = await api.patch('/tenants/settings/', data, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-  });
+  // Axios automatically sets Content-Type with boundary for FormData
+  const response = await api.patch('/tenants/settings/', data);
   return response.data;
 };
 
