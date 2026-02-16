@@ -8,7 +8,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("courses", "0004_rename_video_assets_status_idx_video_asset_status_5df695_idx_and_more"),
+        ("courses", "0005_content_media_asset"),
     ]
 
     operations = [
