@@ -38,13 +38,29 @@ ss -tlnp | grep :80
 # Should show "docker-proxy" or "containerd", not "nginx"
 ```
 
-**If the volume has default nginx files** (only `index.html` + `50x.html`), the frontend container couldn't write to the volume (runs as `nginx` user). The fix is in `docker-compose.prod.yml` (`user: root` on frontend). Pull latest, rebuild, and restart:
+**If the volume has default nginx files** (only `index.html` + `50x.html`), the frontend container couldn't write to the volume (runs as `nginx` user). The fix is in `docker-compose.prod.yml` (`user: root` on frontend).
+
+**If you see a blank white screen** (main.xxx.js and main.xxx.css return 404), the frontend volume has wrong or stale content. Do a **full reset**:
+
 ```bash
 cd /opt/lms
 git pull
+
+# Rebuild frontend image
 docker compose -f docker-compose.prod.yml build --no-cache frontend
-docker compose -f docker-compose.prod.yml up -d
+
+# Force frontend container to run and copy build to volume (overwrites existing)
+docker compose -f docker-compose.prod.yml run --rm frontend
+
+# Restart nginx to pick up new files
+docker compose -f docker-compose.prod.yml up -d nginx
+
+# Verify volume has React files
+docker compose -f docker-compose.prod.yml run --rm -T nginx ls -la /usr/share/nginx/html/static/js/
+# Should show main.*.js and chunk files
 ```
+
+Then hard-refresh the page (Ctrl+Shift+R or Cmd+Shift+R) to clear cached index.html.
 
 ### ".env.production.example: No such file or directory"
 
