@@ -77,7 +77,7 @@ def course_list_create(request):
         log_audit('CREATE', 'Course', target_id=str(course.id), target_repr=str(course), request=request)
 
         return Response(
-            CourseDetailSerializer(course).data,
+            CourseDetailSerializer(course, context={'request': request}).data,
             status=status.HTTP_201_CREATED
         )
 
@@ -95,7 +95,7 @@ def course_detail(request, course_id):
     course = get_object_or_404(Course, id=course_id, tenant=request.tenant)
     
     if request.method == 'GET':
-        serializer = CourseDetailSerializer(course)
+        serializer = CourseDetailSerializer(course, context={'request': request})
         return Response(serializer.data)
     
     elif request.method in ['PUT', 'PATCH']:
@@ -200,7 +200,7 @@ def course_duplicate(request, course_id):
             )
     
     return Response(
-        CourseDetailSerializer(course_copy).data,
+        CourseDetailSerializer(course_copy, context={'request': request}).data,
         status=status.HTTP_201_CREATED
     )
 

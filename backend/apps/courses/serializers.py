@@ -143,12 +143,23 @@ class CourseDetailSerializer(serializers.ModelSerializer):
         super().__init__(*args, **kwargs)
         request = self.context.get('request')
         if request and hasattr(request, 'tenant') and request.tenant:
-            self.fields['assigned_groups'].queryset = TeacherGroup.objects.filter(
+            # Use all_tenants() to bypass TenantManager's automatic filtering
+            # and apply explicit tenant filter to avoid double-filtering issues
+            self.fields['assigned_groups'].queryset = TeacherGroup.objects.all_tenants().filter(
                 tenant=request.tenant
             )
+            # Match /teachers/ endpoint: all non-admin users from tenant
+            # (includes TEACHER, HOD, IB_COORDINATOR regardless of is_active)
             self.fields['assigned_teachers'].queryset = User.objects.filter(
-                tenant=request.tenant, role='TEACHER', is_active=True
+                tenant=request.tenant,
+            ).exclude(
+                role__in=['SUPER_ADMIN', 'SCHOOL_ADMIN'],
             )
+        else:
+            # If no tenant in context, make fields optional to avoid validation errors
+            # The view decorator @tenant_required will catch missing tenant before serializer
+            self.fields['assigned_groups'].queryset = TeacherGroup.objects.none()
+            self.fields['assigned_teachers'].queryset = User.objects.none()
     
     class Meta:
         model = Course
