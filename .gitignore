@@ -38,6 +38,7 @@ media/
 .env
 .env.local
 .env.*.local
+.env.deploy
 
 # IDE
 .idea/

@@ -1,7 +1,9 @@
 # utils/tenant_utils.py
 
-from apps.tenants.models import Tenant
+from django.conf import settings
 from django.core.exceptions import PermissionDenied
+
+from apps.tenants.models import Tenant
 
 
 def get_tenant_from_request(request):
@@ -9,17 +11,24 @@ def get_tenant_from_request(request):
     Extract tenant from request based on subdomain or custom domain.
     
     Lookup order:
-    1. Custom domain (e.g., lms.school.edu)
-    2. Subdomain (e.g., school.lms.com)
-    3. Development fallback (localhost -> demo)
+    1. Platform root (learnpuddle.com) -> None (command center, signup)
+    2. Custom domain (e.g., lms.school.edu)
+    3. Subdomain (e.g., school.learnpuddle.com)
+    4. Development fallback (localhost -> demo)
     
     Examples:
+    - learnpuddle.com -> None (platform root)
     - lms.school.edu -> custom_domain='lms.school.edu'
-    - abc.lms.com -> subdomain='abc'
+    - school.learnpuddle.com -> subdomain='school'
     - localhost:8000 -> subdomain='demo' (development)
     """
     host = request.get_host().split(':')[0].lower()  # Remove port, lowercase
-    
+
+    # Platform root — no tenant (command center, signup, marketing)
+    platform_domain = getattr(settings, 'PLATFORM_DOMAIN', '').lower()
+    if platform_domain and host == platform_domain:
+        return None
+
     # Development mode - use demo tenant
     if host in ['localhost', '127.0.0.1']:
         subdomain = 'demo'

@@ -396,9 +396,12 @@ else:
 
 CORS_ALLOW_CREDENTIALS = True
 
-# Production: use regex to allow wildcard subdomains (e.g., *.learnpuddle.com)
+# Production: use regex to allow root + subdomains (learnpuddle.com, school.learnpuddle.com)
 _escaped_domain = _platform_domain_early.replace('.', r'\.')
-_cors_regex = config("CORS_ALLOWED_ORIGIN_REGEX", default=rf"^https://.*\.{_escaped_domain}$" if not DEBUG else "")
+_cors_regex = config(
+    "CORS_ALLOWED_ORIGIN_REGEX",
+    default=rf"^https://([a-z0-9-]+\.)*{_escaped_domain}$" if not DEBUG else "",
+)
 if _cors_regex:
     CORS_ALLOWED_ORIGIN_REGEXES = [_cors_regex]
 

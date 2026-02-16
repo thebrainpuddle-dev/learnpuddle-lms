@@ -45,6 +45,7 @@ class TenantMiddleware:
         public_paths = [
             '/admin/',
             '/api/auth/register/',  # Tenant registration (future)
+            '/api/onboarding/',  # Tenant signup (root domain)
             '/api/users/auth/login/',
             '/api/users/auth/refresh/',
             '/api/users/auth/request-password-reset/',

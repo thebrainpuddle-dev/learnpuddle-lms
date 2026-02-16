@@ -98,7 +98,7 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --legacy-peer-deps
         working-directory: frontend
       
       - name: Run tests with coverage
@@ -210,7 +210,7 @@ jobs:
             # Run migrations
             docker compose -f docker-compose.staging.yml up -d db redis
             docker compose -f docker-compose.staging.yml run --rm -T web python manage.py migrate --noinput
-            docker compose -f docker-compose.staging.yml run --rm -T web python manage.py collectstatic --noinput
+            docker compose -f docker-compose.staging.yml run --rm -T -u root web python manage.py collectstatic --noinput
             # Restart all services
             docker compose -f docker-compose.staging.yml up -d --remove-orphans
             # Verify health
@@ -272,7 +272,7 @@ jobs:
             # Run migrations BEFORE restarting app containers (prevents schema mismatch)
             docker compose -f docker-compose.prod.yml up -d db redis
             docker compose -f docker-compose.prod.yml run --rm -T web python manage.py migrate --noinput
-            docker compose -f docker-compose.prod.yml run --rm -T web python manage.py collectstatic --noinput
+            docker compose -f docker-compose.prod.yml run --rm -T -u root web python manage.py collectstatic --noinput
             # Now restart all services with new code (migrations already applied)
             docker compose -f docker-compose.prod.yml up -d --remove-orphans
             # Verify health

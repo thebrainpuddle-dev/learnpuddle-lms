@@ -3,11 +3,11 @@
 # Run this ON the Droplet after cloning the repo.
 # Usage: ./scripts/deploy-droplet.sh [REPO_URL]
 #
-# Example: ./scripts/deploy-droplet.sh https://github.com/your-org/LMS.git
+# Example: ./scripts/deploy-droplet.sh https://github.com/thebrainpuddle-dev/learnpuddle-lms.git
 
 set -e
 
-REPO_URL="${1:-}"
+REPO_URL="${1:-https://github.com/thebrainpuddle-dev/learnpuddle-lms.git}"
 APP_DIR="/opt/lms"
 
 echo "=== LearnPuddle Droplet Deployment ==="
@@ -34,35 +34,42 @@ if [ -n "$REPO_URL" ]; then
 else
     if [ ! -d "$APP_DIR" ]; then
         echo "Error: No repo URL provided and $APP_DIR does not exist."
-        echo "Usage: $0 https://github.com/your-org/LMS.git"
+        echo "Usage: $0 https://github.com/thebrainpuddle-dev/learnpuddle-lms.git"
         exit 1
     fi
     cd "$APP_DIR"
 fi
 
-# Step 3: Check .env exists
+# Step 3: Check .env exists (create from template if missing)
 if [ ! -f .env ]; then
-    echo ""
-    echo "ERROR: .env file not found!"
-    echo "Create it: cp .env.production.example .env"
-    echo "Then edit: nano .env"
-    echo ""
-    exit 1
+    if [ -f .env.production.example ]; then
+        cp .env.production.example .env
+        echo "Created .env from .env.production.example - EDIT IT: nano .env"
+        exit 1
+    elif [ -f .env.example ]; then
+        cp .env.example .env
+        echo "Created .env from .env.example - EDIT IT: nano .env"
+        exit 1
+    else
+        echo "ERROR: No .env and no template found. Copy .env.deploy from your Mac:"
+        echo "  scp .env.deploy root@64.227.185.164:/opt/lms/.env  # Replace IP if different"
+        exit 1
+    fi
 fi
 
 # Step 4: Start DB + Redis
 echo "Starting database and Redis..."
 docker compose -f docker-compose.prod.yml up -d db redis
 
-echo "Waiting 15s for DB to be ready..."
-sleep 15
+echo "Waiting 20s for DB to be ready..."
+sleep 20
 
 # Step 5: Migrations
 echo "Running migrations..."
 docker compose -f docker-compose.prod.yml run --rm web python manage.py migrate --noinput
 
-echo "Collecting static files..."
-docker compose -f docker-compose.prod.yml run --rm web python manage.py collectstatic --noinput
+echo "Collecting static files (run as root to fix volume permissions)..."
+docker compose -f docker-compose.prod.yml run --rm -u root web python manage.py collectstatic --noinput
 
 # Step 6: Create superadmin (if not exists)
 echo ""

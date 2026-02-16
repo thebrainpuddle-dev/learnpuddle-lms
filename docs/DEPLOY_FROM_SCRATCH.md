@@ -38,24 +38,19 @@ ss -tlnp | grep :80
 # Should show "docker-proxy" or "containerd", not "nginx"
 ```
 
-**If the volume has default nginx files** (only `index.html` + `50x.html`), the frontend container couldn't write to the volume (runs as `nginx` user). The fix is in `docker-compose.prod.yml` (`user: root` on frontend).
-
-**If you see a blank white screen** (main.xxx.js and main.xxx.css return 404), the frontend volume has wrong or stale content. Do a **full reset**:
+**If you see a blank white screen** (main.xxx.js and main.xxx.css return 404), the nginx image may have stale frontend. Rebuild nginx (frontend is baked into the image):
 
 ```bash
 cd /opt/lms
 git pull
 
-# Rebuild frontend image
-docker compose -f docker-compose.prod.yml build --no-cache frontend
+# Rebuild nginx (includes frontend build)
+docker compose -f docker-compose.prod.yml build --no-cache nginx
 
-# Force frontend container to run and copy build to volume (overwrites existing)
-docker compose -f docker-compose.prod.yml run --rm frontend
-
-# Restart nginx to pick up new files
+# Restart nginx
 docker compose -f docker-compose.prod.yml up -d nginx
 
-# Verify volume has React files
+# Verify React files are in the image
 docker compose -f docker-compose.prod.yml run --rm -T nginx ls -la /usr/share/nginx/html/static/js/
 # Should show main.*.js and chunk files
 ```
@@ -366,7 +361,7 @@ Enter:
 docker compose -f docker-compose.prod.yml up -d
 ```
 
-First run may take 3–5 minutes while the frontend image builds.
+First run may take 3–5 minutes while the nginx image builds (includes frontend).
 
 ### E.6 Verify Services
 
@@ -374,7 +369,7 @@ First run may take 3–5 minutes while the frontend image builds.
 docker compose -f docker-compose.prod.yml ps
 ```
 
-These should show `Up`: db, redis, web, asgi, worker, beat, nginx, flower. The `frontend` and `certbot` containers may show different states—that’s fine. Check nginx:
+These should show `Up`: db, redis, web, asgi, worker, beat, nginx, flower. The `certbot` container may show a different state—that’s fine. Check nginx:
 ```bash
 curl -s http://localhost/health/
 ```
@@ -447,7 +442,7 @@ docker compose -f docker-compose.prod.yml restart
 
 # Pull latest and redeploy
 git pull
-docker compose -f docker-compose.prod.yml build --no-cache web frontend
+docker compose -f docker-compose.prod.yml build --no-cache web nginx
 docker compose -f docker-compose.prod.yml run --rm web python manage.py migrate --noinput
 docker compose -f docker-compose.prod.yml run --rm -u root web python manage.py collectstatic --noinput
 docker compose -f docker-compose.prod.yml up -d --build

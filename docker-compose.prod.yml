@@ -251,23 +251,14 @@ services:
           memory: 256M
           cpus: "0.25"
 
-  # ── Frontend (React SPA) ────────────────────────────────────────────
-  frontend:
+  # ── Nginx (reverse proxy + frontend baked in + SSL) ───────────────────
+  # Frontend is built into the nginx image; no volume copy.
+  nginx:
     build:
-      context: ./frontend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: nginx/Dockerfile
       args:
         REACT_APP_API_URL: /api
-    restart: "no"
-    user: root  # Required: nginx user can't write to volume; copy must succeed
-    # This container just builds and exits; nginx copies the built files
-    command: ["sh", "-c", "cp -r /usr/share/nginx/html/* /frontend-build/"]
-    volumes:
-      - frontend_build:/frontend-build
-
-  # ── Nginx (reverse proxy + frontend + SSL) ───────────────────────────
-  nginx:
-    image: nginx:1.25-alpine
     restart: always
     ports:
       - "80:80"
@@ -275,12 +266,10 @@ services:
     depends_on:
       - web
       - asgi
-      - frontend
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
       - static_data:/var/www/static:ro
       - media_data:/var/www/media:ro
-      - frontend_build:/usr/share/nginx/html:ro
       - certbot_conf:/etc/letsencrypt:ro
       - certbot_www:/var/www/certbot:ro
     networks:
@@ -310,6 +299,5 @@ volumes:
   redis_data:
   media_data:
   static_data:
-  frontend_build:
   certbot_conf:
   certbot_www:

@@ -1,5 +1,9 @@
 # LearnPuddle Deployment Guide
 
+**New to deployment?** See **[DEPLOY_FROM_SCRATCH.md](DEPLOY_FROM_SCRATCH.md)** for a full step-by-step guide (Cloudflare DNS, Droplet setup, clone, .env, deploy).
+
+---
+
 ## Step 1: Migrate Repo to New GitHub Account
 
 Run these commands **on your Mac** (from the project root):
@@ -95,7 +99,7 @@ sleep 15
 
 # Run migrations
 docker compose -f docker-compose.prod.yml run --rm web python manage.py migrate --noinput
-docker compose -f docker-compose.prod.yml run --rm web python manage.py collectstatic --noinput
+docker compose -f docker-compose.prod.yml run --rm -u root web python manage.py collectstatic --noinput
 
 # Create superadmin (interactive)
 docker compose -f docker-compose.prod.yml run --rm web python manage.py createsuperuser
@@ -115,10 +119,15 @@ curl -s http://localhost/health/
 # https://learnpuddle.com/health/
 ```
 
-### 2.6 Post-Deploy: First School
+### 2.6 Cloudflare Setup
+
+1. **SSL mode**: Set to **Flexible** (HTTPS to user, HTTP to origin). See `docs/CLOUDFLARE_TROUBLESHOOTING.md` if you see "Host Error".
+2. **DNS**: Add A records for `@` and `*` pointing to your Droplet IP (both proxied).
+
+### 2.7 Post-Deploy: First School
 
 1. **Resend**: Add and verify domain `learnpuddle.com` in Resend dashboard, add DNS records in Cloudflare.
-2. **Create tenant**: Use Django admin at `https://learnpuddle.com/admin/` or API/shell to create a tenant with subdomain (e.g. `silveroaks` → `silveroaks.learnpuddle.com`).
+2. **Create tenant**: Use Command Center at `https://learnpuddle.com/super-admin/schools` or signup at `https://learnpuddle.com/signup`.
 
 ---
 
@@ -127,5 +136,5 @@ curl -s http://localhost/health/
 For future deployments (pull latest and restart):
 
 ```bash
-cd /opt/lms && git pull && docker compose -f docker-compose.prod.yml build --no-cache web frontend && docker compose -f docker-compose.prod.yml run --rm web python manage.py migrate --noinput && docker compose -f docker-compose.prod.yml run --rm web python manage.py collectstatic --noinput && docker compose -f docker-compose.prod.yml up -d --build
+cd /opt/lms && git pull && docker compose -f docker-compose.prod.yml build --no-cache web nginx && docker compose -f docker-compose.prod.yml run --rm web python manage.py migrate --noinput && docker compose -f docker-compose.prod.yml run --rm -u root web python manage.py collectstatic --noinput && docker compose -f docker-compose.prod.yml up -d --build
 ```
