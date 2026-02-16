@@ -2,8 +2,10 @@
 # Stage 1: build the React app
 FROM node:18-alpine AS build
 WORKDIR /app
+# Limit Node memory (helps on 2GB Droplets; npm ci can OOM)
+ENV NODE_OPTIONS=--max-old-space-size=1536
 COPY package.json package-lock.json ./
-RUN npm ci --silent
+RUN npm ci --legacy-peer-deps
 COPY . .
 ARG REACT_APP_API_URL=/api
 ENV REACT_APP_API_URL=$REACT_APP_API_URL \
