@@ -227,8 +227,21 @@ def teachers_bulk_import_view(request):
             results.append({"row": i, "email": email, "status": "error", "message": "Missing email or first_name"})
             continue
 
-        if User.objects.filter(email=email).exists():
-            results.append({"row": i, "email": email, "status": "error", "message": "Email already exists"})
+        # Check for existing user (case-insensitive)
+        existing_user = User.objects.filter(email__iexact=email).first()
+        if existing_user:
+            if existing_user.is_deleted:
+                results.append({
+                    "row": i, "email": email, "status": "error",
+                    "message": "Email was previously used. Contact support to restore or use different email."
+                })
+            elif existing_user.tenant_id == tenant.id:
+                results.append({"row": i, "email": email, "status": "error", "message": "Teacher already exists in this school"})
+            else:
+                results.append({
+                    "row": i, "email": email, "status": "error",
+                    "message": "Email is registered with another organization"
+                })
             continue
 
         if created_count >= remaining_slots:
