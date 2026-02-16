@@ -132,10 +132,11 @@ class CourseDetailSerializer(serializers.ModelSerializer):
         queryset=TeacherGroup.objects.none(),  # overridden in __init__
         required=False
     )
-    assigned_teachers = serializers.PrimaryKeyRelatedField(
-        many=True,
-        queryset=User.objects.none(),  # overridden in __init__
-        required=False
+    assigned_teachers = serializers.ListField(
+        child=serializers.UUIDField(),
+        required=False,
+        allow_empty=True,
+        write_only=True
     )
     stats = serializers.SerializerMethodField()
 
@@ -146,9 +147,32 @@ class CourseDetailSerializer(serializers.ModelSerializer):
             self.fields['assigned_groups'].queryset = TeacherGroup.objects.filter(
                 tenant=request.tenant
             )
-            self.fields['assigned_teachers'].queryset = User.objects.filter(
-                tenant=request.tenant, role='TEACHER', is_active=True
+
+    def validate_assigned_teachers(self, value):
+        """Resolve teacher IDs to User instances; ignore invalid/stale IDs."""
+        if not value:
+            return []
+        request = self.context.get('request')
+        tenant = getattr(request, 'tenant', None)
+        if not tenant:
+            return []
+        valid = list(
+            User.objects.filter(
+                tenant=tenant,
+                role__in=('TEACHER', 'HOD', 'IB_COORDINATOR'),
+                is_active=True,
+                id__in=value
             )
+        )
+        return valid
+
+    def to_representation(self, instance):
+        """Include assigned_teachers as IDs in read output."""
+        ret = super().to_representation(instance)
+        ret['assigned_teachers'] = list(
+            instance.assigned_teachers.values_list('id', flat=True)
+        )
+        return ret
     
     class Meta:
         model = Course
