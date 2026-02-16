@@ -5,11 +5,14 @@ from django.conf import settings
 from django.core.files.storage import default_storage
 from django.shortcuts import get_object_or_404
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 
 from utils.decorators import admin_only, tenant_required, check_feature
+
+
 from apps.progress.models import Assignment
 from apps.tenants.services import get_tenant_usage
 
@@ -24,6 +27,10 @@ from .tasks import (
     generate_assignments,
     finalize_video_asset,
 )
+
+
+class VideoUploadThrottle(ScopedRateThrottle):
+    scope = 'video_upload'
 
 
 ALLOWED_VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".wmv"}
@@ -49,6 +56,7 @@ def _maybe_absolute(request, url: str) -> str:
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
+@throttle_classes([VideoUploadThrottle])
 @admin_only
 @tenant_required
 @check_feature("feature_video_upload")
@@ -67,12 +75,17 @@ def upload_video_content(request, course_id, module_id):
     # ── Validate file type ──────────────────────────────────────────────
     ext = _ext_from_name(getattr(f, "name", ""))
     mime = getattr(f, "content_type", "")
+    if not ext and not mime:
+        return Response(
+            {"error": "File must have a recognizable extension or MIME type."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
     if ext and ext not in ALLOWED_VIDEO_EXTENSIONS:
         return Response(
             {"error": f"Unsupported file type '{ext}'. Allowed: {', '.join(sorted(ALLOWED_VIDEO_EXTENSIONS))}"},
             status=status.HTTP_400_BAD_REQUEST,
         )
-    if mime and mime not in ALLOWED_VIDEO_MIMES and not mime.startswith("video/"):
+    if mime and mime not in ALLOWED_VIDEO_MIMES:
         return Response(
             {"error": f"Unsupported MIME type '{mime}'. Upload a video file."},
             status=status.HTTP_400_BAD_REQUEST,

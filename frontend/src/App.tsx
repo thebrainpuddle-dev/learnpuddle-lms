@@ -4,9 +4,14 @@ import React, { useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { applyTheme, loadTenantTheme, DEFAULT_THEME } from './config/theme';
-import { ProtectedRoute, ToastProvider } from './components/common';
+import { ProtectedRoute, ToastProvider, ErrorBoundary, PWAPrompt, OfflineIndicator } from './components/common';
 import { LoginPage } from './pages/auth/LoginPage';
 import { SuperAdminLoginPage } from './pages/auth/SuperAdminLoginPage';
+import { ForgotPasswordPage } from './pages/auth/ForgotPasswordPage';
+import { ResetPasswordPage } from './pages/auth/ResetPasswordPage';
+import { SSOCallbackPage } from './pages/auth/SSOCallbackPage';
+import { SignupPage } from './pages/onboarding/SignupPage';
+import { SecuritySettings } from './pages/settings/SecuritySettings';
 import { AdminLayout } from './components/layout/AdminLayout';
 import { TeacherLayout } from './components/layout/TeacherLayout';
 import {
@@ -20,6 +25,7 @@ import {
   GroupsPage,
   RemindersPage,
   MediaLibraryPage,
+  AnnouncementsPage,
 } from './pages/admin';
 import {
   DashboardPage as TeacherDashboardPage,
@@ -85,6 +91,16 @@ function AppContent() {
         }
       />
 
+      {/* Public Routes — Password Reset */}
+      <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+      <Route path="/reset-password" element={<ResetPasswordPage />} />
+
+      {/* Public Routes — SSO Callback */}
+      <Route path="/auth/sso-callback" element={<SSOCallbackPage />} />
+
+      {/* Public Routes — Tenant Self-Service Signup */}
+      <Route path="/signup" element={<SignupPage />} />
+
       {/* Public Routes — Super Admin login (platform admin) */}
       <Route
         path="/super-admin/login"
@@ -131,8 +147,10 @@ function AppContent() {
         <Route path="teachers/new" element={<CreateTeacherPage />} />
         <Route path="groups" element={<GroupsPage />} />
         <Route path="reminders" element={<RemindersPage />} />
+        <Route path="announcements" element={<AnnouncementsPage />} />
         <Route path="analytics" element={<AnalyticsPage />} />
         <Route path="settings" element={<SettingsPage />} />
+        <Route path="settings/security" element={<SecuritySettings />} />
         <Route index element={<Navigate to="/admin/dashboard" replace />} />
         <Route path="*" element={<Navigate to="/admin/dashboard" replace />} />
       </Route>
@@ -153,6 +171,7 @@ function AppContent() {
         <Route path="reminders" element={<TeacherRemindersPage />} />
         <Route path="quizzes/:assignmentId" element={<QuizPage />} />
         <Route path="profile" element={<ProfilePage />} />
+        <Route path="settings/security" element={<SecuritySettings />} />
         <Route index element={<Navigate to="/teacher/dashboard" replace />} />
         <Route path="*" element={<Navigate to="/teacher/dashboard" replace />} />
       </Route>
@@ -219,13 +238,17 @@ function App() {
   }
   
   return (
-    <QueryClientProvider client={queryClient}>
-      <ToastProvider>
-        <BrowserRouter>
-          <AppContent />
-        </BrowserRouter>
-      </ToastProvider>
-    </QueryClientProvider>
+    <ErrorBoundary>
+      <QueryClientProvider client={queryClient}>
+        <ToastProvider>
+          <BrowserRouter>
+            <OfflineIndicator />
+            <AppContent />
+            <PWAPrompt />
+          </BrowserRouter>
+        </ToastProvider>
+      </QueryClientProvider>
+    </ErrorBoundary>
   );
 }
 

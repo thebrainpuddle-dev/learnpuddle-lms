@@ -4,7 +4,7 @@
 // Super admins use the separate /super-admin/login page.
 
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { Input } from '../../components/common/Input';
 import { Button } from '../../components/common/Button';
 import { Checkbox } from '../../components/common/Checkbox';
@@ -42,8 +42,8 @@ export const LoginPage: React.FC = () => {
       });
       const { user, tokens } = response.data;
 
-      // Store auth state
-      setAuth(user, tokens);
+      // Store auth state (use localStorage if "Remember me" is checked)
+      setAuth(user, tokens, rememberMe);
 
       // Redirect based on role
       if (user.role === 'SCHOOL_ADMIN') {
@@ -141,13 +141,12 @@ export const LoginPage: React.FC = () => {
                 onChange={(e) => setRememberMe(e.target.checked)}
               />
 
-              <button
-                type="button"
+              <Link
+                to="/forgot-password"
                 className="text-sm font-medium text-primary-600 hover:text-primary-700"
-                onClick={() => {/* TODO: Implement forgot password */}}
               >
                 Forgot password?
-              </button>
+              </Link>
             </div>
 
             <Button

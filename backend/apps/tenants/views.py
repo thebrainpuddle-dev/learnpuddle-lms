@@ -6,6 +6,7 @@ from rest_framework import status
 from .serializers import TenantThemeSerializer
 from utils.tenant_utils import get_tenant_from_request
 from utils.decorators import admin_only, tenant_required
+from utils.audit import log_audit
 from .services import TenantService
 from .serializers_admin import TenantSettingsSerializer
 
@@ -126,4 +127,5 @@ def tenant_settings_view(request):
     )
     serializer.is_valid(raise_exception=True)
     serializer.save()
+    log_audit('SETTINGS_CHANGE', 'Tenant', target_id=str(tenant.id), target_repr=tenant.name, request=request)
     return Response(serializer.data, status=status.HTTP_200_OK)

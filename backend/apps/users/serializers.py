@@ -4,6 +4,15 @@ from rest_framework import serializers
 from apps.users.models import User
 from django.contrib.auth import authenticate
 from django.contrib.auth.password_validation import validate_password
+from django.core.cache import cache
+
+# Account lockout settings
+MAX_LOGIN_ATTEMPTS = 5
+LOCKOUT_DURATION_SECONDS = 15 * 60  # 15 minutes
+
+
+def _lockout_key(email):
+    return f"login_fail:{email.lower()}"
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -32,7 +41,7 @@ class UserSerializer(serializers.ModelSerializer):
 
 class LoginSerializer(serializers.Serializer):
     """Serializer for user login."""
-    
+
     email = serializers.EmailField()
     password = serializers.CharField(write_only=True)
     portal = serializers.ChoiceField(
@@ -41,28 +50,39 @@ class LoginSerializer(serializers.Serializer):
         required=False,
         help_text="Which portal the login is coming from. 'super_admin' only accepts SUPER_ADMIN users; 'tenant' only accepts tenant users.",
     )
-    
+
     def validate(self, data):
         email = data.get('email')
         password = data.get('password')
         portal = data.get('portal', 'tenant')
-        
+
         if not email or not password:
             raise serializers.ValidationError("Email and password are required")
-        
+
+        # Check account lockout
+        key = _lockout_key(email)
+        attempts = cache.get(key, 0)
+        if attempts >= MAX_LOGIN_ATTEMPTS:
+            raise serializers.ValidationError(
+                "Account temporarily locked due to too many failed attempts. "
+                "Please try again in 15 minutes."
+            )
+
         # Authenticate user
         user = authenticate(
             request=self.context.get('request'),
             username=email,
             password=password
         )
-        
+
         if not user:
+            # Increment failed attempts
+            cache.set(key, attempts + 1, LOCKOUT_DURATION_SECONDS)
             raise serializers.ValidationError("Invalid credentials")
-        
+
         if not user.is_active:
             raise serializers.ValidationError("User account is disabled")
-        
+
         # Portal-aware role validation: prevent cross-portal logins
         if portal == 'super_admin' and user.role != 'SUPER_ADMIN':
             raise serializers.ValidationError(
@@ -73,7 +93,10 @@ class LoginSerializer(serializers.Serializer):
             raise serializers.ValidationError(
                 "Super admin accounts must log in at the platform admin portal."
             )
-        
+
+        # Clear failed attempts on successful login
+        cache.delete(key)
+
         data['user'] = user
         return data
 

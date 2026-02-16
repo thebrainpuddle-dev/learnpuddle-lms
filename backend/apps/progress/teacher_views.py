@@ -39,9 +39,15 @@ def _teacher_assigned_to_course(user, course: Course) -> bool:
     return False
 
 
-def _teacher_assigned_courses_qs(request):
+def _teacher_assigned_courses_qs(request, with_prefetch=False):
+    """Get courses assigned to the current teacher.
+    
+    Args:
+        request: HTTP request with user and tenant
+        with_prefetch: If True, prefetch modules and contents for N+1 optimization
+    """
     user = request.user
-    return (
+    qs = (
         Course.objects.filter(tenant=request.tenant, is_active=True, is_published=True)
         .filter(
             Q(assigned_to_all=True)
@@ -50,6 +56,15 @@ def _teacher_assigned_courses_qs(request):
         )
         .distinct()
     )
+    
+    if with_prefetch:
+        qs = qs.select_related('tenant', 'created_by').prefetch_related(
+            'modules__contents',
+            'assigned_teachers',
+            'assigned_groups',
+        )
+    
+    return qs
 
 
 @api_view(["GET"])
@@ -214,9 +229,21 @@ def progress_update(request, content_id):
     progress_pct = request.data.get("progress_percentage")
 
     if video_seconds is not None:
-        obj.video_progress_seconds = int(video_seconds)
+        try:
+            video_seconds = int(video_seconds)
+        except (TypeError, ValueError):
+            return Response({"error": "video_progress_seconds must be an integer"}, status=status.HTTP_400_BAD_REQUEST)
+        if video_seconds < 0:
+            return Response({"error": "video_progress_seconds cannot be negative"}, status=status.HTTP_400_BAD_REQUEST)
+        obj.video_progress_seconds = video_seconds
     if progress_pct is not None:
-        obj.progress_percentage = float(progress_pct)
+        try:
+            progress_pct = float(progress_pct)
+        except (TypeError, ValueError):
+            return Response({"error": "progress_percentage must be a number"}, status=status.HTTP_400_BAD_REQUEST)
+        if progress_pct < 0 or progress_pct > 100:
+            return Response({"error": "progress_percentage must be between 0 and 100"}, status=status.HTTP_400_BAD_REQUEST)
+        obj.progress_percentage = progress_pct
 
     if obj.status == "NOT_STARTED":
         obj.status = "IN_PROGRESS"
@@ -456,6 +483,18 @@ def quiz_submit(request, assignment_id):
     if not isinstance(answers, dict):
         return Response({"error": "answers must be an object"}, status=status.HTTP_400_BAD_REQUEST)
 
+    # Limit answers payload size: max 200 keys, each value must be a flat dict
+    max_answers = 200
+    if len(answers) > max_answers:
+        return Response({"error": f"Too many answers (max {max_answers})"}, status=status.HTTP_400_BAD_REQUEST)
+    for key, val in answers.items():
+        if not isinstance(val, dict):
+            return Response({"error": f"Each answer must be an object, got {type(val).__name__} for '{key}'"}, status=status.HTTP_400_BAD_REQUEST)
+        # Reject nested objects — values must be scalar (str, int, float, bool, None)
+        for inner_key, inner_val in val.items():
+            if isinstance(inner_val, (dict, list)):
+                return Response({"error": "Answer values must be scalar (no nested objects or arrays)"}, status=status.HTTP_400_BAD_REQUEST)
+
     # Auto-grade MCQs; track whether manual review is needed for short-answer
     all_questions = list(quiz.questions.all())
     has_short_answer = any(q.question_type == "SHORT_ANSWER" for q in all_questions)
@@ -540,4 +579,125 @@ def teacher_search(request):
             for a in matched_assignments
         ],
     })
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+@teacher_or_admin
+@tenant_required
+def course_certificate(request, course_id):
+    """
+    Generate and download a completion certificate for a course.
+    
+    The teacher must have completed the course (100% progress) to download.
+    Tenant must have the 'certificates' feature enabled.
+    """
+    from django.http import FileResponse
+    from .certificate_service import generate_certificate_pdf, get_certificate_filename
+    
+    # Check if tenant has certificates feature enabled
+    tenant = request.tenant
+    if not getattr(tenant, 'feature_certificates', False):
+        return Response(
+            {"error": "Certificates are not enabled for your organization."},
+            status=status.HTTP_403_FORBIDDEN
+        )
+    
+    # Get the course
+    course = get_object_or_404(
+        Course,
+        id=course_id,
+        tenant=tenant,
+        is_active=True,
+        is_published=True,
+    )
+    
+    # Check if teacher is assigned to the course
+    if not _teacher_assigned_to_course(request.user, course):
+        return Response(
+            {"error": "You are not assigned to this course."},
+            status=status.HTTP_403_FORBIDDEN
+        )
+    
+    # Get course progress
+    progress = TeacherProgress.objects.filter(
+        teacher=request.user,
+        course=course,
+        content__isnull=True,  # Course-level progress (not content-level)
+    ).first()
+    
+    # If no course-level progress exists, calculate from content
+    if not progress:
+        # Check content-level progress
+        # Note: Content is related via Course → modules → contents, not directly
+        from apps.courses.models import Content
+        total_contents = Content.objects.filter(module__course=course, is_active=True).count()
+        if total_contents == 0:
+            return Response(
+                {"error": "This course has no content to complete."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        completed_contents = TeacherProgress.objects.filter(
+            teacher=request.user,
+            course=course,
+            content__isnull=False,
+            status='COMPLETED',
+        ).count()
+        
+        progress_percentage = (completed_contents / total_contents) * 100
+        completion_date = _utcnow()
+        
+        # Get the last completion date from content progress
+        last_completed = TeacherProgress.objects.filter(
+            teacher=request.user,
+            course=course,
+            content__isnull=False,
+            status='COMPLETED',
+        ).order_by('-completed_at').first()
+        
+        if last_completed and last_completed.completed_at:
+            completion_date = last_completed.completed_at
+    else:
+        progress_percentage = float(progress.progress_percentage)
+        completion_date = progress.completed_at or _utcnow()
+    
+    # Check if course is completed (100% or close to it)
+    if progress_percentage < 99.9:
+        return Response(
+            {"error": f"You have not completed this course yet. Progress: {progress_percentage:.1f}%"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    # Get tenant logo path if available
+    logo_path = None
+    if tenant.logo and hasattr(tenant.logo, 'path'):
+        try:
+            logo_path = tenant.logo.path
+        except Exception:
+            pass  # Logo not available locally
+    
+    # Generate certificate
+    certificate_id = f"{str(course_id)[:8]}-{str(request.user.id)[:8]}"
+    
+    pdf_buffer = generate_certificate_pdf(
+        teacher_name=request.user.get_full_name(),
+        course_title=course.title,
+        completion_date=completion_date,
+        tenant_name=tenant.name,
+        tenant_logo_path=logo_path,
+        primary_color=tenant.primary_color or "#1F4788",
+        certificate_id=certificate_id,
+    )
+    
+    filename = get_certificate_filename(request.user.get_full_name(), course.title)
+    
+    response = FileResponse(
+        pdf_buffer,
+        content_type='application/pdf',
+        as_attachment=True,
+        filename=filename,
+    )
+    
+    return response
 

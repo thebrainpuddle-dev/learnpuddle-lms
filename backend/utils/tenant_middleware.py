@@ -1,5 +1,6 @@
 # utils/tenant_middleware.py
 
+import re
 import threading
 from django.core.exceptions import PermissionDenied
 from django.http import JsonResponse
@@ -47,6 +48,8 @@ class TenantMiddleware:
             '/api/users/auth/login/',
             '/api/users/auth/refresh/',
             '/api/users/auth/request-password-reset/',
+            '/api/users/auth/confirm-password-reset/',
+            '/api/users/auth/verify-email/',
             '/api/tenants/theme/',
             '/api/super-admin/',  # Super admin endpoints (no tenant context needed)
             '/health/',
@@ -66,8 +69,10 @@ class TenantMiddleware:
             
             # If user is authenticated, verify they belong to this tenant
             if hasattr(request, 'user') and request.user.is_authenticated:
+                # Normalize path: /api/v1/... → /api/... for public path matching
+                norm_path = re.sub(r'^/api/v\d+/', '/api/', request.path)
                 # Skip membership enforcement for public endpoints
-                if not any(request.path.startswith(path) for path in public_paths):
+                if not any(norm_path.startswith(path) or request.path.startswith(path) for path in public_paths):
                     if request.user.role != 'SUPER_ADMIN':  # Super admins can access any tenant
                         if tenant is None:
                             return JsonResponse({'error': 'Tenant required'}, status=400)

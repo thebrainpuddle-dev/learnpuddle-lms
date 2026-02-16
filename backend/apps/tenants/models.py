@@ -2,6 +2,7 @@
 
 from django.db import models
 from django.utils.text import slugify
+from django.utils import timezone
 import uuid
 
 
@@ -57,6 +58,34 @@ class Tenant(models.Model):
     feature_reports_export = models.BooleanField(default=False)
     feature_groups = models.BooleanField(default=True)
     feature_certificates = models.BooleanField(default=False)
+    feature_sso = models.BooleanField(default=False)
+    feature_2fa = models.BooleanField(default=False)
+
+    # SSO Configuration
+    sso_domains = models.TextField(
+        blank=True, default='',
+        help_text="Comma-separated list of allowed SSO domains (e.g., school.edu,district.edu)"
+    )
+    allow_sso_registration = models.BooleanField(
+        default=True,
+        help_text="Allow new users to register via SSO"
+    )
+    require_sso = models.BooleanField(
+        default=False,
+        help_text="Require SSO for all users (disable password login)"
+    )
+    require_2fa = models.BooleanField(
+        default=False,
+        help_text="Require 2FA for all users"
+    )
+
+    # Custom domain support
+    custom_domain = models.CharField(
+        max_length=255, blank=True, default='',
+        help_text="Custom domain (e.g., lms.school.edu)"
+    )
+    custom_domain_verified = models.BooleanField(default=False)
+    custom_domain_ssl_expires = models.DateTimeField(null=True, blank=True)
 
     # Super admin internal notes
     internal_notes = models.TextField(blank=True, default='')
@@ -72,6 +101,7 @@ class Tenant(models.Model):
             models.Index(fields=['slug']),
             models.Index(fields=['subdomain']),
             models.Index(fields=['is_active']),
+            models.Index(fields=['custom_domain']),
         ]
     
     def __str__(self):
@@ -81,3 +111,53 @@ class Tenant(models.Model):
         if not self.slug:
             self.slug = slugify(self.name)
         super().save(*args, **kwargs)
+
+
+class AuditLog(models.Model):
+    """Tracks admin actions for security and compliance."""
+
+    ACTION_CHOICES = [
+        ('CREATE', 'Create'),
+        ('UPDATE', 'Update'),
+        ('DELETE', 'Delete'),
+        ('LOGIN', 'Login'),
+        ('LOGOUT', 'Logout'),
+        ('PUBLISH', 'Publish'),
+        ('UNPUBLISH', 'Unpublish'),
+        ('DEACTIVATE', 'Deactivate'),
+        ('ACTIVATE', 'Activate'),
+        ('PASSWORD_RESET', 'Password Reset'),
+        ('SETTINGS_CHANGE', 'Settings Change'),
+        ('IMPORT', 'Bulk Import'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tenant = models.ForeignKey(
+        Tenant, on_delete=models.CASCADE,
+        related_name='audit_logs', null=True, blank=True,
+    )
+    actor = models.ForeignKey(
+        'users.User', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='audit_actions',
+    )
+    action = models.CharField(max_length=20, choices=ACTION_CHOICES)
+    target_type = models.CharField(max_length=100, help_text="e.g. 'User', 'Course'")
+    target_id = models.CharField(max_length=255, blank=True)
+    target_repr = models.CharField(max_length=500, blank=True)
+    changes = models.JSONField(default=dict, blank=True)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.TextField(blank=True, default='')
+    request_id = models.CharField(max_length=64, blank=True, default='')
+    timestamp = models.DateTimeField(default=timezone.now, db_index=True)
+
+    class Meta:
+        db_table = 'audit_logs'
+        ordering = ['-timestamp']
+        indexes = [
+            models.Index(fields=['tenant', 'timestamp']),
+            models.Index(fields=['actor', 'timestamp']),
+            models.Index(fields=['target_type', 'target_id']),
+        ]
+
+    def __str__(self):
+        return f"{self.actor} {self.action} {self.target_type}:{self.target_id}"

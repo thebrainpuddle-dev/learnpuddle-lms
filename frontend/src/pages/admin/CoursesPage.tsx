@@ -3,7 +3,7 @@
 import React, { useState, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { Button, Loading, useToast } from '../../components/common';
+import { Button, Loading, useToast, BulkActionsBar, BulkAction } from '../../components/common';
 import api from '../../config/api';
 import {
   PlusIcon,
@@ -21,6 +21,8 @@ import {
   TableCellsIcon,
   ViewColumnsIcon,
   Bars3Icon,
+  CheckIcon,
+  StopIcon,
 } from '@heroicons/react/24/outline';
 
 interface Course {
@@ -80,6 +82,11 @@ const togglePublish = async (course: Course): Promise<Course> => {
     is_published: !course.is_published,
   });
   return response.data;
+};
+
+const bulkActionCourses = async (action: 'publish' | 'unpublish' | 'delete', courseIds: string[]) => {
+  const response = await api.post('/courses/bulk-action/', { action, course_ids: courseIds });
+  return response.data as { message: string; affected_count: number; requested_count: number };
 };
 
 /* ── Thumbnail helper ─────────────────────────────────────────────── */
@@ -166,6 +173,7 @@ export const CoursesPage: React.FC = () => {
   const [page, setPage] = useState(1);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'table' | 'board'>('table');
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const dragCourseRef = useRef<Course | null>(null);
 
   const { data, isLoading, error } = useQuery({
@@ -219,10 +227,59 @@ export const CoursesPage: React.FC = () => {
     },
   });
 
+  const bulkActionMutation = useMutation({
+    mutationFn: ({ action, courseIds }: { action: 'publish' | 'unpublish' | 'delete'; courseIds: string[] }) =>
+      bulkActionCourses(action, courseIds),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ['adminCourses'] });
+      queryClient.invalidateQueries({ queryKey: ['adminDashboardStats'] });
+      toast.success('Bulk action complete', result.message);
+      setSelectedIds(new Set());
+    },
+    onError: () => {
+      toast.error('Bulk action failed', 'Please try again.');
+    },
+  });
+
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
     setPage(1);
   };
+
+  // Selection helpers
+  const courses = data?.results || [];
+  const toggleSelection = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === courses.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(courses.map((c) => c.id)));
+    }
+  };
+
+  const clearSelection = () => setSelectedIds(new Set());
+
+  const handleBulkAction = (actionId: string) => {
+    const courseIds = Array.from(selectedIds);
+    bulkActionMutation.mutate({ action: actionId as 'publish' | 'unpublish' | 'delete', courseIds });
+  };
+
+  const bulkActions: BulkAction[] = [
+    { id: 'publish', label: 'Publish', icon: EyeIcon, variant: 'success' },
+    { id: 'unpublish', label: 'Unpublish', icon: EyeSlashIcon, variant: 'default' },
+    { id: 'delete', label: 'Delete', icon: TrashIcon, variant: 'danger', requiresConfirmation: true },
+  ];
 
   /* ── Kanban drag handlers ─────────────────────────────────────── */
   const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); e.currentTarget.classList.add('ring-2', 'ring-primary-400'); };
@@ -414,6 +471,14 @@ export const CoursesPage: React.FC = () => {
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
                 <tr>
+                  <th className="px-3 py-3 w-10">
+                    <input
+                      type="checkbox"
+                      checked={courses.length > 0 && selectedIds.size === courses.length}
+                      onChange={toggleSelectAll}
+                      className="rounded border-gray-300 text-emerald-600 focus:ring-emerald-500"
+                    />
+                  </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Course</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Assignment</th>
@@ -426,7 +491,15 @@ export const CoursesPage: React.FC = () => {
                 {data?.results.map((course) => {
                   const src = thumbSrc(course);
                   return (
-                    <tr key={course.id} className="hover:bg-gray-50">
+                    <tr key={course.id} className={`hover:bg-gray-50 ${selectedIds.has(course.id) ? 'bg-emerald-50' : ''}`}>
+                      <td className="px-3 py-4">
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(course.id)}
+                          onChange={() => toggleSelection(course.id)}
+                          className="rounded border-gray-300 text-emerald-600 focus:ring-emerald-500"
+                        />
+                      </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="flex items-center">
                           <div className="flex-shrink-0 h-10 w-10 bg-primary-100 rounded-lg flex items-center justify-center overflow-hidden">
@@ -538,6 +611,15 @@ export const CoursesPage: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Bulk Actions Bar */}
+      <BulkActionsBar
+        selectedCount={selectedIds.size}
+        actions={bulkActions}
+        onAction={handleBulkAction}
+        onClearSelection={clearSelection}
+        isLoading={bulkActionMutation.isPending}
+      />
     </div>
   );
 };

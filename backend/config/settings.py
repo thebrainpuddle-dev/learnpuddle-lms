@@ -11,7 +11,10 @@ SECRET_KEY = config('SECRET_KEY')
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = config('DEBUG', default=False, cast=bool)
 
-_default_allowed_hosts = ["localhost", "127.0.0.1", ".lms.com"]
+_platform_domain_early = config('PLATFORM_DOMAIN', default='localhost')
+_default_allowed_hosts = ["localhost", "127.0.0.1"]
+if _platform_domain_early != 'localhost':
+    _default_allowed_hosts.append(f".{_platform_domain_early}")
 _env_allowed_hosts = [h.strip() for h in config("ALLOWED_HOSTS", default="").split(",") if h.strip()]
 ALLOWED_HOSTS = sorted(set(_default_allowed_hosts + _env_allowed_hosts))
 
@@ -34,6 +37,11 @@ CSRF_COOKIE_SECURE = config("CSRF_COOKIE_SECURE", default=not DEBUG, cast=bool)
 SESSION_COOKIE_SAMESITE = config("SESSION_COOKIE_SAMESITE", default="Lax")
 CSRF_COOKIE_SAMESITE = config("CSRF_COOKIE_SAMESITE", default="Lax")
 
+# Cookie domain — set to .{PLATFORM_DOMAIN} so cookies work across tenant subdomains
+_cookie_domain = f".{_platform_domain_early}" if not DEBUG and _platform_domain_early != 'localhost' else None
+SESSION_COOKIE_DOMAIN = config("SESSION_COOKIE_DOMAIN", default=_cookie_domain)
+CSRF_COOKIE_DOMAIN = config("CSRF_COOKIE_DOMAIN", default=_cookie_domain)
+
 SECURE_HSTS_SECONDS = config("SECURE_HSTS_SECONDS", default=0 if DEBUG else 31536000, cast=int)
 SECURE_HSTS_INCLUDE_SUBDOMAINS = config("SECURE_HSTS_INCLUDE_SUBDOMAINS", default=not DEBUG, cast=bool)
 SECURE_HSTS_PRELOAD = config("SECURE_HSTS_PRELOAD", default=not DEBUG, cast=bool)
@@ -43,11 +51,10 @@ X_FRAME_OPTIONS = "DENY"
 SECURE_REFERRER_POLICY = "same-origin"
 
 # CSRF trusted origins (comma-separated), e.g. https://demo.lms.com,https://*.lms.com
-CSRF_TRUSTED_ORIGINS = [
-    o.strip()
-    for o in config("CSRF_TRUSTED_ORIGINS", default="").split(",")
-    if o.strip()
-]
+_csrf_env = [o.strip() for o in config("CSRF_TRUSTED_ORIGINS", default="").split(",") if o.strip()]
+_platform_domain = config('PLATFORM_DOMAIN', default='lms.com')
+_csrf_defaults = [f"https://*.{_platform_domain}", f"https://{_platform_domain}"] if not DEBUG else []
+CSRF_TRUSTED_ORIGINS = sorted(set(_csrf_env + _csrf_defaults))
 
 # Application definition
 INSTALLED_APPS = [
@@ -65,6 +72,13 @@ INSTALLED_APPS = [
     'corsheaders',
     'django_filters',
     'django_celery_beat',  # Celery beat scheduler with DB backend
+    'drf_spectacular',  # OpenAPI 3.0 schema generation
+    'django_prometheus',  # Prometheus metrics
+    'channels',  # WebSocket support
+    'social_django',  # Social authentication (Google SSO)
+    'django_otp',  # Two-factor authentication
+    'django_otp.plugins.otp_totp',  # TOTP devices
+    'django_otp.plugins.otp_static',  # Backup codes
     
     # Local apps
     'apps.tenants',
@@ -72,16 +86,22 @@ INSTALLED_APPS = [
     'apps.courses',
     'apps.progress',
     'apps.uploads',
-    'apps.media',
+    # 'apps.media',  # TODO: Implement media library app (Wave 2.13)
     'apps.reports',
     'apps.reminders',
     'apps.notifications',
+    'apps.webhooks',
+    'apps.discussions',
 ]
 
 # Custom User Model
 AUTH_USER_MODEL = 'users.User'
 
 MIDDLEWARE = [
+    # Prometheus metrics — must be at the very top for accurate timing
+    'django_prometheus.middleware.PrometheusBeforeMiddleware',
+    
+    'utils.request_id_middleware.RequestIDMiddleware',  # Assigns X-Request-ID
     'django.middleware.security.SecurityMiddleware',
     'corsheaders.middleware.CorsMiddleware',  # CORS - must be before CommonMiddleware
     'django.contrib.sessions.middleware.SessionMiddleware',
@@ -91,9 +111,16 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'utils.media_xframe_middleware.MediaXFrameExemptMiddleware',
-    
+    'utils.csp_middleware.CSPMiddleware',  # CSP with nonce support for Django admin
+
     # IMPORTANT: Tenant middleware must be after AuthenticationMiddleware
     'utils.tenant_middleware.TenantMiddleware',
+    
+    # Logging context — must be after Auth and Tenant to capture user_id and tenant_id
+    'utils.request_id_middleware.LoggingContextMiddleware',
+    
+    # Prometheus metrics — must be at the very bottom
+    'django_prometheus.middleware.PrometheusAfterMiddleware',
 ]
 
 ROOT_URLCONF = 'config.urls'
@@ -165,7 +192,14 @@ STORAGES = {
             "base_url": MEDIA_URL,
         },
     },
-    "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
+    # Use ManifestStaticFilesStorage in production for cache busting
+    "staticfiles": {
+        "BACKEND": (
+            "django.contrib.staticfiles.storage.ManifestStaticFilesStorage"
+            if not DEBUG else
+            "django.contrib.staticfiles.storage.StaticFilesStorage"
+        )
+    },
 }
 
 if STORAGE_BACKEND.lower() == "s3":
@@ -191,6 +225,23 @@ if STORAGE_BACKEND.lower() == "s3":
             "querystring_auth": AWS_QUERYSTRING_AUTH,
         },
     }
+
+# -----------------------------------------------------------------------------
+# CDN Configuration (for media delivery via CloudFront, Cloudflare, etc.)
+# -----------------------------------------------------------------------------
+# Set CDN_DOMAIN to serve media files through a CDN for better performance.
+# Example: cdn.yourdomain.com, d1234567890.cloudfront.net
+CDN_DOMAIN = config("CDN_DOMAIN", default="")
+CDN_ENABLED = bool(CDN_DOMAIN)
+
+if CDN_ENABLED:
+    # Override MEDIA_URL to use CDN
+    MEDIA_URL = f"https://{CDN_DOMAIN}/media/"
+    
+    # For S3 storage with CloudFront
+    if STORAGE_BACKEND.lower() == "s3":
+        # Use custom domain for S3 storage
+        STORAGES["default"]["OPTIONS"]["custom_domain"] = CDN_DOMAIN
 
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
@@ -243,7 +294,79 @@ REST_FRAMEWORK = {
         'login': '5/minute',
         'password_reset': '3/minute',
         'register': '10/minute',
+        'reminder_send': '10/hour',
+        'video_upload': '20/hour',
+        'impersonate': '10/hour',
+        # Email verification
+        'email_verify': '10/minute',
+        'resend_verify': '3/minute',
+        # Tenant onboarding
+        'tenant_signup': '5/hour',
+        'subdomain_check': '30/minute',
+        # Upload endpoints
+        'upload': '30/minute',
+        # 2FA verification (prevent brute force on 6-digit codes)
+        'twofa_verify': '5/minute',
     },
+    # OpenAPI schema generation
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+}
+
+# -----------------------------------------------------------------------------
+# API Documentation (drf-spectacular) - OpenAPI 3.0 schema
+# Access Swagger UI at /api/docs/ and ReDoc at /api/redoc/
+# -----------------------------------------------------------------------------
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'LMS Platform API',
+    'DESCRIPTION': '''
+Multi-tenant Learning Management System API.
+
+## Authentication
+Most endpoints require JWT authentication. Obtain tokens via `/api/v1/auth/token/`.
+
+## Multi-tenancy
+All requests must include the tenant subdomain (e.g., `demo.lms.com`).
+The tenant is determined from the `Host` header or `X-Tenant-Subdomain` header.
+
+## Roles
+- **superadmin**: Platform-wide administration
+- **admin**: Tenant administration (manage teachers, courses, settings)
+- **teacher**: Course consumption (view courses, take quizzes, earn certificates)
+''',
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+    'COMPONENT_SPLIT_REQUEST': True,
+    'SWAGGER_UI_SETTINGS': {
+        'deepLinking': True,
+        'persistAuthorization': True,
+        'displayOperationId': True,
+        'filter': True,
+    },
+    'SWAGGER_UI_DIST': 'SIDECAR',  # Use bundled swagger-ui
+    'SWAGGER_UI_FAVICON_HREF': 'SIDECAR',
+    'REDOC_DIST': 'SIDECAR',
+    # Security schemes for JWT
+    'SECURITY': [{'bearerAuth': []}],
+    'APPEND_COMPONENTS': {
+        'securitySchemes': {
+            'bearerAuth': {
+                'type': 'http',
+                'scheme': 'bearer',
+                'bearerFormat': 'JWT',
+            }
+        }
+    },
+    # Tags for organizing endpoints
+    'TAGS': [
+        {'name': 'auth', 'description': 'Authentication and token management'},
+        {'name': 'users', 'description': 'User management'},
+        {'name': 'courses', 'description': 'Course management'},
+        {'name': 'progress', 'description': 'Learning progress and certificates'},
+        {'name': 'notifications', 'description': 'Notifications and announcements'},
+        {'name': 'tenants', 'description': 'Tenant management (superadmin)'},
+        {'name': 'admin', 'description': 'Tenant administration'},
+        {'name': 'reports', 'description': 'Analytics and reporting'},
+    ],
 }
 
 # JWT Configuration
@@ -258,36 +381,129 @@ SIMPLE_JWT = {
 }
 
 # CORS Configuration (for frontend)
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",
-    "http://localhost:3001",
-    "http://localhost:3002",
-    "http://127.0.0.1:3000",
-    "http://127.0.0.1:3001",
-    "http://127.0.0.1:3002",
-]
+# CORS - Allow localhost only in DEBUG mode, use regex for production
+if DEBUG:
+    CORS_ALLOWED_ORIGINS = [
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "http://localhost:3002",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:3001",
+        "http://127.0.0.1:3002",
+    ]
+else:
+    CORS_ALLOWED_ORIGINS = []
 
 CORS_ALLOW_CREDENTIALS = True
 
-# Optional: allow staging/prod wildcard subdomains via regex
-_cors_regex = config("CORS_ALLOWED_ORIGIN_REGEX", default="")
+# Production: use regex to allow wildcard subdomains (e.g., *.learnpuddle.com)
+_escaped_domain = _platform_domain_early.replace('.', r'\.')
+_cors_regex = config("CORS_ALLOWED_ORIGIN_REGEX", default=rf"^https://.*\.{_escaped_domain}$" if not DEBUG else "")
 if _cors_regex:
     CORS_ALLOWED_ORIGIN_REGEXES = [_cors_regex]
 
 # -----------------------------------------------------------------------------
-# Logging (console) - production should route to centralized logging.
+# Logging - Structured JSON logging for production, simple format for dev
+# Ships to any log aggregator (CloudWatch, Datadog, ELK, etc.)
 # -----------------------------------------------------------------------------
 
-LOGGING = {
-    "version": 1,
-    "disable_existing_loggers": False,
-    "formatters": {
-        "simple": {"format": "%(levelname)s %(name)s %(message)s"},
-    },
-    "handlers": {
-        "console": {"class": "logging.StreamHandler", "formatter": "simple"},
-    },
-    "root": {"handlers": ["console"], "level": config("LOG_LEVEL", default="INFO")},
+# Use JSON logging in production, simple format in DEBUG mode
+_use_json_logging = config("LOG_JSON", default=not DEBUG, cast=bool)
+_log_level = config("LOG_LEVEL", default="INFO")
+
+if _use_json_logging:
+    # JSON structured logging with request context
+    LOGGING = {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {
+            "json": {
+                "()": "utils.logging.ContextualJsonFormatter",
+            },
+            "simple": {
+                "format": "[%(asctime)s] %(levelname)s %(name)s: %(message)s",
+                "datefmt": "%Y-%m-%d %H:%M:%S",
+            },
+        },
+        "handlers": {
+            "console": {
+                "class": "logging.StreamHandler",
+                "formatter": "json",
+            },
+        },
+        "root": {
+            "handlers": ["console"],
+            "level": _log_level,
+        },
+        "loggers": {
+            "django": {
+                "handlers": ["console"],
+                "level": _log_level,
+                "propagate": False,
+            },
+            "django.request": {
+                "handlers": ["console"],
+                "level": "WARNING",
+                "propagate": False,
+            },
+            "django.db.backends": {
+                "handlers": ["console"],
+                "level": "WARNING",
+                "propagate": False,
+            },
+            "celery": {
+                "handlers": ["console"],
+                "level": _log_level,
+                "propagate": False,
+            },
+            "apps": {
+                "handlers": ["console"],
+                "level": _log_level,
+                "propagate": False,
+            },
+            "utils": {
+                "handlers": ["console"],
+                "level": _log_level,
+                "propagate": False,
+            },
+        },
+    }
+else:
+    # Simple format for local development
+    LOGGING = {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {
+            "simple": {
+                "format": "[%(asctime)s] %(levelname)s %(name)s: %(message)s",
+                "datefmt": "%Y-%m-%d %H:%M:%S",
+            },
+        },
+        "handlers": {
+            "console": {
+                "class": "logging.StreamHandler",
+                "formatter": "simple",
+            },
+        },
+        "root": {
+            "handlers": ["console"],
+            "level": _log_level,
+        },
+    }
+
+# -----------------------------------------------------------------------------
+# Cache (Redis) - used for rate limiting, account lockout, and general caching
+# -----------------------------------------------------------------------------
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.redis.RedisCache",
+        "LOCATION": config("REDIS_URL", default="redis://localhost:6379/1"),
+        "OPTIONS": {
+            "db": config("REDIS_CACHE_DB", default=1, cast=int),
+        },
+        "KEY_PREFIX": "lms",
+        "TIMEOUT": 300,  # 5 minutes default
+    }
 }
 
 # -----------------------------------------------------------------------------
@@ -302,6 +518,22 @@ CELERY_TASK_TIME_LIMIT = config("CELERY_TASK_TIME_LIMIT", default=60 * 60 * 2, c
 CELERY_TASK_SOFT_TIME_LIMIT = config("CELERY_TASK_SOFT_TIME_LIMIT", default=60 * 60 * 2 - 60, cast=int)
 CELERY_RESULT_EXPIRES = config("CELERY_RESULT_EXPIRES", default=60 * 60 * 24, cast=int)  # 24h
 
+# -----------------------------------------------------------------------------
+# Django Channels (WebSocket) - real-time notifications
+# -----------------------------------------------------------------------------
+ASGI_APPLICATION = "config.asgi.application"
+
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {
+            "hosts": [config("REDIS_URL", default="redis://localhost:6379/2")],
+            "capacity": 1500,
+            "expiry": 10,
+        },
+    },
+}
+
 # Email Configuration
 EMAIL_BACKEND = config('EMAIL_BACKEND', default='django.core.mail.backends.console.EmailBackend')
 EMAIL_HOST = config('EMAIL_HOST', default='')
@@ -309,11 +541,26 @@ EMAIL_PORT = config('EMAIL_PORT', default=587, cast=int)
 EMAIL_USE_TLS = config('EMAIL_USE_TLS', default=True, cast=bool)
 EMAIL_HOST_USER = config('EMAIL_HOST_USER', default='')
 EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD', default='')
-DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default='noreply@lms.com')
+DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default=f'noreply@{_platform_domain_early}')
 
 # Platform branding (used in emails and public pages)
-PLATFORM_NAME = config('PLATFORM_NAME', default='Brain LMS')
-PLATFORM_DOMAIN = config('PLATFORM_DOMAIN', default='lms.com')
+PLATFORM_NAME = config('PLATFORM_NAME', default='LearnPuddle')
+PLATFORM_DOMAIN = _platform_domain_early
+
+# -----------------------------------------------------------------------------
+# Content Security Policy (CSP) configuration
+# -----------------------------------------------------------------------------
+# CSP is applied differently for:
+# - Django admin/docs: Strict CSP with nonces (via CSPMiddleware)
+# - React SPA: CSP set in nginx (requires 'unsafe-inline' for styles due to React/Tailwind)
+#
+# The main security benefit comes from script-src restrictions. Style-based attacks
+# (CSS exfiltration) are much more limited than XSS via script injection.
+
+CSP_ENABLED = config('CSP_ENABLED', default=True, cast=bool)
+CSP_REPORT_ONLY = config('CSP_REPORT_ONLY', default=False, cast=bool)  # Set True to test without enforcing
+CSP_REPORT_URI = config('CSP_REPORT_URI', default='')  # e.g., /api/csp-report/ or external service
+CSP_PATHS = ['/admin/', '/api/docs/', '/api/redoc/']  # Paths that get Django CSP (not React SPA)
 
 # -----------------------------------------------------------------------------
 # Sentry error tracking (optional; set SENTRY_DSN to enable)
@@ -330,3 +577,53 @@ if SENTRY_DSN:
         )
     except ImportError:
         pass  # sentry-sdk not installed; silently skip
+
+# -----------------------------------------------------------------------------
+# Social Authentication (SSO) - Google Workspace
+# -----------------------------------------------------------------------------
+AUTHENTICATION_BACKENDS = [
+    'social_core.backends.google.GoogleOAuth2',
+    'django.contrib.auth.backends.ModelBackend',
+]
+
+# Google OAuth2 credentials (from Google Cloud Console)
+SOCIAL_AUTH_GOOGLE_OAUTH2_KEY = config('GOOGLE_OAUTH_CLIENT_ID', default='')
+SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET = config('GOOGLE_OAUTH_CLIENT_SECRET', default='')
+SOCIAL_AUTH_GOOGLE_OAUTH2_SCOPE = [
+    'https://www.googleapis.com/auth/userinfo.email',
+    'https://www.googleapis.com/auth/userinfo.profile',
+]
+
+# Where to redirect after successful SSO login
+SOCIAL_AUTH_LOGIN_REDIRECT_URL = '/auth/sso-callback'
+SOCIAL_AUTH_LOGIN_ERROR_URL = '/login?error=sso_failed'
+
+# Pipeline to handle user creation/matching
+SOCIAL_AUTH_PIPELINE = (
+    'social_core.pipeline.social_auth.social_details',
+    'social_core.pipeline.social_auth.social_uid',
+    'social_core.pipeline.social_auth.auth_allowed',
+    'social_core.pipeline.social_auth.social_user',
+    'social_core.pipeline.user.get_username',
+    'apps.users.sso_pipeline.associate_by_email',  # Custom: match by email
+    'apps.users.sso_pipeline.create_user_if_allowed',  # Custom: create only if tenant allows
+    'social_core.pipeline.social_auth.associate_user',
+    'social_core.pipeline.social_auth.load_extra_data',
+    'social_core.pipeline.user.user_details',
+)
+
+# Restrict SSO to certain domains (Google Workspace domains)
+SOCIAL_AUTH_GOOGLE_OAUTH2_WHITELISTED_DOMAINS = config(
+    'SSO_ALLOWED_DOMAINS',
+    default='',
+    cast=lambda v: [d.strip() for d in v.split(',') if d.strip()] if v else []
+)
+
+# -----------------------------------------------------------------------------
+# Two-Factor Authentication (2FA / MFA)
+# -----------------------------------------------------------------------------
+OTP_TOTP_ISSUER = config('OTP_ISSUER', default='Brain LMS')
+
+# Number of backup codes to generate
+OTP_STATIC_THROTTLE_FACTOR = 1
+BACKUP_CODES_COUNT = 10

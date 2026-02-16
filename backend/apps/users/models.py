@@ -1,27 +1,11 @@
 # apps/users/models.py
 
-from django.contrib.auth.models import AbstractUser, BaseUserManager
+from django.contrib.auth.models import AbstractUser
 from django.db import models
+from django.utils import timezone
 import uuid
 
-
-class UserManager(BaseUserManager):
-    """Custom user manager for email-based authentication."""
-    
-    def create_user(self, email, password=None, **extra_fields):
-        if not email:
-            raise ValueError('Email is required')
-        email = self.normalize_email(email)
-        user = self.model(email=email, **extra_fields)
-        user.set_password(password)
-        user.save(using=self._db)
-        return user
-    
-    def create_superuser(self, email, password=None, **extra_fields):
-        extra_fields.setdefault('is_staff', True)
-        extra_fields.setdefault('is_superuser', True)
-        extra_fields.setdefault('role', 'SUPER_ADMIN')
-        return self.create_user(email, password, **extra_fields)
+from utils.user_soft_delete_manager import UserSoftDeleteManager, AllUsersManager
 
 
 class User(AbstractUser):
@@ -75,6 +59,22 @@ class User(AbstractUser):
     # Status
     is_active = models.BooleanField(default=True)
     email_verified = models.BooleanField(default=False)
+    must_change_password = models.BooleanField(
+        default=False,
+        help_text="Force password change on next login (e.g., after bulk import)"
+    )
+
+    # Soft delete fields
+    is_deleted = models.BooleanField(default=False, db_index=True)
+    deleted_at = models.DateTimeField(null=True, blank=True)
+    deleted_by = models.ForeignKey(
+        'self',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='deleted_users',
+        help_text="Admin who soft-deleted this user"
+    )
 
     # Notification preferences (JSON: {"email_courses": true, "email_assignments": true, ...})
     notification_preferences = models.JSONField(blank=True, default=dict)
@@ -84,7 +84,9 @@ class User(AbstractUser):
     updated_at = models.DateTimeField(auto_now=True)
     last_login = models.DateTimeField(null=True, blank=True)
     
-    objects = UserManager()
+    # Managers - soft delete by default, all_objects includes deleted
+    objects = UserSoftDeleteManager()
+    all_objects = AllUsersManager()
     
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = ['first_name', 'last_name']
@@ -96,6 +98,8 @@ class User(AbstractUser):
             models.Index(fields=['email']),
             models.Index(fields=['tenant', 'role']),
             models.Index(fields=['tenant', 'is_active']),
+            models.Index(fields=['is_deleted']),
+            models.Index(fields=['tenant', 'is_deleted']),
         ]
     
     def __str__(self):
@@ -111,3 +115,45 @@ class User(AbstractUser):
     @property
     def is_teacher(self):
         return self.role == 'TEACHER'
+
+    def delete(self, using=None, keep_parents=False, deleted_by=None):
+        """
+        Soft-delete this user.
+        
+        Sets is_deleted=True, is_active=False, and records deletion metadata.
+        The user's data is preserved for audit/recovery purposes.
+        
+        Args:
+            deleted_by: Optional User who performed the deletion (for audit trail)
+        """
+        self.is_deleted = True
+        self.is_active = False
+        self.deleted_at = timezone.now()
+        if deleted_by:
+            self.deleted_by = deleted_by
+        self.save(update_fields=['is_deleted', 'is_active', 'deleted_at', 'deleted_by'])
+
+    def hard_delete(self, using=None, keep_parents=False):
+        """
+        Permanently delete this user from the database.
+        
+        WARNING: This is irreversible. Use only for GDPR compliance or
+        data cleanup after appropriate retention period.
+        """
+        super().delete(using=using, keep_parents=keep_parents)
+
+    def restore(self, restored_by=None):
+        """
+        Restore a soft-deleted user.
+        
+        Re-enables the user account while preserving audit trail.
+        Note: is_active is set to True, but email_verified state is preserved.
+        
+        Args:
+            restored_by: Optional User who performed the restoration
+        """
+        self.is_deleted = False
+        self.is_active = True
+        self.deleted_at = None
+        self.deleted_by = None
+        self.save(update_fields=['is_deleted', 'is_active', 'deleted_at', 'deleted_by'])

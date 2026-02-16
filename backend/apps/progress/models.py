@@ -3,6 +3,8 @@
 from django.db import models
 import uuid
 
+from utils.soft_delete import SoftDeleteMixin, SoftDeleteManager
+
 
 class TeacherProgress(models.Model):
     """
@@ -43,13 +45,16 @@ class TeacherProgress(models.Model):
             models.Index(fields=['teacher', 'course']),
             models.Index(fields=['teacher', 'status']),
             models.Index(fields=['course', 'status']),
+            # For dashboard queries
+            models.Index(fields=['teacher', 'status', 'completed_at']),
+            models.Index(fields=['last_accessed']),
         ]
     
     def __str__(self):
         return f"{self.teacher.email} - {self.course.title} - {self.status}"
 
 
-class Assignment(models.Model):
+class Assignment(SoftDeleteMixin, models.Model):
     """
     Assignments within courses.
     """
@@ -90,13 +95,20 @@ class Assignment(models.Model):
     
     is_mandatory = models.BooleanField(default=True)
     is_active = models.BooleanField(default=True)
-    
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    
+
+    objects = SoftDeleteManager()
+    all_objects = models.Manager()
+
     class Meta:
         db_table = 'assignments'
         ordering = ['course', 'due_date']
+        indexes = [
+            models.Index(fields=['course', 'is_active']),
+            models.Index(fields=['due_date', 'is_active']),
+        ]
     
     def __str__(self):
         return f"{self.course.title} - {self.title}"
@@ -226,6 +238,11 @@ class AssignmentSubmission(models.Model):
         db_table = 'assignment_submissions'
         unique_together = [('assignment', 'teacher')]
         ordering = ['-submitted_at']
+        indexes = [
+            models.Index(fields=['assignment', 'status']),
+            models.Index(fields=['teacher', 'status']),
+            models.Index(fields=['submitted_at']),
+        ]
     
     def __str__(self):
         return f"{self.teacher.email} - {self.assignment.title}"

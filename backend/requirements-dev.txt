@@ -1,0 +1,23 @@
+# Development dependencies - DO NOT include in production image
+# Install with: pip install -r requirements-dev.txt
+
+# Include production dependencies
+-r requirements.txt
+
+# Linting & formatting
+black==23.3.0
+flake8==7.0.0
+pycodestyle==2.11.1
+pyflakes==3.2.0
+mccabe==0.7.0
+
+# Testing
+pytest==7.4.4
+pytest-django==4.7.0
+pytest-cov==4.1.0
+
+# Security auditing
+pip-audit
+
+# Type checking helpers
+mypy_extensions==1.0.0

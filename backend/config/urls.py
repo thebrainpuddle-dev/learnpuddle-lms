@@ -4,27 +4,60 @@ from django.contrib import admin
 from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
+from drf_spectacular.views import (
+    SpectacularAPIView,
+    SpectacularSwaggerView,
+    SpectacularRedocView,
+)
 from .views import health_view
+from utils.media_views import protected_media_view
+
+# Versioned API routes — all new clients should use /api/v1/
+_api_patterns = [
+    path('super-admin/', include('apps.tenants.superadmin_urls')),
+    path('tenants/', include('apps.tenants.urls')),
+    path('onboarding/', include('apps.tenants.onboarding_urls')),  # Public tenant signup
+    path('users/', include('apps.users.urls')),
+    path('', include('apps.users.admin_urls')),
+    path('courses/', include('apps.courses.urls')),
+    path('', include('apps.courses.group_urls')),
+    path('teacher/', include('apps.courses.teacher_urls')),
+    path('teacher/', include('apps.progress.teacher_urls')),
+    path('uploads/', include('apps.uploads.urls')),
+    # path('media/', include('apps.media.urls')),  # TODO: Implement media library app (Wave 2.13)
+    path('reports/', include('apps.reports.urls')),
+    path('reminders/', include('apps.reminders.urls')),
+    path('notifications/', include('apps.notifications.urls')),
+    path('webhooks/', include('apps.webhooks.urls')),
+    path('discussions/', include('apps.discussions.urls')),
+]
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('health/', health_view),
     
-    # API endpoints
-    path('api/super-admin/', include('apps.tenants.superadmin_urls')),
-    path('api/tenants/', include('apps.tenants.urls')),
-    path('api/users/', include('apps.users.urls')),
-    path('api/', include('apps.users.admin_urls')),
-    path('api/courses/', include('apps.courses.urls')),
-    path('api/', include('apps.courses.group_urls')),
-    path('api/teacher/', include('apps.courses.teacher_urls')),
-    path('api/teacher/', include('apps.progress.teacher_urls')),
-    path('api/uploads/', include('apps.uploads.urls')),
-    path('api/media/', include('apps.media.urls')),
-    path('api/reports/', include('apps.reports.urls')),
-    path('api/reminders/', include('apps.reminders.urls')),
-    path('api/notifications/', include('apps.notifications.urls')),
+    # Protected media files (auth required, tenant-isolated)
+    path('media/<path:path>', protected_media_view, name='protected_media'),
+
+    # Versioned API (canonical)
+    path('api/v1/', include((_api_patterns, 'api_v1'))),
+    # Backward-compatible unversioned API (mirrors v1)
+    path('api/', include((_api_patterns, 'api'))),
+    
 ]
+
+# API Documentation (OpenAPI 3.0) - only in DEBUG mode
+# In production, disable or protect behind VPN/IP whitelist in nginx
+if settings.DEBUG:
+    urlpatterns += [
+        path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
+        path('api/docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
+        path('api/redoc/', SpectacularRedocView.as_view(url_name='schema'), name='redoc'),
+    ]
+
+# Prometheus metrics endpoint - protect in production via nginx IP whitelist
+# Exposes request counts, latency histograms, DB query metrics, etc.
+urlpatterns += [path('', include('django_prometheus.urls'))]
 
 # Serve media files in development
 if settings.DEBUG:

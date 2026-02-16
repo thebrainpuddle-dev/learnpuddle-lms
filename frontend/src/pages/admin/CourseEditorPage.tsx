@@ -98,7 +98,7 @@ const fetchTeachers = async (): Promise<Teacher[]> => {
 
 const fetchGroups = async (): Promise<TeacherGroup[]> => {
   const response = await api.get('/teacher-groups/');
-  return response.data;
+  return response.data.results ?? response.data;
 };
 
 const createCourse = async (data: FormData): Promise<Course> => {

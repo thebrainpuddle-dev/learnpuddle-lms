@@ -1,7 +1,61 @@
 """
 Service functions to create notifications from various parts of the app.
+
+Notifications are:
+1. Persisted to the database
+2. Sent in real-time via WebSocket (if user is connected)
 """
+
+import logging
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
 from .models import Notification
+from .consumers import get_user_group_name
+
+logger = logging.getLogger(__name__)
+
+
+def send_realtime_notification(user_id: str, notification_data: dict):
+    """
+    Send a notification to a user's WebSocket connection.
+    
+    Args:
+        user_id: UUID of the user
+        notification_data: Serialized notification data
+    """
+    try:
+        channel_layer = get_channel_layer()
+        if channel_layer is None:
+            logger.debug("Channel layer not available, skipping real-time notification")
+            return
+        
+        group_name = get_user_group_name(user_id)
+        
+        async_to_sync(channel_layer.group_send)(
+            group_name,
+            {
+                "type": "notification.message",
+                "notification": notification_data,
+            }
+        )
+        logger.debug(f"Real-time notification sent to user {user_id}")
+    except Exception as e:
+        # Don't fail if WebSocket delivery fails - notification is already in DB
+        logger.warning(f"Failed to send real-time notification: {e}")
+
+
+def serialize_notification(notification: Notification) -> dict:
+    """Serialize a notification for WebSocket delivery."""
+    return {
+        "id": str(notification.id),
+        "type": notification.notification_type,
+        "title": notification.title,
+        "message": notification.message,
+        "is_read": notification.is_read,
+        "created_at": notification.created_at.isoformat(),
+        "course_id": str(notification.course_id) if notification.course_id else None,
+        "assignment_id": str(notification.assignment_id) if notification.assignment_id else None,
+    }
 
 
 def create_notification(
@@ -15,8 +69,9 @@ def create_notification(
 ):
     """
     Create a notification for a teacher.
+    Also sends real-time notification via WebSocket.
     """
-    return Notification.objects.create(
+    notification = Notification.objects.create(
         tenant=tenant,
         teacher=teacher,
         notification_type=notification_type,
@@ -25,6 +80,14 @@ def create_notification(
         course=course,
         assignment=assignment,
     )
+    
+    # Send real-time notification
+    send_realtime_notification(
+        str(teacher.id),
+        serialize_notification(notification)
+    )
+    
+    return notification
 
 
 def create_bulk_notifications(
@@ -38,6 +101,7 @@ def create_bulk_notifications(
 ):
     """
     Create notifications for multiple teachers.
+    Also sends real-time notifications via WebSocket.
     """
     notifications = [
         Notification(
@@ -51,7 +115,16 @@ def create_bulk_notifications(
         )
         for teacher in teachers
     ]
-    return Notification.objects.bulk_create(notifications)
+    created = Notification.objects.bulk_create(notifications)
+    
+    # Send real-time notifications
+    for notification in created:
+        send_realtime_notification(
+            str(notification.teacher_id),
+            serialize_notification(notification)
+        )
+    
+    return created
 
 
 def notify_course_assigned(tenant, teachers, course):

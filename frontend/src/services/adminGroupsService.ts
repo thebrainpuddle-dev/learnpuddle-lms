@@ -21,7 +21,7 @@ export interface GroupMember {
 export const adminGroupsService = {
   async listGroups(): Promise<TeacherGroup[]> {
     const res = await api.get('/teacher-groups/');
-    return res.data;
+    return res.data.results ?? res.data;
   },
 
   async createGroup(payload: { name: string; description?: string; group_type?: string }): Promise<TeacherGroup> {
@@ -35,7 +35,7 @@ export const adminGroupsService = {
 
   async listMembers(groupId: string): Promise<GroupMember[]> {
     const res = await api.get(`/teacher-groups/${groupId}/members/`);
-    return res.data;
+    return res.data.results ?? res.data;
   },
 
   async addMembers(groupId: string, teacherIds: string[]): Promise<GroupMember[]> {

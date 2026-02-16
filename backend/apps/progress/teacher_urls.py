@@ -19,5 +19,6 @@ urlpatterns = [
     path("quizzes/<uuid:assignment_id>/", teacher_views.quiz_detail, name="quiz_detail"),
     path("quizzes/<uuid:assignment_id>/submit/", teacher_views.quiz_submit, name="quiz_submit"),
     path("search/", teacher_views.teacher_search, name="teacher_search"),
+    path("courses/<uuid:course_id>/certificate/", teacher_views.course_certificate, name="course_certificate"),
 ]
 

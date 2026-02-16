@@ -47,4 +47,22 @@ export const authService = {
       new_password_confirm: newPassword,
     });
   },
+
+  /**
+   * Request password reset email
+   */
+  async requestPasswordReset(email: string): Promise<void> {
+    await api.post('/users/auth/request-password-reset/', { email });
+  },
+
+  /**
+   * Confirm password reset with uid + token + new password
+   */
+  async confirmPasswordReset(uid: string, token: string, newPassword: string): Promise<void> {
+    await api.post('/users/auth/confirm-password-reset/', {
+      uid,
+      token,
+      new_password: newPassword,
+    });
+  },
 };

@@ -1,12 +1,15 @@
 # apps/courses/views.py
 
+from django.contrib.postgres.search import SearchQuery, SearchRank, SearchVector
+from django.db.models import Q
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 from django.shortcuts import get_object_or_404
-from utils.decorators import admin_only, tenant_required
+from utils.decorators import admin_only, tenant_required, teacher_or_admin
+from utils.audit import log_audit
 from .models import Course, Module, Content
 from .serializers import (
     CourseListSerializer, CourseDetailSerializer,
@@ -36,8 +39,14 @@ def course_list_create(request):
         is_mandatory = request.GET.get('is_mandatory')
         search = request.GET.get('search')
         
-        # Base queryset (defense-in-depth: explicitly tenant-filter)
-        courses = Course.objects.filter(tenant=request.tenant)
+        # Base queryset with optimized related queries (defense-in-depth: explicitly tenant-filter)
+        courses = Course.objects.filter(tenant=request.tenant).select_related(
+            'tenant', 'created_by'
+        ).prefetch_related(
+            'modules',
+            'assigned_teachers',
+            'assigned_groups',
+        )
         
         # Additional filters
         if is_published is not None:
@@ -64,7 +73,9 @@ def course_list_create(request):
         )
         serializer.is_valid(raise_exception=True)
         course = serializer.save()
-        
+
+        log_audit('CREATE', 'Course', target_id=str(course.id), target_repr=str(course), request=request)
+
         return Response(
             CourseDetailSerializer(course).data,
             status=status.HTTP_201_CREATED
@@ -101,6 +112,7 @@ def course_detail(request, course_id):
         return Response(serializer.data)
     
     elif request.method == 'DELETE':
+        log_audit('DELETE', 'Course', target_id=str(course.id), target_repr=str(course), request=request)
         course.delete()
         return Response(
             {'message': 'Course deleted successfully'},
@@ -133,7 +145,10 @@ def course_publish(request, course_id):
         )
     
     course.save()
-    
+
+    audit_action = 'PUBLISH' if action == 'publish' else 'UNPUBLISH'
+    log_audit(audit_action, 'Course', target_id=str(course.id), target_repr=str(course), request=request)
+
     return Response({
         'message': message,
         'is_published': course.is_published
@@ -316,3 +331,193 @@ def content_detail(request, course_id, module_id, content_id):
     elif request.method == 'DELETE':
         content.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+@admin_only
+@tenant_required
+def courses_bulk_action(request):
+    """
+    Perform bulk actions on courses.
+    
+    POST body:
+    {
+        "action": "publish" | "unpublish" | "delete",
+        "course_ids": ["uuid", ...]
+    }
+    """
+    action = (request.data.get('action') or '').lower()
+    course_ids = request.data.get('course_ids', [])
+    
+    valid_actions = ['publish', 'unpublish', 'delete']
+    if action not in valid_actions:
+        return Response(
+            {'error': f'Invalid action. Must be one of: {", ".join(valid_actions)}'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    if not course_ids or not isinstance(course_ids, list):
+        return Response(
+            {'error': 'course_ids must be a non-empty list'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    MAX_BULK_IDS = 100
+    if len(course_ids) > MAX_BULK_IDS:
+        return Response(
+            {'error': f'Too many IDs. Maximum {MAX_BULK_IDS} per request.'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    # Get courses within tenant
+    courses = Course.objects.filter(
+        id__in=course_ids,
+        tenant=request.tenant,
+    )
+    
+    found_count = courses.count()
+    if found_count == 0:
+        return Response(
+            {'error': 'No valid courses found with the provided IDs'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    
+    affected_count = 0
+    
+    if action == 'publish':
+        affected_count = courses.filter(is_published=False).update(is_published=True)
+        action_display = 'published'
+    elif action == 'unpublish':
+        affected_count = courses.filter(is_published=True).update(is_published=False)
+        action_display = 'unpublished'
+    elif action == 'delete':
+        # Proper soft delete - mark as deleted with timestamp
+        from django.utils import timezone
+        affected_count = courses.filter(is_deleted=False).update(
+            is_deleted=True,
+            deleted_at=timezone.now(),
+            is_active=False,
+        )
+        action_display = 'deleted'
+    
+    log_audit(
+        'BULK_ACTION',
+        'Course',
+        target_repr=f"Bulk {action}: {affected_count} courses",
+        changes={'action': action, 'course_ids': course_ids, 'affected': affected_count},
+        request=request
+    )
+    
+    return Response({
+        'message': f'Successfully {action_display} {affected_count} course(s)',
+        'affected_count': affected_count,
+        'requested_count': len(course_ids),
+    }, status=status.HTTP_200_OK)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+@teacher_or_admin
+@tenant_required
+def global_search(request):
+    """
+    Global search across courses and content.
+    
+    Query params:
+        q: Search query (required, min 2 chars)
+        limit: Max results per category (default 10)
+    
+    Uses PostgreSQL full-text search with SearchVector/SearchRank for relevance ordering.
+    Falls back to icontains for short queries or when search_vector is not populated.
+    """
+    query = (request.GET.get('q') or '').strip()
+    
+    if len(query) < 2:
+        return Response({
+            'courses': [],
+            'content': [],
+            'query': query,
+        })
+    
+    try:
+        limit = min(20, max(1, int(request.GET.get('limit', 10))))
+    except (ValueError, TypeError):
+        limit = 10
+    
+    tenant = request.tenant
+    user = request.user
+    
+    # Determine which courses the user can access
+    if user.role in ['SCHOOL_ADMIN', 'SUPER_ADMIN']:
+        # Admins can see all courses
+        course_base_qs = Course.objects.filter(tenant=tenant, is_active=True)
+    else:
+        # Teachers can only see published courses they're assigned to
+        course_base_qs = Course.objects.filter(
+            tenant=tenant,
+            is_active=True,
+            is_published=True,
+        ).filter(
+            Q(assigned_to_all=True)
+            | Q(assigned_teachers=user)
+            | Q(assigned_groups__in=user.teacher_groups.all())
+        ).distinct()
+    
+    # Try full-text search first
+    search_query = SearchQuery(query)
+    
+    # Search courses using SearchVector if available
+    courses_with_vector = course_base_qs.filter(search_vector__isnull=False)
+    if courses_with_vector.exists():
+        # Use full-text search with ranking
+        courses_result = courses_with_vector.annotate(
+            rank=SearchRank('search_vector', search_query)
+        ).filter(
+            search_vector=search_query
+        ).order_by('-rank')[:limit]
+        
+        # Fall back to icontains if no results
+        if not courses_result.exists():
+            courses_result = course_base_qs.filter(
+                Q(title__icontains=query) | Q(description__icontains=query)
+            )[:limit]
+    else:
+        # No search vectors populated, use icontains
+        courses_result = course_base_qs.filter(
+            Q(title__icontains=query) | Q(description__icontains=query)
+        )[:limit]
+    
+    # Search content (titles only for performance)
+    content_result = Content.objects.filter(
+        module__course__in=course_base_qs,
+        is_active=True,
+    ).filter(
+        Q(title__icontains=query) | Q(content_type__icontains=query)
+    ).select_related('module', 'module__course')[:limit]
+    
+    return Response({
+        'query': query,
+        'courses': [
+            {
+                'id': str(c.id),
+                'title': c.title,
+                'description': c.description[:200] + '...' if len(c.description) > 200 else c.description,
+                'type': 'course',
+                'is_published': c.is_published,
+            }
+            for c in courses_result
+        ],
+        'content': [
+            {
+                'id': str(c.id),
+                'title': c.title,
+                'content_type': c.content_type,
+                'course_id': str(c.module.course_id),
+                'course_title': c.module.course.title,
+                'module_title': c.module.title,
+                'type': 'content',
+            }
+            for c in content_result
+        ],
+    })

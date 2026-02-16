@@ -4,15 +4,20 @@ import React, { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { AssignmentCard } from '../../components/teacher';
+import { SubmissionModal } from '../../components/teacher/SubmissionModal';
 import { useToast } from '../../components/common';
 import { ClipboardDocumentListIcon } from '@heroicons/react/24/outline';
-import { teacherService } from '../../services/teacherService';
+import { teacherService, TeacherAssignmentSubmission, TeacherAssignmentListItem } from '../../services/teacherService';
 
 type TabFilter = 'ALL' | 'PENDING' | 'SUBMITTED';
 
 export const AssignmentsPage: React.FC = () => {
   const toast = useToast();
   const [activeTab, setActiveTab] = useState<TabFilter>('ALL');
+  const [submissionModalOpen, setSubmissionModalOpen] = useState(false);
+  const [selectedAssignment, setSelectedAssignment] = useState<TeacherAssignmentListItem | null>(null);
+  const [currentSubmission, setCurrentSubmission] = useState<TeacherAssignmentSubmission | null>(null);
+  const [loadingSubmission, setLoadingSubmission] = useState(false);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   
@@ -42,6 +47,28 @@ export const AssignmentsPage: React.FC = () => {
       toast.error('Submission failed', 'Could not submit assignment. Please try again.');
     },
   });
+
+  const handleViewSubmission = async (assignment: TeacherAssignmentListItem) => {
+    setSelectedAssignment(assignment);
+    setSubmissionModalOpen(true);
+    setLoadingSubmission(true);
+    setCurrentSubmission(null);
+    
+    try {
+      const submission = await teacherService.getSubmission(assignment.id);
+      setCurrentSubmission(submission);
+    } catch (error) {
+      toast.error('Error', 'Could not load submission details.');
+    } finally {
+      setLoadingSubmission(false);
+    }
+  };
+
+  const handleCloseSubmissionModal = () => {
+    setSubmissionModalOpen(false);
+    setSelectedAssignment(null);
+    setCurrentSubmission(null);
+  };
   
   // Count by status
   const statusCounts = {
@@ -151,8 +178,7 @@ export const AssignmentsPage: React.FC = () => {
                   navigate(`/teacher/quizzes/${assignment.id}`);
                   return;
                 }
-                // For now: fetch submission and log (UI modal can be added later)
-                teacherService.getSubmission(assignment.id);
+                handleViewSubmission(assignment);
               }}
             />
           ))}
@@ -168,6 +194,16 @@ export const AssignmentsPage: React.FC = () => {
           </p>
         </div>
       )}
+
+      {/* Submission Details Modal */}
+      <SubmissionModal
+        isOpen={submissionModalOpen}
+        onClose={handleCloseSubmissionModal}
+        submission={currentSubmission}
+        assignmentTitle={selectedAssignment?.title}
+        maxScore={selectedAssignment?.max_score ? Number(selectedAssignment.max_score) : undefined}
+        isLoading={loadingSubmission}
+      />
     </div>
   );
 };

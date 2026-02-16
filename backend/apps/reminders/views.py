@@ -4,9 +4,10 @@ from django.utils import timezone
 from django.core.mail import send_mail
 from django.conf import settings
 
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework import status
 
 from utils.decorators import admin_only, tenant_required
@@ -15,12 +16,17 @@ from apps.users.models import User
 from apps.courses.models import Course
 from apps.progress.models import TeacherProgress, Assignment, AssignmentSubmission
 
+
 from .models import ReminderCampaign, ReminderDelivery
 from .serializers import (
     ReminderPreviewRequestSerializer,
     ReminderSendRequestSerializer,
     ReminderCampaignSerializer,
 )
+
+
+class ReminderSendThrottle(ScopedRateThrottle):
+    scope = 'reminder_send'
 
 
 def _tenant_teachers_qs(tenant):
@@ -139,6 +145,7 @@ def reminder_preview(request):
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
+@throttle_classes([ReminderSendThrottle])
 @admin_only
 @tenant_required
 def reminder_send(request):
@@ -161,7 +168,8 @@ def reminder_send(request):
 
     teacher_ids = data.get("teacher_ids")
     if teacher_ids:
-        recipients = recipients.filter(id__in=teacher_ids)
+        # Defense-in-depth: explicitly scope to current tenant
+        recipients = recipients.filter(id__in=teacher_ids, tenant=request.tenant)
 
     recipients = recipients.order_by("last_name", "first_name")
 
@@ -181,7 +189,7 @@ def reminder_send(request):
         deadline_override=deadline_override,
     )
 
-    from_email = getattr(settings, "DEFAULT_FROM_EMAIL", None) or "no-reply@lms.com"
+    from_email = getattr(settings, "DEFAULT_FROM_EMAIL", None) or f"no-reply@{getattr(settings, 'PLATFORM_DOMAIN', 'localhost')}"
 
     sent = 0
     failed = 0

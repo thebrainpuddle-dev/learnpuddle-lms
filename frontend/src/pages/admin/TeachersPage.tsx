@@ -2,6 +2,7 @@ import React, { useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button, Input, useToast } from '../../components/common';
+import { BulkActionsBar, BulkAction } from '../../components/common/BulkActionsBar';
 import { adminTeachersService } from '../../services/adminTeachersService';
 import { useTenantStore } from '../../stores/tenantStore';
 import {
@@ -12,6 +13,9 @@ import {
   ArrowUpTrayIcon,
   CheckCircleIcon,
   XCircleIcon,
+  TrashIcon,
+  PlayIcon,
+  StopIcon,
 } from '@heroicons/react/24/outline';
 import type { User } from '../../types';
 
@@ -24,6 +28,7 @@ export const TeachersPage: React.FC = () => {
   const [search, setSearch] = useState('');
   const [editingTeacher, setEditingTeacher] = useState<User | null>(null);
   const [editForm, setEditForm] = useState<Partial<User>>({});
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   const { data: teachers, isLoading } = useQuery({
     queryKey: ['adminTeachers', search],
@@ -50,7 +55,52 @@ export const TeachersPage: React.FC = () => {
     onError: () => toast.error('Import failed', 'Check CSV format.'),
   });
 
+  const bulkActionMut = useMutation({
+    mutationFn: ({ action, teacherIds }: { action: 'activate' | 'deactivate' | 'delete'; teacherIds: string[] }) =>
+      adminTeachersService.bulkAction(action, teacherIds),
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ['adminTeachers'] });
+      toast.success('Bulk action complete', data.message);
+      setSelectedIds(new Set());
+    },
+    onError: () => toast.error('Bulk action failed', 'Please try again.'),
+  });
+
   const rows = useMemo(() => teachers ?? [], [teachers]);
+
+  // Selection helpers
+  const toggleSelection = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === rows.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(rows.map((t) => t.id)));
+    }
+  };
+
+  const clearSelection = () => setSelectedIds(new Set());
+
+  const handleBulkAction = (actionId: string) => {
+    const teacherIds = Array.from(selectedIds);
+    bulkActionMut.mutate({ action: actionId as 'activate' | 'deactivate' | 'delete', teacherIds });
+  };
+
+  const bulkActions: BulkAction[] = [
+    { id: 'activate', label: 'Activate', icon: PlayIcon, variant: 'success' },
+    { id: 'deactivate', label: 'Deactivate', icon: StopIcon, variant: 'default' },
+    { id: 'delete', label: 'Delete', icon: TrashIcon, variant: 'danger', requiresConfirmation: true },
+  ];
 
   const openEdit = (t: User) => {
     setEditingTeacher(t);
@@ -86,6 +136,14 @@ export const TeachersPage: React.FC = () => {
         <table className="min-w-full text-sm">
           <thead className="text-left text-gray-500">
             <tr>
+              <th className="py-3 pr-3 w-10">
+                <input
+                  type="checkbox"
+                  checked={rows.length > 0 && selectedIds.size === rows.length}
+                  onChange={toggleSelectAll}
+                  className="rounded border-gray-300 text-emerald-600 focus:ring-emerald-500"
+                />
+              </th>
               <th className="py-3 pr-6">Name</th>
               <th className="py-3 pr-6">Email</th>
               <th className="py-3 pr-6">Department</th>
@@ -96,12 +154,20 @@ export const TeachersPage: React.FC = () => {
           </thead>
           <tbody className="divide-y divide-gray-100">
             {isLoading ? (
-              <tr><td className="py-6 text-gray-500" colSpan={6}>Loading...</td></tr>
+              <tr><td className="py-6 text-gray-500" colSpan={7}>Loading...</td></tr>
             ) : rows.length === 0 ? (
-              <tr><td className="py-6 text-gray-500" colSpan={6}>No teachers found.</td></tr>
+              <tr><td className="py-6 text-gray-500" colSpan={7}>No teachers found.</td></tr>
             ) : (
               rows.map((t) => (
-                <tr key={t.id} className="text-gray-800 hover:bg-gray-50">
+                <tr key={t.id} className={`text-gray-800 hover:bg-gray-50 ${selectedIds.has(t.id) ? 'bg-emerald-50' : ''}`}>
+                  <td className="py-3 pr-3">
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(t.id)}
+                      onChange={() => toggleSelection(t.id)}
+                      className="rounded border-gray-300 text-emerald-600 focus:ring-emerald-500"
+                    />
+                  </td>
                   <td className="py-3 pr-6 font-medium">{t.first_name} {t.last_name}</td>
                   <td className="py-3 pr-6">{t.email}</td>
                   <td className="py-3 pr-6">{t.department || '-'}</td>
@@ -130,6 +196,15 @@ export const TeachersPage: React.FC = () => {
           </tbody>
         </table>
       </div>
+
+      {/* Bulk Actions Bar */}
+      <BulkActionsBar
+        selectedCount={selectedIds.size}
+        actions={bulkActions}
+        onAction={handleBulkAction}
+        onClearSelection={clearSelection}
+        isLoading={bulkActionMut.isPending}
+      />
 
       {/* Edit modal */}
       {editingTeacher && (

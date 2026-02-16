@@ -39,4 +39,9 @@ export const adminTeachersService = {
     });
     return res.data as { created: number; total_rows: number; results: Array<{ row: number; email: string; status: string; message?: string }> };
   },
+
+  async bulkAction(action: 'activate' | 'deactivate' | 'delete', teacherIds: string[]) {
+    const res = await api.post('/teachers/bulk-action/', { action, teacher_ids: teacherIds });
+    return res.data as { message: string; affected_count: number; requested_count: number };
+  },
 };

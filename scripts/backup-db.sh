@@ -17,8 +17,8 @@ set -euo pipefail
 
 # Configuration (override via environment)
 DB_CONTAINER="${DB_CONTAINER:-db}"
-DB_USER="${DB_USER:-postgres}"
-DB_NAME="${DB_NAME:-lms_db}"
+DB_USER="${DB_USER:-learnpuddle}"
+DB_NAME="${DB_NAME:-learnpuddle_db}"
 BACKUP_DIR="${BACKUP_DIR:-/opt/lms/backups}"
 BACKUP_RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-30}"
 BACKUP_S3_BUCKET="${BACKUP_S3_BUCKET:-}"

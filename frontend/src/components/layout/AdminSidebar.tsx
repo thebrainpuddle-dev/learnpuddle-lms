@@ -10,6 +10,7 @@ import {
   UserGroupIcon,
   UsersIcon,
   PaperAirplaneIcon,
+  MegaphoneIcon,
   ChartBarIcon,
   Cog6ToothIcon,
   ArrowRightOnRectangleIcon,
@@ -32,6 +33,7 @@ const ALL_NAV_ITEMS = [
   { name: 'Groups', href: '/admin/groups', icon: UsersIcon, feature: 'groups' as const },
   { name: 'Analytics', href: '/admin/analytics', icon: ChartBarIcon, feature: null },
   { name: 'Reminders', href: '/admin/reminders', icon: PaperAirplaneIcon, feature: 'reminders' as const },
+  { name: 'Announcements', href: '/admin/announcements', icon: MegaphoneIcon, feature: null },
   { name: 'Settings', href: '/admin/settings', icon: Cog6ToothIcon, feature: null },
 ];
 

@@ -2,12 +2,19 @@ from django.shortcuts import get_object_or_404
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.pagination import PageNumberPagination
 from rest_framework import status
 
 from utils.decorators import admin_only, tenant_required
 from apps.users.models import User
 from apps.users.serializers import UserSerializer
 from .models import TeacherGroup
+
+
+class MemberPagination(PageNumberPagination):
+    page_size = 50
+    page_size_query_param = 'page_size'
+    max_page_size = 200
 
 
 def _get_group(request, group_id):
@@ -27,6 +34,10 @@ def teacher_group_members(request, group_id):
 
     if request.method == "GET":
         members = group.members.filter(tenant=request.tenant).order_by("last_name", "first_name")
+        paginator = MemberPagination()
+        page = paginator.paginate_queryset(members, request)
+        if page is not None:
+            return paginator.get_paginated_response(UserSerializer(page, many=True).data)
         return Response(UserSerializer(members, many=True).data, status=status.HTTP_200_OK)
 
     teacher_ids = request.data.get("teacher_ids")

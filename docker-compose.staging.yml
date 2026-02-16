@@ -1,0 +1,279 @@
+# docker-compose.staging.yml
+# Staging deployment — mirrors production with staging-specific settings
+# Deployed automatically on push to `develop` branch
+#
+# Run with: docker compose -f docker-compose.staging.yml up -d
+#
+# Required .env.staging vars:
+#   SECRET_KEY, DB_PASSWORD
+# Optional:
+#   STAGING_DOMAIN (default: staging.learnpuddle.com)
+
+services:
+  # ── Database ─────────────────────────────────────────────────────────
+  db:
+    image: postgres:15-alpine
+    restart: always
+    environment:
+      POSTGRES_DB: ${DB_NAME:-learnpuddle_staging}
+      POSTGRES_USER: ${DB_USER:-learnpuddle}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD}
+    volumes:
+      - postgres_staging_data:/var/lib/postgresql/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-learnpuddle}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+
+  # ── Redis (Celery broker + cache) ────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: always
+    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.25"
+
+  # ── Django API (gunicorn) ────────────────────────────────────────────
+  web:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - DEBUG=True  # Enable debug for staging to catch issues
+      - SECRET_KEY=${SECRET_KEY:?Set SECRET_KEY}
+      - DB_NAME=${DB_NAME:-learnpuddle_staging}
+      - DB_USER=${DB_USER:-learnpuddle}
+      - DB_PASSWORD=${DB_PASSWORD:?Set DB_PASSWORD}
+      - DB_HOST=db
+      - DB_PORT=5432
+      - REDIS_URL=redis://redis:6379/1
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - ALLOWED_HOSTS=.${STAGING_DOMAIN:-staging.learnpuddle.com},localhost
+      - CSRF_TRUSTED_ORIGINS=https://*.${STAGING_DOMAIN:-staging.learnpuddle.com}
+      - CORS_ALLOWED_ORIGIN_REGEX=https://.*\.${STAGING_DOMAIN:-staging.learnpuddle.com}
+      - SECURE_SSL_REDIRECT=False
+      - SECURE_HSTS_SECONDS=0  # No HSTS in staging
+      - PLATFORM_DOMAIN=${STAGING_DOMAIN:-staging.learnpuddle.com}
+      - PLATFORM_NAME=${PLATFORM_NAME:-LearnPuddle (Staging)}
+      - EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend  # Console emails in staging
+      - SENTRY_DSN=${SENTRY_DSN:-}
+      - SENTRY_ENVIRONMENT=staging
+      - LOG_LEVEL=DEBUG  # Verbose logging in staging
+      - LOG_JSON=True
+    volumes:
+      - media_staging_data:/app/media
+      - static_staging_data:/app/staticfiles
+    networks:
+      - backend
+      - frontend
+    expose:
+      - "8000"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+
+  # ── Celery worker ───────────────────────────────────────────────────
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: always
+    command: celery -A config worker -l info --concurrency=1
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - DEBUG=True
+      - SECRET_KEY=${SECRET_KEY}
+      - DB_NAME=${DB_NAME:-learnpuddle_staging}
+      - DB_USER=${DB_USER:-learnpuddle}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_HOST=db
+      - DB_PORT=5432
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - PLATFORM_DOMAIN=${STAGING_DOMAIN:-staging.learnpuddle.com}
+      - EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend
+      - SENTRY_DSN=${SENTRY_DSN:-}
+      - SENTRY_ENVIRONMENT=staging
+    volumes:
+      - media_staging_data:/app/media
+    networks:
+      - backend
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "0.5"
+
+  # ── ASGI server (Daphne for WebSockets) ───────────────────────────────
+  asgi:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: always
+    command: daphne -b 0.0.0.0 -p 8001 config.asgi:application
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - DEBUG=True
+      - SECRET_KEY=${SECRET_KEY}
+      - DB_NAME=${DB_NAME:-learnpuddle_staging}
+      - DB_USER=${DB_USER:-learnpuddle}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_HOST=db
+      - DB_PORT=5432
+      - REDIS_URL=redis://redis:6379/1
+      - PLATFORM_DOMAIN=${STAGING_DOMAIN:-staging.learnpuddle.com}
+    networks:
+      - backend
+      - frontend
+    expose:
+      - "8001"
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.25"
+
+  # ── Celery beat ─────────────────────────────────────────────────────
+  beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: always
+    command: celery -A config beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - DEBUG=True
+      - SECRET_KEY=${SECRET_KEY}
+      - DB_NAME=${DB_NAME:-learnpuddle_staging}
+      - DB_USER=${DB_USER:-learnpuddle}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_HOST=db
+      - DB_PORT=5432
+      - CELERY_BROKER_URL=redis://redis:6379/0
+    networks:
+      - backend
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: "0.1"
+
+  # ── Flower (Celery monitoring UI) ───────────────────────────────────
+  flower:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: always
+    command: celery -A config flower --port=5555 --basic_auth=${FLOWER_USER:-admin}:${FLOWER_PASSWORD:-staging123}
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+    networks:
+      - backend
+      - frontend
+    expose:
+      - "5555"
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: "0.1"
+
+  # ── Frontend (React build) ──────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        REACT_APP_API_URL: /api
+    restart: "no"
+    command: ["sh", "-c", "cp -r /usr/share/nginx/html/* /frontend-build/"]
+    volumes:
+      - frontend_staging_build:/frontend-build
+
+  # ── Nginx (reverse proxy + frontend) ────────────────────────────────
+  nginx:
+    image: nginx:1.25-alpine
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - web
+      - asgi
+      - frontend
+    volumes:
+      - ./nginx/nginx.staging.conf:/etc/nginx/conf.d/default.conf:ro
+      - static_staging_data:/var/www/static:ro
+      - media_staging_data:/var/www/media:ro
+      - frontend_staging_build:/usr/share/nginx/html:ro
+      - certbot_staging_conf:/etc/letsencrypt:ro
+      - certbot_staging_www:/var/www/certbot:ro
+    networks:
+      - frontend
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: "0.25"
+
+  # ── Certbot (SSL certificate) ───────────────────────────────────────
+  certbot:
+    image: certbot/certbot
+    volumes:
+      - certbot_staging_conf:/etc/letsencrypt
+      - certbot_staging_www:/var/www/certbot
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;'"
+
+networks:
+  backend:
+    driver: bridge
+  frontend:
+    driver: bridge
+
+volumes:
+  postgres_staging_data:
+  media_staging_data:
+  static_staging_data:
+  frontend_staging_build:
+  certbot_staging_conf:
+  certbot_staging_www:
