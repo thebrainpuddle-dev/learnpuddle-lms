@@ -114,6 +114,27 @@ class RegisterTeacherSerializer(serializers.ModelSerializer):
             'employee_id', 'subjects', 'grades', 'department', 'date_of_joining'
         ]
     
+    def validate_email(self, value):
+        """Check if email already exists (globally, as emails are unique across tenants)."""
+        value = value.lower().strip()
+        
+        # Check for existing active user
+        if User.objects.filter(email__iexact=value, is_deleted=False).exists():
+            raise serializers.ValidationError(
+                "A user with this email already exists. "
+                "If they need access to this school, contact support."
+            )
+        
+        # Check for soft-deleted user that could be restored
+        deleted_user = User.objects.filter(email__iexact=value, is_deleted=True).first()
+        if deleted_user:
+            raise serializers.ValidationError(
+                "This email was previously used. "
+                "Contact support to restore the account or use a different email."
+            )
+        
+        return value
+    
     def validate(self, data):
         if data['password'] != data['password_confirm']:
             raise serializers.ValidationError({"password": "Passwords don't match"})
@@ -125,6 +146,9 @@ class RegisterTeacherSerializer(serializers.ModelSerializer):
         
         # Get current tenant from context
         tenant = self.context['request'].tenant
+        
+        # Normalize email
+        validated_data['email'] = validated_data['email'].lower().strip()
         
         user = User.objects.create_user(
             **validated_data,
