@@ -162,21 +162,36 @@ class CourseDetailSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'slug', 'created_by', 'created_at', 'updated_at']
     
     def get_stats(self, obj):
+        # Handle missing assignments relation gracefully
+        assignment_count = 0
+        try:
+            if hasattr(obj, 'assignments'):
+                assignment_count = obj.assignments.count()
+        except Exception:
+            # Fallback if assignments doesn't exist
+            assignment_count = 0
+
         return {
             'total_modules': obj.modules.count(),
             'total_content': Content.objects.filter(module__course=obj).count(),
-            'total_assignments': obj.assignments.count(),
+            'total_assignments': assignment_count,
         }
     
     def create(self, validated_data):
         assigned_groups = validated_data.pop('assigned_groups', [])
         assigned_teachers = validated_data.pop('assigned_teachers', [])
-        
+
         # Get current user and tenant from context
-        request = self.context['request']
+        request = self.context.get('request')
+        if not request:
+            raise serializers.ValidationError("Request context is required")
+
         user = request.user
+        if not hasattr(request, 'tenant') or not request.tenant:
+            raise serializers.ValidationError("Tenant context is not set. Please ensure TenantMiddleware is active.")
+
         tenant = request.tenant
-        
+
         course = Course.objects.create(
             **validated_data,
             tenant=tenant,
