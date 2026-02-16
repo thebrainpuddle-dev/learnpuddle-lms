@@ -63,9 +63,8 @@ export const adminMediaService = {
     if (payload.file_url) {
       fd.append('file_url', payload.file_url);
     }
-    const res = await api.post('/media/', fd, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    });
+    // Axios automatically sets Content-Type with boundary for FormData
+    const res = await api.post('/media/', fd);
     return res.data;
   },
 
