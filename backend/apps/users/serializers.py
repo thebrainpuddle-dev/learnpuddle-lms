@@ -113,6 +113,13 @@ class RegisterTeacherSerializer(serializers.ModelSerializer):
             'email', 'password', 'password_confirm', 'first_name', 'last_name',
             'employee_id', 'subjects', 'grades', 'department', 'date_of_joining'
         ]
+        extra_kwargs = {
+            'employee_id': {'required': False, 'allow_blank': True},
+            'subjects': {'required': False, 'default': list},
+            'grades': {'required': False, 'default': list},
+            'department': {'required': False, 'allow_blank': True},
+            'date_of_joining': {'required': False, 'allow_null': True},
+        }
     
     def validate(self, data):
         if data['password'] != data['password_confirm']:

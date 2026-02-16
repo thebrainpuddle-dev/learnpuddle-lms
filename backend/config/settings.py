@@ -86,7 +86,7 @@ INSTALLED_APPS = [
     'apps.courses',
     'apps.progress',
     'apps.uploads',
-    # 'apps.media',  # TODO: Implement media library app (Wave 2.13)
+    'apps.media',
     'apps.reports',
     'apps.reminders',
     'apps.notifications',

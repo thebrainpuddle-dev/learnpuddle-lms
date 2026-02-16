@@ -33,6 +33,7 @@ db.sqlite3
 *.pot
 *.pyc
 media/
+!backend/apps/media/
 
 # Environment variables
 .env

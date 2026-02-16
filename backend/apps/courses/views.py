@@ -3,7 +3,8 @@
 from django.contrib.postgres.search import SearchQuery, SearchRank, SearchVector
 from django.db.models import Q
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, parser_classes
+from rest_framework.parsers import JSONParser, MultiPartParser, FormParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
@@ -24,14 +25,32 @@ class CoursePagination(PageNumberPagination):
     max_page_size = 100
 
 
+def _normalize_multipart_list_fields(data, list_fields=None):
+    """
+    Normalize multipart/form-data so list fields (e.g. assigned_groups, assigned_teachers)
+    are proper lists. QueryDict returns last value for data[key]; use getlist when available.
+    """
+    list_fields = list_fields or ('assigned_groups', 'assigned_teachers')
+    if hasattr(data, 'getlist'):
+        result = dict(data)
+        for key in list_fields:
+            if key in result:
+                vals = data.getlist(key)
+                if vals:
+                    result[key] = vals
+        return result
+    return data
+
+
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
+@parser_classes([JSONParser, MultiPartParser, FormParser])
 @admin_only
 @tenant_required
 def course_list_create(request):
     """
     GET: List all courses for current tenant
-    POST: Create new course
+    POST: Create new course (supports multipart/form-data for thumbnail upload)
     """
     if request.method == 'GET':
         # Get query parameters
@@ -67,8 +86,9 @@ def course_list_create(request):
         return paginator.get_paginated_response(serializer.data)
     
     elif request.method == 'POST':
+        data = _normalize_multipart_list_fields(request.data)
         serializer = CourseDetailSerializer(
-            data=request.data,
+            data=data,
             context={'request': request}
         )
         serializer.is_valid(raise_exception=True)
@@ -84,6 +104,7 @@ def course_list_create(request):
 
 @api_view(['GET', 'PUT', 'PATCH', 'DELETE'])
 @permission_classes([IsAuthenticated])
+@parser_classes([JSONParser, MultiPartParser, FormParser])
 @admin_only
 @tenant_required
 def course_detail(request, course_id):
@@ -100,9 +121,10 @@ def course_detail(request, course_id):
     
     elif request.method in ['PUT', 'PATCH']:
         partial = request.method == 'PATCH'
+        data = _normalize_multipart_list_fields(request.data)
         serializer = CourseDetailSerializer(
             course,
-            data=request.data,
+            data=data,
             partial=partial,
             context={'request': request}
         )
@@ -269,6 +291,7 @@ def module_detail(request, course_id, module_id):
 # Content endpoints
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
+@parser_classes([JSONParser, MultiPartParser, FormParser])
 @admin_only
 @tenant_required
 def content_list_create(request, course_id, module_id):

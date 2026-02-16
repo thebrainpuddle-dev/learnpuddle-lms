@@ -24,7 +24,7 @@ _api_patterns = [
     path('teacher/', include('apps.courses.teacher_urls')),
     path('teacher/', include('apps.progress.teacher_urls')),
     path('uploads/', include('apps.uploads.urls')),
-    # path('media/', include('apps.media.urls')),  # TODO: Implement media library app (Wave 2.13)
+    path('media/', include('apps.media.urls')),
     path('reports/', include('apps.reports.urls')),
     path('reminders/', include('apps.reminders.urls')),
     path('notifications/', include('apps.notifications.urls')),
