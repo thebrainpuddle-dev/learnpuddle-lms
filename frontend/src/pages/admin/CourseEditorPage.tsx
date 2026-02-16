@@ -102,16 +102,13 @@ const fetchGroups = async (): Promise<TeacherGroup[]> => {
 };
 
 const createCourse = async (data: FormData): Promise<Course> => {
-  const response = await api.post('/courses/', data, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-  });
+  // Do NOT set Content-Type: let browser add multipart/form-data; boundary=...
+  const response = await api.post('/courses/', data);
   return response.data;
 };
 
 const updateCourse = async ({ id, data }: { id: string; data: FormData }): Promise<Course> => {
-  const response = await api.patch(`/courses/${id}/`, data, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-  });
+  const response = await api.patch(`/courses/${id}/`, data);
   return response.data;
 };
 
@@ -130,9 +127,7 @@ const deleteModule = async ({ courseId, moduleId }: { courseId: string; moduleId
 };
 
 const createContent = async ({ courseId, moduleId, data }: { courseId: string; moduleId: string; data: FormData }): Promise<Content> => {
-  const response = await api.post(`/courses/${courseId}/modules/${moduleId}/contents/`, data, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-  });
+  const response = await api.post(`/courses/${courseId}/modules/${moduleId}/contents/`, data);
   return response.data;
 };
 
@@ -151,11 +146,8 @@ const deleteContent = async ({ courseId, moduleId, contentId }: { courseId: stri
 const uploadFile = async (file: File, type: 'thumbnail' | 'content'): Promise<string> => {
   const formData = new FormData();
   formData.append('file', file);
-  
   const endpoint = type === 'thumbnail' ? '/uploads/course-thumbnail/' : '/uploads/content-file/';
-  const response = await api.post(endpoint, formData, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-  });
+  const response = await api.post(endpoint, formData);
   return response.data.url;
 };
 
@@ -502,7 +494,6 @@ export const CourseEditorPage: React.FC = () => {
         setUploadPhase('uploading');
         setUploadProgress(0);
         const res = await api.post(`/courses/${courseId}/modules/${moduleId}/contents/video-upload/`, fd, {
-          headers: { 'Content-Type': 'multipart/form-data' },
           timeout: 600000, // 10 min for large files
           onUploadProgress: (e) => {
             setUploadProgress(Math.round((e.loaded / (e.total || 1)) * 100));

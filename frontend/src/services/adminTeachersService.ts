@@ -34,9 +34,7 @@ export const adminTeachersService = {
   async bulkImportCSV(file: File) {
     const fd = new FormData();
     fd.append('file', file);
-    const res = await api.post('/teachers/bulk-import/', fd, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    });
+    const res = await api.post('/teachers/bulk-import/', fd);
     return res.data as { created: number; total_rows: number; results: Array<{ row: number; email: string; status: string; message?: string }> };
   },
 

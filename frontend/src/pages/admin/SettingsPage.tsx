@@ -32,9 +32,7 @@ const fetchTenantSettings = async (): Promise<TenantSettings> => {
 };
 
 const updateTenantSettings = async (data: FormData): Promise<TenantSettings> => {
-  const response = await api.patch('/tenants/settings/', data, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-  });
+  const response = await api.patch('/tenants/settings/', data);
   return response.data;
 };
 

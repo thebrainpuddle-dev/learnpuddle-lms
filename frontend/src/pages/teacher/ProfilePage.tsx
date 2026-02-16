@@ -118,9 +118,7 @@ export const ProfilePage: React.FC = () => {
       if (profilePicFile) {
         fd.append('profile_picture', profilePicFile);
       }
-      const res = await api.patch('/users/auth/me/', fd, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
+      const res = await api.patch('/users/auth/me/', fd);
       setUser(res.data);
       toast.success('Profile updated', 'Your profile has been saved successfully.');
     } catch {

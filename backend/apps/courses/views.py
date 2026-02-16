@@ -29,6 +29,7 @@ def _normalize_multipart_list_fields(data, list_fields=None):
     """
     Normalize multipart/form-data so list fields (e.g. assigned_groups, assigned_teachers)
     are proper lists. QueryDict returns last value for data[key]; use getlist when available.
+    Also normalizes single string values to [str] for JSON/form submissions.
     """
     list_fields = list_fields or ('assigned_groups', 'assigned_teachers')
     if hasattr(data, 'getlist'):
@@ -38,6 +39,17 @@ def _normalize_multipart_list_fields(data, list_fields=None):
                 vals = data.getlist(key)
                 if vals:
                     result[key] = vals
+        return result
+    # For dict (JSON): ensure list fields are lists, not single strings
+    if isinstance(data, dict):
+        result = dict(data)
+        for key in list_fields:
+            if key in result:
+                val = result[key]
+                if isinstance(val, str) and val:
+                    result[key] = [val]
+                elif not isinstance(val, list):
+                    result[key] = [val] if val is not None else []
         return result
     return data
 
