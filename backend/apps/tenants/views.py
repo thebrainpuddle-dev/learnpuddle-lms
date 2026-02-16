@@ -17,12 +17,24 @@ from .serializers_admin import TenantSettingsSerializer
 def tenant_theme_view(request):
     """
     Public endpoint to bootstrap tenant branding/theme.
-    Tenant is derived from request host/subdomain.
-
-    NOTE: @authentication_classes([]) prevents DRF's JWTAuthentication from
-    rejecting stale/expired tokens with 401 before AllowAny is evaluated.
+    Tenant is derived from request host/subdomain (set by middleware).
+    When tenant is not found (e.g. invalid subdomain), returns default theme
+    so the login page can still render.
     """
-    tenant = get_tenant_from_request(request)
+    tenant = getattr(request, "tenant", None)
+    if tenant is None:
+        # Tenant not found or inactive - return default theme so login page loads
+        return Response({
+            "name": "Default School",
+            "subdomain": "demo",
+            "logo_url": None,
+            "primary_color": "#1F4788",
+            "secondary_color": "#2E5C8A",
+            "font_family": "Inter",
+            "is_active": True,
+            "is_trial": False,
+            "trial_end_date": None,
+        }, status=status.HTTP_200_OK)
     serializer = TenantThemeSerializer(tenant, context={"request": request})
     return Response(serializer.data, status=status.HTTP_200_OK)
 
