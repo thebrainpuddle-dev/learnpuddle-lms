@@ -61,7 +61,7 @@ export const StatsCard: React.FC<StatsCardProps> = ({
       <div className="relative flex flex-col h-full justify-between">
         <div className="flex items-start justify-between mb-4">
           <div className={`p-3 rounded-xl bg-white shadow-sm ring-1 ring-black/5 ${styles.iconText}`}>
-            {React.cloneElement(icon as React.ReactElement, { className: 'h-6 w-6' })}
+            {React.cloneElement(icon as React.ReactElement<{ className?: string }>, { className: 'h-6 w-6' })}
           </div>
           {change && (
             <span
