@@ -143,18 +143,6 @@ class CourseDetailSerializer(serializers.ModelSerializer):
         super().__init__(*args, **kwargs)
         request = self.context.get('request')
         
-        # region agent log
-        import logging
-        import json
-        _ser_log = logging.getLogger('debug.course_serializers')
-        LOG_PATH = '/Users/rakeshreddy/LMS/.cursor/debug.log'
-        def _dbg(msg, data=None):
-            import time
-            with open(LOG_PATH, 'a') as f:
-                f.write(json.dumps({'timestamp': int(time.time()*1000), 'location': 'serializers.py', 'message': msg, 'data': data or {}}) + '\n')
-        _dbg('SER_INIT', {'has_request': request is not None, 'has_tenant': hasattr(request, 'tenant') if request else False, 'tenant': str(getattr(request, 'tenant', None))})
-        # endregion
-        
         if request and hasattr(request, 'tenant') and request.tenant:
             # Use all_tenants() to bypass TenantManager's automatic filtering
             # and apply explicit tenant filter to avoid double-filtering issues
@@ -164,59 +152,17 @@ class CourseDetailSerializer(serializers.ModelSerializer):
             # Match /teachers/ endpoint: all non-admin users from tenant
             # Use all_objects to bypass UserSoftDeleteManager's automatic filtering
             # which can cause issues with DRF's PrimaryKeyRelatedField lookup
-            teachers_qs = User.all_objects.filter(
+            self.fields['assigned_teachers'].queryset = User.all_objects.filter(
                 tenant=request.tenant,
                 is_deleted=False,  # Explicit soft-delete filter
             ).exclude(
                 role__in=['SUPER_ADMIN', 'SCHOOL_ADMIN'],
             )
-            self.fields['assigned_teachers'].queryset = teachers_qs
-            
-            # region agent log
-            teacher_ids = list(teachers_qs.values_list('id', flat=True))
-            _dbg('SER_TEACHERS_QS', {'count': len(teacher_ids), 'ids': [str(tid) for tid in teacher_ids]})
-            # endregion
         else:
             # If no tenant in context, make fields optional to avoid validation errors
             # The view decorator @tenant_required will catch missing tenant before serializer
             self.fields['assigned_groups'].queryset = TeacherGroup.objects.none()
             self.fields['assigned_teachers'].queryset = User.objects.none()
-            # region agent log
-            _dbg('SER_NO_TENANT', {})
-            # endregion
-    
-    def to_internal_value(self, data):
-        # region agent log
-        import json, time
-        LOG_PATH = '/Users/rakeshreddy/LMS/.cursor/debug.log'
-        def _dbg(msg, d=None):
-            with open(LOG_PATH, 'a') as f:
-                f.write(json.dumps({'timestamp': int(time.time()*1000), 'location': 'serializers.py', 'message': msg, 'data': d or {}}) + '\n')
-        
-        at_val = data.get('assigned_teachers') if hasattr(data, 'get') else None
-        _dbg('SER_TO_INTERNAL', {
-            'assigned_teachers_value': str(at_val)[:200] if at_val else None,
-            'assigned_teachers_type': type(at_val).__name__ if at_val else None,
-            'is_list': isinstance(at_val, list),
-            'field_qs_count': self.fields['assigned_teachers'].queryset.count() if hasattr(self.fields.get('assigned_teachers', None), 'queryset') else 'no_field',
-        })
-        if isinstance(at_val, list) and len(at_val) > 0:
-            first_item = at_val[0]
-            _dbg('SER_AT_FIRST_ITEM', {
-                'value': str(first_item),
-                'type': type(first_item).__name__,
-                'len': len(str(first_item)),
-            })
-            # Try to lookup directly
-            qs = self.fields['assigned_teachers'].queryset
-            try:
-                found = qs.filter(id=first_item).exists()
-                _dbg('SER_DIRECT_LOOKUP', {'id': str(first_item), 'found': found, 'qs_model': qs.model.__name__})
-            except Exception as e:
-                _dbg('SER_DIRECT_LOOKUP_ERROR', {'error': str(e)})
-        # endregion
-        
-        return super().to_internal_value(data)
     
     class Meta:
         model = Course
