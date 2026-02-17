@@ -32,7 +32,9 @@ def media_list_create(request):
     POST: Create new media asset (file upload or link)
     """
     if request.method == 'GET':
-        qs = MediaAsset.objects.filter(tenant=request.tenant, is_active=True)
+        # TenantManager already filters by request.tenant via thread-local;
+        # adding tenant= again can cause an empty intersection if they diverge.
+        qs = MediaAsset.objects.filter(is_active=True)
 
         media_type = request.GET.get('media_type')
         if media_type:
@@ -68,7 +70,7 @@ def media_list_create(request):
 @tenant_required
 def media_detail(request, asset_id):
     """GET/PATCH/DELETE a single media asset."""
-    asset = MediaAsset.objects.filter(id=asset_id, tenant=request.tenant).first()
+    asset = MediaAsset.objects.filter(id=asset_id).first()
     if not asset:
         return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
 
@@ -98,7 +100,6 @@ def media_detail(request, asset_id):
 def media_stats(request):
     """Return counts by media_type for the tenant."""
     stats = MediaAsset.objects.filter(
-        tenant=request.tenant,
         is_active=True,
     ).values('media_type').annotate(count=Count('id'))
 

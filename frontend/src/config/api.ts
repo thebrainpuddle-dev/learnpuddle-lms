@@ -16,6 +16,28 @@ export const api: AxiosInstance = axios.create({
 });
 
 /**
+ * Clear persisted Zustand auth state so stale isAuthenticated=true
+ * does not cause redirect loops on page reload.
+ */
+function clearPersistedAuth() {
+  try {
+    for (const storage of [sessionStorage, localStorage]) {
+      const raw = storage.getItem('auth-storage');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed?.state) {
+          parsed.state.isAuthenticated = false;
+          parsed.state.user = null;
+          parsed.state.accessToken = null;
+          parsed.state.refreshToken = null;
+          storage.setItem('auth-storage', JSON.stringify(parsed));
+        }
+      }
+    }
+  } catch { /* best-effort */ }
+}
+
+/**
  * Request interceptor to add auth token and set Content-Type
  * Uses sessionStorage for tab-isolated sessions (prevents cross-tab token conflicts)
  */
@@ -80,15 +102,20 @@ api.interceptors.response.use(
 
       const refreshToken = sessionStorage.getItem('refresh_token');
       // Determine which login page to redirect to based on current path
-      const loginPath = window.location.pathname.startsWith('/super-admin')
+      const currentPath = window.location.pathname;
+      const loginPath = currentPath.startsWith('/super-admin')
         ? '/super-admin/login'
         : '/login';
 
+      // Avoid redirect loop: if already on a login page, just reject
+      const isOnLoginPage = currentPath === '/login' || currentPath === '/super-admin/login';
+
       if (!refreshToken) {
-        // No refresh token - session expired, redirect to login
+        // No refresh token - session expired
         sessionStorage.removeItem('access_token');
         sessionStorage.removeItem('refresh_token');
-        window.location.href = loginPath;
+        clearPersistedAuth();
+        if (!isOnLoginPage) window.location.href = loginPath;
         return Promise.reject(error);
       }
 
@@ -143,7 +170,8 @@ api.interceptors.response.use(
         // Refresh failed, logout user and redirect to login
         sessionStorage.removeItem('access_token');
         sessionStorage.removeItem('refresh_token');
-        window.location.href = loginPath;
+        clearPersistedAuth();
+        if (!isOnLoginPage) window.location.href = loginPath;
         return Promise.reject(refreshError);
       }
     }
