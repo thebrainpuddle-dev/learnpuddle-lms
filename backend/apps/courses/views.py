@@ -129,11 +129,30 @@ def course_list_create(request):
         _debug_log.warning('[DBG-CV] POST course: content_type=%s data_type=%s data_keys=%s',
             request.content_type, type(request.data).__name__, list(request.data.keys()) if hasattr(request.data, 'keys') else 'N/A')
         _debug_log.warning('[DBG-CV] POST normalized_data=%s', {k: (type(v).__name__ if hasattr(v, 'read') else repr(v)[:200]) for k, v in (data.items() if hasattr(data, 'items') else [])})
+        
+        # Deep debug: trace assigned_teachers
+        at_val = data.get('assigned_teachers')
+        _debug_log.warning('[DBG-CV] assigned_teachers raw: value=%s type=%s is_list=%s',
+            at_val, type(at_val).__name__, isinstance(at_val, list))
+        if isinstance(at_val, list) and at_val:
+            _debug_log.warning('[DBG-CV] assigned_teachers[0]: value=%s type=%s', at_val[0], type(at_val[0]).__name__)
+        _debug_log.warning('[DBG-CV] request.tenant=%s tenant_id=%s', 
+            request.tenant, getattr(request.tenant, 'id', None))
         # endregion
         serializer = CourseDetailSerializer(
             data=data,
             context={'request': request}
         )
+        # region agent log - trace queryset
+        qs = serializer.fields['assigned_teachers'].queryset
+        _debug_log.warning('[DBG-CV] serializer queryset: count=%s model=%s', qs.count(), qs.model.__name__)
+        if isinstance(at_val, list) and at_val:
+            try:
+                found = qs.filter(pk=at_val[0]).exists()
+                _debug_log.warning('[DBG-CV] direct lookup pk=%s found=%s', at_val[0], found)
+            except Exception as e:
+                _debug_log.warning('[DBG-CV] direct lookup error: %s', str(e))
+        # endregion
         if not serializer.is_valid():
             # region agent log
             _debug_log.warning('[DBG-CV] POST validation_errors=%s', serializer.errors)
