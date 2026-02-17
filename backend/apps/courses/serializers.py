@@ -2,8 +2,61 @@
 
 from rest_framework import serializers
 from django.db.models import Q
+from django.core.exceptions import ObjectDoesNotExist
 from .models import Course, Module, Content, TeacherGroup
 from apps.users.models import User
+import logging
+
+_ser_log = logging.getLogger('debug.course_serializers')
+
+
+class SafePrimaryKeyRelatedField(serializers.PrimaryKeyRelatedField):
+    """
+    Custom PrimaryKeyRelatedField that properly handles querysets from
+    custom managers without triggering unexpected filtering.
+    
+    The issue: DRF's get_queryset() calls self.queryset.all() which can
+    sometimes trigger manager behaviors. This field stores and uses
+    the queryset directly without the .all() call.
+    """
+    
+    def __init__(self, **kwargs):
+        self._explicit_queryset = None
+        super().__init__(**kwargs)
+    
+    def set_queryset(self, queryset):
+        """Set queryset explicitly, bypassing potential manager issues."""
+        self._explicit_queryset = queryset
+        self.queryset = queryset
+    
+    def get_queryset(self):
+        """Return the explicitly set queryset without calling .all()."""
+        if self._explicit_queryset is not None:
+            return self._explicit_queryset
+        return super().get_queryset()
+    
+    def to_internal_value(self, data):
+        """Override to add debugging and handle lookup properly."""
+        queryset = self.get_queryset()
+        try:
+            # Log for debugging
+            _ser_log.warning('[SPKRF] to_internal_value: data=%s type=%s qs_count=%s',
+                data, type(data).__name__, queryset.count())
+            
+            if self.pk_field is not None:
+                data = self.pk_field.to_internal_value(data)
+            
+            # Try direct get
+            result = queryset.get(pk=data)
+            _ser_log.warning('[SPKRF] found: %s', result)
+            return result
+        except ObjectDoesNotExist:
+            _ser_log.warning('[SPKRF] ObjectDoesNotExist for pk=%s, qs_sql=%s', 
+                data, str(queryset.query)[:500])
+            self.fail('does_not_exist', pk_value=data)
+        except (TypeError, ValueError) as e:
+            _ser_log.warning('[SPKRF] TypeError/ValueError: %s', e)
+            self.fail('incorrect_type', data_type=type(data).__name__)
 
 
 class ContentSerializer(serializers.ModelSerializer):
@@ -132,7 +185,8 @@ class CourseDetailSerializer(serializers.ModelSerializer):
         queryset=TeacherGroup.objects.none(),  # overridden in __init__
         required=False
     )
-    assigned_teachers = serializers.PrimaryKeyRelatedField(
+    # Use custom field to bypass DRF's queryset.all() behavior
+    assigned_teachers = SafePrimaryKeyRelatedField(
         many=True,
         queryset=User.objects.none(),  # overridden in __init__
         required=False
@@ -152,12 +206,17 @@ class CourseDetailSerializer(serializers.ModelSerializer):
             # Match /teachers/ endpoint: all non-admin users from tenant
             # Use all_objects to bypass UserSoftDeleteManager's automatic filtering
             # which can cause issues with DRF's PrimaryKeyRelatedField lookup
-            self.fields['assigned_teachers'].queryset = User.all_objects.filter(
+            teachers_qs = User.all_objects.filter(
                 tenant=request.tenant,
                 is_deleted=False,  # Explicit soft-delete filter
             ).exclude(
                 role__in=['SUPER_ADMIN', 'SCHOOL_ADMIN'],
             )
+            # Use set_queryset for SafePrimaryKeyRelatedField
+            if hasattr(self.fields['assigned_teachers'], 'set_queryset'):
+                self.fields['assigned_teachers'].set_queryset(teachers_qs)
+            else:
+                self.fields['assigned_teachers'].queryset = teachers_qs
         else:
             # If no tenant in context, make fields optional to avoid validation errors
             # The view decorator @tenant_required will catch missing tenant before serializer
