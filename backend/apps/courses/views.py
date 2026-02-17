@@ -140,6 +140,8 @@ def course_detail(request, course_id):
     
     elif request.method == 'DELETE':
         log_audit('DELETE', 'Course', target_id=str(course.id), target_repr=str(course), request=request)
+        course.assigned_teachers.clear()
+        course.assigned_groups.clear()
         course.delete()
         return Response(
             {'message': 'Course deleted successfully'},
@@ -160,6 +162,17 @@ def course_publish(request, course_id):
     action = request.data.get('action')  # 'publish' or 'unpublish'
     
     if action == 'publish':
+        # Block publishing if any video is still processing
+        from .video_models import VideoAsset
+        processing = VideoAsset.objects.filter(
+            content__module__course=course,
+            status='PROCESSING',
+        ).count()
+        if processing > 0:
+            return Response(
+                {'error': f'{processing} video(s) still processing. Wait for completion before publishing.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         course.is_published = True
         message = 'Course published successfully'
     elif action == 'unpublish':

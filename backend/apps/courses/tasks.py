@@ -450,11 +450,11 @@ def generate_thumbnail(self, video_asset_id: str) -> str:
                     pass
 
 
-@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 2})
+@shared_task(bind=True)
 def transcribe_video(self, video_asset_id: str, language: str = "en") -> str:
     """
     Transcribe video audio using faster-whisper.
-    Non-fatal: if transcription fails, the pipeline continues (video is still usable).
+    Non-fatal: runs independently after finalize. Failures don't affect video status.
     """
     asset = VideoAsset.objects.select_related("content__module__course__tenant").get(id=video_asset_id)
     if asset.status == "FAILED":
@@ -541,11 +541,11 @@ def transcribe_video(self, video_asset_id: str, language: str = "en") -> str:
                 pass
 
 
-@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 2})
+@shared_task(bind=True)
 def generate_assignments(self, video_asset_id: str) -> str:
     """
     Auto-generate reflection + quiz assignments from a video's transcript.
-    Non-fatal: if this fails, the video is still usable.
+    Non-fatal: runs independently after finalize. Failures don't affect video status.
     """
     asset = VideoAsset.objects.select_related(
         "content",

@@ -124,6 +124,7 @@ def logout_view(request):
 def refresh_token_view(request):
     """
     Refresh access token using refresh token.
+    Validates that the token is not blacklisted (e.g. after logout).
     """
     try:
         refresh_token = request.data.get('refresh_token')
@@ -134,6 +135,9 @@ def refresh_token_view(request):
             )
         
         refresh = RefreshToken(refresh_token)
+        # Check blacklist — rejects tokens that were invalidated on logout
+        if hasattr(refresh, 'check_blacklist'):
+            refresh.check_blacklist()
         
         return Response({
             'access': str(refresh.access_token),

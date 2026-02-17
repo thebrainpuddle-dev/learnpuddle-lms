@@ -271,6 +271,15 @@ def progress_complete(request, content_id):
     if not _teacher_assigned_to_course(request.user, course):
         return Response({"error": "Not assigned to this course"}, status=status.HTTP_403_FORBIDDEN)
 
+    # Block completion if VIDEO content hasn't finished processing
+    if content.content_type == "VIDEO":
+        asset = getattr(content, "video_asset", None)
+        if not asset or asset.status != "READY":
+            return Response(
+                {"error": "Video is not ready yet. Please wait for processing to complete."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
     obj, _created = TeacherProgress.objects.get_or_create(
         teacher=request.user,
         course=course,

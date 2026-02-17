@@ -1,6 +1,6 @@
 import uuid
 
-from celery import chain
+from celery import chain, group
 from django.conf import settings
 from django.core.files.storage import default_storage
 from django.shortcuts import get_object_or_404
@@ -144,15 +144,22 @@ def upload_video_content(request, course_id, module_id):
         status="UPLOADED",
     )
 
-    # Enqueue processing pipeline
-    chain(
-        validate_duration.s(str(asset.id)),
+    # Enqueue processing pipeline.
+    # Critical chain must complete for READY status: validate → transcode → thumbnail → finalize.
+    # Non-fatal tasks (transcribe, assignments) run as fire-and-forget after finalize succeeds.
+    asset_id = str(asset.id)
+    critical = chain(
+        validate_duration.s(asset_id),
         transcode_to_hls.s(),
         generate_thumbnail.s(),
-        transcribe_video.s(language=language),
-        generate_assignments.s(),
         finalize_video_asset.s(),
-    ).apply_async()
+    )
+    critical.apply_async(
+        link=group(
+            transcribe_video.si(asset_id, language),
+            generate_assignments.si(asset_id),
+        )
+    )
 
     return Response(
         {

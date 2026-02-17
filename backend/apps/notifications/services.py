@@ -71,6 +71,14 @@ def create_notification(
     Create a notification for a teacher.
     Also sends real-time notification via WebSocket.
     """
+    # Guard against cross-tenant notifications
+    if teacher.tenant_id != tenant.id:
+        import logging
+        logging.getLogger(__name__).warning(
+            "Blocked cross-tenant notification: teacher=%s tenant=%s target_tenant=%s",
+            teacher.id, teacher.tenant_id, tenant.id,
+        )
+        return None
     notification = Notification.objects.create(
         tenant=tenant,
         teacher=teacher,

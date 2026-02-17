@@ -182,11 +182,16 @@ export const CourseEditorPage: React.FC = () => {
   // pollingModuleId is set alongside pollingContentId
   const [pollingModuleId, setPollingModuleId] = useState<string | null>(null);
 
+  const pollErrorCount = useRef(0);
   useEffect(() => {
     if (!pollingContentId || !pollingModuleId || !courseId) return;
+    // Clear any previous interval before starting a new one
+    if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null; }
+    pollErrorCount.current = 0;
     pollingRef.current = setInterval(async () => {
       try {
         const data = await adminService.getVideoStatus(courseId, pollingModuleId, pollingContentId);
+        pollErrorCount.current = 0; // reset on success
         const st = data.video_asset?.status;
         if (st === 'READY') {
           stopPolling();
@@ -200,7 +205,14 @@ export const CourseEditorPage: React.FC = () => {
           toast.error('Video processing failed', data.video_asset?.error_message || 'Unknown error');
           queryClient.invalidateQueries({ queryKey: ['adminCourse', courseId] });
         }
-      } catch { /* ignore polling errors */ }
+      } catch {
+        pollErrorCount.current += 1;
+        if (pollErrorCount.current >= 5) {
+          stopPolling();
+          setUploadPhase('idle');
+          toast.error('Status check failed', 'Could not reach the server. Please refresh the page.');
+        }
+      }
     }, 5000);
     return () => stopPolling();
   }, [pollingContentId, pollingModuleId, courseId, stopPolling, toast, queryClient]);
@@ -541,6 +553,15 @@ export const CourseEditorPage: React.FC = () => {
     data.append('content_type', newContentData.content_type);
     data.append('is_mandatory', String(newContentData.is_mandatory));
     data.append('order', String(order));
+
+    if (newContentData.content_type === 'LINK' && !newContentData.file_url?.trim()) {
+      toast.error('Missing URL', 'Please enter a valid link.');
+      return;
+    }
+    if (newContentData.content_type === 'DOCUMENT' && !contentFile && !newContentData.file_url) {
+      toast.error('Missing file', 'Please upload a document or select from the media library.');
+      return;
+    }
 
     if (newContentData.content_type === 'TEXT') {
       data.append('text_content', newContentData.text_content);

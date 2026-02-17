@@ -1,6 +1,7 @@
 # apps/courses/serializers.py
 
 from rest_framework import serializers
+from django.db import transaction
 from django.db.models import Q
 from .models import Course, Module, Content, TeacherGroup
 from apps.users.models import User
@@ -217,27 +218,26 @@ class CourseDetailSerializer(serializers.ModelSerializer):
         old_teacher_ids = set(instance.assigned_teachers.values_list('id', flat=True))
         old_assigned_to_all = instance.assigned_to_all
         
-        # Update regular fields
-        for attr, value in validated_data.items():
-            setattr(instance, attr, value)
-        instance.save()
+        with transaction.atomic():
+            # Update regular fields
+            for attr, value in validated_data.items():
+                setattr(instance, attr, value)
+            instance.save()
+            
+            # Update assignments
+            if assigned_groups is not None:
+                instance.assigned_groups.set(assigned_groups)
+            if assigned_teachers is not None:
+                instance.assigned_teachers.set(assigned_teachers)
         
-        # Update assignments
-        if assigned_groups is not None:
-            instance.assigned_groups.set(assigned_groups)
-        if assigned_teachers is not None:
-            instance.assigned_teachers.set(assigned_teachers)
-        
-        # Only notify if course is published
+        # Notify outside the transaction (non-critical)
         if instance.is_published:
             request = self.context.get('request')
             tenant = request.tenant if request else instance.tenant
             
-            # Get new assignments
             new_group_ids = set(instance.assigned_groups.values_list('id', flat=True)) if assigned_groups is not None else old_group_ids
             new_teacher_ids = set(instance.assigned_teachers.values_list('id', flat=True)) if assigned_teachers is not None else old_teacher_ids
             
-            # Notify newly assigned teachers
             self._notify_assigned_teachers(
                 instance, tenant, 
                 old_teacher_ids if not old_assigned_to_all else set(),

@@ -32,6 +32,15 @@ def _get_tenant_from_path(path: str) -> str | None:
     return None
 
 
+# Paths that don't require authentication (non-sensitive, displayed in <img> tags).
+_PUBLIC_PREFIXES = ('course_thumbnails/', 'profile_pictures/')
+
+
+def _is_public_path(path: str) -> bool:
+    """Check if a path is in the public allowlist (thumbnails, profile pics)."""
+    return any(path.startswith(prefix) for prefix in _PUBLIC_PREFIXES)
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def protected_media_view(request, path):
@@ -50,17 +59,44 @@ def protected_media_view(request, path):
     if not _path_is_safe(path):
         raise Http404("Invalid path")
     
-    # Extract and verify tenant ownership
-    path_tenant_id = _get_tenant_from_path(path)
-    if path_tenant_id:
-        user_tenant_id = str(request.user.tenant_id) if request.user.tenant_id else None
-        
-        # Super admins can access any tenant's files
-        if request.user.role != 'SUPER_ADMIN':
-            if user_tenant_id != path_tenant_id:
-                raise Http404("File not found")
+    # Public paths (thumbnails, profile pics) don't require tenant check
+    if not _is_public_path(path):
+        # Extract and verify tenant ownership
+        path_tenant_id = _get_tenant_from_path(path)
+        if path_tenant_id:
+            user_tenant_id = str(request.user.tenant_id) if request.user.tenant_id else None
+            
+            # Super admins can access any tenant's files
+            if request.user.role != 'SUPER_ADMIN':
+                if user_tenant_id != path_tenant_id:
+                    raise Http404("File not found")
     
-    # Production: Use X-Accel-Redirect for nginx to serve
+    return _serve_file(path)
+
+
+from django.views.decorators.csrf import csrf_exempt
+from django.http import JsonResponse
+
+
+@csrf_exempt
+def public_media_view(request, path):
+    """Serve public media files (thumbnails, profile pics) without authentication."""
+    # Reconstruct full media path from the URL.
+    # URL is /media/course_thumbnails/<path> so we need course_thumbnails/<path>
+    request_path = request.path
+    if '/media/' in request_path:
+        full_path = request_path.split('/media/', 1)[1]
+    else:
+        full_path = path
+    if not _path_is_safe(full_path):
+        raise Http404("Invalid path")
+    if not _is_public_path(full_path):
+        raise Http404("File not found")
+    return _serve_file(full_path)
+
+
+def _serve_file(path):
+    """Serve a media file via X-Accel-Redirect (prod) or directly (dev)."""
     use_x_accel = getattr(settings, 'USE_X_ACCEL_REDIRECT', not settings.DEBUG)
     
     if use_x_accel:
@@ -76,7 +112,6 @@ def protected_media_view(request, path):
     if not os.path.exists(full_path) or not os.path.isfile(full_path):
         raise Http404("File not found")
     
-    # Serve with proper content type
     import mimetypes
     content_type, _ = mimetypes.guess_type(full_path)
     

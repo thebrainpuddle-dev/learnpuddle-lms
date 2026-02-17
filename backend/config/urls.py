@@ -10,7 +10,7 @@ from drf_spectacular.views import (
     SpectacularRedocView,
 )
 from .views import health_view
-from utils.media_views import protected_media_view
+from utils.media_views import protected_media_view, public_media_view
 
 # Versioned API routes — all new clients should use /api/v1/
 _api_patterns = [
@@ -36,6 +36,9 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('health/', health_view),
     
+    # Public media (thumbnails, profile pics — no auth needed for <img> tags)
+    path('media/course_thumbnails/<path:path>', public_media_view, name='public_media_thumbnails'),
+    path('media/profile_pictures/<path:path>', public_media_view, name='public_media_profiles'),
     # Protected media files (auth required, tenant-isolated)
     path('media/<path:path>', protected_media_view, name='protected_media'),
 
