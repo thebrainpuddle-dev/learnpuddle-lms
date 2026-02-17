@@ -110,9 +110,11 @@ def reminder_preview(request):
     assignment = None
 
     if reminder_type == "COURSE_DEADLINE":
-        course = get_object_or_404(Course, id=data.get("course_id"), tenant=request.tenant)
+        # Note: Course uses TenantSoftDeleteManager - no need for tenant= filter
+        course = get_object_or_404(Course, id=data.get("course_id"))
         recipients = _recipients_for_course_deadline(course)
     elif reminder_type == "ASSIGNMENT_DUE":
+        # Assignment doesn't use TenantManager, so course__tenant is needed for FK traversal
         assignment = get_object_or_404(Assignment, id=data.get("assignment_id"), course__tenant=request.tenant)
         recipients = _recipients_for_assignment_due(assignment)
     else:
@@ -158,9 +160,11 @@ def reminder_send(request):
     assignment = None
 
     if reminder_type == "COURSE_DEADLINE":
-        course = get_object_or_404(Course, id=data.get("course_id"), tenant=request.tenant)
+        # Note: Course uses TenantSoftDeleteManager - no need for tenant= filter
+        course = get_object_or_404(Course, id=data.get("course_id"))
         recipients = _recipients_for_course_deadline(course)
     elif reminder_type == "ASSIGNMENT_DUE":
+        # Assignment doesn't use TenantManager, so course__tenant is needed for FK traversal
         assignment = get_object_or_404(Assignment, id=data.get("assignment_id"), course__tenant=request.tenant)
         recipients = _recipients_for_assignment_due(assignment)
     else:
@@ -168,7 +172,7 @@ def reminder_send(request):
 
     teacher_ids = data.get("teacher_ids")
     if teacher_ids:
-        # Defense-in-depth: explicitly scope to current tenant
+        # Defense-in-depth: explicitly scope to current tenant (User doesn't use TenantManager)
         recipients = recipients.filter(id__in=teacher_ids, tenant=request.tenant)
 
     recipients = recipients.order_by("last_name", "first_name")

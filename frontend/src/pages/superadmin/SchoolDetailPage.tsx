@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { superAdminService, PLAN_OPTIONS, FEATURE_FLAGS, TenantDetail } from '../../services/superAdminService';
-import { Button, Input, useToast } from '../../components/common';
+import { superAdminService, PLAN_OPTIONS, FEATURE_FLAGS } from '../../services/superAdminService';
+import { Button, useToast } from '../../components/common';
 import {
   ArrowLeftIcon,
   CheckCircleIcon,

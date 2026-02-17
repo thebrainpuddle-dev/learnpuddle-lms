@@ -101,7 +101,7 @@ self.addEventListener('fetch', (event) => {
   }
   
   // Default: stale-while-revalidate
-  event.respondWith(staleWhileRevalidate(request));
+  event.respondWith(staleWhileRevalidate(request, event));
 });
 
 // Cache-first strategy (for static assets)
@@ -159,20 +159,34 @@ async function networkFirstStrategy(request) {
 }
 
 // Stale-while-revalidate strategy
-async function staleWhileRevalidate(request) {
+async function staleWhileRevalidate(request, event) {
   const cachedResponse = await caches.match(request);
   
-  const fetchPromise = fetch(request)
-    .then((networkResponse) => {
-      if (networkResponse.ok) {
-        const cache = caches.open(DYNAMIC_CACHE);
-        cache.then((c) => c.put(request, networkResponse.clone()));
+  const fetchPromise = fetch(request);
+
+  // Update cache in the background (don't block response).
+  const cacheUpdatePromise = fetchPromise
+    .then(async (networkResponse) => {
+      if (networkResponse && networkResponse.ok) {
+        // Clone BEFORE the response body can be consumed
+        // This prevents "Response body is already used" errors
+        const responseToCache = networkResponse.clone();
+        const cache = await caches.open(DYNAMIC_CACHE);
+        await cache.put(request, responseToCache);
       }
-      return networkResponse;
     })
-    .catch(() => null);
-  
-  return cachedResponse || fetchPromise;
+    .catch(() => {});
+
+  if (event && typeof event.waitUntil === 'function') {
+    event.waitUntil(cacheUpdatePromise);
+  }
+
+  if (cachedResponse) {
+    return cachedResponse;
+  }
+
+  const networkResponse = await fetchPromise.catch(() => null);
+  return networkResponse || new Response('Offline', { status: 503 });
 }
 
 // Check if URL is a static asset

@@ -5,7 +5,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Button, Input } from '../../components/common';
 import {
@@ -39,7 +39,6 @@ interface SignupData {
 }
 
 export const SignupPage: React.FC = () => {
-  const navigate = useNavigate();
   const [step, setStep] = useState(1);
   const [formData, setFormData] = useState<SignupData>({
     school_name: '',
@@ -63,7 +62,7 @@ export const SignupPage: React.FC = () => {
   });
 
   // Check subdomain availability
-  const checkSubdomain = useMutation({
+  const { mutate: checkSubdomain } = useMutation({
     mutationFn: async (name: string) => {
       const res = await api.get(`/onboarding/check-subdomain/?name=${encodeURIComponent(name)}`);
       return res.data;
@@ -92,11 +91,11 @@ export const SignupPage: React.FC = () => {
   useEffect(() => {
     const timeout = setTimeout(() => {
       if (formData.school_name.length >= 3) {
-        checkSubdomain.mutate(formData.school_name);
+        checkSubdomain(formData.school_name);
       }
     }, 500);
     return () => clearTimeout(timeout);
-  }, [formData.school_name]);
+  }, [formData.school_name, checkSubdomain]);
 
   const updateField = (field: keyof SignupData, value: string) => {
     setFormData(prev => ({ ...prev, [field]: value }));

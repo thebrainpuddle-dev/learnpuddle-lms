@@ -12,6 +12,56 @@ class ReminderPreviewRequestSerializer(serializers.Serializer):
     subject = serializers.CharField(required=False, allow_blank=True)
     message = serializers.CharField(required=False, allow_blank=True)
 
+    def validate(self, attrs):
+        reminder_type = attrs.get("reminder_type")
+        course_id = attrs.get("course_id")
+        assignment_id = attrs.get("assignment_id")
+
+        if reminder_type == "COURSE_DEADLINE":
+            if not course_id:
+                raise serializers.ValidationError(
+                    {"course_id": "course_id is required when reminder_type=COURSE_DEADLINE"}
+                )
+            if assignment_id:
+                raise serializers.ValidationError(
+                    {"assignment_id": "Do not provide assignment_id when reminder_type=COURSE_DEADLINE"}
+                )
+
+        elif reminder_type == "ASSIGNMENT_DUE":
+            if not assignment_id:
+                raise serializers.ValidationError(
+                    {"assignment_id": "assignment_id is required when reminder_type=ASSIGNMENT_DUE"}
+                )
+            if course_id:
+                raise serializers.ValidationError(
+                    {"course_id": "Do not provide course_id when reminder_type=ASSIGNMENT_DUE"}
+                )
+
+        elif reminder_type == "CUSTOM":
+            # Explicitly reject unused fields to avoid silent confusion.
+            if course_id:
+                raise serializers.ValidationError(
+                    {"course_id": "Do not provide course_id when reminder_type=CUSTOM"}
+                )
+            if assignment_id:
+                raise serializers.ValidationError(
+                    {"assignment_id": "Do not provide assignment_id when reminder_type=CUSTOM"}
+                )
+
+        teacher_ids = attrs.get("teacher_ids")
+        if teacher_ids is not None:
+            if len(teacher_ids) == 0:
+                raise serializers.ValidationError(
+                    {"teacher_ids": "teacher_ids must be a non-empty list when provided"}
+                )
+            max_ids = 1000
+            if len(teacher_ids) > max_ids:
+                raise serializers.ValidationError(
+                    {"teacher_ids": f"Too many teacher_ids (max {max_ids})"}
+                )
+
+        return attrs
+
 
 class ReminderSendRequestSerializer(ReminderPreviewRequestSerializer):
     pass

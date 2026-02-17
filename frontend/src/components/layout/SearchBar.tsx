@@ -1,6 +1,6 @@
 // src/components/layout/SearchBar.tsx
 
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -69,11 +69,13 @@ export const SearchBar: React.FC<SearchBarProps> = ({ className = '', isAdmin = 
     enabled: debouncedQuery.length >= 2,
   });
   
-  // Combine results for keyboard navigation
-  const allResults = [
-    ...(results?.courses || []),
-    ...(results?.content || []),
-  ];
+  // Combine results for keyboard navigation (memoized for stable hook deps)
+  const allResults = useMemo(() => {
+    return [
+      ...(results?.courses || []),
+      ...(results?.content || []),
+    ];
+  }, [results?.courses, results?.content]);
   
   // Handle click outside
   useEffect(() => {
@@ -86,6 +88,25 @@ export const SearchBar: React.FC<SearchBarProps> = ({ className = '', isAdmin = 
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
   
+  const handleResultClick = useCallback((result: SearchResult) => {
+    setIsOpen(false);
+    setQuery('');
+    
+    if (result.type === 'course') {
+      if (isAdmin) {
+        navigate(`/admin/courses/${result.id}/edit`);
+      } else {
+        navigate(`/teacher/courses/${result.id}`);
+      }
+    } else if (result.type === 'content' && result.course_id) {
+      if (isAdmin) {
+        navigate(`/admin/courses/${result.course_id}/edit`);
+      } else {
+        navigate(`/teacher/courses/${result.course_id}`);
+      }
+    }
+  }, [isAdmin, navigate]);
+
   // Handle keyboard navigation
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (!isOpen || allResults.length === 0) return;
@@ -110,26 +131,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({ className = '', isAdmin = 
         inputRef.current?.blur();
         break;
     }
-  }, [isOpen, allResults, selectedIndex]);
-  
-  const handleResultClick = (result: SearchResult) => {
-    setIsOpen(false);
-    setQuery('');
-    
-    if (result.type === 'course') {
-      if (isAdmin) {
-        navigate(`/admin/courses/${result.id}/edit`);
-      } else {
-        navigate(`/teacher/courses/${result.id}`);
-      }
-    } else if (result.type === 'content' && result.course_id) {
-      if (isAdmin) {
-        navigate(`/admin/courses/${result.course_id}/edit`);
-      } else {
-        navigate(`/teacher/courses/${result.course_id}`);
-      }
-    }
-  };
+  }, [isOpen, allResults, selectedIndex, handleResultClick]);
   
   const clearSearch = () => {
     setQuery('');
