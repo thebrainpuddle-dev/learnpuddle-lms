@@ -48,20 +48,27 @@ class MediaAssetCreateSerializer(serializers.ModelSerializer):
 
         file_obj = validated_data.pop('file', None)
         file_url = validated_data.get('file_url', '') or ''
+        media_type = validated_data['media_type']
 
-        # For VIDEO/DOCUMENT: require file. For LINK: require file_url.
-        if validated_data['media_type'] == 'LINK':
+        if media_type == 'LINK':
             if not file_url:
                 raise serializers.ValidationError({'file_url': 'URL is required for link type.'})
         elif file_obj:
             validated_data['file'] = file_obj
-        else:
-            raise serializers.ValidationError(
-                {'file': 'File upload is required for video or document type.'}
-            )
             validated_data['file_name'] = getattr(file_obj, 'name', '') or ''
             validated_data['file_size'] = getattr(file_obj, 'size', None)
             validated_data['mime_type'] = getattr(file_obj, 'content_type', '') or ''
+        elif file_url:
+            # Allow creating a DOCUMENT/VIDEO asset from an existing URL
+            # (e.g. file already uploaded via /uploads/content-file/).
+            # Extract filename from the URL path for searchability.
+            from urllib.parse import urlparse
+            path = urlparse(file_url).path
+            validated_data['file_name'] = path.rsplit('/', 1)[-1] if '/' in path else ''
+        else:
+            raise serializers.ValidationError(
+                {'file': 'File upload or file_url is required for video or document type.'}
+            )
 
         asset = MediaAsset.objects.create(
             tenant=tenant,

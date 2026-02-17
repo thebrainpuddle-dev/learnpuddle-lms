@@ -598,6 +598,18 @@ export const CourseEditorPage: React.FC = () => {
       // Upload file first
       const fileUrl = await uploadFile(contentFile, 'content');
       data.append('file_url', fileUrl);
+      // Also register in Media Library so it appears on the Media Library page
+      if (newContentData.content_type === 'DOCUMENT') {
+        try {
+          await adminMediaService.uploadMedia({
+            title: newContentData.title || contentFile.name,
+            media_type: 'DOCUMENT',
+            file_url: fileUrl,
+          });
+        } catch {
+          // Best-effort: don't block content creation if library sync fails
+        }
+      }
     } else if (newContentData.file_url) {
       // file_url already set (e.g. from media library)
       data.append('file_url', newContentData.file_url);
