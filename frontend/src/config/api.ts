@@ -8,17 +8,15 @@ const API_BASE_URL =
 
 /**
  * Create axios instance with default config
+ * Note: Don't set Content-Type here - let axios auto-detect for FormData
  */
 export const api: AxiosInstance = axios.create({
   baseURL: API_BASE_URL,
   timeout: 30000,
-  headers: {
-    'Content-Type': 'application/json',
-  },
 });
 
 /**
- * Request interceptor to add auth token
+ * Request interceptor to add auth token and set Content-Type
  * Uses sessionStorage for tab-isolated sessions (prevents cross-tab token conflicts)
  */
 api.interceptors.request.use(
@@ -27,6 +25,13 @@ api.interceptors.request.use(
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
+    
+    // Set Content-Type for JSON, but let axios auto-detect for FormData
+    // FormData needs multipart/form-data with boundary which axios sets automatically
+    if (config.data && !(config.data instanceof FormData)) {
+      config.headers['Content-Type'] = 'application/json';
+    }
+    
     return config;
   },
   (error) => {
