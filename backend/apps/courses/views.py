@@ -129,6 +129,22 @@ def course_list_create(request):
         _debug_log.warning('[DBG-CV] POST course: content_type=%s data_type=%s data_keys=%s',
             request.content_type, type(request.data).__name__, list(request.data.keys()) if hasattr(request.data, 'keys') else 'N/A')
         _debug_log.warning('[DBG-CV] POST normalized_data=%s', {k: (type(v).__name__ if hasattr(v, 'read') else repr(v)[:200]) for k, v in (data.items() if hasattr(data, 'items') else [])})
+        
+        # Deep debug: log exact assigned_teachers value and type
+        import json
+        LOG_PATH = '/Users/rakeshreddy/LMS/.cursor/debug.log'
+        def _dbg(msg, d=None):
+            import time
+            with open(LOG_PATH, 'a') as f:
+                f.write(json.dumps({'timestamp': int(time.time()*1000), 'location': 'views.py', 'message': msg, 'data': d or {}}) + '\n')
+        
+        at_val = data.get('assigned_teachers')
+        _dbg('VIEW_AT_VALUE', {
+            'raw_value': str(at_val)[:200] if at_val else None,
+            'type': type(at_val).__name__ if at_val else None,
+            'is_list': isinstance(at_val, list),
+            'list_items': [{'v': str(x), 't': type(x).__name__} for x in at_val] if isinstance(at_val, list) else None,
+        })
         # endregion
         serializer = CourseDetailSerializer(
             data=data,
@@ -137,6 +153,7 @@ def course_list_create(request):
         if not serializer.is_valid():
             # region agent log
             _debug_log.warning('[DBG-CV] POST validation_errors=%s', serializer.errors)
+            _dbg('VIEW_VALIDATION_ERRORS', {'errors': str(serializer.errors)[:500]})
             # endregion
         serializer.is_valid(raise_exception=True)
         course = serializer.save()

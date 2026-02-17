@@ -145,11 +145,14 @@ class CourseDetailSerializer(serializers.ModelSerializer):
         
         # region agent log
         import logging
+        import json
         _ser_log = logging.getLogger('debug.course_serializers')
-        _ser_log.warning('[DBG-SER] __init__: has_request=%s has_tenant=%s tenant=%s',
-            request is not None,
-            hasattr(request, 'tenant') if request else False,
-            getattr(request, 'tenant', None) if request else None)
+        LOG_PATH = '/Users/rakeshreddy/LMS/.cursor/debug.log'
+        def _dbg(msg, data=None):
+            import time
+            with open(LOG_PATH, 'a') as f:
+                f.write(json.dumps({'timestamp': int(time.time()*1000), 'location': 'serializers.py', 'message': msg, 'data': data or {}}) + '\n')
+        _dbg('SER_INIT', {'has_request': request is not None, 'has_tenant': hasattr(request, 'tenant') if request else False, 'tenant': str(getattr(request, 'tenant', None))})
         # endregion
         
         if request and hasattr(request, 'tenant') and request.tenant:
@@ -168,8 +171,8 @@ class CourseDetailSerializer(serializers.ModelSerializer):
             self.fields['assigned_teachers'].queryset = teachers_qs
             
             # region agent log
-            _ser_log.warning('[DBG-SER] teachers_qs count=%d sql=%s',
-                teachers_qs.count(), str(teachers_qs.query)[:500])
+            teacher_ids = list(teachers_qs.values_list('id', flat=True))
+            _dbg('SER_TEACHERS_QS', {'count': len(teacher_ids), 'ids': [str(tid) for tid in teacher_ids]})
             # endregion
         else:
             # If no tenant in context, make fields optional to avoid validation errors
@@ -177,8 +180,41 @@ class CourseDetailSerializer(serializers.ModelSerializer):
             self.fields['assigned_groups'].queryset = TeacherGroup.objects.none()
             self.fields['assigned_teachers'].queryset = User.objects.none()
             # region agent log
-            _ser_log.warning('[DBG-SER] No tenant - using empty querysets')
+            _dbg('SER_NO_TENANT', {})
             # endregion
+    
+    def to_internal_value(self, data):
+        # region agent log
+        import json, time
+        LOG_PATH = '/Users/rakeshreddy/LMS/.cursor/debug.log'
+        def _dbg(msg, d=None):
+            with open(LOG_PATH, 'a') as f:
+                f.write(json.dumps({'timestamp': int(time.time()*1000), 'location': 'serializers.py', 'message': msg, 'data': d or {}}) + '\n')
+        
+        at_val = data.get('assigned_teachers') if hasattr(data, 'get') else None
+        _dbg('SER_TO_INTERNAL', {
+            'assigned_teachers_value': str(at_val)[:200] if at_val else None,
+            'assigned_teachers_type': type(at_val).__name__ if at_val else None,
+            'is_list': isinstance(at_val, list),
+            'field_qs_count': self.fields['assigned_teachers'].queryset.count() if hasattr(self.fields.get('assigned_teachers', None), 'queryset') else 'no_field',
+        })
+        if isinstance(at_val, list) and len(at_val) > 0:
+            first_item = at_val[0]
+            _dbg('SER_AT_FIRST_ITEM', {
+                'value': str(first_item),
+                'type': type(first_item).__name__,
+                'len': len(str(first_item)),
+            })
+            # Try to lookup directly
+            qs = self.fields['assigned_teachers'].queryset
+            try:
+                found = qs.filter(id=first_item).exists()
+                _dbg('SER_DIRECT_LOOKUP', {'id': str(first_item), 'found': found, 'qs_model': qs.model.__name__})
+            except Exception as e:
+                _dbg('SER_DIRECT_LOOKUP_ERROR', {'error': str(e)})
+        # endregion
+        
+        return super().to_internal_value(data)
     
     class Meta:
         model = Course
