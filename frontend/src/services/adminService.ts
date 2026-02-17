@@ -85,6 +85,19 @@ export interface VideoStatusResponse {
   assignments: Array<{ id: string; title: string }>;
 }
 
+// Skip-request types (course skip by teacher, reviewed by admin)
+export interface SkipRequestItem {
+  id: string;
+  teacher_name: string;
+  teacher_email: string;
+  course_title: string;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED';
+  certificate_url: string | null;
+  comments: string;
+  created_at: string;
+  reviewed_by_name: string | null;
+}
+
 export const adminService = {
   async getTenantStats(): Promise<TenantStats> {
     const res = await api.get('/tenants/stats/');
@@ -98,6 +111,16 @@ export const adminService = {
 
   async getVideoStatus(courseId: string, moduleId: string, contentId: string): Promise<VideoStatusResponse> {
     const res = await api.get(`/courses/${courseId}/modules/${moduleId}/contents/${contentId}/video-status/`);
+    return res.data;
+  },
+
+  async listSkipRequests(params?: { status?: string; search?: string; page?: number }) {
+    const res = await api.get('/teacher/skip-requests/', { params });
+    return res.data as { count: number; results: SkipRequestItem[] };
+  },
+
+  async reviewSkipRequest(id: string, data: { action: 'approve' | 'reject'; admin_notes?: string }) {
+    const res = await api.post(`/teacher/skip-requests/${id}/review/`, data);
     return res.data;
   },
 };
