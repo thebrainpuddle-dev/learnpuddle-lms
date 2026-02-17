@@ -5,10 +5,12 @@ import { useQuery } from '@tanstack/react-query';
 import { CourseCard } from '../../components/teacher';
 import { MagnifyingGlassIcon, FunnelIcon } from '@heroicons/react/24/outline';
 import { teacherService } from '../../services/teacherService';
+import { usePageTitle } from '../../hooks/usePageTitle';
 
 type StatusFilter = 'ALL' | 'NOT_STARTED' | 'IN_PROGRESS' | 'COMPLETED';
 
 export const MyCoursesPage: React.FC = () => {
+  usePageTitle('My Courses');
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('ALL');
   
@@ -39,7 +41,7 @@ export const MyCoursesPage: React.FC = () => {
   };
   
   // Filter courses
-  const filteredCourses = courses?.filter(course => {
+  const filteredCourses = (courses ?? []).filter(course => {
     const matchesSearch = course.title.toLowerCase().includes(search.toLowerCase()) ||
                           course.description.toLowerCase().includes(search.toLowerCase());
     const progress = Number(course.progress_percentage || 0);
@@ -51,13 +53,13 @@ export const MyCoursesPage: React.FC = () => {
   
   // Count by status
   const statusCounts = {
-    ALL: courses?.length || 0,
-    NOT_STARTED: courses?.filter(c => Number(c.progress_percentage || 0) === 0).length || 0,
-    IN_PROGRESS: courses?.filter(c => {
+    ALL: (courses ?? []).length,
+    NOT_STARTED: (courses ?? []).filter(c => Number(c.progress_percentage || 0) === 0).length,
+    IN_PROGRESS: (courses ?? []).filter(c => {
       const p = Number(c.progress_percentage || 0);
       return p > 0 && p < 100;
-    }).length || 0,
-    COMPLETED: courses?.filter(c => Number(c.progress_percentage || 0) >= 100).length || 0,
+    }).length,
+    COMPLETED: (courses ?? []).filter(c => Number(c.progress_percentage || 0) >= 100).length,
   };
   
   return (

@@ -18,8 +18,10 @@ import {
   StopIcon,
 } from '@heroicons/react/24/outline';
 import type { User } from '../../types';
+import { usePageTitle } from '../../hooks/usePageTitle';
 
 export const TeachersPage: React.FC = () => {
+  usePageTitle('Teachers');
   const navigate = useNavigate();
   const toast = useToast();
   const qc = useQueryClient();

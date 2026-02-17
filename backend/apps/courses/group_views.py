@@ -22,7 +22,7 @@ class GroupPagination(PageNumberPagination):
 @tenant_required
 def teacher_group_list_create(request):
     if request.method == "GET":
-        qs = TeacherGroup.objects.filter(tenant=request.tenant).order_by("name")
+        qs = TeacherGroup.objects.all().order_by("name")
         paginator = GroupPagination()
         page = paginator.paginate_queryset(qs, request)
         if page is not None:
@@ -40,7 +40,7 @@ def teacher_group_list_create(request):
 @admin_only
 @tenant_required
 def teacher_group_detail(request, group_id):
-    group = get_object_or_404(TeacherGroup, id=group_id, tenant=request.tenant)
+    group = get_object_or_404(TeacherGroup, id=group_id)
 
     if request.method == "GET":
         return Response(TeacherGroupSerializer(group).data, status=status.HTTP_200_OK)

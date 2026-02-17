@@ -53,7 +53,7 @@ def thread_list_create(request):
     - status: Filter by status (open/closed/archived)
     """
     if request.method == 'GET':
-        threads = DiscussionThread.objects.filter(tenant=request.tenant)
+        threads = DiscussionThread.objects.all()
         
         # Filters
         course_id = request.GET.get('course_id')
@@ -110,7 +110,7 @@ def thread_list_create(request):
         
         if course_id:
             from apps.courses.models import Course
-            course = get_object_or_404(Course, id=course_id, tenant=request.tenant)
+            course = get_object_or_404(Course, id=course_id)
         
         if content_id:
             from apps.courses.models import Content
@@ -158,7 +158,6 @@ def thread_detail(request, thread_id):
     thread = get_object_or_404(
         DiscussionThread.objects.select_related('author', 'course', 'content'),
         id=thread_id,
-        tenant=request.tenant
     )
     
     if request.method == 'GET':
@@ -274,7 +273,6 @@ def reply_create(request, thread_id):
     thread = get_object_or_404(
         DiscussionThread,
         id=thread_id,
-        tenant=request.tenant
     )
     
     if thread.status != 'open':
@@ -323,7 +321,7 @@ def reply_detail(request, thread_id, reply_id):
     PUT: Edit a reply
     DELETE: Delete a reply
     """
-    thread = get_object_or_404(DiscussionThread, id=thread_id, tenant=request.tenant)
+    thread = get_object_or_404(DiscussionThread, id=thread_id)
     reply = get_object_or_404(DiscussionReply, id=reply_id, thread=thread)
     
     if request.method == 'PUT':
@@ -365,7 +363,7 @@ def reply_like(request, thread_id, reply_id):
     POST: Like a reply
     DELETE: Unlike a reply
     """
-    thread = get_object_or_404(DiscussionThread, id=thread_id, tenant=request.tenant)
+    thread = get_object_or_404(DiscussionThread, id=thread_id)
     reply = get_object_or_404(DiscussionReply, id=reply_id, thread=thread)
     
     if request.method == 'POST':
@@ -405,7 +403,7 @@ def thread_subscribe(request, thread_id):
     POST: Subscribe to thread notifications
     DELETE: Unsubscribe
     """
-    thread = get_object_or_404(DiscussionThread, id=thread_id, tenant=request.tenant)
+    thread = get_object_or_404(DiscussionThread, id=thread_id)
     
     if request.method == 'POST':
         sub, created = DiscussionSubscription.objects.get_or_create(
@@ -440,7 +438,7 @@ def reply_moderate(request, thread_id, reply_id):
         "reason": "Reason for hiding"
     }
     """
-    thread = get_object_or_404(DiscussionThread, id=thread_id, tenant=request.tenant)
+    thread = get_object_or_404(DiscussionThread, id=thread_id)
     reply = get_object_or_404(DiscussionReply, id=reply_id, thread=thread)
     
     action = request.data.get('action')

@@ -64,7 +64,7 @@ def course_list_create(request):
         is_mandatory = request.GET.get('is_mandatory')
         search = request.GET.get('search')
         
-        courses = Course.objects.filter(tenant=request.tenant).select_related(
+        courses = Course.objects.select_related(
             'tenant', 'created_by'
         ).prefetch_related(
             'modules',
@@ -118,7 +118,7 @@ def course_detail(request, course_id):
     PUT/PATCH: Update course
     DELETE: Delete course
     """
-    course = get_object_or_404(Course, id=course_id, tenant=request.tenant)
+    course = get_object_or_404(Course, id=course_id)
     
     if request.method == 'GET':
         serializer = CourseDetailSerializer(course, context={'request': request})
@@ -157,7 +157,7 @@ def course_publish(request, course_id):
     """
     Publish or unpublish a course.
     """
-    course = get_object_or_404(Course, id=course_id, tenant=request.tenant)
+    course = get_object_or_404(Course, id=course_id)
     
     action = request.data.get('action')  # 'publish' or 'unpublish'
     
@@ -203,7 +203,7 @@ def course_duplicate(request, course_id):
     """
     Duplicate an existing course.
     """
-    original_course = get_object_or_404(Course, id=course_id, tenant=request.tenant)
+    original_course = get_object_or_404(Course, id=course_id)
     
     # Create copy
     course_copy = Course.objects.create(
@@ -255,7 +255,7 @@ def module_list_create(request, course_id):
     GET: List modules for a course
     POST: Create new module
     """
-    course = get_object_or_404(Course, id=course_id, tenant=request.tenant)
+    course = get_object_or_404(Course, id=course_id)
     
     if request.method == 'GET':
         modules = course.modules.all().order_by('order')
@@ -288,7 +288,6 @@ def module_detail(request, course_id, module_id):
         Module,
         id=module_id,
         course_id=course_id,
-        course__tenant=request.tenant,
     )
     
     if request.method == 'GET':
@@ -321,7 +320,6 @@ def content_list_create(request, course_id, module_id):
         Module,
         id=module_id,
         course_id=course_id,
-        course__tenant=request.tenant,
     )
     
     if request.method == 'GET':
@@ -356,7 +354,6 @@ def content_detail(request, course_id, module_id, content_id):
         id=content_id,
         module_id=module_id,
         module__course_id=course_id,
-        module__course__tenant=request.tenant,
     )
     
     if request.method == 'GET':
@@ -411,10 +408,9 @@ def courses_bulk_action(request):
             status=status.HTTP_400_BAD_REQUEST
         )
     
-    # Get courses within tenant
+    # Get courses within tenant (TenantSoftDeleteManager auto-filters by tenant)
     courses = Course.objects.filter(
         id__in=course_ids,
-        tenant=request.tenant,
     )
     
     found_count = courses.count()
@@ -486,17 +482,15 @@ def global_search(request):
     except (ValueError, TypeError):
         limit = 10
     
-    tenant = request.tenant
     user = request.user
     
     # Determine which courses the user can access
     if user.role in ['SCHOOL_ADMIN', 'SUPER_ADMIN']:
-        # Admins can see all courses
-        course_base_qs = Course.objects.filter(tenant=tenant, is_active=True)
+        # Admins can see all courses (TenantSoftDeleteManager auto-filters by tenant)
+        course_base_qs = Course.objects.filter(is_active=True)
     else:
         # Teachers can only see published courses they're assigned to
         course_base_qs = Course.objects.filter(
-            tenant=tenant,
             is_active=True,
             is_published=True,
         ).filter(

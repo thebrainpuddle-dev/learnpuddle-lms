@@ -7,6 +7,7 @@ import { adminReportsService } from '../../services/adminReportsService';
 import { adminRemindersService } from '../../services/adminRemindersService';
 import { adminTeachersService } from '../../services/adminTeachersService';
 import { PaperAirplaneIcon, EyeIcon, ClockIcon, MagnifyingGlassIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import { usePageTitle } from '../../hooks/usePageTitle';
 
 // Debounce hook
 function useDebounce<T>(value: T, delay: number): T {
@@ -21,6 +22,7 @@ function useDebounce<T>(value: T, delay: number): T {
 type ReminderType = 'COURSE_DEADLINE' | 'ASSIGNMENT_DUE' | 'CUSTOM';
 
 export const RemindersPage: React.FC = () => {
+  usePageTitle('Reminders');
   const toast = useToast();
   const [reminderType, setReminderType] = useState<ReminderType>('COURSE_DEADLINE');
   const [courseId, setCourseId] = useState('');

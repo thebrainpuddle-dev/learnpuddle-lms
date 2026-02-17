@@ -14,8 +14,10 @@ import {
   UsersIcon,
   PaperAirplaneIcon,
 } from '@heroicons/react/24/outline';
+import { usePageTitle } from '../../hooks/usePageTitle';
 
 export const AnnouncementsPage: React.FC = () => {
+  usePageTitle('Announcements');
   const toast = useToast();
   const queryClient = useQueryClient();
 

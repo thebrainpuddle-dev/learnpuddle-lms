@@ -2,6 +2,7 @@
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { usePageTitle } from '../../hooks/usePageTitle';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button, Input, Loading, useToast, HlsVideoPlayer } from '../../components/common';
 import { useAuthBlobUrl } from '../../hooks/useAuthBlobUrl';
@@ -157,6 +158,7 @@ const uploadFile = async (file: File, type: 'thumbnail' | 'content'): Promise<st
 };
 
 export const CourseEditorPage: React.FC = () => {
+  usePageTitle('Course Editor');
   const toast = useToast();
   const { courseId } = useParams<{ courseId: string }>();
   const navigate = useNavigate();

@@ -13,6 +13,7 @@ import {
   MagnifyingGlassIcon,
   XMarkIcon,
 } from '@heroicons/react/24/outline';
+import { usePageTitle } from '../../hooks/usePageTitle';
 
 // Debounce hook
 function useDebounce<T>(value: T, delay: number): T {
@@ -25,6 +26,7 @@ function useDebounce<T>(value: T, delay: number): T {
 }
 
 export const GroupsPage: React.FC = () => {
+  usePageTitle('Groups');
   const toast = useToast();
   const queryClient = useQueryClient();
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);

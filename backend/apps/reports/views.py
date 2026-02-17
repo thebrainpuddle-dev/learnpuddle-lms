@@ -49,7 +49,7 @@ def course_progress_report(request):
     if not course_id:
         return Response({"error": "course_id is required"}, status=status.HTTP_400_BAD_REQUEST)
 
-    course = get_object_or_404(Course, id=course_id, tenant=request.tenant)
+    course = get_object_or_404(Course, id=course_id)
     teachers = _course_assigned_teachers(course)
 
     search = request.GET.get("search")
@@ -156,7 +156,7 @@ def assignment_status_report(request):
 @admin_only
 @tenant_required
 def list_courses_for_reports(request):
-    qs = Course.objects.filter(tenant=request.tenant, is_active=True).order_by("-created_at")
+    qs = Course.objects.filter(is_active=True).order_by("-created_at")
     return Response(
         [{"id": c.id, "title": c.title, "deadline": c.deadline} for c in qs[:200]],
         status=status.HTTP_200_OK,
@@ -201,7 +201,7 @@ def course_progress_export(request):
     course_id = request.GET.get("course_id")
     if not course_id:
         return Response({"error": "course_id required"}, status=400)
-    course = get_object_or_404(Course, id=course_id, tenant=request.tenant)
+    course = get_object_or_404(Course, id=course_id)
     teachers = _course_assigned_teachers(course)
     progress_map = {p.teacher_id: p for p in TeacherProgress.objects.filter(course=course, content__isnull=True, teacher__in=teachers)}
     rows = []

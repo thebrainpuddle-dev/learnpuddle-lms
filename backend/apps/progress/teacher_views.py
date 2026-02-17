@@ -47,8 +47,11 @@ def _teacher_assigned_courses_qs(request, with_prefetch=False):
         with_prefetch: If True, prefetch modules and contents for N+1 optimization
     """
     user = request.user
+    # Note: Course uses TenantSoftDeleteManager which auto-filters by tenant via get_current_tenant().
+    # Do NOT add tenant=request.tenant here - it causes empty results when request.tenant and
+    # get_current_tenant() diverge (middleware timing issues).
     qs = (
-        Course.objects.filter(tenant=request.tenant, is_active=True, is_published=True)
+        Course.objects.filter(is_active=True, is_published=True)
         .filter(
             Q(assigned_to_all=True)
             | Q(assigned_teachers=user)
@@ -613,10 +616,10 @@ def course_certificate(request, course_id):
         )
     
     # Get the course
+    # Note: Course uses TenantSoftDeleteManager - no need for tenant= filter
     course = get_object_or_404(
         Course,
         id=course_id,
-        tenant=tenant,
         is_active=True,
         is_published=True,
     )

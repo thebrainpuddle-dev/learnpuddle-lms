@@ -21,6 +21,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { PlayIcon } from '@heroicons/react/24/solid';
 import { formatDistanceToNow } from 'date-fns';
+import { usePageTitle } from '../../hooks/usePageTitle';
 
 const NotifIcon: React.FC<{ type: Notification['notification_type'] }> = ({ type }) => {
   switch (type) {
@@ -38,6 +39,7 @@ const NotifIcon: React.FC<{ type: Notification['notification_type'] }> = ({ type
 };
 
 export const DashboardPage: React.FC = () => {
+  usePageTitle('Dashboard');
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { user } = useAuthStore();
@@ -372,7 +374,7 @@ export const DashboardPage: React.FC = () => {
               <CourseCard key={i} loading id="" title="" description="" progress={0} totalModules={0} completedModules={0} estimatedHours={0} status="NOT_STARTED" />
             ))
           ) : (
-            courses?.slice(0, 4).map((course) => (
+            (courses ?? []).slice(0, 4).map((course) => (
               <CourseCard
                 key={course.id}
                 {...toCourseCard(course)}

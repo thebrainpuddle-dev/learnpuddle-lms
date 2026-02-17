@@ -8,10 +8,12 @@ import { SubmissionModal } from '../../components/teacher/SubmissionModal';
 import { useToast } from '../../components/common';
 import { ClipboardDocumentListIcon } from '@heroicons/react/24/outline';
 import { teacherService, TeacherAssignmentSubmission, TeacherAssignmentListItem } from '../../services/teacherService';
+import { usePageTitle } from '../../hooks/usePageTitle';
 
 type TabFilter = 'ALL' | 'PENDING' | 'SUBMITTED';
 
 export const AssignmentsPage: React.FC = () => {
+  usePageTitle('Assignments');
   const toast = useToast();
   const [activeTab, setActiveTab] = useState<TabFilter>('ALL');
   const [submissionModalOpen, setSubmissionModalOpen] = useState(false);

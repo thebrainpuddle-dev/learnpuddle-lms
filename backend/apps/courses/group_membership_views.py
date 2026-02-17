@@ -18,7 +18,7 @@ class MemberPagination(PageNumberPagination):
 
 
 def _get_group(request, group_id):
-    return get_object_or_404(TeacherGroup, id=group_id, tenant=request.tenant)
+    return get_object_or_404(TeacherGroup, id=group_id)
 
 
 @api_view(["GET", "POST"])

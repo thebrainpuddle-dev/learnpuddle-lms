@@ -65,7 +65,7 @@ def upload_video_content(request, course_id, module_id):
     Upload a video file, create Content(VIDEO) + VideoAsset, and enqueue processing.
     Validates: file type, file size, storage quota.
     """
-    course = get_object_or_404(Course, id=course_id, tenant=request.tenant)
+    course = get_object_or_404(Course, id=course_id)
     module = get_object_or_404(Module, id=module_id, course=course)
 
     f = request.FILES.get("file") or request.FILES.get("video")
@@ -181,7 +181,7 @@ def upload_video_content(request, course_id, module_id):
 @admin_only
 @tenant_required
 def video_status(request, course_id, module_id, content_id):
-    course = get_object_or_404(Course, id=course_id, tenant=request.tenant)
+    course = get_object_or_404(Course, id=course_id)
     module = get_object_or_404(Module, id=module_id, course=course)
     content = get_object_or_404(Content, id=content_id, module=module, content_type="VIDEO")
     asset = getattr(content, "video_asset", None)
@@ -233,7 +233,7 @@ def video_status(request, course_id, module_id, content_id):
 @admin_only
 @tenant_required
 def regenerate_transcript(request, course_id, module_id, content_id):
-    course = get_object_or_404(Course, id=course_id, tenant=request.tenant)
+    course = get_object_or_404(Course, id=course_id)
     module = get_object_or_404(Module, id=module_id, course=course)
     content = get_object_or_404(Content, id=content_id, module=module, content_type="VIDEO")
     asset = getattr(content, "video_asset", None)
@@ -251,7 +251,7 @@ def regenerate_transcript(request, course_id, module_id, content_id):
 @admin_only
 @tenant_required
 def regenerate_assignments(request, course_id, module_id, content_id):
-    course = get_object_or_404(Course, id=course_id, tenant=request.tenant)
+    course = get_object_or_404(Course, id=course_id)
     module = get_object_or_404(Module, id=module_id, course=course)
     content = get_object_or_404(Content, id=content_id, module=module, content_type="VIDEO")
     asset = getattr(content, "video_asset", None)

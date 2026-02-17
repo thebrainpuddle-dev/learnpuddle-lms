@@ -38,8 +38,11 @@ def teacher_course_list(request):
     """
     user = request.user
 
+    # Note: Course uses TenantSoftDeleteManager which auto-filters by tenant via get_current_tenant().
+    # Do NOT add tenant=request.tenant here - it causes empty results when request.tenant and
+    # get_current_tenant() diverge (middleware timing issues).
     qs = (
-        Course.objects.filter(tenant=request.tenant, is_active=True, is_published=True)
+        Course.objects.filter(is_active=True, is_published=True)
         .filter(
             Q(assigned_to_all=True)
             | Q(assigned_teachers=user)
@@ -63,10 +66,10 @@ def teacher_course_detail(request, course_id):
     """
     user = request.user
 
+    # Note: Course uses TenantSoftDeleteManager - no need for tenant= filter
     course = get_object_or_404(
         Course,
         id=course_id,
-        tenant=request.tenant,
         is_active=True,
         is_published=True,
     )
@@ -161,10 +164,10 @@ def course_certificate(request, course_id):
     if not getattr(tenant, "feature_certificates", False):
         return Response({"error": "Certificates not available on your plan.", "upgrade_required": True}, status=403)
 
+    # Note: Course uses TenantSoftDeleteManager - no need for tenant= filter
     course = get_object_or_404(
         Course,
         id=course_id,
-        tenant=tenant,
         is_active=True,
         is_published=True,
     )

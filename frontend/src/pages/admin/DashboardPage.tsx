@@ -19,6 +19,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { Button } from '../../components/common/Button';
 import { useNavigate } from 'react-router-dom';
+import { usePageTitle } from '../../hooks/usePageTitle';
 
 function formatRelativeTime(dateString: string): string {
   const date = new Date(dateString);
@@ -38,6 +39,7 @@ function formatRelativeTime(dateString: string): string {
 }
 
 export const DashboardPage: React.FC = () => {
+  usePageTitle('Dashboard');
   const navigate = useNavigate();
   const { plan, usage, limits } = useTenantStore();
 

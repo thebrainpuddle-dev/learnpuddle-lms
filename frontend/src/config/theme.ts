@@ -144,8 +144,6 @@ export function getSubdomain(): string {
  */
 export async function loadTenantTheme(): Promise<TenantTheme> {
   try {
-    const subdomain = getSubdomain();
-    
     const { api } = await import('./api');
     const response = await api.get('/tenants/theme/');
 

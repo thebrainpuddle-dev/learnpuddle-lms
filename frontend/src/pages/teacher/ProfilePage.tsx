@@ -16,9 +16,8 @@ import {
   CameraIcon,
   BookOpenIcon,
   IdentificationIcon,
-  CalendarIcon,
-  PencilSquareIcon,
 } from '@heroicons/react/24/outline';
+import { usePageTitle } from '../../hooks/usePageTitle';
 
 const COMMON_SUBJECTS = [
   'Mathematics', 'Physics', 'Chemistry', 'Biology', 'English',
@@ -45,6 +44,7 @@ const DESIGNATIONS = [
 const backendOrigin = (process.env.REACT_APP_API_URL || 'http://localhost:8000/api').replace(/\/api\/?$/, '');
 
 export const ProfilePage: React.FC = () => {
+  usePageTitle('Profile');
   const toast = useToast();
   const { user, setUser } = useAuthStore();
   const [activeSection, setActiveSection] = useState<'profile' | 'password' | 'notifications'>('profile');

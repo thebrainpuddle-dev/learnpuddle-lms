@@ -34,6 +34,7 @@ import {
   FunnelIcon,
   BellAlertIcon,
 } from '@heroicons/react/24/outline';
+import { usePageTitle } from '../../hooks/usePageTitle';
 
 ChartJS.register(
   CategoryScale, LinearScale, BarElement, ArcElement,
@@ -56,6 +57,7 @@ const EmptyChart: React.FC<{ message: string }> = ({ message }) => (
 );
 
 export const AnalyticsPage: React.FC = () => {
+  usePageTitle('Analytics');
   const navigate = useNavigate();
   const toast = useToast();
   const [courseFilter, setCourseFilter] = useState<string>('');

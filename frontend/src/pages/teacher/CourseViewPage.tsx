@@ -21,10 +21,12 @@ import {
 import { useTenantStore } from '../../stores/tenantStore';
 import api from '../../config/api';
 import { CheckCircleIcon as CheckCircleSolidIcon } from '@heroicons/react/24/solid';
+import { usePageTitle } from '../../hooks/usePageTitle';
 
 type ContentItem = TeacherCourseDetail['modules'][number]['contents'][number];
 
 export const CourseViewPage: React.FC = () => {
+  usePageTitle('Course');
   const { courseId } = useParams<{ courseId: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();

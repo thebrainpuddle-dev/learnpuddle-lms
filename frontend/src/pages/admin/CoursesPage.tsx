@@ -3,6 +3,7 @@
 import React, { useState, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
+import { usePageTitle } from '../../hooks/usePageTitle';
 import { Button, Loading, useToast, BulkActionsBar, BulkAction } from '../../components/common';
 import api from '../../config/api';
 import {
@@ -20,9 +21,6 @@ import {
   ClockIcon,
   TableCellsIcon,
   ViewColumnsIcon,
-  Bars3Icon,
-  CheckIcon,
-  StopIcon,
 } from '@heroicons/react/24/outline';
 
 interface Course {
@@ -163,6 +161,7 @@ const KanbanCard: React.FC<{
 };
 
 export const CoursesPage: React.FC = () => {
+  usePageTitle('Courses');
   const toast = useToast();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -488,7 +487,7 @@ export const CoursesPage: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {data?.results.map((course) => {
+                {(data?.results ?? []).map((course) => {
                   const src = thumbSrc(course);
                   return (
                     <tr key={course.id} className={`hover:bg-gray-50 ${selectedIds.has(course.id) ? 'bg-emerald-50' : ''}`}>

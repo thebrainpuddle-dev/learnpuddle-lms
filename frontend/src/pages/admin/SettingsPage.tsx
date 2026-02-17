@@ -11,6 +11,7 @@ import {
   CheckCircleIcon,
   ExclamationTriangleIcon,
 } from '@heroicons/react/24/outline';
+import { usePageTitle } from '../../hooks/usePageTitle';
 
 interface TenantSettings {
   id: string;
@@ -51,6 +52,7 @@ const FONT_OPTIONS = [
 ];
 
 export const SettingsPage: React.FC = () => {
+  usePageTitle('Settings');
   const toast = useToast();
   const queryClient = useQueryClient();
   const { setTheme } = useTenantStore();

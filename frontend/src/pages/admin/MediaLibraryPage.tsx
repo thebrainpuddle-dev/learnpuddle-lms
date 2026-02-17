@@ -24,6 +24,7 @@ import {
   DocumentIcon,
 } from '@heroicons/react/24/outline';
 import { format } from 'date-fns';
+import { usePageTitle } from '../../hooks/usePageTitle';
 
 type MediaTab = 'ALL' | 'DOCUMENT' | 'VIDEO' | 'LINK';
 
@@ -56,6 +57,7 @@ function getMediaIcon(type: string) {
 }
 
 export const MediaLibraryPage: React.FC = () => {
+  usePageTitle('Media Library');
   const toast = useToast();
   const qc = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
