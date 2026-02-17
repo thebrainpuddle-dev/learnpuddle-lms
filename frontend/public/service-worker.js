@@ -163,10 +163,13 @@ async function staleWhileRevalidate(request) {
   const cachedResponse = await caches.match(request);
   
   const fetchPromise = fetch(request)
-    .then((networkResponse) => {
+    .then(async (networkResponse) => {
       if (networkResponse.ok) {
-        const cache = caches.open(DYNAMIC_CACHE);
-        cache.then((c) => c.put(request, networkResponse.clone()));
+        // Clone BEFORE the response body can be consumed
+        // This prevents "Response body is already used" errors
+        const responseToCache = networkResponse.clone();
+        const cache = await caches.open(DYNAMIC_CACHE);
+        cache.put(request, responseToCache);
       }
       return networkResponse;
     })
