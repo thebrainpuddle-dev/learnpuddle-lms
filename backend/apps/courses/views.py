@@ -1,5 +1,6 @@
 # apps/courses/views.py
 
+import logging
 from django.contrib.postgres.search import SearchQuery, SearchRank, SearchVector
 from django.db.models import Q
 from rest_framework import status
@@ -17,6 +18,10 @@ from .serializers import (
     ModuleSerializer, CreateModuleSerializer,
     ContentSerializer, CreateContentSerializer
 )
+
+# region agent log
+_debug_log = logging.getLogger('debug.course_views')
+# endregion
 
 
 class CoursePagination(PageNumberPagination):
@@ -57,6 +62,31 @@ def course_list_create(request):
         is_published = request.GET.get('is_published')
         is_mandatory = request.GET.get('is_mandatory')
         search = request.GET.get('search')
+
+        # region agent log
+        from utils.tenant_middleware import get_current_tenant
+        thread_tenant = get_current_tenant()
+        _debug_log.warning(
+            '[DBG-CV] GET courses: user=%s role=%s req_tenant=%s(%s) thread_tenant=%s(%s)',
+            request.user.email, request.user.role,
+            getattr(request, 'tenant', None), getattr(getattr(request, 'tenant', None), 'id', None),
+            thread_tenant, getattr(thread_tenant, 'id', None),
+        )
+        # Check raw DB state
+        from django.db import connection
+        with connection.cursor() as cur:
+            tenant_id = str(request.tenant.id)
+            cur.execute("SELECT count(*) FROM courses WHERE tenant_id = %s", [tenant_id])
+            total_in_db = cur.fetchone()[0]
+            cur.execute("SELECT count(*) FROM courses WHERE tenant_id = %s AND is_deleted = false", [tenant_id])
+            alive_in_db = cur.fetchone()[0]
+            cur.execute("SELECT count(*) FROM courses WHERE tenant_id = %s AND is_deleted = false AND is_active = true", [tenant_id])
+            active_alive_in_db = cur.fetchone()[0]
+        _debug_log.warning(
+            '[DBG-CV] raw DB: total=%d alive=%d active_alive=%d for tenant=%s',
+            total_in_db, alive_in_db, active_alive_in_db, tenant_id,
+        )
+        # endregion
         
         # Base queryset with optimized related queries (defense-in-depth: explicitly tenant-filter)
         courses = Course.objects.filter(tenant=request.tenant).select_related(
@@ -66,6 +96,10 @@ def course_list_create(request):
             'assigned_teachers',
             'assigned_groups',
         )
+
+        # region agent log
+        _debug_log.warning('[DBG-CV] ORM queryset count=%d sql=%s', courses.count(), str(courses.query)[:500])
+        # endregion
         
         # Additional filters
         if is_published is not None:
@@ -87,10 +121,19 @@ def course_list_create(request):
     
     elif request.method == 'POST':
         data = _normalize_multipart_list_fields(request.data)
+        # region agent log
+        _debug_log.warning('[DBG-CV] POST course: content_type=%s data_type=%s data_keys=%s',
+            request.content_type, type(request.data).__name__, list(request.data.keys()) if hasattr(request.data, 'keys') else 'N/A')
+        _debug_log.warning('[DBG-CV] POST normalized_data=%s', {k: (type(v).__name__ if hasattr(v, 'read') else repr(v)[:200]) for k, v in (data.items() if hasattr(data, 'items') else [])})
+        # endregion
         serializer = CourseDetailSerializer(
             data=data,
             context={'request': request}
         )
+        if not serializer.is_valid():
+            # region agent log
+            _debug_log.warning('[DBG-CV] POST validation_errors=%s', serializer.errors)
+            # endregion
         serializer.is_valid(raise_exception=True)
         course = serializer.save()
 

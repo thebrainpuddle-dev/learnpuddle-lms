@@ -1,8 +1,13 @@
 # utils/tenant_soft_delete_manager.py
 
+import logging
 from django.db import models
 from .tenant_middleware import get_current_tenant
 from .soft_delete import SoftDeleteQuerySet
+
+# region agent log
+_debug_log = logging.getLogger('debug.tenant_soft_delete_mgr')
+# endregion
 
 
 class TenantSoftDeleteQuerySet(SoftDeleteQuerySet):
@@ -10,6 +15,9 @@ class TenantSoftDeleteQuerySet(SoftDeleteQuerySet):
 
     def filter_by_tenant(self):
         tenant = get_current_tenant()
+        # region agent log
+        _debug_log.warning('[DBG-TSDM] filter_by_tenant: model=%s tenant=%s(%s)', self.model.__name__, tenant, getattr(tenant, 'id', None))
+        # endregion
         if tenant:
             return self.filter(tenant=tenant)
         return self

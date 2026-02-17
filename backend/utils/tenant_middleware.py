@@ -1,10 +1,15 @@
 # utils/tenant_middleware.py
 
 import re
+import logging
 import threading
 from django.core.exceptions import PermissionDenied
 from django.http import JsonResponse
 from .tenant_utils import get_tenant_from_request
+
+# region agent log
+_debug_log = logging.getLogger('debug.tenant_middleware')
+# endregion
 
 
 # Thread-local storage for current tenant
@@ -39,6 +44,11 @@ class TenantMiddleware:
     def __call__(self, request):
         # Clear any previous tenant
         clear_current_tenant()
+
+        # region agent log
+        host = request.get_host()
+        _debug_log.warning('[DBG-MW] path=%s host=%s method=%s user=%s', request.path, host, request.method, getattr(request, 'user', 'anon'))
+        # endregion
         
         # Public endpoints: do not enforce tenant-membership check
         # (but we still want tenant resolution for tenant-scoped responses like theme)
@@ -64,7 +74,13 @@ class TenantMiddleware:
                 tenant = get_tenant_from_request(request)
                 set_current_tenant(tenant)
                 request.tenant = tenant
-            except Exception:
+                # region agent log
+                _debug_log.warning('[DBG-MW] tenant_resolved=%s tenant_id=%s', tenant, getattr(tenant, 'id', None))
+                # endregion
+            except Exception as exc:
+                # region agent log
+                _debug_log.warning('[DBG-MW] tenant_resolution_failed=%s', exc)
+                # endregion
                 # For truly public/non-tenant routes, proceed without tenant.
                 tenant = None
             
