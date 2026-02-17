@@ -116,7 +116,7 @@ export const adminService = {
 
   async listSkipRequests(params?: { status?: string; search?: string; page?: number }) {
     const res = await api.get('/teacher/skip-requests/', { params });
-    return res.data as { count: number; results: SkipRequestItem[] };
+    return res.data as { count: number; next: string | null; previous: string | null; results: SkipRequestItem[] };
   },
 
   async reviewSkipRequest(id: string, data: { action: 'approve' | 'reject'; admin_notes?: string }) {
