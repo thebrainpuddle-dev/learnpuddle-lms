@@ -7,3 +7,5 @@ export type { Notification } from './useNotifications';
 export { useKeyboardNav } from './useKeyboardNav';
 
 export { usePWA } from './usePWA';
+
+export { useAuthBlobUrl } from './useAuthBlobUrl';

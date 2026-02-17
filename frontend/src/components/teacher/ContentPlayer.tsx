@@ -11,6 +11,7 @@ import {
 } from '@heroicons/react/24/solid';
 import { ArrowTopRightOnSquareIcon } from '@heroicons/react/24/outline';
 import { teacherService } from '../../services/teacherService';
+import { useAuthBlobUrl } from '../../hooks/useAuthBlobUrl';
 
 interface ContentPlayerProps {
   content: {
@@ -39,6 +40,10 @@ export const ContentPlayer: React.FC<ContentPlayerProps> = ({
   const [, setIsPlaying] = useState(false);
   const [, setCurrentTime] = useState(0);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+
+  // Authenticated blob URL for document preview iframes
+  const docFileUrl = content.content_type === 'DOCUMENT' ? (content.file_url || null) : null;
+  const docBlobUrl = useAuthBlobUrl(docFileUrl);
 
   const [activeTab, setActiveTab] = useState<'video' | 'transcript'>('video');
   const [transcriptLoading, setTranscriptLoading] = useState(false);
@@ -71,23 +76,25 @@ export const ContentPlayer: React.FC<ContentPlayerProps> = ({
     if (!video) return;
     if (!videoSrc) return;
 
-    // Native HLS (Safari) or MP4 fallback
-    if (!videoSrc.endsWith('.m3u8') || video.canPlayType('application/vnd.apple.mpegurl')) {
-      video.src = videoSrc;
-      return;
+    const isHls = videoSrc.endsWith('.m3u8') || videoSrc.includes('.m3u8');
+
+    if (isHls && Hls.isSupported()) {
+      const hls = new Hls({
+        enableWorker: true,
+        xhrSetup: (xhr) => {
+          const token = sessionStorage.getItem('access_token');
+          if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+        },
+      });
+      hls.loadSource(videoSrc);
+      hls.attachMedia(video);
+      return () => {
+        hls.destroy();
+      };
     }
 
-    if (!Hls.isSupported()) {
-      video.src = videoSrc;
-      return;
-    }
-
-    const hls = new Hls({ enableWorker: true });
-    hls.loadSource(videoSrc);
-    hls.attachMedia(video);
-    return () => {
-      hls.destroy();
-    };
+    // Non-HLS source (regular mp4, etc.)
+    video.src = videoSrc;
   }, [content.content_type, content.id, videoSrc]);
 
   // Reset transcript state when content changes
@@ -280,14 +287,20 @@ export const ContentPlayer: React.FC<ContentPlayerProps> = ({
           </div>
         </div>
         
-        {/* Document preview iframe */}
+        {/* Document preview iframe (fetched with auth, rendered via blob URL) */}
         {content.file_url && (
           <div className="border-t border-gray-200">
-            <iframe
-              src={content.file_url}
-              className="w-full h-96"
-              title={content.title}
-            />
+            {docBlobUrl ? (
+              <iframe
+                src={docBlobUrl}
+                className="w-full h-96"
+                title={content.title}
+              />
+            ) : (
+              <div className="flex items-center justify-center h-96">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
+              </div>
+            )}
           </div>
         )}
       </div>

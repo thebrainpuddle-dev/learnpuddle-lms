@@ -13,7 +13,8 @@ RUN npm ci --legacy-peer-deps
 COPY frontend/ .
 ARG REACT_APP_API_URL=/api
 ENV REACT_APP_API_URL=$REACT_APP_API_URL \
-    GENERATE_SOURCEMAP=false
+    GENERATE_SOURCEMAP=false \
+    CI=false
 RUN npm run build
 
 # Stage 2: Nginx with frontend baked in
