@@ -32,17 +32,21 @@ class CoursePagination(PageNumberPagination):
 
 def _normalize_multipart_list_fields(data, list_fields=None):
     """
-    Normalize multipart/form-data so list fields (e.g. assigned_groups, assigned_teachers)
-    are proper lists. QueryDict returns last value for data[key]; use getlist when available.
+    Convert QueryDict to a plain dict suitable for DRF serializer validation.
+    
+    QueryDict stores all values as lists internally. dict(QueryDict) exposes those
+    raw lists, breaking CharField/BooleanField/etc validation. QueryDict.dict()
+    returns {key: last_value} which is what serializers expect for scalar fields.
+    For list fields (assigned_groups, assigned_teachers), we use getlist() to
+    preserve multiple values.
     """
     list_fields = list_fields or ('assigned_groups', 'assigned_teachers')
-    if hasattr(data, 'getlist'):
-        result = dict(data)
+    if hasattr(data, 'dict'):
+        result = data.dict()
         for key in list_fields:
-            if key in result:
-                vals = data.getlist(key)
-                if vals:
-                    result[key] = vals
+            vals = data.getlist(key)
+            if vals:
+                result[key] = vals
         return result
     return data
 
