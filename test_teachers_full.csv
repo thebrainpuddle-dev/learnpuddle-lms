@@ -1,0 +1,5 @@
+email,first_name,last_name,password,department,employee_id
+sarah.jones@demo.com,Sarah,Jones,changeme123,Science,EMP001
+tom.brown@demo.com,Tom,Brown,changeme123,English,EMP002
+lisa.chen@demo.com,Lisa,Chen,changeme123,Math,EMP003
+david.kumar@demo.com,David,Kumar,changeme123,History,EMP004

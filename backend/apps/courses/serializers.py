@@ -142,6 +142,16 @@ class CourseDetailSerializer(serializers.ModelSerializer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         request = self.context.get('request')
+        
+        # region agent log
+        import logging
+        _ser_log = logging.getLogger('debug.course_serializers')
+        _ser_log.warning('[DBG-SER] __init__: has_request=%s has_tenant=%s tenant=%s',
+            request is not None,
+            hasattr(request, 'tenant') if request else False,
+            getattr(request, 'tenant', None) if request else None)
+        # endregion
+        
         if request and hasattr(request, 'tenant') and request.tenant:
             # Use all_tenants() to bypass TenantManager's automatic filtering
             # and apply explicit tenant filter to avoid double-filtering issues
@@ -150,16 +160,25 @@ class CourseDetailSerializer(serializers.ModelSerializer):
             )
             # Match /teachers/ endpoint: all non-admin users from tenant
             # (includes TEACHER, HOD, IB_COORDINATOR regardless of is_active)
-            self.fields['assigned_teachers'].queryset = User.objects.filter(
+            teachers_qs = User.objects.filter(
                 tenant=request.tenant,
             ).exclude(
                 role__in=['SUPER_ADMIN', 'SCHOOL_ADMIN'],
             )
+            self.fields['assigned_teachers'].queryset = teachers_qs
+            
+            # region agent log
+            _ser_log.warning('[DBG-SER] teachers_qs count=%d sql=%s',
+                teachers_qs.count(), str(teachers_qs.query)[:500])
+            # endregion
         else:
             # If no tenant in context, make fields optional to avoid validation errors
             # The view decorator @tenant_required will catch missing tenant before serializer
             self.fields['assigned_groups'].queryset = TeacherGroup.objects.none()
             self.fields['assigned_teachers'].queryset = User.objects.none()
+            # region agent log
+            _ser_log.warning('[DBG-SER] No tenant - using empty querysets')
+            # endregion
     
     class Meta:
         model = Course
