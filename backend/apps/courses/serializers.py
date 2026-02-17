@@ -162,9 +162,11 @@ class CourseDetailSerializer(serializers.ModelSerializer):
                 tenant=request.tenant
             )
             # Match /teachers/ endpoint: all non-admin users from tenant
-            # (includes TEACHER, HOD, IB_COORDINATOR regardless of is_active)
-            teachers_qs = User.objects.filter(
+            # Use all_objects to bypass UserSoftDeleteManager's automatic filtering
+            # which can cause issues with DRF's PrimaryKeyRelatedField lookup
+            teachers_qs = User.all_objects.filter(
                 tenant=request.tenant,
+                is_deleted=False,  # Explicit soft-delete filter
             ).exclude(
                 role__in=['SUPER_ADMIN', 'SCHOOL_ADMIN'],
             )
