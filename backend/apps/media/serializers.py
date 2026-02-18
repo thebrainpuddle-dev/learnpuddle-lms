@@ -36,6 +36,7 @@ class MediaAssetSerializer(serializers.ModelSerializer):
 
 class MediaAssetCreateSerializer(serializers.ModelSerializer):
     file = serializers.FileField(required=False, allow_null=True)
+    is_active = serializers.BooleanField(default=True, required=False)
 
     class Meta:
         model = MediaAsset
