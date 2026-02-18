@@ -36,9 +36,11 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('health/', health_view),
     
-    # Public media (thumbnails, profile pics — no auth needed for <img> tags)
+    # Public media (thumbnails, logos, profile pics — no auth needed for <img> tags)
     path('media/course_thumbnails/<path:path>', public_media_view, name='public_media_thumbnails'),
     path('media/profile_pictures/<path:path>', public_media_view, name='public_media_profiles'),
+    path('media/learning_path_thumbnails/<path:path>', public_media_view, name='public_media_learning_paths'),
+    path('media/tenant_logos/<path:path>', public_media_view, name='public_media_logos'),
     # Protected media files (auth required, tenant-isolated)
     path('media/<path:path>', protected_media_view, name='protected_media'),
 

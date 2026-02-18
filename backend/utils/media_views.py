@@ -25,15 +25,25 @@ def _path_is_safe(path: str) -> bool:
 
 
 def _get_tenant_from_path(path: str) -> str | None:
-    """Extract tenant ID from path like 'tenant/{tenant_id}/uploads/...'"""
+    """
+    Extract tenant ID from path containing 'tenant/{tenant_id}/'.
+    
+    Supports multiple path formats:
+    - tenant/{tenant_id}/uploads/...          (old format)
+    - media_assets/2026/02/tenant/{tenant_id}/...  (new format)
+    - course_thumbnails/tenant/{tenant_id}/...     (new format)
+    - profile_pictures/tenant/{tenant_id}/...      (new format)
+    """
     parts = path.split('/')
-    if len(parts) >= 2 and parts[0] == 'tenant':
-        return parts[1]
+    # Find 'tenant' segment and get the next part as tenant_id
+    for i, part in enumerate(parts):
+        if part == 'tenant' and i + 1 < len(parts):
+            return parts[i + 1]
     return None
 
 
 # Paths that don't require authentication (non-sensitive, displayed in <img> tags).
-_PUBLIC_PREFIXES = ('course_thumbnails/', 'profile_pictures/')
+_PUBLIC_PREFIXES = ('course_thumbnails/', 'profile_pictures/', 'learning_path_thumbnails/', 'tenant_logos/')
 
 
 def _is_public_path(path: str) -> bool:

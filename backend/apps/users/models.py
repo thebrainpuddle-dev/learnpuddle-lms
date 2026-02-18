@@ -8,6 +8,20 @@ import uuid
 from utils.user_soft_delete_manager import UserSoftDeleteManager, AllUsersManager
 
 
+def profile_picture_upload_path(instance, filename):
+    """
+    Generate tenant-scoped upload path for user profile pictures.
+    Format: profile_pictures/tenant/{tenant_id}/{user_id}_{ext}
+    Falls back to 'global' for super admins without a tenant.
+    """
+    ext = ''
+    if '.' in filename:
+        ext = '.' + filename.rsplit('.', 1)[-1].lower()
+    tenant_folder = str(instance.tenant_id) if instance.tenant_id else 'global'
+    unique_name = f"{instance.id}{ext}"
+    return f"profile_pictures/tenant/{tenant_folder}/{unique_name}"
+
+
 class User(AbstractUser):
     """
     Custom user model with tenant relationship.
@@ -51,7 +65,7 @@ class User(AbstractUser):
     designation = models.CharField(max_length=100, blank=True, help_text="e.g. PGT, TGT, PRT, HOD, Vice Principal")
     date_of_joining = models.DateField(null=True, blank=True)
     bio = models.TextField(blank=True, default='', help_text="Short profile description")
-    profile_picture = models.ImageField(upload_to='profile_pictures/', blank=True, null=True)
+    profile_picture = models.ImageField(upload_to=profile_picture_upload_path, blank=True, null=True)
     
     # Groups (for course assignment)
     teacher_groups = models.ManyToManyField('courses.TeacherGroup', related_name='members', blank=True)

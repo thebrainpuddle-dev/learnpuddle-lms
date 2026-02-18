@@ -13,6 +13,18 @@ from django.db import models
 from utils.tenant_manager import TenantManager
 
 
+def learning_path_thumbnail_upload_path(instance, filename):
+    """
+    Generate tenant-scoped upload path for learning path thumbnails.
+    Format: learning_path_thumbnails/tenant/{tenant_id}/{uuid}_{ext}
+    """
+    ext = ''
+    if '.' in filename:
+        ext = '.' + filename.rsplit('.', 1)[-1].lower()
+    unique_name = f"{uuid.uuid4().hex}{ext}"
+    return f"learning_path_thumbnails/tenant/{instance.tenant_id}/{unique_name}"
+
+
 class LearningPath(models.Model):
     """
     An ordered collection of courses with prerequisites.
@@ -31,7 +43,7 @@ class LearningPath(models.Model):
     # Basic info
     title = models.CharField(max_length=300)
     description = models.TextField(blank=True)
-    thumbnail = models.ImageField(upload_to='learning_path_thumbnails/', blank=True, null=True)
+    thumbnail = models.ImageField(upload_to=learning_path_thumbnail_upload_path, blank=True, null=True)
     
     # Status
     is_published = models.BooleanField(default=False)

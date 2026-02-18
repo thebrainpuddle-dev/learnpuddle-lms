@@ -11,6 +11,18 @@ from utils.soft_delete import SoftDeleteMixin, SoftDeleteManager
 from utils.tenant_soft_delete_manager import TenantSoftDeleteManager
 
 
+def course_thumbnail_upload_path(instance, filename):
+    """
+    Generate tenant-scoped upload path for course thumbnails.
+    Format: course_thumbnails/tenant/{tenant_id}/{uuid}_{ext}
+    """
+    ext = ''
+    if '.' in filename:
+        ext = '.' + filename.rsplit('.', 1)[-1].lower()
+    unique_name = f"{uuid.uuid4().hex}{ext}"
+    return f"course_thumbnails/tenant/{instance.tenant_id}/{unique_name}"
+
+
 class TeacherGroup(models.Model):
     """
     Groups for organizing teachers (e.g., by subject, grade, department).
@@ -56,7 +68,7 @@ class Course(SoftDeleteMixin, models.Model):
     title = models.CharField(max_length=300)
     slug = models.SlugField(max_length=300)
     description = models.TextField()
-    thumbnail = models.ImageField(upload_to='course_thumbnails/', blank=True, null=True)
+    thumbnail = models.ImageField(upload_to=course_thumbnail_upload_path, blank=True, null=True)
 
     # Course settings
     is_mandatory = models.BooleanField(default=False, help_text="Required for all teachers")
