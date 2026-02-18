@@ -27,22 +27,43 @@ class MediaAssetSerializer(serializers.ModelSerializer):
 
     def get_file_url(self, obj):
         """
-        Return the file URL, routing through Django's protected media endpoint
-        for files stored in S3/Spaces (ensures auth + tenant isolation).
+        Return the file URL. For S3 storage, generates a signed URL that
+        the browser can access directly without auth headers.
         """
+        from django.conf import settings
+        from django.core.files.storage import default_storage
+        
         # For LINK type, return the external URL as-is
         if obj.media_type == 'LINK' and obj.file_url:
             return obj.file_url
         
-        # For uploaded files, route through our protected media endpoint
+        # For uploaded files, generate appropriate URL
         if obj.file:
-            # Get the storage path (relative path in bucket)
             file_path = obj.file.name
-            request = self.context.get('request')
-            if request:
-                # Route through /api/media/file/<path> endpoint for auth
-                return request.build_absolute_uri(f'/api/media/file/{file_path}')
-            return f'/api/media/file/{file_path}'
+            storage_backend = getattr(settings, 'STORAGE_BACKEND', 'local').lower()
+            
+            if storage_backend == 's3':
+                # Generate signed URL for S3/Spaces (1 hour expiry)
+                try:
+                    storage = default_storage
+                    client = storage.connection.meta.client
+                    bucket_name = storage.bucket_name
+                    
+                    signed_url = client.generate_presigned_url(
+                        'get_object',
+                        Params={'Bucket': bucket_name, 'Key': file_path},
+                        ExpiresIn=3600  # 1 hour
+                    )
+                    return signed_url
+                except Exception:
+                    # Fallback to direct URL if signing fails
+                    return obj.file.url
+            else:
+                # Local storage: use Django media URL
+                request = self.context.get('request')
+                if request:
+                    return request.build_absolute_uri(obj.file.url)
+                return obj.file.url
         
         # Fallback to stored file_url if no file object
         url = obj.file_url or ''
