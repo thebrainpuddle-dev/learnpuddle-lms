@@ -6,6 +6,7 @@ import { Input } from '../../components/common/Input';
 import { useToast } from '../../components/common';
 import { adminReportsService } from '../../services/adminReportsService';
 import { adminRemindersService } from '../../services/adminRemindersService';
+import { usePageTitle } from '../../hooks/usePageTitle';
 import {
   PaperAirplaneIcon,
   ClipboardDocumentCheckIcon,
@@ -16,6 +17,7 @@ import {
 type Tab = 'COURSE' | 'ASSIGNMENT';
 
 export const ReportsPage: React.FC = () => {
+  usePageTitle('Reports');
   const toast = useToast();
   const [searchParams] = useSearchParams();
   const tabParam = searchParams.get('tab');

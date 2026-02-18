@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { adminService } from '../../services/adminService';
 import type { SkipRequestItem } from '../../services/adminService';
+import { usePageTitle } from '../../hooks/usePageTitle';
 import {
   MagnifyingGlassIcon,
   XMarkIcon,
@@ -22,6 +23,7 @@ const STATUS_TABS = [
 ] as const;
 
 export const SkipRequestsPage: React.FC = () => {
+  usePageTitle('Skip Requests');
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<string>('PENDING');
   const [search, setSearch] = useState('');

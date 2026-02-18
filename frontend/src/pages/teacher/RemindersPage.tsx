@@ -6,6 +6,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuthStore } from '../../stores/authStore';
 import { useTenantStore } from '../../stores/tenantStore';
 import { notificationService, Notification } from '../../services/notificationService';
+import { usePageTitle } from '../../hooks/usePageTitle';
 import {
   BellAlertIcon,
   CheckIcon,
@@ -24,6 +25,7 @@ const INVALIDATE_KEYS = [
 ];
 
 export const RemindersPage: React.FC = () => {
+  usePageTitle('Reminders');
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { user } = useAuthStore();

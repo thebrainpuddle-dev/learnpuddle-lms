@@ -6,9 +6,11 @@ import { Input } from '../../components/common/Input';
 import { Button } from '../../components/common/Button';
 import { useTenantStore } from '../../stores/tenantStore';
 import { authService } from '../../services/authService';
+import { usePageTitle } from '../../hooks/usePageTitle';
 import { EnvelopeIcon, ArrowLeftIcon } from '@heroicons/react/24/outline';
 
 export const ForgotPasswordPage: React.FC = () => {
+  usePageTitle('Forgot Password');
   const { theme } = useTenantStore();
   const [email, setEmail] = useState('');
   const [loading, setLoading] = useState(false);

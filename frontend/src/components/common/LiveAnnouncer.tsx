@@ -6,13 +6,7 @@
  * Includes both polite and assertive announcement regions.
  */
 
-import React, { createContext, useContext, useState, useCallback, useRef } from 'react';
-
-interface Announcement {
-  message: string;
-  politeness: 'polite' | 'assertive';
-  id: number;
-}
+import React, { createContext, useContext, useState, useCallback } from 'react';
 
 interface LiveAnnouncerContextType {
   /** Announce a message politely (waits for idle) */
@@ -40,7 +34,6 @@ export const LiveAnnouncerProvider: React.FC<LiveAnnouncerProviderProps> = ({
 }) => {
   const [politeMessage, setPoliteMessage] = useState('');
   const [assertiveMessage, setAssertiveMessage] = useState('');
-  const idRef = useRef(0);
 
   const clearMessage = useCallback((setter: React.Dispatch<React.SetStateAction<string>>) => {
     setTimeout(() => setter(''), 1000);

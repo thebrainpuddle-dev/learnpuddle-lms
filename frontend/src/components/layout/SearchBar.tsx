@@ -110,6 +110,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({ className = '', isAdmin = 
         inputRef.current?.blur();
         break;
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, allResults, selectedIndex]);
   
   const handleResultClick = (result: SearchResult) => {

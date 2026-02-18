@@ -6,9 +6,11 @@ import { Input } from '../../components/common/Input';
 import { Button } from '../../components/common/Button';
 import { useTenantStore } from '../../stores/tenantStore';
 import { authService } from '../../services/authService';
+import { usePageTitle } from '../../hooks/usePageTitle';
 import { LockClosedIcon, CheckCircleIcon } from '@heroicons/react/24/outline';
 
 export const ResetPasswordPage: React.FC = () => {
+  usePageTitle('Reset Password');
   const { theme } = useTenantStore();
   const [searchParams] = useSearchParams();
   const uid = searchParams.get('uid') || '';

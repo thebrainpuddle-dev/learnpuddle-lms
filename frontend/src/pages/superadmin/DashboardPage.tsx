@@ -2,6 +2,7 @@ import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { superAdminService } from '../../services/superAdminService';
+import { usePageTitle } from '../../hooks/usePageTitle';
 import {
   BuildingOffice2Icon,
   UsersIcon,
@@ -12,6 +13,7 @@ import {
 } from '@heroicons/react/24/outline';
 
 export const SuperAdminDashboardPage: React.FC = () => {
+  usePageTitle('Platform Dashboard');
   const navigate = useNavigate();
   const { data: stats, isLoading } = useQuery({
     queryKey: ['platformStats'],

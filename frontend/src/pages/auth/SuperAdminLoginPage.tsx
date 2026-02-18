@@ -2,9 +2,9 @@
 
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Input } from '../../components/common/Input';
 import { Button } from '../../components/common/Button';
 import { useAuthStore } from '../../stores/authStore';
+import { usePageTitle } from '../../hooks/usePageTitle';
 import api from '../../config/api';
 import {
   EnvelopeIcon,
@@ -13,6 +13,7 @@ import {
 } from '@heroicons/react/24/outline';
 
 export const SuperAdminLoginPage: React.FC = () => {
+  usePageTitle('Super Admin Login');
   const navigate = useNavigate();
   const { setAuth, setLoading } = useAuthStore();
 

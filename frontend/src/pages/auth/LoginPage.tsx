@@ -10,10 +10,12 @@ import { Button } from '../../components/common/Button';
 import { Checkbox } from '../../components/common/Checkbox';
 import { useAuthStore } from '../../stores/authStore';
 import { useTenantStore } from '../../stores/tenantStore';
+import { usePageTitle } from '../../hooks/usePageTitle';
 import api from '../../config/api';
 import { EnvelopeIcon, LockClosedIcon } from '@heroicons/react/24/outline';
 
 export const LoginPage: React.FC = () => {
+  usePageTitle('Login');
   const navigate = useNavigate();
   const { setAuth, setLoading } = useAuthStore();
   const { theme } = useTenantStore();

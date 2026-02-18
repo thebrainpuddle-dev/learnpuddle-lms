@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { superAdminService, OnboardPayload, TenantListItem } from '../../services/superAdminService';
 import { Button, Input, useToast } from '../../components/common';
+import { usePageTitle } from '../../hooks/usePageTitle';
 import {
   BuildingOffice2Icon,
   MagnifyingGlassIcon,
@@ -12,6 +13,7 @@ import {
 } from '@heroicons/react/24/outline';
 
 export const SchoolsPage: React.FC = () => {
+  usePageTitle('Schools');
   const toast = useToast();
   const queryClient = useQueryClient();
   const nav = useNavigate();

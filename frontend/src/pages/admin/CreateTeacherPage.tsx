@@ -5,6 +5,7 @@ import { Button } from '../../components/common/Button';
 import { Input } from '../../components/common/Input';
 import { useToast } from '../../components/common';
 import { adminTeachersService } from '../../services/adminTeachersService';
+import { usePageTitle } from '../../hooks/usePageTitle';
 import axios from 'axios';
 
 // Type for field-level validation errors from backend
@@ -19,6 +20,7 @@ function getFieldError(errors: FieldErrors | null, field: string): string | unde
 }
 
 export const CreateTeacherPage: React.FC = () => {
+  usePageTitle('Create Teacher');
   const toast = useToast();
   const navigate = useNavigate();
   const queryClient = useQueryClient();

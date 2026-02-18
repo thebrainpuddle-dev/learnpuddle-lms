@@ -2,10 +2,12 @@ import React, { useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { teacherService } from '../../services/teacherService';
+import { usePageTitle } from '../../hooks/usePageTitle';
 import { ArrowLeftIcon } from '@heroicons/react/24/outline';
 import { Button } from '../../components/common';
 
 export const QuizPage: React.FC = () => {
+  usePageTitle('Quiz');
   const { assignmentId } = useParams<{ assignmentId: string }>();
   const navigate = useNavigate();
 

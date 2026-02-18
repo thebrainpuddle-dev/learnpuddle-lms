@@ -10,7 +10,6 @@ import {
   UserGroupIcon,
   ChartBarIcon,
   ClockIcon,
-  CheckCircleIcon,
   DocumentCheckIcon,
   TrophyIcon,
   ExclamationTriangleIcon,
@@ -19,9 +18,7 @@ import {
   SparklesIcon,
   MegaphoneIcon,
   CalendarDaysIcon,
-  ClipboardDocumentListIcon,
 } from '@heroicons/react/24/outline';
-import { Button } from '../../components/common/Button';
 import { useNavigate } from 'react-router-dom';
 import { usePageTitle } from '../../hooks/usePageTitle';
 

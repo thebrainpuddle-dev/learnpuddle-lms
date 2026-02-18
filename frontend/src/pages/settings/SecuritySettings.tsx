@@ -6,6 +6,7 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button, Loading } from '../../components/common';
+import { usePageTitle } from '../../hooks/usePageTitle';
 import api from '../../config/api';
 
 interface TwoFAStatus {
@@ -37,6 +38,7 @@ interface SSOProviders {
 }
 
 export const SecuritySettings: React.FC = () => {
+  usePageTitle('Security Settings');
   const queryClient = useQueryClient();
   const [setupStep, setSetupStep] = useState<'idle' | 'scanning' | 'verifying'>('idle');
   const [qrData, setQrData] = useState<{ qr_code: string; secret: string } | null>(null);

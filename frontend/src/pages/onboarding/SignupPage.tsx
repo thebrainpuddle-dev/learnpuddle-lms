@@ -5,9 +5,10 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Button, Input } from '../../components/common';
+import { usePageTitle } from '../../hooks/usePageTitle';
 import {
   BuildingOfficeIcon,
   EnvelopeIcon,
@@ -39,7 +40,7 @@ interface SignupData {
 }
 
 export const SignupPage: React.FC = () => {
-  const navigate = useNavigate();
+  usePageTitle('Sign Up');
   const [step, setStep] = useState(1);
   const [formData, setFormData] = useState<SignupData>({
     school_name: '',
@@ -96,6 +97,7 @@ export const SignupPage: React.FC = () => {
       }
     }, 500);
     return () => clearTimeout(timeout);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [formData.school_name]);
 
   const updateField = (field: keyof SignupData, value: string) => {
