@@ -236,13 +236,34 @@ export const MediaLibraryPage: React.FC = () => {
               className="bg-white rounded-xl border border-gray-200 overflow-hidden hover:shadow-md transition-shadow group"
             >
               {/* Thumbnail / Icon area */}
-              <div className="h-36 bg-gray-50 flex items-center justify-center relative">
+              <div className="h-36 bg-gray-100 flex items-center justify-center relative">
                 {asset.thumbnail_url ? (
                   <img
                     src={resolveUrl(asset.thumbnail_url)}
                     alt={asset.title}
                     className="w-full h-full object-cover"
                   />
+                ) : asset.media_type === 'VIDEO' ? (
+                  <div className="w-full h-full bg-gradient-to-br from-slate-700 to-slate-900 flex items-center justify-center">
+                    <div className="flex flex-col items-center gap-1.5">
+                      <PlayCircleIcon className="h-12 w-12 text-white/80" />
+                      <span className="text-[10px] text-white/50 font-medium tracking-wide uppercase">{asset.file_name?.split('.').pop() || 'video'}</span>
+                    </div>
+                  </div>
+                ) : asset.media_type === 'DOCUMENT' ? (
+                  <div className="w-full h-full bg-gradient-to-br from-orange-50 to-amber-100 flex items-center justify-center">
+                    <div className="flex flex-col items-center gap-1.5">
+                      <DocumentTextIcon className="h-12 w-12 text-orange-500" />
+                      <span className="text-[10px] text-orange-400 font-semibold uppercase tracking-wide">{asset.file_name?.split('.').pop() || 'doc'}</span>
+                    </div>
+                  </div>
+                ) : asset.media_type === 'LINK' ? (
+                  <div className="w-full h-full bg-gradient-to-br from-purple-50 to-violet-100 flex items-center justify-center">
+                    <div className="flex flex-col items-center gap-1.5">
+                      <LinkIcon className="h-12 w-12 text-purple-500" />
+                      <span className="text-[10px] text-purple-400 font-semibold uppercase tracking-wide">link</span>
+                    </div>
+                  </div>
                 ) : (
                   getMediaIcon(asset.media_type)
                 )}
@@ -494,28 +515,34 @@ export const MediaLibraryPage: React.FC = () => {
                   )
                 ) : a.media_type === 'DOCUMENT' ? (
                   a.file_url ? (
-                    <div className="space-y-4">
-                      {a.file_url.match(/\.pdf(\?|$)/i) || a.mime_type === 'application/pdf' ? (
-                        <iframe
-                          src={resolveUrl(a.file_url)}
-                          className="w-full h-[60vh] rounded-lg border border-gray-200"
-                          title={a.title}
-                        />
-                      ) : (
-                        <div className="flex flex-col items-center justify-center py-16">
-                          <DocumentTextIcon className="h-12 w-12 text-orange-400 mb-3" />
-                          <p className="font-medium text-gray-900">{a.title}</p>
-                          <p className="text-sm text-gray-500 mt-1">{a.file_name}</p>
-                          <a
-                            href={resolveUrl(a.file_url)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="mt-3 inline-flex items-center gap-1.5 text-sm text-primary-600 hover:text-primary-700 font-medium"
-                          >
-                            Open document in new tab
-                          </a>
-                        </div>
+                    <div className="flex flex-col items-center justify-center py-12">
+                      <div className="w-20 h-24 bg-gradient-to-br from-orange-50 to-amber-100 rounded-lg flex items-center justify-center mb-4 shadow-sm border border-orange-200">
+                        <DocumentTextIcon className="h-10 w-10 text-orange-500" />
+                      </div>
+                      <p className="font-semibold text-gray-900 text-lg">{a.title}</p>
+                      <p className="text-sm text-gray-500 mt-1">{a.file_name}</p>
+                      {a.file_size && (
+                        <p className="text-xs text-gray-400 mt-0.5">{formatFileSize(a.file_size)}</p>
                       )}
+                      <div className="flex items-center gap-3 mt-5">
+                        <a
+                          href={resolveUrl(a.file_url)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-2 px-4 py-2 bg-primary-600 text-white text-sm font-medium rounded-lg hover:bg-primary-700 transition-colors"
+                        >
+                          <EyeIcon className="h-4 w-4" />
+                          Open in new tab
+                        </a>
+                        <a
+                          href={resolveUrl(a.file_url)}
+                          download={a.file_name || a.title}
+                          className="inline-flex items-center gap-2 px-4 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors"
+                        >
+                          <ArrowUpTrayIcon className="h-4 w-4 rotate-180" />
+                          Download
+                        </a>
+                      </div>
                     </div>
                   ) : (
                     <p className="text-gray-400 text-center py-8">No file uploaded</p>
