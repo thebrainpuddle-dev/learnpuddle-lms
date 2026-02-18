@@ -26,12 +26,31 @@ class MediaAssetSerializer(serializers.ModelSerializer):
         return ''
 
     def get_file_url(self, obj):
-        url = obj.file_url or (obj.file.url if obj.file else '')
+        """
+        Return the file URL, routing through Django's protected media endpoint
+        for files stored in S3/Spaces (ensures auth + tenant isolation).
+        """
+        # For LINK type, return the external URL as-is
+        if obj.media_type == 'LINK' and obj.file_url:
+            return obj.file_url
+        
+        # For uploaded files, route through our protected media endpoint
+        if obj.file:
+            # Get the storage path (relative path in bucket)
+            file_path = obj.file.name
+            request = self.context.get('request')
+            if request:
+                # Route through /api/media/file/<path> endpoint for auth
+                return request.build_absolute_uri(f'/api/media/file/{file_path}')
+            return f'/api/media/file/{file_path}'
+        
+        # Fallback to stored file_url if no file object
+        url = obj.file_url or ''
         if url and not url.startswith('http'):
             request = self.context.get('request')
             if request:
                 return request.build_absolute_uri(url)
-        return url or ''
+        return url
 
 
 class MediaAssetCreateSerializer(serializers.ModelSerializer):
@@ -71,18 +90,15 @@ class MediaAssetCreateSerializer(serializers.ModelSerializer):
                 {'file': 'File upload or file_url is required for video or document type.'}
             )
 
+        # Don't store file_url for uploaded files - it's generated dynamically
+        # by the serializer to ensure proper auth routing
+        if file_obj and 'file_url' in validated_data:
+            del validated_data['file_url']
+        
         asset = MediaAsset.objects.create(
             tenant=tenant,
             uploaded_by=user,
             **validated_data,
         )
-
-        # Set file_url from saved file if we have one (for uploads)
-        if asset.file:
-            url = asset.file.url
-            if not url.startswith('http'):
-                url = request.build_absolute_uri(url)
-            asset.file_url = url
-            asset.save(update_fields=['file_url'])
 
         return asset
