@@ -7,6 +7,8 @@ from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import update_session_auth_hash
+from django.views.decorators.csrf import csrf_exempt
+from django.utils.decorators import method_decorator
 from .serializers import (
     UserSerializer, LoginSerializer, RegisterTeacherSerializer,
     ChangePasswordSerializer
@@ -36,6 +38,7 @@ class ResendVerifyThrottle(ScopedRateThrottle):
     scope = 'resend_verify'
 
 
+@csrf_exempt
 @api_view(['POST'])
 @permission_classes([AllowAny])
 @throttle_classes([LoginThrottle])
@@ -119,6 +122,7 @@ def logout_view(request):
         )
 
 
+@csrf_exempt
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def refresh_token_view(request):
@@ -297,6 +301,7 @@ def change_password_view(request):
     )
 
 
+@csrf_exempt
 @api_view(['POST'])
 @permission_classes([AllowAny])
 @throttle_classes([PasswordResetThrottle])
@@ -351,6 +356,7 @@ def request_password_reset_view(request):
     return Response({'message': 'Password reset email sent if account exists'})
 
 
+@csrf_exempt
 @api_view(['POST'])
 @permission_classes([AllowAny])
 @throttle_classes([PasswordResetThrottle])
@@ -400,6 +406,7 @@ def confirm_password_reset_view(request):
     return Response({'message': 'Password has been reset successfully'})
 
 
+@csrf_exempt
 @api_view(['POST'])
 @permission_classes([AllowAny])
 @throttle_classes([EmailVerifyThrottle])

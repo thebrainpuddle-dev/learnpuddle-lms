@@ -11,6 +11,7 @@ Supports:
 import logging
 from django.conf import settings
 from django.shortcuts import redirect
+from django.views.decorators.csrf import csrf_exempt
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -95,6 +96,7 @@ def sso_callback(request, backend):
     return redirect(settings.SOCIAL_AUTH_LOGIN_ERROR_URL)
 
 
+@csrf_exempt
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def sso_token_exchange(request):
