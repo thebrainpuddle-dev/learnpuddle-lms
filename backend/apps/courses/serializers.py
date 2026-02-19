@@ -9,8 +9,11 @@ from .models import Course, Module, Content, TeacherGroup
 from apps.users.models import User
 
 
-def _get_signed_file_url(file_field, expires_in=3600):
-    """Generate a signed URL for S3/DO Spaces files, or return direct URL for local storage."""
+def _get_signed_file_url(file_field, expires_in=86400):
+    """Generate a signed URL for S3/DO Spaces files, or return direct URL for local storage.
+    
+    Default expiry is 24 hours (86400 seconds) for thumbnails.
+    """
     if not file_field:
         return None
     

@@ -6,8 +6,11 @@ from apps.progress.models import TeacherProgress
 from .models import Course, Module, Content
 
 
-def _get_signed_file_url(file_field, expires_in=3600):
-    """Generate a signed URL for S3/DO Spaces files, or return direct URL for local storage."""
+def _get_signed_file_url(file_field, expires_in=86400):
+    """Generate a signed URL for S3/DO Spaces files, or return direct URL for local storage.
+    
+    Default expiry is 24 hours (86400 seconds) for thumbnails.
+    """
     if not file_field:
         return None
     
@@ -29,6 +32,48 @@ def _get_signed_file_url(file_field, expires_in=3600):
             return file_field.url
     
     return file_field.url
+
+
+def _get_signed_url_from_path(url_or_path, expires_in=86400):
+    """Generate a signed URL from a stored URL or S3 key path.
+    
+    Handles both:
+    - Direct URLs: https://bucket.region.digitaloceanspaces.com/key/path
+    - Relative paths: /media/key/path or key/path
+    """
+    if not url_or_path:
+        return ""
+    
+    storage_backend = getattr(settings, 'STORAGE_BACKEND', 'local').lower()
+    
+    if storage_backend != 's3':
+        return url_or_path
+    
+    try:
+        storage = default_storage
+        client = storage.connection.meta.client
+        bucket_name = storage.bucket_name
+        
+        # Extract S3 key from URL
+        key = url_or_path
+        if url_or_path.startswith('http'):
+            # Extract key from full URL
+            # URL format: https://bucket.region.digitaloceanspaces.com/key/path
+            # or: https://bucket.region.cdn.digitaloceanspaces.com/key/path
+            from urllib.parse import urlparse
+            parsed = urlparse(url_or_path)
+            key = parsed.path.lstrip('/')
+        elif url_or_path.startswith('/'):
+            key = url_or_path.lstrip('/')
+        
+        signed_url = client.generate_presigned_url(
+            'get_object',
+            Params={'Bucket': bucket_name, 'Key': key},
+            ExpiresIn=expires_in
+        )
+        return signed_url
+    except Exception:
+        return url_or_path
 
 
 class TeacherContentProgressSerializer(serializers.ModelSerializer):
@@ -103,13 +148,25 @@ class TeacherContentProgressSerializer(serializers.ModelSerializer):
         if obj.content_type != "VIDEO":
             return ""
         asset = self._video_asset(obj)
-        return self._abs(getattr(asset, "hls_master_url", "") or "") if asset else ""
+        if not asset:
+            return ""
+        hls_url = getattr(asset, "hls_master_url", "") or ""
+        if not hls_url:
+            return ""
+        # Generate signed URL for private S3/DO Spaces files (longer expiry for video playback)
+        return _get_signed_url_from_path(hls_url, expires_in=14400)  # 4 hours for video streaming
 
     def get_thumbnail_url(self, obj):
         if obj.content_type != "VIDEO":
             return ""
         asset = self._video_asset(obj)
-        return self._abs(getattr(asset, "thumbnail_url", "") or "") if asset else ""
+        if not asset:
+            return ""
+        thumb_url = getattr(asset, "thumbnail_url", "") or ""
+        if not thumb_url:
+            return ""
+        # Generate signed URL for private S3/DO Spaces files
+        return _get_signed_url_from_path(thumb_url)
 
     def get_has_transcript(self, obj):
         if obj.content_type != "VIDEO":
@@ -122,7 +179,13 @@ class TeacherContentProgressSerializer(serializers.ModelSerializer):
             return ""
         asset = self._video_asset(obj)
         transcript = getattr(asset, "transcript", None) if asset else None
-        return self._abs(getattr(transcript, "vtt_url", "") or "") if transcript else ""
+        if not transcript:
+            return ""
+        vtt_url = getattr(transcript, "vtt_url", "") or ""
+        if not vtt_url:
+            return ""
+        # Generate signed URL for private S3/DO Spaces files
+        return _get_signed_url_from_path(vtt_url)
 
 
 class TeacherModuleSerializer(serializers.ModelSerializer):
