@@ -1,3 +1,4 @@
+from django.conf import settings
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -28,18 +29,37 @@ def tenant_theme_view(request):
     tenant = getattr(request, "tenant", None)
     
     if tenant is None:
-        # Check if subdomain exists but is inactive (vs. truly not found)
         host = request.get_host().split(':')[0].lower()
+        platform_domain = getattr(settings, 'PLATFORM_DOMAIN', '').lower()
+
+        # Platform root (learnpuddle.com) or localhost — no tenant expected; return default theme
+        # so super-admin, signup, and marketing pages can render
+        is_platform_root = (
+            (platform_domain and host == platform_domain) or
+            host in ('localhost', '127.0.0.1')
+        )
+        if is_platform_root:
+            return Response({
+                "tenant_found": True,
+                "name": "LearnPuddle",
+                "subdomain": "",
+                "logo_url": None,
+                "primary_color": "#1F4788",
+                "secondary_color": "#2E5C8A",
+                "font_family": "Inter",
+                "is_active": True,
+            }, status=status.HTTP_200_OK)
+
+        # Subdomain or other host — check if tenant exists but is inactive
         subdomain = None
         reason = "not_found"
         inactive_tenant = None
-        
-        # Extract subdomain from host
+
         if host not in ['localhost', '127.0.0.1']:
             parts = host.split('.')
             if len(parts) >= 2:
                 subdomain = parts[0]
-        
+
         # Check if an inactive tenant exists with this subdomain
         if subdomain:
             inactive_tenant = Tenant.objects.filter(subdomain=subdomain, is_active=False).first()
