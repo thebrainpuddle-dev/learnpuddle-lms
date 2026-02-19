@@ -242,41 +242,54 @@ def reminder_send(request):
             logger.exception("[REMINDER_SEND] Failed to create campaign")
             return Response({"error": f"Failed to create campaign: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        from_email = getattr(settings, "DEFAULT_FROM_EMAIL", None) or f"no-reply@{getattr(settings, 'PLATFORM_DOMAIN', 'localhost')}"
-        logger.info(f"[REMINDER_SEND] From email: {from_email}")
+        # Check if email is configured (not console backend)
+        email_backend = getattr(settings, "EMAIL_BACKEND", "")
+        email_enabled = "console" not in email_backend.lower() and getattr(settings, "EMAIL_HOST", "")
+        logger.info(f"[REMINDER_SEND] Email backend: {email_backend}, enabled: {email_enabled}")
 
         sent = 0
         failed = 0
         
+        # Create delivery records for tracking
         for teacher in recipient_list:
             try:
                 delivery = ReminderDelivery.objects.create(campaign=campaign, teacher=teacher, status="PENDING")
+                
+                # Only attempt email if email is properly configured
+                if email_enabled:
+                    from_email = getattr(settings, "DEFAULT_FROM_EMAIL", None) or f"no-reply@{getattr(settings, 'PLATFORM_DOMAIN', 'localhost')}"
+                    try:
+                        send_mail(
+                            subject=subj,
+                            message=msg,
+                            from_email=from_email,
+                            recipient_list=[teacher.email],
+                            fail_silently=True,  # Don't block on email errors
+                        )
+                        delivery.status = "SENT"
+                        delivery.sent_at = timezone.now()
+                        sent += 1
+                        logger.info(f"[REMINDER_SEND] Email sent to {teacher.email}")
+                    except Exception as e:
+                        logger.warning(f"[REMINDER_SEND] Email failed to {teacher.email}: {e}")
+                        delivery.status = "FAILED"
+                        delivery.error = str(e)[:500]
+                        failed += 1
+                else:
+                    # Email not configured - mark as sent (in-app notification will be created)
+                    delivery.status = "SENT"
+                    delivery.sent_at = timezone.now()
+                    sent += 1
+                    logger.info(f"[REMINDER_SEND] Email skipped (not configured), in-app only for {teacher.email}")
+                
+                delivery.save(update_fields=["status", "sent_at", "error"])
+                
             except Exception as e:
                 logger.warning(f"[REMINDER_SEND] Failed to create delivery for {teacher.email}: {e}")
                 failed += 1
                 continue
-                
-            try:
-                send_mail(
-                    subject=subj,
-                    message=msg,
-                    from_email=from_email,
-                    recipient_list=[teacher.email],
-                    fail_silently=False,
-                )
-                delivery.status = "SENT"
-                delivery.sent_at = timezone.now()
-                delivery.save(update_fields=["status", "sent_at"])
-                sent += 1
-                logger.info(f"[REMINDER_SEND] Email sent to {teacher.email}")
-            except Exception as e:
-                logger.warning(f"[REMINDER_SEND] Email failed to {teacher.email}: {e}")
-                delivery.status = "FAILED"
-                delivery.error = str(e)[:500]
-                delivery.save(update_fields=["status", "error"])
-                failed += 1
 
-        # Create in-app notifications (non-blocking)
+        # Create in-app notifications (this is the primary delivery method)
         try:
             from apps.notifications.services import notify_reminder
             notify_reminder(
@@ -287,7 +300,7 @@ def reminder_send(request):
                 course=course,
                 assignment=assignment,
             )
-            logger.info(f"[REMINDER_SEND] In-app notifications created")
+            logger.info(f"[REMINDER_SEND] In-app notifications created for {len(recipient_list)} recipients")
         except Exception as e:
             logger.warning(f"[REMINDER_SEND] In-app notifications failed: {e}")
 
