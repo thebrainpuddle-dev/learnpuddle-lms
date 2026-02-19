@@ -46,25 +46,19 @@ export const CreateTeacherPage: React.FC = () => {
     onError: (error) => {
       // Extract field-level errors from axios response
       if (axios.isAxiosError(error) && error.response?.data) {
-        const errors = error.response.data as FieldErrors;
-        setFieldErrors(errors);
-        
-        // Show specific toast message based on error type
-        if (errors.email?.some(e => e.toLowerCase().includes('exists') || e.toLowerCase().includes('already'))) {
-          toast.error('Email already in use', 'A teacher with this email address already exists. Please use a different email.');
-        } else if (Object.keys(errors).length > 0) {
-          // Show first error message if available
-          const firstField = Object.keys(errors)[0];
-          const firstError = errors[firstField]?.[0];
-          if (firstError) {
-            toast.error('Validation error', firstError);
-          } else {
-            toast.error('Validation error', 'Please check the form and correct any errors.');
-          }
+        const data = error.response.data as FieldErrors;
+        setFieldErrors(data);
+        // Show a more specific error message if we can find one
+        const firstError = Object.values(data).flat()[0];
+        if (firstError) {
+          toast.error('Validation error', String(firstError));
+        } else {
+          toast.error('Validation error', 'Please check the form and correct any errors.');
         }
       } else {
         setFieldErrors(null);
-        toast.error('Failed to create teacher', 'Please try again.');
+        const message = error instanceof Error ? error.message : 'Please try again.';
+        toast.error('Failed to create teacher', message);
       }
     },
   });

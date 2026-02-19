@@ -221,6 +221,9 @@ def register_teacher_view(request):
     """
     Admin endpoint to create teacher accounts.
     """
+    import logging
+    logger = logging.getLogger(__name__)
+
     serializer = RegisterTeacherSerializer(
         data=request.data,
         context={'request': request}
@@ -228,15 +231,21 @@ def register_teacher_view(request):
     serializer.is_valid(raise_exception=True)
     user = serializer.save()
 
-    # Send welcome/verification email
-    _send_verification_email(user, request)
+    # Non-critical post-creation tasks - don't fail the request if these fail
+    try:
+        _send_verification_email(user, request)
+    except Exception as e:
+        logger.warning(f"Failed to send verification email for user {user.email}: {e}")
 
-    log_audit('CREATE', 'User', target_id=str(user.id), target_repr=str(user), request=request)
+    try:
+        log_audit('CREATE', 'User', target_id=str(user.id), target_repr=str(user), request=request)
+    except Exception as e:
+        logger.warning(f"Failed to log audit for user {user.email}: {e}")
 
-    return Response(
-        UserSerializer(user).data,
-        status=status.HTTP_201_CREATED
-    )
+    # Serialize response with request context for proper URL building
+    response_data = UserSerializer(user, context={'request': request}).data
+
+    return Response(response_data, status=status.HTTP_201_CREATED)
 
 
 def _send_verification_email(user, request=None):
