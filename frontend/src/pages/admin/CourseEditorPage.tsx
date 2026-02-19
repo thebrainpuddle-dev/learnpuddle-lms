@@ -5,7 +5,6 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { usePageTitle } from '../../hooks/usePageTitle';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button, Input, Loading, useToast, HlsVideoPlayer, ConfirmDialog } from '../../components/common';
-import { useAuthBlobUrl } from '../../hooks/useAuthBlobUrl';
 import { useTenantStore } from '../../stores/tenantStore';
 import { adminService } from '../../services/adminService';
 import { adminMediaService, type MediaAsset } from '../../services/adminMediaService';
@@ -455,16 +454,6 @@ export const CourseEditorPage: React.FC = () => {
 
   // Content preview
   const [previewContent, setPreviewContent] = useState<Content | null>(null);
-
-  // Resolve backend URL for preview content (documents need authenticated blob fetch)
-  const _backendOrigin = (process.env.REACT_APP_API_URL || 'http://localhost:8000/api').replace(/\/api\/?$/, '');
-  const _resolveUrl = (u: string | null | undefined) => {
-    if (!u) return '';
-    if (u.startsWith('http')) return u;
-    return `${_backendOrigin}${u.startsWith('/') ? '' : '/'}${u}`;
-  };
-  const previewDocUrl = previewContent?.content_type === 'DOCUMENT' ? _resolveUrl(previewContent.file_url) : null;
-  const docBlobUrl = useAuthBlobUrl(previewDocUrl);
 
   // Media library picker
   const [libraryOpen, setLibraryOpen] = useState(false);
@@ -1411,17 +1400,11 @@ export const CourseEditorPage: React.FC = () => {
                   c.file_url ? (
                     <div className="space-y-4">
                       {c.file_url.match(/\.pdf(\?|$)/i) ? (
-                        docBlobUrl ? (
-                          <iframe
-                            src={docBlobUrl}
-                            className="w-full h-[60vh] rounded-lg border border-gray-200"
-                            title={c.title}
-                          />
-                        ) : (
-                          <div className="flex items-center justify-center h-[60vh]">
-                            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600" />
-                          </div>
-                        )
+                        <iframe
+                          src={c.file_url}
+                          className="w-full h-[60vh] rounded-lg border border-gray-200"
+                          title={c.title}
+                        />
                       ) : (
                         <div className="flex flex-col items-center justify-center py-16">
                           <DocumentTextIcon className="h-12 w-12 text-orange-400 mb-3" />

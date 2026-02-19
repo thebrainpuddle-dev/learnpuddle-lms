@@ -37,9 +37,54 @@ def _get_signed_file_url(file_field, expires_in=86400):
     return file_field.url
 
 
+def _get_signed_url_from_path(url_or_path, expires_in=14400):
+    """Generate a signed URL from a stored URL or S3 key path.
+    
+    Handles both:
+    - Direct URLs: https://bucket.region.digitaloceanspaces.com/key/path
+    - Relative paths: /media/key/path or key/path
+    
+    Default expiry is 4 hours (14400 seconds) for content files.
+    """
+    if not url_or_path:
+        return ""
+    
+    storage_backend = getattr(settings, 'STORAGE_BACKEND', 'local').lower()
+    
+    if storage_backend != 's3':
+        return url_or_path
+    
+    try:
+        from urllib.parse import urlparse
+        storage = default_storage
+        client = storage.connection.meta.client
+        bucket_name = storage.bucket_name
+        
+        # Extract S3 key from URL
+        key = url_or_path
+        if url_or_path.startswith('http'):
+            # Extract key from full URL
+            # URL format: https://bucket.region.digitaloceanspaces.com/key/path
+            # or: https://bucket.region.cdn.digitaloceanspaces.com/key/path
+            parsed = urlparse(url_or_path)
+            key = parsed.path.lstrip('/')
+        elif url_or_path.startswith('/'):
+            key = url_or_path.lstrip('/')
+        
+        signed_url = client.generate_presigned_url(
+            'get_object',
+            Params={'Bucket': bucket_name, 'Key': key},
+            ExpiresIn=expires_in
+        )
+        return signed_url
+    except Exception:
+        return url_or_path
+
+
 class ContentSerializer(serializers.ModelSerializer):
     """Serializer for course content."""
     video_status = serializers.SerializerMethodField()
+    file_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Content
@@ -51,6 +96,13 @@ class ContentSerializer(serializers.ModelSerializer):
             'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def get_file_url(self, obj):
+        """Return signed URL for S3/DO Spaces files."""
+        raw_url = obj.file_url or ""
+        if not raw_url:
+            return ""
+        return _get_signed_url_from_path(raw_url)
 
     def get_video_status(self, obj):
         if obj.content_type != "VIDEO":
