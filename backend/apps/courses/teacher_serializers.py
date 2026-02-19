@@ -82,8 +82,12 @@ class TeacherContentProgressSerializer(serializers.ModelSerializer):
         hls_url = getattr(asset, "hls_master_url", "") or ""
         if not hls_url:
             return ""
-        # Generate signed URL for private S3/DO Spaces files (longer expiry for video playback)
-        return sign_url(hls_url, expires_in=14400)
+        # Return backend proxy URL that serves m3u8 with signed segment URLs
+        # This solves 403 errors when HLS.js fetches segments from private S3 buckets
+        req = self.context.get("request")
+        if req:
+            return req.build_absolute_uri(f"/api/courses/hls/{obj.id}/")
+        return f"/api/courses/hls/{obj.id}/"
 
     def get_thumbnail_url(self, obj):
         if obj.content_type != "VIDEO":

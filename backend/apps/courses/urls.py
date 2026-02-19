@@ -48,6 +48,13 @@ urlpatterns = [
         name="regenerate_assignments",
     ),
     
+    # HLS playlist proxy (signs segment URLs for private S3 buckets)
+    path(
+        "hls/<uuid:content_id>/",
+        video_views.hls_playlist_view,
+        name="hls_playlist",
+    ),
+    
     # Learning Paths - Admin
     path('learning-paths/', learning_path_views.learning_path_list_create, name='learning_path_list_create'),
     path('learning-paths/<uuid:path_id>/', learning_path_views.learning_path_detail, name='learning_path_detail'),

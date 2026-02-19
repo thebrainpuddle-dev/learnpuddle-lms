@@ -1,8 +1,12 @@
+import re
 import uuid
+import logging
+import requests
 
 from celery import chain, group
 from django.conf import settings
 from django.core.files.storage import default_storage
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes, throttle_classes
@@ -10,8 +14,11 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 
-from utils.decorators import admin_only, tenant_required, check_feature
+from utils.decorators import admin_only, tenant_required, check_feature, teacher_or_admin
 from utils.storage_paths import course_video_source_path
+from utils.s3_utils import sign_url
+
+logger = logging.getLogger(__name__)
 
 
 from apps.progress.models import Assignment
@@ -198,6 +205,11 @@ def video_status(request, course_id, module_id, content_id):
         .values("id", "title")
     )
 
+    # Build proxy URL for HLS playback (signs segment URLs on the fly)
+    hls_proxy_url = ""
+    if asset and asset.hls_master_url:
+        hls_proxy_url = request.build_absolute_uri(f"/api/courses/hls/{content_id}/")
+    
     return Response(
         {
             "content": ContentSerializer(content).data,
@@ -207,9 +219,9 @@ def video_status(request, course_id, module_id, content_id):
                     "status": asset.status,
                     "error_message": asset.error_message,
                     "duration_seconds": asset.duration_seconds,
-                    "hls_master_url": _maybe_absolute(request, asset.hls_master_url),
-                    "thumbnail_url": _maybe_absolute(request, asset.thumbnail_url),
-                    "source_url": _maybe_absolute(request, asset.source_url),
+                    "hls_master_url": hls_proxy_url,
+                    "thumbnail_url": sign_url(asset.thumbnail_url) if asset.thumbnail_url else "",
+                    "source_url": sign_url(asset.source_url) if asset.source_url else "",
                 }
                 if asset
                 else None
@@ -218,7 +230,7 @@ def video_status(request, course_id, module_id, content_id):
                 {
                     "language": transcript.language,
                     "full_text_preview": (transcript.full_text[:240] + "...") if transcript.full_text else "",
-                    "vtt_url": _maybe_absolute(request, transcript.vtt_url),
+                    "vtt_url": sign_url(transcript.vtt_url) if transcript.vtt_url else "",
                     "generated_at": transcript.generated_at,
                 }
                 if transcript
@@ -263,3 +275,79 @@ def regenerate_assignments(request, course_id, module_id, content_id):
     # Fixed: use .delay() directly, not chain() with trailing comma
     generate_assignments.delay(str(asset.id))
     return Response({"queued": True}, status=status.HTTP_202_ACCEPTED)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+@teacher_or_admin
+@tenant_required
+def hls_playlist_view(request, content_id):
+    """
+    Serve the HLS master.m3u8 playlist with signed segment URLs.
+    
+    This endpoint:
+    1. Fetches the original master.m3u8 from S3
+    2. Parses and replaces segment references (*.ts) with signed S3 URLs
+    3. Returns the modified playlist
+    
+    This solves 403 errors when HLS.js tries to fetch segments from private S3 buckets.
+    """
+    content = get_object_or_404(Content, id=content_id, content_type="VIDEO")
+    
+    # Verify the content belongs to the current tenant
+    if content.module.course.tenant_id != request.tenant.id:
+        return Response({"error": "Access denied"}, status=status.HTTP_403_FORBIDDEN)
+    
+    asset = getattr(content, "video_asset", None)
+    if not asset or not asset.hls_master_url:
+        return Response({"error": "HLS playlist not available"}, status=status.HTTP_404_NOT_FOUND)
+    
+    # Get the original m3u8 URL (signed for fetching)
+    original_m3u8_url = sign_url(asset.hls_master_url, expires_in=300)
+    
+    try:
+        # Fetch the original m3u8 content
+        resp = requests.get(original_m3u8_url, timeout=10)
+        resp.raise_for_status()
+        m3u8_content = resp.text
+    except requests.RequestException as e:
+        logger.error(f"Failed to fetch m3u8 for content {content_id}: {e}")
+        return Response({"error": "Failed to fetch playlist"}, status=status.HTTP_502_BAD_GATEWAY)
+    
+    # Determine the base path for segments (same directory as master.m3u8)
+    # hls_master_url is like: course_content/tenant/{tenant_id}/videos/{content_id}/hls/master.m3u8
+    # We need the prefix: course_content/tenant/{tenant_id}/videos/{content_id}/hls/
+    hls_base_path = asset.hls_master_url.rsplit("/", 1)[0] + "/"
+    
+    # Sign all segment URLs in the playlist
+    # Segments are referenced as relative paths like: seg_00000.ts, seg_00001.ts
+    def sign_segment(match):
+        segment_name = match.group(0)
+        # Skip lines that are comments or don't look like segment files
+        if segment_name.startswith("#") or not segment_name.endswith(".ts"):
+            return segment_name
+        segment_path = hls_base_path + segment_name
+        return sign_url(segment_path, expires_in=14400)  # 4 hours for playback
+    
+    # Replace segment references with signed URLs
+    # Match lines that are .ts files (not starting with #)
+    modified_m3u8 = []
+    for line in m3u8_content.splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and line.endswith(".ts"):
+            # This is a segment reference, sign it
+            segment_path = hls_base_path + line
+            modified_m3u8.append(sign_url(segment_path, expires_in=14400))
+        else:
+            modified_m3u8.append(line)
+    
+    modified_content = "\n".join(modified_m3u8)
+    
+    return HttpResponse(
+        modified_content,
+        content_type="application/vnd.apple.mpegurl",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Access-Control-Allow-Origin": "*",
+        }
+    )
