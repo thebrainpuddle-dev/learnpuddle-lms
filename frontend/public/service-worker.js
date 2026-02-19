@@ -2,10 +2,10 @@
 // Service Worker for Brain LMS PWA
 // Provides offline support, caching, and push notifications
 
-const CACHE_NAME = 'brain-lms-v1';
-const STATIC_CACHE = 'brain-lms-static-v1';
-const DYNAMIC_CACHE = 'brain-lms-dynamic-v1';
-const API_CACHE = 'brain-lms-api-v1';
+const CACHE_NAME = 'brain-lms-v2';
+const STATIC_CACHE = 'brain-lms-static-v2';
+const DYNAMIC_CACHE = 'brain-lms-dynamic-v2';
+const API_CACHE = 'brain-lms-api-v2';
 
 // Resources to cache immediately on install
 const STATIC_ASSETS = [
