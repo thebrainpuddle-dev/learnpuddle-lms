@@ -76,7 +76,11 @@ export const ContentPlayer: React.FC<ContentPlayerProps> = ({
     if (isHls && Hls.isSupported()) {
       const hls = new Hls({
         enableWorker: true,
-        // No xhrSetup needed - signed URLs provide access without auth headers
+        // Add auth headers for the HLS proxy endpoint
+        xhrSetup: (xhr) => {
+          const token = sessionStorage.getItem('access_token');
+          if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+        },
       });
       hls.loadSource(videoSrc);
       hls.attachMedia(video);

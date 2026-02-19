@@ -293,18 +293,36 @@ def hls_playlist_view(request, content_id):
     
     This solves 403 errors when HLS.js tries to fetch segments from private S3 buckets.
     """
+    # #region agent log
+    logger.info(f"[HLS_DEBUG] HLS_ENDPOINT_REACHED content_id={content_id} user={request.user.email if request.user else None} is_authenticated={request.user.is_authenticated if request.user else False} user_role={getattr(request.user, 'role', None)}")
+    # #endregion
+    
     content = get_object_or_404(Content, id=content_id, content_type="VIDEO")
     
     # Verify the content belongs to the current tenant
     if content.module.course.tenant_id != request.tenant.id:
+        # #region agent log
+        logger.info(f"[HLS_DEBUG] TENANT_MISMATCH content_tenant={content.module.course.tenant_id} request_tenant={request.tenant.id}")
+        # #endregion
         return Response({"error": "Access denied"}, status=status.HTTP_403_FORBIDDEN)
     
     asset = getattr(content, "video_asset", None)
     if not asset or not asset.hls_master_url:
+        # #region agent log
+        logger.info(f"[HLS_DEBUG] NO_HLS_ASSET has_asset={asset is not None} hls_url={getattr(asset, 'hls_master_url', None) if asset else None}")
+        # #endregion
         return Response({"error": "HLS playlist not available"}, status=status.HTTP_404_NOT_FOUND)
+    
+    # #region agent log
+    logger.info(f"[HLS_DEBUG] HLS_MASTER_URL_FROM_DB hls_master_url={asset.hls_master_url}")
+    # #endregion
     
     # Get the original m3u8 URL (signed for fetching)
     original_m3u8_url = sign_url(asset.hls_master_url, expires_in=300)
+    
+    # #region agent log
+    logger.info(f"[HLS_DEBUG] SIGNED_M3U8_URL original={asset.hls_master_url} signed_prefix={original_m3u8_url[:150] if original_m3u8_url else None} has_signature={'X-Amz-' in (original_m3u8_url or '')}")
+    # #endregion
     
     try:
         # Fetch the original m3u8 content
@@ -312,8 +330,15 @@ def hls_playlist_view(request, content_id):
         resp.raise_for_status()
         m3u8_content = resp.text
     except requests.RequestException as e:
+        # #region agent log
+        logger.error(f"[HLS_DEBUG] M3U8_FETCH_FAILED error={e}")
+        # #endregion
         logger.error(f"Failed to fetch m3u8 for content {content_id}: {e}")
         return Response({"error": "Failed to fetch playlist"}, status=status.HTTP_502_BAD_GATEWAY)
+    
+    # #region agent log
+    logger.info(f"[HLS_DEBUG] M3U8_FETCHED content_length={len(m3u8_content)} first_100_chars={m3u8_content[:100]}")
+    # #endregion
     
     # Determine the base path for segments (same directory as master.m3u8)
     # hls_master_url is like: course_content/tenant/{tenant_id}/videos/{content_id}/hls/master.m3u8
@@ -333,14 +358,22 @@ def hls_playlist_view(request, content_id):
     # Replace segment references with signed URLs
     # Match lines that are .ts files (not starting with #)
     modified_m3u8 = []
+    first_segment_signed = None
     for line in m3u8_content.splitlines():
         line = line.strip()
         if line and not line.startswith("#") and line.endswith(".ts"):
             # This is a segment reference, sign it
             segment_path = hls_base_path + line
-            modified_m3u8.append(sign_url(segment_path, expires_in=14400))
+            signed_segment = sign_url(segment_path, expires_in=14400)
+            if first_segment_signed is None:
+                first_segment_signed = signed_segment
+            modified_m3u8.append(signed_segment)
         else:
             modified_m3u8.append(line)
+    
+    # #region agent log
+    logger.info(f"[HLS_DEBUG] SEGMENT_SIGNING hls_base_path={hls_base_path} first_segment_signed_prefix={first_segment_signed[:150] if first_segment_signed else None} has_signature={'X-Amz-' in (first_segment_signed or '')} total_lines={len(modified_m3u8)}")
+    # #endregion
     
     modified_content = "\n".join(modified_m3u8)
     

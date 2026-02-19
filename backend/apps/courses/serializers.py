@@ -25,10 +25,24 @@ class ContentSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at', 'updated_at']
 
     def get_file_url(self, obj):
-        """Return signed URL for S3/DO Spaces files."""
+        """
+        Return URL for content files.
+        
+        For VIDEO content with HLS, return the proxy endpoint URL that serves
+        the m3u8 playlist with signed segment URLs (fixes 403 on segment fetch).
+        For other content types, return a signed S3 URL.
+        """
         raw_url = obj.file_url or ""
         if not raw_url:
             return ""
+        
+        # For VIDEO content, check if it's HLS and use proxy endpoint
+        if obj.content_type == "VIDEO" and ".m3u8" in raw_url:
+            req = self.context.get("request")
+            if req:
+                return req.build_absolute_uri(f"/api/courses/hls/{obj.id}/master.m3u8")
+            return f"/api/courses/hls/{obj.id}/master.m3u8"
+        
         return sign_url(raw_url)
 
     def get_video_status(self, obj):
