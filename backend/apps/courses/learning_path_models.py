@@ -13,16 +13,7 @@ from django.db import models
 from utils.tenant_manager import TenantManager
 
 
-def learning_path_thumbnail_upload_path(instance, filename):
-    """
-    Generate tenant-scoped upload path for learning path thumbnails.
-    Format: learning_path_thumbnails/tenant/{tenant_id}/{uuid}_{ext}
-    """
-    ext = ''
-    if '.' in filename:
-        ext = '.' + filename.rsplit('.', 1)[-1].lower()
-    unique_name = f"{uuid.uuid4().hex}{ext}"
-    return f"learning_path_thumbnails/tenant/{instance.tenant_id}/{unique_name}"
+from utils.storage_paths import learning_path_thumbnail_upload_to as learning_path_thumbnail_upload_path
 
 
 class LearningPath(models.Model):

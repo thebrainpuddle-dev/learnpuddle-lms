@@ -11,16 +11,7 @@ from utils.soft_delete import SoftDeleteMixin, SoftDeleteManager
 from utils.tenant_soft_delete_manager import TenantSoftDeleteManager
 
 
-def course_thumbnail_upload_path(instance, filename):
-    """
-    Generate tenant-scoped upload path for course thumbnails.
-    Format: course_thumbnails/tenant/{tenant_id}/{uuid}_{ext}
-    """
-    ext = ''
-    if '.' in filename:
-        ext = '.' + filename.rsplit('.', 1)[-1].lower()
-    unique_name = f"{uuid.uuid4().hex}{ext}"
-    return f"course_thumbnails/tenant/{instance.tenant_id}/{unique_name}"
+from utils.storage_paths import course_thumbnail_upload_to as course_thumbnail_upload_path
 
 
 class TeacherGroup(models.Model):

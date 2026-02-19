@@ -11,6 +11,7 @@ from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 
 from utils.decorators import admin_only, tenant_required, check_feature
+from utils.storage_paths import course_video_source_path
 
 
 from apps.progress.models import Assignment
@@ -134,7 +135,8 @@ def upload_video_content(request, course_id, module_id):
     )
 
     tenant_id = str(tenant.id)
-    source_key = f"tenant/{tenant_id}/videos/{content.id}/source{ext or '.mp4'}"
+    filename = f"source{ext or '.mp4'}"
+    source_key = course_video_source_path(tenant_id, str(content.id), filename)
     saved_key = default_storage.save(source_key, f)
 
     asset = VideoAsset.objects.create(

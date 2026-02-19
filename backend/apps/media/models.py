@@ -1,23 +1,10 @@
 # apps/media/models.py
 
 import uuid
-from datetime import datetime
 from django.db import models
 
 from utils.tenant_manager import TenantManager
-
-
-def media_asset_upload_path(instance, filename):
-    """
-    Generate tenant-scoped upload path for media assets.
-    Format: media_assets/{YYYY}/{MM}/tenant/{tenant_id}/{uuid}_{filename}
-    """
-    now = datetime.now()
-    ext = ''
-    if '.' in filename:
-        ext = '.' + filename.rsplit('.', 1)[-1].lower()
-    unique_name = f"{uuid.uuid4().hex}{ext}"
-    return f"media_assets/{now.year}/{now.month:02d}/tenant/{instance.tenant_id}/{unique_name}"
+from utils.storage_paths import media_asset_upload_to as media_asset_upload_path
 
 
 class MediaAsset(models.Model):

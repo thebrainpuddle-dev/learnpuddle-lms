@@ -1415,27 +1415,20 @@ export const CourseEditorPage: React.FC = () => {
                   )
                 ) : c.content_type === 'LINK' ? (
                   c.file_url ? (
-                    <div className="space-y-4">
-                      <div className="p-4 bg-purple-50 rounded-lg">
-                        <div className="flex items-center gap-2 mb-2">
-                          <LinkIcon className="h-5 w-5 text-purple-500" />
-                          <span className="font-medium text-gray-900">{c.title}</span>
-                        </div>
-                        <a
-                          href={c.file_url.startsWith('http') ? c.file_url : `https://${c.file_url}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-sm text-primary-600 hover:underline break-all"
-                        >
-                          {c.file_url}
-                        </a>
+                    <div className="flex flex-col items-center justify-center py-16 space-y-4">
+                      <div className="w-20 h-20 bg-gradient-to-br from-purple-50 to-purple-100 rounded-full flex items-center justify-center shadow-sm border border-purple-200">
+                        <LinkIcon className="h-10 w-10 text-purple-500" />
                       </div>
-                      <iframe
-                        src={c.file_url.startsWith('http') ? c.file_url : `https://${c.file_url}`}
-                        className="w-full h-[50vh] rounded-lg border border-gray-200"
-                        title={c.title}
-                        sandbox="allow-scripts allow-same-origin"
-                      />
+                      <p className="font-medium text-gray-900">{c.title}</p>
+                      <p className="text-sm text-gray-500 break-all max-w-md text-center">{c.file_url}</p>
+                      <a
+                        href={c.file_url.startsWith('http') ? c.file_url : `https://${c.file_url}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 px-4 py-2 bg-primary-600 text-white text-sm font-medium rounded-lg hover:bg-primary-700"
+                      >
+                        Open link in new tab
+                      </a>
                     </div>
                   ) : (
                     <p className="text-gray-400 text-center py-8">No URL provided</p>

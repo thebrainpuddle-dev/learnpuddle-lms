@@ -20,6 +20,12 @@ from apps.courses.models import Content
 from apps.courses.video_models import VideoAsset, VideoTranscript
 from apps.progress.models import Assignment, Quiz, QuizQuestion
 from apps.users.models import User
+from utils.storage_paths import (
+    course_video_prefix,
+    course_video_hls_prefix,
+    course_video_thumbnail_path,
+    course_video_captions_path,
+)
 
 
 MAX_VIDEO_DURATION_SECONDS = 60 * 60  # 1 hour
@@ -31,10 +37,6 @@ def _safe_storage_url(path: str) -> str:
     (e.g. /media/...), which will be made absolute at the API layer.
     """
     return default_storage.url(path)
-
-
-def _tenant_video_prefix(tenant_id: str, content_id: str) -> str:
-    return f"tenant/{tenant_id}/videos/{content_id}"
 
 
 def _download_to_tempfile(storage_path: str, suffix: str = "") -> str:
@@ -345,8 +347,7 @@ def transcode_to_hls(self, video_asset_id: str) -> str:
 
     tenant_id = str(asset.content.module.course.tenant_id)
     content_id = str(asset.content_id)
-    prefix = _tenant_video_prefix(tenant_id, content_id)
-    hls_prefix = f"{prefix}/hls"
+    hls_prefix = course_video_hls_prefix(tenant_id, content_id)
 
     local_in = None
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -411,8 +412,7 @@ def generate_thumbnail(self, video_asset_id: str) -> str:
 
     tenant_id = str(asset.content.module.course.tenant_id)
     content_id = str(asset.content_id)
-    prefix = _tenant_video_prefix(tenant_id, content_id)
-    thumb_key = f"{prefix}/thumb.jpg"
+    thumb_key = course_video_thumbnail_path(tenant_id, content_id)
 
     local_in = None
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -465,8 +465,7 @@ def transcribe_video(self, video_asset_id: str, language: str = "en") -> str:
 
     tenant_id = str(asset.content.module.course.tenant_id)
     content_id = str(asset.content_id)
-    prefix = _tenant_video_prefix(tenant_id, content_id)
-    vtt_key = f"{prefix}/captions.vtt"
+    vtt_key = course_video_captions_path(tenant_id, content_id)
 
     local_in = None
     try:

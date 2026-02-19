@@ -5,6 +5,8 @@ from django.utils.text import slugify
 from django.utils import timezone
 import uuid
 
+from utils.storage_paths import tenant_logo_upload_to
+
 
 class Tenant(models.Model):
     """
@@ -22,7 +24,7 @@ class Tenant(models.Model):
     address = models.TextField(blank=True)
     
     # Branding
-    logo = models.ImageField(upload_to='tenant_logos/', blank=True, null=True)
+    logo = models.ImageField(upload_to=tenant_logo_upload_to, blank=True, null=True)
     primary_color = models.CharField(max_length=7, default='#1F4788', help_text="Hex color code")
     secondary_color = models.CharField(max_length=7, blank=True, default='', help_text="Optional hex color code")
     font_family = models.CharField(max_length=100, blank=True, default='Inter', help_text="CSS font-family name")

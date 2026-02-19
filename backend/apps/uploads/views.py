@@ -1,5 +1,3 @@
-import uuid
-
 from django.core.files.storage import default_storage
 from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.permissions import IsAuthenticated
@@ -8,6 +6,11 @@ from rest_framework.throttling import ScopedRateThrottle
 from rest_framework import status
 
 from utils.decorators import admin_only, tenant_required
+from utils.storage_paths import (
+    tenant_logo_path,
+    course_thumbnail_path,
+    course_document_path,
+)
 
 
 class UploadThrottle(ScopedRateThrottle):
@@ -73,16 +76,6 @@ def _validate_upload(file_obj, allowed_exts, allowed_mimes, max_size_mb):
     return True, None
 
 
-def _save_upload(file_obj, prefix: str, tenant_id: str) -> str:
-    ext = ""
-    name = getattr(file_obj, "name", "")
-    if "." in name:
-        ext = "." + name.rsplit(".", 1)[-1].lower()
-    path = f"tenant/{tenant_id}/uploads/{prefix}/{uuid.uuid4().hex}{ext}"
-    saved = default_storage.save(path, file_obj)
-    return default_storage.url(saved)
-
-
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 @throttle_classes([UploadThrottle])
@@ -97,7 +90,11 @@ def upload_tenant_logo(request):
     if not ok:
         return Response({"error": err}, status=status.HTTP_400_BAD_REQUEST)
 
-    url = _save_upload(f, "tenant-logo", str(request.tenant.id))
+    tenant_id = str(request.tenant.id)
+    filename = getattr(f, "name", "logo.png")
+    path = tenant_logo_path(tenant_id, filename)
+    saved = default_storage.save(path, f)
+    url = default_storage.url(saved)
     return Response({"url": request.build_absolute_uri(url)}, status=status.HTTP_201_CREATED)
 
 
@@ -115,7 +112,11 @@ def upload_course_thumbnail(request):
     if not ok:
         return Response({"error": err}, status=status.HTTP_400_BAD_REQUEST)
 
-    url = _save_upload(f, "course-thumbnail", str(request.tenant.id))
+    tenant_id = str(request.tenant.id)
+    filename = getattr(f, "name", "thumbnail.png")
+    path = course_thumbnail_path(tenant_id, filename)
+    saved = default_storage.save(path, f)
+    url = default_storage.url(saved)
     return Response({"url": request.build_absolute_uri(url)}, status=status.HTTP_201_CREATED)
 
 
@@ -125,6 +126,10 @@ def upload_course_thumbnail(request):
 @admin_only
 @tenant_required
 def upload_content_file(request):
+    """
+    Upload a document/content file for course content.
+    Requires content_id query param to organize files properly.
+    """
     f = request.FILES.get("file")
     if not f:
         return Response({"error": "file is required"}, status=status.HTTP_400_BAD_REQUEST)
@@ -133,5 +138,10 @@ def upload_content_file(request):
     if not ok:
         return Response({"error": err}, status=status.HTTP_400_BAD_REQUEST)
 
-    url = _save_upload(f, "content-file", str(request.tenant.id))
+    tenant_id = str(request.tenant.id)
+    filename = getattr(f, "name", "document.pdf")
+    content_id = request.query_params.get("content_id", "general")
+    path = course_document_path(tenant_id, content_id, filename)
+    saved = default_storage.save(path, f)
+    url = default_storage.url(saved)
     return Response({"url": request.build_absolute_uri(url)}, status=status.HTTP_201_CREATED)
