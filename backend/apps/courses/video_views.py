@@ -206,9 +206,10 @@ def video_status(request, course_id, module_id, content_id):
     )
 
     # Build proxy URL for HLS playback (signs segment URLs on the fly)
+    # URL ends with .m3u8 so HLS.js recognizes it as an HLS source
     hls_proxy_url = ""
     if asset and asset.hls_master_url:
-        hls_proxy_url = request.build_absolute_uri(f"/api/courses/hls/{content_id}/")
+        hls_proxy_url = request.build_absolute_uri(f"/api/courses/hls/{content_id}/master.m3u8")
     
     return Response(
         {

@@ -49,8 +49,9 @@ urlpatterns = [
     ),
     
     # HLS playlist proxy (signs segment URLs for private S3 buckets)
+    # URL ends with .m3u8 so HLS.js recognizes it as an HLS source
     path(
-        "hls/<uuid:content_id>/",
+        "hls/<uuid:content_id>/master.m3u8",
         video_views.hls_playlist_view,
         name="hls_playlist",
     ),

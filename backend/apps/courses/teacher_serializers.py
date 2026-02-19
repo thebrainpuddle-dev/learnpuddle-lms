@@ -83,11 +83,11 @@ class TeacherContentProgressSerializer(serializers.ModelSerializer):
         if not hls_url:
             return ""
         # Return backend proxy URL that serves m3u8 with signed segment URLs
-        # This solves 403 errors when HLS.js fetches segments from private S3 buckets
+        # URL ends with .m3u8 so HLS.js recognizes it as an HLS source
         req = self.context.get("request")
         if req:
-            return req.build_absolute_uri(f"/api/courses/hls/{obj.id}/")
-        return f"/api/courses/hls/{obj.id}/"
+            return req.build_absolute_uri(f"/api/courses/hls/{obj.id}/master.m3u8")
+        return f"/api/courses/hls/{obj.id}/master.m3u8"
 
     def get_thumbnail_url(self, obj):
         if obj.content_type != "VIDEO":
