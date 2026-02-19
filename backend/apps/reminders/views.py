@@ -242,45 +242,22 @@ def reminder_send(request):
             logger.exception("[REMINDER_SEND] Failed to create campaign")
             return Response({"error": f"Failed to create campaign: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        # region agent log
-        import json as _json
-        _log_path = "/Users/rakeshreddy/LMS/.cursor/debug.log"
-        def _dbg(loc, msg, data, hyp):
-            with open(_log_path, "a") as f:
-                f.write(_json.dumps({"location": loc, "message": msg, "data": data, "hypothesisId": hyp, "timestamp": int(timezone.now().timestamp() * 1000)}) + "\n")
-        # endregion
-        
         # Check if email sending is enabled via settings (default: disabled for in-app only)
         # Set REMINDER_EMAIL_ENABLED=True in .env to enable email sending
         email_sending_enabled = getattr(settings, "REMINDER_EMAIL_ENABLED", False)
         logger.info(f"[REMINDER_SEND] Email sending enabled: {email_sending_enabled}")
-        
-        # region agent log
-        _dbg("views.py:email_check", "Email enabled check", {"email_sending_enabled": email_sending_enabled}, "H1")
-        # endregion
 
         sent = 0
         failed = 0
         
         # Create delivery records for tracking
         for teacher in recipient_list:
-            # region agent log
-            _dbg("views.py:teacher_loop", "Processing teacher", {"email": teacher.email}, "H3")
-            # endregion
-            
             try:
                 delivery = ReminderDelivery.objects.create(campaign=campaign, teacher=teacher, status="PENDING")
-                
-                # region agent log
-                _dbg("views.py:delivery_created", "Delivery record created", {"delivery_id": str(delivery.id)}, "H3")
-                # endregion
                 
                 # Only attempt email if explicitly enabled
                 if email_sending_enabled:
                     from_email = getattr(settings, "DEFAULT_FROM_EMAIL", None) or f"no-reply@{getattr(settings, 'PLATFORM_DOMAIN', 'localhost')}"
-                    # region agent log
-                    _dbg("views.py:before_send_mail", "About to send email", {"to": teacher.email, "from": from_email}, "H1")
-                    # endregion
                     try:
                         send_mail(
                             subject=subj,
@@ -289,17 +266,11 @@ def reminder_send(request):
                             recipient_list=[teacher.email],
                             fail_silently=True,
                         )
-                        # region agent log
-                        _dbg("views.py:after_send_mail", "send_mail completed", {"to": teacher.email}, "H1")
-                        # endregion
                         delivery.status = "SENT"
                         delivery.sent_at = timezone.now()
                         sent += 1
                         logger.info(f"[REMINDER_SEND] Email sent to {teacher.email}")
                     except Exception as e:
-                        # region agent log
-                        _dbg("views.py:send_mail_error", "send_mail exception", {"error": str(e)}, "H2")
-                        # endregion
                         logger.warning(f"[REMINDER_SEND] Email failed to {teacher.email}: {e}")
                         delivery.status = "FAILED"
                         delivery.error = str(e)[:500]
@@ -309,25 +280,15 @@ def reminder_send(request):
                     delivery.status = "SENT"
                     delivery.sent_at = timezone.now()
                     sent += 1
-                    # region agent log
-                    _dbg("views.py:email_skipped", "Email skipped, using in-app only", {"email": teacher.email}, "H4")
-                    # endregion
-                    logger.info(f"[REMINDER_SEND] Email skipped, in-app only for {teacher.email}")
+                    logger.info(f"[REMINDER_SEND] In-app only for {teacher.email}")
                 
                 delivery.save(update_fields=["status", "sent_at", "error"])
                 
             except Exception as e:
-                # region agent log
-                _dbg("views.py:delivery_error", "Delivery creation failed", {"error": str(e)}, "H3")
-                # endregion
                 logger.warning(f"[REMINDER_SEND] Failed to create delivery for {teacher.email}: {e}")
                 failed += 1
                 continue
 
-        # region agent log
-        _dbg("views.py:before_notify", "About to create in-app notifications", {"count": len(recipient_list)}, "H5")
-        # endregion
-        
         # Create in-app notifications (this is the primary delivery method)
         try:
             from apps.notifications.services import notify_reminder
@@ -339,14 +300,8 @@ def reminder_send(request):
                 course=course,
                 assignment=assignment,
             )
-            # region agent log
-            _dbg("views.py:after_notify", "In-app notifications created", {"count": len(recipient_list)}, "H5")
-            # endregion
             logger.info(f"[REMINDER_SEND] In-app notifications created for {len(recipient_list)} recipients")
         except Exception as e:
-            # region agent log
-            _dbg("views.py:notify_error", "In-app notification failed", {"error": str(e)}, "H5")
-            # endregion
             logger.warning(f"[REMINDER_SEND] In-app notifications failed: {e}")
 
         response_data = {
