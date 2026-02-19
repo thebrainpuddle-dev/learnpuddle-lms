@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timezone
 
 from django.db.models import Q
@@ -8,6 +9,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from apps.courses.models import Course, Content
+
+logger = logging.getLogger(__name__)
 from apps.progress.models import (
     TeacherProgress,
     Assignment,
@@ -239,6 +242,19 @@ def progress_update(request, content_id):
         if video_seconds < 0:
             return Response({"error": "video_progress_seconds cannot be negative"}, status=status.HTTP_400_BAD_REQUEST)
         obj.video_progress_seconds = video_seconds
+        
+        # Auto-calculate progress_percentage from video duration
+        if content.duration and content.duration > 0:
+            calculated_pct = min(100.0, (video_seconds / content.duration) * 100)
+            obj.progress_percentage = calculated_pct
+            
+            # Auto-complete when >= 95% watched (accounts for minor timing differences)
+            if calculated_pct >= 95 and obj.status != "COMPLETED":
+                obj.status = "COMPLETED"
+                obj.completed_at = _utcnow()
+                logger.info(f"[PROGRESS] Auto-completed content={content_id} teacher={request.user.id} "
+                           f"video_seconds={video_seconds} duration={content.duration} pct={calculated_pct:.1f}%")
+        
     if progress_pct is not None:
         try:
             progress_pct = float(progress_pct)
@@ -254,6 +270,10 @@ def progress_update(request, content_id):
         obj.started_at = _utcnow()
 
     obj.save()
+    
+    logger.info(f"[PROGRESS] Updated content={content_id} teacher={request.user.id} "
+               f"video_seconds={obj.video_progress_seconds} pct={obj.progress_percentage} status={obj.status}")
+    
     return Response(TeacherProgressSerializer(obj).data, status=status.HTTP_200_OK)
 
 

@@ -46,11 +46,14 @@ export const CourseViewPage: React.FC = () => {
         await teacherService.updateContent(selectedContent.id, { 
           video_progress_seconds: seconds 
         });
+        // Invalidate queries to refresh progress on dashboard/courses pages
+        queryClient.invalidateQueries({ queryKey: ['teacherDashboard'] });
+        queryClient.invalidateQueries({ queryKey: ['teacherCourses'] });
       } catch {
         // Silent fail - don't interrupt playback
       }
     }
-  }, [selectedContent]);
+  }, [selectedContent, queryClient]);
   
   // Reset lastSavedRef when content changes
   React.useEffect(() => {
@@ -215,6 +218,8 @@ export const CourseViewPage: React.FC = () => {
               onComplete={async () => {
                 await teacherService.completeContent(selectedContent.id);
                 await queryClient.invalidateQueries({ queryKey: ['course', courseId] });
+                await queryClient.invalidateQueries({ queryKey: ['teacherDashboard'] });
+                await queryClient.invalidateQueries({ queryKey: ['teacherCourses'] });
               }}
             />
           ) : (

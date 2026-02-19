@@ -16,7 +16,7 @@ export const MyCoursesPage: React.FC = () => {
   
   // Fetch all courses
   const { data: courses, isLoading } = useQuery({
-    queryKey: ['teacherCourses', 'all'],
+    queryKey: ['teacherCourses'],
     queryFn: teacherService.listCourses,
   });
 
