@@ -514,10 +514,10 @@ export const MediaLibraryPage: React.FC = () => {
                 ) : a.media_type === 'DOCUMENT' ? (
                   a.file_url ? (
                     <div className="flex flex-col h-full">
-                      {/* Embed PDF if file is a PDF */}
+                      {/* Embed PDF using Google Docs Viewer to bypass iframe restrictions */}
                       {(a.file_name || '').toLowerCase().endsWith('.pdf') ? (
                         <iframe
-                          src={resolveUrl(a.file_url)}
+                          src={`https://docs.google.com/gview?url=${encodeURIComponent(resolveUrl(a.file_url))}&embedded=true`}
                           title={a.title}
                           className="w-full flex-1 rounded-lg border border-gray-200"
                           style={{ minHeight: '500px' }}

@@ -1401,7 +1401,7 @@ export const CourseEditorPage: React.FC = () => {
                     <div className="space-y-4">
                       {c.file_url.match(/\.pdf(\?|$)/i) ? (
                         <iframe
-                          src={c.file_url}
+                          src={`https://docs.google.com/gview?url=${encodeURIComponent(c.file_url)}&embedded=true`}
                           className="w-full h-[60vh] rounded-lg border border-gray-200"
                           title={c.title}
                         />

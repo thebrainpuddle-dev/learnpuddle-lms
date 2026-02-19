@@ -162,6 +162,26 @@ def course_publish(request, course_id):
     action = request.data.get('action')  # 'publish' or 'unpublish'
     
     if action == 'publish':
+        # Block publishing if course has no modules
+        module_count = course.modules.filter(is_active=True).count()
+        if module_count == 0:
+            return Response(
+                {'error': 'Cannot publish a course with no modules. Add at least one module first.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        
+        # Block publishing if course has no content
+        content_count = Content.objects.filter(
+            module__course=course,
+            module__is_active=True,
+            is_active=True
+        ).count()
+        if content_count == 0:
+            return Response(
+                {'error': 'Cannot publish a course with no content. Add at least one content item first.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        
         # Block publishing if any video is still processing
         from .video_models import VideoAsset
         processing = VideoAsset.objects.filter(

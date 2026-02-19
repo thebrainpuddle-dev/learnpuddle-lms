@@ -64,10 +64,13 @@ def _get_signed_url_from_path(url_or_path, expires_in=14400):
         key = url_or_path
         if url_or_path.startswith('http'):
             # Extract key from full URL
-            # URL format: https://bucket.region.digitaloceanspaces.com/key/path
-            # or: https://bucket.region.cdn.digitaloceanspaces.com/key/path
+            # URL format: https://bucket.region.digitaloceanspaces.com/key/path (CDN)
+            # or: https://region.digitaloceanspaces.com/bucket/key/path (origin)
             parsed = urlparse(url_or_path)
             key = parsed.path.lstrip('/')
+            # Strip bucket name if URL is in origin format (bucket in path)
+            if key.startswith(f'{bucket_name}/'):
+                key = key[len(bucket_name) + 1:]
         elif url_or_path.startswith('/'):
             key = url_or_path.lstrip('/')
         

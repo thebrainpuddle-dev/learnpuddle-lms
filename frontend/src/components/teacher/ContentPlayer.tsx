@@ -279,14 +279,29 @@ export const ContentPlayer: React.FC<ContentPlayerProps> = ({
           </div>
         </div>
         
-        {/* Document preview iframe using signed URL directly */}
+        {/* Document preview using Google Docs Viewer for PDFs */}
         {content.file_url && (
           <div className="border-t border-gray-200">
-            <iframe
-              src={content.file_url}
-              className="w-full h-96"
-              title={content.title}
-            />
+            {content.file_url.match(/\.pdf(\?|$)/i) ? (
+              <iframe
+                src={`https://docs.google.com/gview?url=${encodeURIComponent(content.file_url)}&embedded=true`}
+                className="w-full h-96"
+                title={content.title}
+              />
+            ) : (
+              <div className="p-6 flex flex-col items-center justify-center">
+                <p className="text-gray-500 mb-4">Document preview not available</p>
+                <a
+                  href={content.file_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-2 px-4 py-2 bg-primary-600 text-white text-sm font-medium rounded-lg hover:bg-primary-700"
+                >
+                  <ArrowTopRightOnSquareIcon className="h-4 w-4" />
+                  Open in new tab
+                </a>
+              </div>
+            )}
           </div>
         )}
       </div>
