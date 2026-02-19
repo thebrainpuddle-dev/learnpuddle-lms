@@ -230,7 +230,7 @@ export const SignupPage: React.FC = () => {
                 <div className="text-sm text-gray-600">
                   Your URL will be:{' '}
                   <span className="font-medium text-primary-600">
-                    {subdomain}.brainlms.com
+                    {subdomain}.{(process.env.REACT_APP_PLATFORM_DOMAIN || 'learnpuddle.com').replace(':3000', '')}
                   </span>
                 </div>
               )}

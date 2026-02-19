@@ -52,7 +52,9 @@ export const SchoolDetailPage: React.FC = () => {
   const impersonateMut = useMutation({
     mutationFn: () => superAdminService.impersonate(tenantId!),
     onSuccess: (d) => {
-      const url = `http://${d.tenant_subdomain}.localhost:3000`;
+      const platformDomain = process.env.REACT_APP_PLATFORM_DOMAIN || 'localhost:3000';
+      const scheme = platformDomain.includes('localhost') ? 'http' : 'https';
+      const url = `${scheme}://${d.tenant_subdomain}.${platformDomain}`;
       const w = window.open(url, '_blank');
       if (w) {
         setTimeout(() => {
@@ -99,10 +101,10 @@ export const SchoolDetailPage: React.FC = () => {
               : <span className="inline-flex items-center gap-1 text-xs font-medium text-red-700 bg-red-50 rounded-full px-2 py-1"><XCircleIcon className="h-3.5 w-3.5" /> Inactive</span>}
             <span className="text-xs font-medium text-indigo-700 bg-indigo-50 rounded-full px-2 py-1">{tenant.plan}</span>
           </div>
-          <p className="text-sm text-gray-500 mt-0.5">{tenant.subdomain}.lms.com</p>
+          <p className="text-sm text-gray-500 mt-0.5">{tenant.subdomain}.{(process.env.REACT_APP_PLATFORM_DOMAIN || 'learnpuddle.com').replace(':3000', '')}</p>
         </div>
         <Button variant="outline" onClick={() => impersonateMut.mutate()} loading={impersonateMut.isPending}>
-          <ArrowTopRightOnSquareIcon className="h-4 w-4 mr-2" />Login as Admin
+          <ArrowTopRightOnSquareIcon className="h-4 w-4 mr-2" />Login as School Admin
         </Button>
       </div>
 

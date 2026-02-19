@@ -1,6 +1,7 @@
 from rest_framework import serializers
 
 from .models import Tenant
+from utils.s3_utils import sign_file_field
 
 
 class TenantSettingsSerializer(serializers.ModelSerializer):
@@ -24,9 +25,14 @@ class TenantSettingsSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "subdomain", "logo_url"]
 
     def get_logo_url(self, obj: Tenant):
-        request = self.context.get("request")
         if not obj.logo:
             return None
+        # Sign the URL for S3/DO Spaces (24-hour expiry)
+        signed = sign_file_field(obj.logo, expires_in=86400)
+        if signed:
+            return signed
+        # Fallback for local storage
+        request = self.context.get("request")
         try:
             url = obj.logo.url
         except Exception:

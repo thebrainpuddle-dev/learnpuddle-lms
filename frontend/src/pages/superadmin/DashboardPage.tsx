@@ -115,7 +115,7 @@ export const SuperAdminDashboardPage: React.FC = () => {
                 >
                   <div>
                     <p className="text-sm font-medium text-gray-900">{s.name}</p>
-                    <p className="text-xs text-gray-500">{s.subdomain}.lms.com</p>
+                    <p className="text-xs text-gray-500">{s.subdomain}.{(process.env.REACT_APP_PLATFORM_DOMAIN || 'learnpuddle.com').replace(':3000', '')}</p>
                   </div>
                   <span className="text-xs text-gray-400">{new Date(s.created_at).toLocaleDateString()}</span>
                 </button>

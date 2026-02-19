@@ -217,7 +217,7 @@ export const SettingsPage: React.FC = () => {
                   className="flex-1 min-w-0 block w-full px-3 py-2 rounded-none border border-gray-300 bg-gray-100 text-gray-500 text-sm cursor-not-allowed"
                 />
                 <span className="inline-flex items-center px-3 rounded-r-md border border-l-0 border-gray-300 bg-gray-50 text-gray-500 text-sm h-10">
-                  .lms.com
+                  .{(process.env.REACT_APP_PLATFORM_DOMAIN || 'learnpuddle.com').replace(':3000', '')}
                 </span>
               </div>
               <p className="mt-1 text-xs text-gray-500">Contact support to change your subdomain</p>
