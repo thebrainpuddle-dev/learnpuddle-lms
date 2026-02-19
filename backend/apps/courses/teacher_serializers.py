@@ -1,82 +1,8 @@
 from rest_framework import serializers
-from django.conf import settings
-from django.core.files.storage import default_storage
 
 from apps.progress.models import TeacherProgress
 from .models import Course, Module, Content
-
-
-def _get_signed_file_url(file_field, expires_in=86400):
-    """Generate a signed URL for S3/DO Spaces files, or return direct URL for local storage.
-    
-    Default expiry is 24 hours (86400 seconds) for thumbnails.
-    """
-    if not file_field:
-        return None
-    
-    storage_backend = getattr(settings, 'STORAGE_BACKEND', 'local').lower()
-    
-    if storage_backend == 's3':
-        try:
-            storage = default_storage
-            client = storage.connection.meta.client
-            bucket_name = storage.bucket_name
-            
-            signed_url = client.generate_presigned_url(
-                'get_object',
-                Params={'Bucket': bucket_name, 'Key': file_field.name},
-                ExpiresIn=expires_in
-            )
-            return signed_url
-        except Exception:
-            return file_field.url
-    
-    return file_field.url
-
-
-def _get_signed_url_from_path(url_or_path, expires_in=86400):
-    """Generate a signed URL from a stored URL or S3 key path.
-    
-    Handles both:
-    - Direct URLs: https://bucket.region.digitaloceanspaces.com/key/path
-    - Relative paths: /media/key/path or key/path
-    """
-    if not url_or_path:
-        return ""
-    
-    storage_backend = getattr(settings, 'STORAGE_BACKEND', 'local').lower()
-    
-    if storage_backend != 's3':
-        return url_or_path
-    
-    try:
-        storage = default_storage
-        client = storage.connection.meta.client
-        bucket_name = storage.bucket_name
-        
-        # Extract S3 key from URL
-        key = url_or_path
-        if url_or_path.startswith('http'):
-            # Extract key from full URL
-            # URL format: https://bucket.region.digitaloceanspaces.com/key/path (CDN)
-            # or: https://region.digitaloceanspaces.com/bucket/key/path (origin)
-            from urllib.parse import urlparse
-            parsed = urlparse(url_or_path)
-            key = parsed.path.lstrip('/')
-            # Strip bucket name if URL is in origin format (bucket in path)
-            if key.startswith(f'{bucket_name}/'):
-                key = key[len(bucket_name) + 1:]
-        elif url_or_path.startswith('/'):
-            key = url_or_path.lstrip('/')
-        
-        signed_url = client.generate_presigned_url(
-            'get_object',
-            Params={'Bucket': bucket_name, 'Key': key},
-            ExpiresIn=expires_in
-        )
-        return signed_url
-    except Exception:
-        return url_or_path
+from utils.s3_utils import sign_file_field, sign_url
 
 
 class TeacherContentProgressSerializer(serializers.ModelSerializer):
@@ -157,7 +83,7 @@ class TeacherContentProgressSerializer(serializers.ModelSerializer):
         if not hls_url:
             return ""
         # Generate signed URL for private S3/DO Spaces files (longer expiry for video playback)
-        return _get_signed_url_from_path(hls_url, expires_in=14400)  # 4 hours for video streaming
+        return sign_url(hls_url, expires_in=14400)
 
     def get_thumbnail_url(self, obj):
         if obj.content_type != "VIDEO":
@@ -169,7 +95,7 @@ class TeacherContentProgressSerializer(serializers.ModelSerializer):
         if not thumb_url:
             return ""
         # Generate signed URL for private S3/DO Spaces files
-        return _get_signed_url_from_path(thumb_url)
+        return sign_url(thumb_url)
 
     def get_has_transcript(self, obj):
         if obj.content_type != "VIDEO":
@@ -188,7 +114,7 @@ class TeacherContentProgressSerializer(serializers.ModelSerializer):
         if not vtt_url:
             return ""
         # Generate signed URL for private S3/DO Spaces files
-        return _get_signed_url_from_path(vtt_url)
+        return sign_url(vtt_url)
 
 
 class TeacherModuleSerializer(serializers.ModelSerializer):
@@ -235,7 +161,7 @@ class TeacherCourseListSerializer(serializers.ModelSerializer):
     def get_thumbnail_url(self, obj):
         if not obj.thumbnail:
             return None
-        return _get_signed_file_url(obj.thumbnail)
+        return sign_file_field(obj.thumbnail)
 
     def _get_teacher(self):
         return self.context["request"].user
@@ -288,7 +214,7 @@ class TeacherCourseDetailSerializer(serializers.ModelSerializer):
     def get_thumbnail_url(self, obj):
         if not obj.thumbnail:
             return None
-        return _get_signed_file_url(obj.thumbnail)
+        return sign_file_field(obj.thumbnail)
 
     def get_modules(self, obj):
         modules = obj.modules.filter(is_active=True).order_by("order")

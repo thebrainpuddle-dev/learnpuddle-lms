@@ -513,23 +513,12 @@ export const MediaLibraryPage: React.FC = () => {
                   )
                 ) : a.media_type === 'DOCUMENT' ? (
                   a.file_url ? (
-                    <div className="flex flex-col h-full">
-                      {/* Embed PDF using Google Docs Viewer to bypass iframe restrictions */}
-                      {(a.file_name || '').toLowerCase().endsWith('.pdf') ? (
-                        <iframe
-                          src={`https://docs.google.com/gview?url=${encodeURIComponent(resolveUrl(a.file_url))}&embedded=true`}
-                          title={a.title}
-                          className="w-full flex-1 rounded-lg border border-gray-200"
-                          style={{ minHeight: '500px' }}
-                        />
-                      ) : (
-                        <div className="flex-1 flex items-center justify-center">
-                          <div className="w-20 h-24 bg-gradient-to-br from-orange-50 to-amber-100 rounded-lg flex items-center justify-center shadow-sm border border-orange-200">
-                            <DocumentTextIcon className="h-10 w-10 text-orange-500" />
-                          </div>
-                        </div>
-                      )}
-                      <div className="flex items-center justify-center gap-3 pt-4">
+                    <div className="flex flex-col items-center justify-center py-10 space-y-4">
+                      <div className="w-20 h-24 bg-gradient-to-br from-orange-50 to-amber-100 rounded-lg flex items-center justify-center shadow-sm border border-orange-200">
+                        <DocumentTextIcon className="h-10 w-10 text-orange-500" />
+                      </div>
+                      <p className="text-sm text-gray-600 font-medium">{a.file_name || a.title}</p>
+                      <div className="flex items-center gap-3">
                         <a
                           href={resolveUrl(a.file_url)}
                           target="_blank"

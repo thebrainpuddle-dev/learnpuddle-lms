@@ -26,51 +26,24 @@ class MediaAssetSerializer(serializers.ModelSerializer):
         return ''
 
     def get_file_url(self, obj):
-        """
-        Return the file URL. For S3 storage, generates a signed URL that
-        the browser can access directly without auth headers.
-        """
-        from django.conf import settings
-        from django.core.files.storage import default_storage
-        
-        # For LINK type, return the external URL as-is
+        """Return signed URL for S3/DO Spaces files, or direct URL for local storage."""
+        from utils.s3_utils import sign_file_field, sign_url
+
         if obj.media_type == 'LINK' and obj.file_url:
             return obj.file_url
-        
-        # For uploaded files, generate appropriate URL
+
         if obj.file:
-            file_path = obj.file.name
-            storage_backend = getattr(settings, 'STORAGE_BACKEND', 'local').lower()
-            
-            if storage_backend == 's3':
-                # Generate signed URL for S3/Spaces (1 hour expiry)
-                try:
-                    storage = default_storage
-                    client = storage.connection.meta.client
-                    bucket_name = storage.bucket_name
-                    
-                    signed_url = client.generate_presigned_url(
-                        'get_object',
-                        Params={'Bucket': bucket_name, 'Key': file_path},
-                        ExpiresIn=3600  # 1 hour
-                    )
-                    return signed_url
-                except Exception:
-                    # Fallback to direct URL if signing fails
-                    return obj.file.url
-            else:
-                # Local storage: use Django media URL
-                request = self.context.get('request')
-                if request:
-                    return request.build_absolute_uri(obj.file.url)
-                return obj.file.url
-        
-        # Fallback to stored file_url if no file object
-        url = obj.file_url or ''
-        if url and not url.startswith('http'):
+            signed = sign_file_field(obj.file, expires_in=3600)
+            if signed:
+                return signed
             request = self.context.get('request')
             if request:
-                return request.build_absolute_uri(url)
+                return request.build_absolute_uri(obj.file.url)
+            return obj.file.url
+
+        url = obj.file_url or ''
+        if url:
+            return sign_url(url, expires_in=3600)
         return url
 
 

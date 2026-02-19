@@ -1398,27 +1398,17 @@ export const CourseEditorPage: React.FC = () => {
                   )
                 ) : c.content_type === 'DOCUMENT' ? (
                   c.file_url ? (
-                    <div className="space-y-4">
-                      {c.file_url.match(/\.pdf(\?|$)/i) ? (
-                        <iframe
-                          src={`https://docs.google.com/gview?url=${encodeURIComponent(c.file_url)}&embedded=true`}
-                          className="w-full h-[60vh] rounded-lg border border-gray-200"
-                          title={c.title}
-                        />
-                      ) : (
-                        <div className="flex flex-col items-center justify-center py-16">
-                          <DocumentTextIcon className="h-12 w-12 text-orange-400 mb-3" />
-                          <p className="font-medium text-gray-900">{c.title}</p>
-                          <a
-                            href={resolveUrl(c.file_url)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="mt-3 inline-flex items-center gap-1.5 text-sm text-primary-600 hover:text-primary-700 font-medium"
-                          >
-                            Open document in new tab
-                          </a>
-                        </div>
-                      )}
+                    <div className="flex flex-col items-center justify-center py-16 space-y-3">
+                      <DocumentTextIcon className="h-12 w-12 text-orange-400" />
+                      <p className="font-medium text-gray-900">{c.title}</p>
+                      <a
+                        href={c.file_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 px-4 py-2 bg-primary-600 text-white text-sm font-medium rounded-lg hover:bg-primary-700"
+                      >
+                        Open document in new tab
+                      </a>
                     </div>
                   ) : (
                     <p className="text-gray-400 text-center py-8">No file uploaded</p>
