@@ -80,8 +80,9 @@ export const ReportsPage: React.FC = () => {
       setSelectedTeacherIds([]);
       setSelectedAssignmentTeacherIds([]);
     },
-    onError: () => {
-      toast.error('Send failed', 'Could not send reminders. Please try again.');
+    onError: (error: any) => {
+      const message = error?.response?.data?.error || error?.response?.data?.detail || 'Could not send reminders. Please try again.';
+      toast.error('Send failed', message);
     },
   });
 

@@ -74,8 +74,9 @@ export const RemindersPage: React.FC = () => {
     onSuccess: (data) => {
       toast.info('Preview ready', `${data.recipient_count} recipient(s) will receive this reminder.`);
     },
-    onError: () => {
-      toast.error('Preview failed', 'Could not generate preview. Please try again.');
+    onError: (error: any) => {
+      const message = error?.response?.data?.error || error?.response?.data?.detail || 'Could not generate preview. Please try again.';
+      toast.error('Preview failed', message);
     },
   });
 
@@ -98,8 +99,9 @@ export const RemindersPage: React.FC = () => {
       // refresh history
       historyQuery.refetch();
     },
-    onError: () => {
-      toast.error('Send failed', 'Could not send reminders. Please try again.');
+    onError: (error: any) => {
+      const message = error?.response?.data?.error || error?.response?.data?.detail || 'Could not send reminders. Please try again.';
+      toast.error('Send failed', message);
     },
   });
 

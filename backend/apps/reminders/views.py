@@ -151,6 +151,9 @@ def reminder_preview(request):
 @admin_only
 @tenant_required
 def reminder_send(request):
+    import logging
+    logger = logging.getLogger(__name__)
+
     serializer = ReminderSendRequestSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
     data = serializer.validated_data
@@ -160,12 +163,18 @@ def reminder_send(request):
     assignment = None
 
     if reminder_type == "COURSE_DEADLINE":
+        course_id = data.get("course_id")
+        if not course_id:
+            return Response({"error": "course_id is required for COURSE_DEADLINE reminders"}, status=status.HTTP_400_BAD_REQUEST)
         # Note: Course uses TenantSoftDeleteManager - no need for tenant= filter
-        course = get_object_or_404(Course, id=data.get("course_id"))
+        course = get_object_or_404(Course, id=course_id)
         recipients = _recipients_for_course_deadline(course)
     elif reminder_type == "ASSIGNMENT_DUE":
+        assignment_id = data.get("assignment_id")
+        if not assignment_id:
+            return Response({"error": "assignment_id is required for ASSIGNMENT_DUE reminders"}, status=status.HTTP_400_BAD_REQUEST)
         # Assignment doesn't use TenantManager, so course__tenant is needed for FK traversal
-        assignment = get_object_or_404(Assignment, id=data.get("assignment_id"), course__tenant=request.tenant)
+        assignment = get_object_or_404(Assignment, id=assignment_id, course__tenant=request.tenant)
         recipients = _recipients_for_assignment_due(assignment)
     else:
         recipients = _tenant_teachers_qs(request.tenant)
@@ -176,28 +185,35 @@ def reminder_send(request):
         recipients = recipients.filter(id__in=teacher_ids, tenant=request.tenant)
 
     recipients = recipients.order_by("last_name", "first_name")
+    recipient_list = list(recipients)
+
+    if not recipient_list:
+        return Response({"error": "No valid recipients found for this reminder"}, status=status.HTTP_400_BAD_REQUEST)
 
     deadline_override = data.get("deadline_override")
     subj, msg = _build_subject_and_message(
         reminder_type, course, assignment, data.get("subject", ""), data.get("message", ""), deadline_override
     )
 
-    campaign = ReminderCampaign.objects.create(
-        tenant=request.tenant,
-        created_by=request.user,
-        reminder_type=reminder_type,
-        course=course,
-        assignment=assignment,
-        subject=subj,
-        message=msg,
-        deadline_override=deadline_override,
-    )
+    try:
+        campaign = ReminderCampaign.objects.create(
+            tenant=request.tenant,
+            created_by=request.user,
+            reminder_type=reminder_type,
+            course=course,
+            assignment=assignment,
+            subject=subj,
+            message=msg,
+            deadline_override=deadline_override,
+        )
+    except Exception as e:
+        logger.exception("Failed to create reminder campaign")
+        return Response({"error": f"Failed to create campaign: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     from_email = getattr(settings, "DEFAULT_FROM_EMAIL", None) or f"no-reply@{getattr(settings, 'PLATFORM_DOMAIN', 'localhost')}"
 
     sent = 0
     failed = 0
-    recipient_list = list(recipients)  # Capture for notifications
     
     for teacher in recipient_list:
         delivery = ReminderDelivery.objects.create(campaign=campaign, teacher=teacher, status="PENDING")
@@ -214,21 +230,25 @@ def reminder_send(request):
             delivery.save(update_fields=["status", "sent_at"])
             sent += 1
         except Exception as e:
+            logger.warning(f"Failed to send reminder email to {teacher.email}: {e}")
             delivery.status = "FAILED"
-            delivery.error = str(e)
+            delivery.error = str(e)[:500]
             delivery.save(update_fields=["status", "error"])
             failed += 1
 
-    # Create in-app notifications for all recipients
-    from apps.notifications.services import notify_reminder
-    notify_reminder(
-        tenant=request.tenant,
-        teachers=recipient_list,
-        subject=subj,
-        message=msg,
-        course=course,
-        assignment=assignment,
-    )
+    # Create in-app notifications for all recipients (non-blocking)
+    try:
+        from apps.notifications.services import notify_reminder
+        notify_reminder(
+            tenant=request.tenant,
+            teachers=recipient_list,
+            subject=subj,
+            message=msg,
+            course=course,
+            assignment=assignment,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to create in-app notifications: {e}")
 
     return Response(
         {
