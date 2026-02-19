@@ -1,7 +1,34 @@
 from rest_framework import serializers
+from django.conf import settings
+from django.core.files.storage import default_storage
 
 from apps.progress.models import TeacherProgress
 from .models import Course, Module, Content
+
+
+def _get_signed_file_url(file_field, expires_in=3600):
+    """Generate a signed URL for S3/DO Spaces files, or return direct URL for local storage."""
+    if not file_field:
+        return None
+    
+    storage_backend = getattr(settings, 'STORAGE_BACKEND', 'local').lower()
+    
+    if storage_backend == 's3':
+        try:
+            storage = default_storage
+            client = storage.connection.meta.client
+            bucket_name = storage.bucket_name
+            
+            signed_url = client.generate_presigned_url(
+                'get_object',
+                Params={'Bucket': bucket_name, 'Key': file_field.name},
+                ExpiresIn=expires_in
+            )
+            return signed_url
+        except Exception:
+            return file_field.url
+    
+    return file_field.url
 
 
 class TeacherContentProgressSerializer(serializers.ModelSerializer):
@@ -116,6 +143,7 @@ class TeacherCourseListSerializer(serializers.ModelSerializer):
     progress_percentage = serializers.SerializerMethodField()
     completed_content_count = serializers.SerializerMethodField()
     total_content_count = serializers.SerializerMethodField()
+    thumbnail_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Course
@@ -125,6 +153,7 @@ class TeacherCourseListSerializer(serializers.ModelSerializer):
             "slug",
             "description",
             "thumbnail",
+            "thumbnail_url",
             "is_mandatory",
             "deadline",
             "estimated_hours",
@@ -136,6 +165,11 @@ class TeacherCourseListSerializer(serializers.ModelSerializer):
             "completed_content_count",
             "total_content_count",
         ]
+    
+    def get_thumbnail_url(self, obj):
+        if not obj.thumbnail:
+            return None
+        return _get_signed_file_url(obj.thumbnail)
 
     def _get_teacher(self):
         return self.context["request"].user
@@ -163,6 +197,7 @@ class TeacherCourseListSerializer(serializers.ModelSerializer):
 class TeacherCourseDetailSerializer(serializers.ModelSerializer):
     modules = serializers.SerializerMethodField()
     progress = serializers.SerializerMethodField()
+    thumbnail_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Course
@@ -172,6 +207,7 @@ class TeacherCourseDetailSerializer(serializers.ModelSerializer):
             "slug",
             "description",
             "thumbnail",
+            "thumbnail_url",
             "is_mandatory",
             "deadline",
             "estimated_hours",
@@ -182,6 +218,11 @@ class TeacherCourseDetailSerializer(serializers.ModelSerializer):
             "progress",
             "modules",
         ]
+    
+    def get_thumbnail_url(self, obj):
+        if not obj.thumbnail:
+            return None
+        return _get_signed_file_url(obj.thumbnail)
 
     def get_modules(self, obj):
         modules = obj.modules.filter(is_active=True).order_by("order")

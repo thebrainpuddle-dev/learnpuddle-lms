@@ -1,10 +1,37 @@
 # apps/courses/serializers.py
 
 from rest_framework import serializers
+from django.conf import settings
 from django.db import transaction
 from django.db.models import Q
+from django.core.files.storage import default_storage
 from .models import Course, Module, Content, TeacherGroup
 from apps.users.models import User
+
+
+def _get_signed_file_url(file_field, expires_in=3600):
+    """Generate a signed URL for S3/DO Spaces files, or return direct URL for local storage."""
+    if not file_field:
+        return None
+    
+    storage_backend = getattr(settings, 'STORAGE_BACKEND', 'local').lower()
+    
+    if storage_backend == 's3':
+        try:
+            storage = default_storage
+            client = storage.connection.meta.client
+            bucket_name = storage.bucket_name
+            
+            signed_url = client.generate_presigned_url(
+                'get_object',
+                Params={'Bucket': bucket_name, 'Key': file_field.name},
+                ExpiresIn=expires_in
+            )
+            return signed_url
+        except Exception:
+            return file_field.url
+    
+    return file_field.url
 
 
 class ContentSerializer(serializers.ModelSerializer):
@@ -79,10 +106,7 @@ class CourseListSerializer(serializers.ModelSerializer):
     def get_thumbnail_url(self, obj):
         if not obj.thumbnail:
             return None
-        request = self.context.get('request')
-        if request:
-            return request.build_absolute_uri(obj.thumbnail.url)
-        return obj.thumbnail.url
+        return _get_signed_file_url(obj.thumbnail)
 
     def get_content_count(self, obj):
         return Content.objects.filter(module__course=obj, is_active=True).count()
@@ -139,6 +163,7 @@ class CourseDetailSerializer(serializers.ModelSerializer):
         required=False
     )
     stats = serializers.SerializerMethodField()
+    thumbnail_url = serializers.SerializerMethodField()
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -165,13 +190,18 @@ class CourseDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = Course
         fields = [
-            'id', 'title', 'slug', 'description', 'thumbnail',
+            'id', 'title', 'slug', 'description', 'thumbnail', 'thumbnail_url',
             'is_mandatory', 'deadline', 'estimated_hours',
             'assigned_to_all', 'assigned_groups', 'assigned_teachers',
             'is_published', 'is_active', 'modules', 'stats',
             'created_by', 'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'slug', 'created_by', 'created_at', 'updated_at']
+    
+    def get_thumbnail_url(self, obj):
+        if not obj.thumbnail:
+            return None
+        return _get_signed_file_url(obj.thumbnail)
     
     def get_stats(self, obj):
         return {

@@ -77,6 +77,7 @@ interface Course {
   slug: string;
   description: string;
   thumbnail: string | null;
+  thumbnail_url: string | null;
   is_mandatory: boolean;
   deadline: string | null;
   estimated_hours: number;
@@ -313,13 +314,17 @@ export const CourseEditorPage: React.FC = () => {
         assigned_groups: course.assigned_groups || [],
         assigned_teachers: course.assigned_teachers || [],
       });
-      if (course.thumbnail) {
-        // Resolve thumbnail to full URL
-        const backendOrigin = (process.env.REACT_APP_API_URL || 'http://localhost:8000/api').replace(/\/api\/?$/, '');
-        const thumbnailUrl = course.thumbnail.startsWith('http')
-          ? course.thumbnail
-          : `${backendOrigin}${course.thumbnail.startsWith('/') ? '' : '/'}${course.thumbnail}`;
-        setThumbnailPreview(thumbnailUrl);
+      if (course.thumbnail_url || course.thumbnail) {
+        // Prefer signed thumbnail_url, fallback to resolving thumbnail
+        if (course.thumbnail_url) {
+          setThumbnailPreview(course.thumbnail_url);
+        } else if (course.thumbnail) {
+          const backendOrigin = (process.env.REACT_APP_API_URL || 'http://localhost:8000/api').replace(/\/api\/?$/, '');
+          const thumbnailUrl = course.thumbnail.startsWith('http')
+            ? course.thumbnail
+            : `${backendOrigin}${course.thumbnail.startsWith('/') ? '' : '/'}${course.thumbnail}`;
+          setThumbnailPreview(thumbnailUrl);
+        }
       }
       // Expand all modules by default when editing
       if (course.modules) {

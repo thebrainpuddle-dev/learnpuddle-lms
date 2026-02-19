@@ -98,7 +98,7 @@ export const DashboardPage: React.FC = () => {
       id: c.id,
       title: c.title,
       description: c.description,
-      thumbnail: c.thumbnail || undefined,
+      thumbnail: c.thumbnail_url || c.thumbnail || undefined,
       progress,
       totalModules: total,
       completedModules: completed,
