@@ -25,6 +25,7 @@ interface ContentPlayerProps {
     has_transcript?: boolean;
     transcript_vtt_url?: string;
   };
+  initialProgress?: number;
   isCompleted?: boolean;
   onComplete?: () => void;
   onProgressUpdate?: (seconds: number) => void;
@@ -32,6 +33,7 @@ interface ContentPlayerProps {
 
 export const ContentPlayer: React.FC<ContentPlayerProps> = ({
   content,
+  initialProgress = 0,
   isCompleted = false,
   onComplete,
   onProgressUpdate,
@@ -39,6 +41,14 @@ export const ContentPlayer: React.FC<ContentPlayerProps> = ({
   const [, setIsPlaying] = useState(false);
   const [, setCurrentTime] = useState(0);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  
+  // Track max watched position for anti-skip (allow rewind, prevent forward skip)
+  const [maxWatched, setMaxWatched] = useState(initialProgress);
+  
+  // Reset maxWatched when content changes
+  useEffect(() => {
+    setMaxWatched(initialProgress);
+  }, [content.id, initialProgress]);
 
   const [activeTab, setActiveTab] = useState<'video' | 'transcript'>('video');
   const [transcriptLoading, setTranscriptLoading] = useState(false);
@@ -156,10 +166,26 @@ export const ContentPlayer: React.FC<ContentPlayerProps> = ({
               className="w-full h-full"
               controls
               poster={content.thumbnail_url || undefined}
+              onLoadedMetadata={(e) => {
+                // Resume from last watched position
+                const video = e.currentTarget;
+                if (initialProgress > 0 && video.duration > initialProgress) {
+                  video.currentTime = initialProgress;
+                }
+              }}
               onTimeUpdate={(e) => {
                 const video = e.currentTarget;
-                setCurrentTime(Math.floor(video.currentTime));
-                onProgressUpdate?.(Math.floor(video.currentTime));
+                const current = Math.floor(video.currentTime);
+                setCurrentTime(current);
+                setMaxWatched(prev => Math.max(prev, current));
+                onProgressUpdate?.(current);
+              }}
+              onSeeking={(e) => {
+                // Prevent skipping ahead - allow rewind only
+                const video = e.currentTarget;
+                if (video.currentTime > maxWatched + 2) {
+                  video.currentTime = maxWatched;
+                }
               }}
               onEnded={() => onComplete?.()}
               onPlay={() => setIsPlaying(true)}

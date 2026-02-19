@@ -1,6 +1,6 @@
 // src/pages/teacher/CourseViewPage.tsx
 
-import React, { useState } from 'react';
+import React, { useState, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ContentPlayer } from '../../components/teacher';
@@ -34,6 +34,28 @@ export const CourseViewPage: React.FC = () => {
   const [expandedModules, setExpandedModules] = useState<string[]>([]);
   const [selectedContent, setSelectedContent] = useState<ContentItem | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  
+  // Throttle video progress updates (save every 5 seconds)
+  const lastSavedRef = useRef<number>(0);
+  
+  const handleProgressUpdate = useCallback(async (seconds: number) => {
+    if (!selectedContent || selectedContent.content_type !== 'VIDEO') return;
+    if (seconds - lastSavedRef.current >= 5) {
+      lastSavedRef.current = seconds;
+      try {
+        await teacherService.updateContent(selectedContent.id, { 
+          video_progress_seconds: seconds 
+        });
+      } catch {
+        // Silent fail - don't interrupt playback
+      }
+    }
+  }, [selectedContent]);
+  
+  // Reset lastSavedRef when content changes
+  React.useEffect(() => {
+    lastSavedRef.current = 0;
+  }, [selectedContent?.id]);
   
   // Fetch course details
   const { data: course, isLoading } = useQuery<TeacherCourseDetail>({
@@ -187,7 +209,9 @@ export const CourseViewPage: React.FC = () => {
                 has_transcript: selectedContent.has_transcript,
                 transcript_vtt_url: selectedContent.transcript_vtt_url,
               }}
+              initialProgress={selectedContent.video_progress_seconds}
               isCompleted={selectedContent.is_completed}
+              onProgressUpdate={handleProgressUpdate}
               onComplete={async () => {
                 await teacherService.completeContent(selectedContent.id);
                 await queryClient.invalidateQueries({ queryKey: ['course', courseId] });

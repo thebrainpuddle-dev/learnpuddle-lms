@@ -62,12 +62,14 @@ export const ReportsPage: React.FC = () => {
     queryKey: ['courseProgressReport', courseId, courseStatus, courseSearch],
     queryFn: () => adminReportsService.courseProgress({ course_id: courseId, status: courseStatus || undefined, search: courseSearch || undefined }),
     enabled: tab === 'COURSE' && !!courseId,
+    refetchInterval: 30000, // Auto-refresh every 30 seconds for real-time progress
   });
 
   const { data: assignmentReport, isLoading: assignmentLoading } = useQuery({
     queryKey: ['assignmentStatusReport', assignmentId, assignmentStatus, assignmentSearch],
     queryFn: () => adminReportsService.assignmentStatus({ assignment_id: assignmentId, status: assignmentStatus || undefined, search: assignmentSearch || undefined }),
     enabled: tab === 'ASSIGNMENT' && !!assignmentId,
+    refetchInterval: 30000, // Auto-refresh every 30 seconds for real-time progress
   });
 
   const courseRows = courseReport?.results ?? [];

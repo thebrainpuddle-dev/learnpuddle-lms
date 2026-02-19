@@ -47,6 +47,7 @@ export const DashboardPage: React.FC = () => {
   const { data: stats, isLoading } = useQuery({
     queryKey: ['adminDashboardStats'],
     queryFn: adminService.getTenantStats,
+    refetchInterval: 30000, // Auto-refresh every 30 seconds for real-time progress
   });
 
   const recentActivity: RecentActivityItem[] = stats?.recent_activity || [];
