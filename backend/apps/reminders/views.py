@@ -152,112 +152,156 @@ def reminder_preview(request):
 @tenant_required
 def reminder_send(request):
     import logging
+    import traceback
     logger = logging.getLogger(__name__)
-
-    serializer = ReminderSendRequestSerializer(data=request.data)
-    serializer.is_valid(raise_exception=True)
-    data = serializer.validated_data
-
-    reminder_type = data["reminder_type"]
-    course = None
-    assignment = None
-
-    if reminder_type == "COURSE_DEADLINE":
-        course_id = data.get("course_id")
-        if not course_id:
-            return Response({"error": "course_id is required for COURSE_DEADLINE reminders"}, status=status.HTTP_400_BAD_REQUEST)
-        # Note: Course uses TenantSoftDeleteManager - no need for tenant= filter
-        course = get_object_or_404(Course, id=course_id)
-        recipients = _recipients_for_course_deadline(course)
-    elif reminder_type == "ASSIGNMENT_DUE":
-        assignment_id = data.get("assignment_id")
-        if not assignment_id:
-            return Response({"error": "assignment_id is required for ASSIGNMENT_DUE reminders"}, status=status.HTTP_400_BAD_REQUEST)
-        # Assignment doesn't use TenantManager, so course__tenant is needed for FK traversal
-        assignment = get_object_or_404(Assignment, id=assignment_id, course__tenant=request.tenant)
-        recipients = _recipients_for_assignment_due(assignment)
-    else:
-        recipients = _tenant_teachers_qs(request.tenant)
-
-    teacher_ids = data.get("teacher_ids")
-    if teacher_ids:
-        # Defense-in-depth: explicitly scope to current tenant (User doesn't use TenantManager)
-        recipients = recipients.filter(id__in=teacher_ids, tenant=request.tenant)
-
-    recipients = recipients.order_by("last_name", "first_name")
-    recipient_list = list(recipients)
-
-    if not recipient_list:
-        return Response({"error": "No valid recipients found for this reminder"}, status=status.HTTP_400_BAD_REQUEST)
-
-    deadline_override = data.get("deadline_override")
-    subj, msg = _build_subject_and_message(
-        reminder_type, course, assignment, data.get("subject", ""), data.get("message", ""), deadline_override
-    )
-
-    try:
-        campaign = ReminderCampaign.objects.create(
-            tenant=request.tenant,
-            created_by=request.user,
-            reminder_type=reminder_type,
-            course=course,
-            assignment=assignment,
-            subject=subj,
-            message=msg,
-            deadline_override=deadline_override,
-        )
-    except Exception as e:
-        logger.exception("Failed to create reminder campaign")
-        return Response({"error": f"Failed to create campaign: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-    from_email = getattr(settings, "DEFAULT_FROM_EMAIL", None) or f"no-reply@{getattr(settings, 'PLATFORM_DOMAIN', 'localhost')}"
-
-    sent = 0
-    failed = 0
     
-    for teacher in recipient_list:
-        delivery = ReminderDelivery.objects.create(campaign=campaign, teacher=teacher, status="PENDING")
+    logger.info(f"[REMINDER_SEND] Started - user={request.user.email}, tenant={request.tenant.subdomain}")
+    
+    try:
+        # Validate request data
+        serializer = ReminderSendRequestSerializer(data=request.data)
+        if not serializer.is_valid():
+            logger.warning(f"[REMINDER_SEND] Validation failed: {serializer.errors}")
+            return Response({"error": "Invalid request data", "details": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+        
+        data = serializer.validated_data
+        reminder_type = data["reminder_type"]
+        logger.info(f"[REMINDER_SEND] Type={reminder_type}, data={data}")
+        
+        course = None
+        assignment = None
+
+        if reminder_type == "COURSE_DEADLINE":
+            course_id = data.get("course_id")
+            if not course_id:
+                return Response({"error": "course_id is required for COURSE_DEADLINE reminders"}, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Explicitly query with tenant filter to avoid TenantManager issues
+            try:
+                course = Course.objects.filter(id=course_id).first()
+                if not course:
+                    logger.warning(f"[REMINDER_SEND] Course not found: {course_id}")
+                    return Response({"error": f"Course not found: {course_id}"}, status=status.HTTP_404_NOT_FOUND)
+                logger.info(f"[REMINDER_SEND] Found course: {course.title}")
+            except Exception as e:
+                logger.exception(f"[REMINDER_SEND] Error fetching course: {e}")
+                return Response({"error": f"Error fetching course: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            
+            recipients = _recipients_for_course_deadline(course)
+            
+        elif reminder_type == "ASSIGNMENT_DUE":
+            assignment_id = data.get("assignment_id")
+            if not assignment_id:
+                return Response({"error": "assignment_id is required for ASSIGNMENT_DUE reminders"}, status=status.HTTP_400_BAD_REQUEST)
+            
+            try:
+                assignment = Assignment.objects.filter(id=assignment_id, course__tenant=request.tenant).first()
+                if not assignment:
+                    return Response({"error": f"Assignment not found: {assignment_id}"}, status=status.HTTP_404_NOT_FOUND)
+            except Exception as e:
+                logger.exception(f"[REMINDER_SEND] Error fetching assignment: {e}")
+                return Response({"error": f"Error fetching assignment: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            
+            recipients = _recipients_for_assignment_due(assignment)
+        else:
+            recipients = _tenant_teachers_qs(request.tenant)
+
+        teacher_ids = data.get("teacher_ids")
+        if teacher_ids:
+            # Defense-in-depth: explicitly scope to current tenant
+            recipients = recipients.filter(id__in=teacher_ids, tenant=request.tenant)
+            logger.info(f"[REMINDER_SEND] Filtered to teacher_ids: {teacher_ids}")
+
+        recipients = recipients.order_by("last_name", "first_name")
+        recipient_list = list(recipients)
+        logger.info(f"[REMINDER_SEND] Found {len(recipient_list)} recipients")
+
+        if not recipient_list:
+            return Response({"error": "No valid recipients found for this reminder"}, status=status.HTTP_400_BAD_REQUEST)
+
+        deadline_override = data.get("deadline_override")
+        subj, msg = _build_subject_and_message(
+            reminder_type, course, assignment, data.get("subject", ""), data.get("message", ""), deadline_override
+        )
+        logger.info(f"[REMINDER_SEND] Subject: {subj}")
+
+        # Create campaign
         try:
-            send_mail(
+            campaign = ReminderCampaign.objects.create(
+                tenant=request.tenant,
+                created_by=request.user,
+                reminder_type=reminder_type,
+                course=course,
+                assignment=assignment,
                 subject=subj,
                 message=msg,
-                from_email=from_email,
-                recipient_list=[teacher.email],
-                fail_silently=False,
+                deadline_override=deadline_override,
             )
-            delivery.status = "SENT"
-            delivery.sent_at = timezone.now()
-            delivery.save(update_fields=["status", "sent_at"])
-            sent += 1
+            logger.info(f"[REMINDER_SEND] Campaign created: {campaign.id}")
         except Exception as e:
-            logger.warning(f"Failed to send reminder email to {teacher.email}: {e}")
-            delivery.status = "FAILED"
-            delivery.error = str(e)[:500]
-            delivery.save(update_fields=["status", "error"])
-            failed += 1
+            logger.exception("[REMINDER_SEND] Failed to create campaign")
+            return Response({"error": f"Failed to create campaign: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-    # Create in-app notifications for all recipients (non-blocking)
-    try:
-        from apps.notifications.services import notify_reminder
-        notify_reminder(
-            tenant=request.tenant,
-            teachers=recipient_list,
-            subject=subj,
-            message=msg,
-            course=course,
-            assignment=assignment,
-        )
-    except Exception as e:
-        logger.warning(f"Failed to create in-app notifications: {e}")
+        from_email = getattr(settings, "DEFAULT_FROM_EMAIL", None) or f"no-reply@{getattr(settings, 'PLATFORM_DOMAIN', 'localhost')}"
+        logger.info(f"[REMINDER_SEND] From email: {from_email}")
 
-    return Response(
-        {
+        sent = 0
+        failed = 0
+        
+        for teacher in recipient_list:
+            try:
+                delivery = ReminderDelivery.objects.create(campaign=campaign, teacher=teacher, status="PENDING")
+            except Exception as e:
+                logger.warning(f"[REMINDER_SEND] Failed to create delivery for {teacher.email}: {e}")
+                failed += 1
+                continue
+                
+            try:
+                send_mail(
+                    subject=subj,
+                    message=msg,
+                    from_email=from_email,
+                    recipient_list=[teacher.email],
+                    fail_silently=False,
+                )
+                delivery.status = "SENT"
+                delivery.sent_at = timezone.now()
+                delivery.save(update_fields=["status", "sent_at"])
+                sent += 1
+                logger.info(f"[REMINDER_SEND] Email sent to {teacher.email}")
+            except Exception as e:
+                logger.warning(f"[REMINDER_SEND] Email failed to {teacher.email}: {e}")
+                delivery.status = "FAILED"
+                delivery.error = str(e)[:500]
+                delivery.save(update_fields=["status", "error"])
+                failed += 1
+
+        # Create in-app notifications (non-blocking)
+        try:
+            from apps.notifications.services import notify_reminder
+            notify_reminder(
+                tenant=request.tenant,
+                teachers=recipient_list,
+                subject=subj,
+                message=msg,
+                course=course,
+                assignment=assignment,
+            )
+            logger.info(f"[REMINDER_SEND] In-app notifications created")
+        except Exception as e:
+            logger.warning(f"[REMINDER_SEND] In-app notifications failed: {e}")
+
+        response_data = {
             "campaign": ReminderCampaignSerializer(campaign).data,
             "sent": sent,
             "failed": failed,
-        },
-        status=status.HTTP_200_OK,
-    )
+        }
+        logger.info(f"[REMINDER_SEND] Complete - sent={sent}, failed={failed}")
+        return Response(response_data, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        logger.exception(f"[REMINDER_SEND] Unexpected error: {e}\n{traceback.format_exc()}")
+        return Response({"error": f"Unexpected error: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(["GET"])
