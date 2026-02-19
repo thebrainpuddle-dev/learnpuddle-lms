@@ -7,6 +7,9 @@ export interface TenantTheme {
   primaryColor: string;
   secondaryColor?: string;
   fontFamily?: string;
+  tenantFound: boolean;
+  tenantErrorReason?: 'not_found' | 'trial_expired' | 'deactivated';
+  tenantErrorMessage?: string;
 }
 
 // Default theme (fallback)
@@ -16,6 +19,7 @@ export const DEFAULT_THEME: TenantTheme = {
   primaryColor: '#1F4788',
   secondaryColor: '#2E5C8A',
   fontFamily: 'Inter',
+  tenantFound: true,
 };
 
 /**
@@ -154,6 +158,9 @@ export async function loadTenantTheme(): Promise<TenantTheme> {
       primary_color: string;
       secondary_color?: string | null;
       font_family?: string | null;
+      tenant_found?: boolean;
+      reason?: 'not_found' | 'trial_expired' | 'deactivated';
+      message?: string;
     };
 
     return {
@@ -163,6 +170,9 @@ export async function loadTenantTheme(): Promise<TenantTheme> {
       primaryColor: data.primary_color || DEFAULT_THEME.primaryColor,
       secondaryColor: data.secondary_color || undefined,
       fontFamily: data.font_family || DEFAULT_THEME.fontFamily,
+      tenantFound: data.tenant_found !== false,
+      tenantErrorReason: data.tenant_found === false ? data.reason : undefined,
+      tenantErrorMessage: data.tenant_found === false ? data.message : undefined,
     };
   } catch (error) {
     console.error('Failed to load theme:', error);

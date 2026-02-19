@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { applyTheme, loadTenantTheme, DEFAULT_THEME } from './config/theme';
+import { applyTheme, loadTenantTheme, DEFAULT_THEME, type TenantTheme } from './config/theme';
 import { ProtectedRoute, ToastProvider, ErrorBoundary, PWAPrompt, OfflineIndicator } from './components/common';
 import { LoginPage } from './pages/auth/LoginPage';
 import { SuperAdminLoginPage } from './pages/auth/SuperAdminLoginPage';
@@ -211,9 +211,79 @@ function AppContent() {
   );
 }
 
+function TenantErrorPage({ theme }: { theme: TenantTheme }) {
+  const getIcon = () => {
+    switch (theme.tenantErrorReason) {
+      case 'trial_expired':
+        return (
+          <svg className="w-16 h-16 text-amber-500 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+        );
+      case 'deactivated':
+        return (
+          <svg className="w-16 h-16 text-red-500 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
+          </svg>
+        );
+      default:
+        return (
+          <svg className="w-16 h-16 text-gray-400 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+        );
+    }
+  };
+
+  const getTitle = () => {
+    switch (theme.tenantErrorReason) {
+      case 'trial_expired':
+        return 'Trial Period Expired';
+      case 'deactivated':
+        return 'Account Deactivated';
+      default:
+        return 'School Not Found';
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 flex items-center justify-center p-4">
+      <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8 text-center">
+        {getIcon()}
+        <h1 className="text-2xl font-bold text-gray-900 mb-2">{getTitle()}</h1>
+        {theme.name && theme.name !== 'School Not Found' && (
+          <p className="text-lg text-gray-600 mb-4">{theme.name}</p>
+        )}
+        <p className="text-gray-500 mb-6">
+          {theme.tenantErrorMessage || 'This school is not accessible. Please contact support.'}
+        </p>
+        <div className="space-y-3">
+          <a
+            href="mailto:support@learnpuddle.com"
+            className="block w-full py-3 px-4 bg-primary-600 hover:bg-primary-700 text-white font-medium rounded-lg transition-colors"
+          >
+            Contact Support
+          </a>
+          <a
+            href="https://learnpuddle.com"
+            className="block w-full py-3 px-4 bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium rounded-lg transition-colors"
+          >
+            Go to LearnPuddle Home
+          </a>
+        </div>
+        {theme.tenantErrorReason === 'trial_expired' && (
+          <p className="mt-6 text-sm text-gray-400">
+            Trial ended? Upgrade your plan to continue using the platform.
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [loading, setLoading] = useState(true);
-  const { setTheme } = useTenantStore();
+  const { theme, setTheme } = useTenantStore();
   
   useEffect(() => {
     loadTenantTheme()
@@ -235,6 +305,11 @@ function App() {
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
       </div>
     );
+  }
+
+  // Show tenant error page if tenant not found or deactivated
+  if (!theme.tenantFound) {
+    return <TenantErrorPage theme={theme} />;
   }
   
   return (

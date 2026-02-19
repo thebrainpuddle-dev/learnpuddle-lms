@@ -18,25 +18,62 @@ def tenant_theme_view(request):
     """
     Public endpoint to bootstrap tenant branding/theme.
     Tenant is derived from request host/subdomain (set by middleware).
-    When tenant is not found (e.g. invalid subdomain), returns default theme
-    so the login page can still render.
+    
+    Returns tenant_found=true with full theme data for active tenants.
+    Returns tenant_found=false with reason when tenant is missing/inactive,
+    so the frontend can display an appropriate error message.
     """
+    from apps.tenants.models import Tenant
+    
     tenant = getattr(request, "tenant", None)
+    
     if tenant is None:
-        # Tenant not found or inactive - return default theme so login page loads
+        # Check if subdomain exists but is inactive (vs. truly not found)
+        host = request.get_host().split(':')[0].lower()
+        subdomain = None
+        reason = "not_found"
+        inactive_tenant = None
+        
+        # Extract subdomain from host
+        if host not in ['localhost', '127.0.0.1']:
+            parts = host.split('.')
+            if len(parts) >= 2:
+                subdomain = parts[0]
+        
+        # Check if an inactive tenant exists with this subdomain
+        if subdomain:
+            inactive_tenant = Tenant.objects.filter(subdomain=subdomain, is_active=False).first()
+            if inactive_tenant:
+                reason = "trial_expired" if inactive_tenant.is_trial else "deactivated"
+        
         return Response({
-            "name": "Default School",
-            "subdomain": "demo",
+            "tenant_found": False,
+            "reason": reason,
+            "subdomain": subdomain,
+            "name": "School Not Found" if reason == "not_found" else inactive_tenant.name if inactive_tenant else "School",
             "logo_url": None,
             "primary_color": "#1F4788",
             "secondary_color": "#2E5C8A",
             "font_family": "Inter",
-            "is_active": True,
-            "is_trial": False,
-            "trial_end_date": None,
+            "is_active": False,
+            "is_trial": inactive_tenant.is_trial if inactive_tenant else False,
+            "trial_end_date": str(inactive_tenant.trial_end_date) if inactive_tenant and inactive_tenant.trial_end_date else None,
+            "message": _get_tenant_error_message(reason, inactive_tenant),
         }, status=status.HTTP_200_OK)
-    serializer = TenantThemeSerializer(tenant, context={"request": request})
-    return Response(serializer.data, status=status.HTTP_200_OK)
+    
+    data = TenantThemeSerializer(tenant, context={"request": request}).data
+    data["tenant_found"] = True
+    return Response(data, status=status.HTTP_200_OK)
+
+
+def _get_tenant_error_message(reason, tenant):
+    """Return user-friendly error message based on tenant status."""
+    if reason == "trial_expired":
+        return "Your school's trial period has expired. Please contact support to reactivate your account or upgrade your plan."
+    elif reason == "deactivated":
+        return "This school's account has been deactivated. Please contact your administrator or support for assistance."
+    else:
+        return "School not found. Please check the URL or contact support if you believe this is an error."
 
 
 @api_view(["GET"])

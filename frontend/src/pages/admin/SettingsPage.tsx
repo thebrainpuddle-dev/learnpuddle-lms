@@ -102,6 +102,7 @@ export const SettingsPage: React.FC = () => {
         primaryColor: data.primary_color,
         secondaryColor: data.secondary_color || data.primary_color,
         fontFamily: data.font_family || 'Inter',
+        tenantFound: true,
       };
       setTheme(newTheme);
       applyTheme(newTheme);
