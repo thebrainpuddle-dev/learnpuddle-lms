@@ -1,7 +1,7 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Button, Input, useToast } from '../../components/common';
+import { Button, Input, useToast, ConfirmDialog } from '../../components/common';
 import { BulkActionsBar, BulkAction } from '../../components/common/BulkActionsBar';
 import { adminTeachersService } from '../../services/adminTeachersService';
 import { useTenantStore } from '../../stores/tenantStore';
@@ -31,6 +31,7 @@ export const TeachersPage: React.FC = () => {
   const [editingTeacher, setEditingTeacher] = useState<User | null>(null);
   const [editForm, setEditForm] = useState<Partial<User>>({});
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [deactivateTarget, setDeactivateTarget] = useState<User | null>(null);
 
   const { data: teachers, isLoading } = useQuery({
     queryKey: ['adminTeachers', search],
@@ -186,7 +187,7 @@ export const TeachersPage: React.FC = () => {
                       <button onClick={() => openEdit(t)} className="p-1 text-gray-400 hover:text-indigo-600 rounded"><PencilIcon className="h-4 w-4" /></button>
                       {t.is_active && (
                         <button
-                          onClick={() => { if (window.confirm(`Deactivate ${t.first_name} ${t.last_name}?`)) deactivateMut.mutate(t.id); }}
+                          onClick={() => setDeactivateTarget(t)}
                           className="p-1 text-gray-400 hover:text-red-600 rounded"
                         ><XCircleIcon className="h-4 w-4" /></button>
                       )}
@@ -241,6 +242,19 @@ export const TeachersPage: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Deactivate confirmation dialog */}
+      <ConfirmDialog
+        isOpen={!!deactivateTarget}
+        onClose={() => setDeactivateTarget(null)}
+        onConfirm={() => {
+          if (deactivateTarget) deactivateMut.mutate(deactivateTarget.id);
+        }}
+        title="Deactivate Teacher"
+        message={`Are you sure you want to deactivate ${deactivateTarget?.first_name} ${deactivateTarget?.last_name}? They will no longer be able to access the platform.`}
+        confirmLabel="Deactivate"
+        variant="warning"
+      />
     </div>
   );
 };

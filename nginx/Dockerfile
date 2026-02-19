@@ -6,16 +6,18 @@
 
 # Stage 1: Build React app
 FROM node:18-alpine AS frontend-build
+RUN apk add --no-cache git
 WORKDIR /app
 ENV NODE_OPTIONS=--max-old-space-size=1536
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --legacy-peer-deps
 COPY frontend/ .
+COPY .git /tmp/.git
 ARG REACT_APP_API_URL=/api
 ENV REACT_APP_API_URL=$REACT_APP_API_URL \
     GENERATE_SOURCEMAP=false \
     CI=false
-RUN npm run build
+RUN GIT_DIR=/tmp/.git npm run build
 
 # Stage 2: Nginx with frontend baked in
 FROM nginx:1.25-alpine

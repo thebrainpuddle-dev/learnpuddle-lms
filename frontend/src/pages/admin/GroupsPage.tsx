@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '../../components/common/Button';
 import { Input } from '../../components/common/Input';
-import { useToast } from '../../components/common';
+import { useToast, ConfirmDialog } from '../../components/common';
 import { adminGroupsService, TeacherGroup } from '../../services/adminGroupsService';
 import { adminTeachersService } from '../../services/adminTeachersService';
 import {
@@ -42,6 +42,7 @@ export const GroupsPage: React.FC = () => {
   const [teacherSearch, setTeacherSearch] = useState('');
   const debouncedTeacherSearch = useDebounce(teacherSearch, 300);
   const [selectedTeacherIds, setSelectedTeacherIds] = useState<string[]>([]);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   const { data: groups, isLoading: groupsLoading } = useQuery({
     queryKey: ['adminGroups'],
@@ -193,11 +194,7 @@ export const GroupsPage: React.FC = () => {
                 <Button
                   variant="outline"
                   className="text-red-600 border-red-200 hover:bg-red-50"
-                  onClick={() => {
-                    if (window.confirm('Delete this group?')) {
-                      deleteMutation.mutate(selectedGroup.id);
-                    }
-                  }}
+                  onClick={() => setShowDeleteConfirm(true)}
                   loading={deleteMutation.isPending}
                 >
                   <TrashIcon className="h-4 w-4 mr-2" />
@@ -350,7 +347,18 @@ export const GroupsPage: React.FC = () => {
           </div>
         </div>
       )}
+      {/* Delete confirmation dialog */}
+      {selectedGroup && (
+        <ConfirmDialog
+          isOpen={showDeleteConfirm}
+          onClose={() => setShowDeleteConfirm(false)}
+          onConfirm={() => deleteMutation.mutate(selectedGroup.id)}
+          title="Delete Group"
+          message={`Are you sure you want to delete "${selectedGroup.name}"? All members will be removed from this group.`}
+          confirmLabel="Delete"
+          variant="danger"
+        />
+      )}
     </div>
   );
 };
-

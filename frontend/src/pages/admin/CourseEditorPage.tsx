@@ -4,7 +4,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { usePageTitle } from '../../hooks/usePageTitle';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Button, Input, Loading, useToast, HlsVideoPlayer } from '../../components/common';
+import { Button, Input, Loading, useToast, HlsVideoPlayer, ConfirmDialog } from '../../components/common';
 import { useAuthBlobUrl } from '../../hooks/useAuthBlobUrl';
 import { useTenantStore } from '../../stores/tenantStore';
 import { adminService } from '../../services/adminService';
@@ -226,6 +226,7 @@ export const CourseEditorPage: React.FC = () => {
   const [thumbnailFile, setThumbnailFile] = useState<File | null>(null);
   const [expandedModules, setExpandedModules] = useState<string[]>([]);
   const [editingModule, setEditingModule] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<{ type: 'module' | 'content'; moduleId: string; contentId?: string; label: string } | null>(null);
   // const [editingContent, setEditingContent] = useState<string | null>(null); // TODO: implement inline content editing
   const [newModuleTitle, setNewModuleTitle] = useState('');
   const [addingContentToModule, setAddingContentToModule] = useState<string | null>(null);
@@ -922,11 +923,7 @@ export const CourseEditorPage: React.FC = () => {
                         <PencilIcon className="h-4 w-4" />
                       </button>
                       <button
-                        onClick={() => {
-                          if (window.confirm('Delete this module and all its content?')) {
-                            deleteModuleMutation.mutate({ courseId: courseId!, moduleId: module.id });
-                          }
-                        }}
+                        onClick={() => setConfirmDelete({ type: 'module', moduleId: module.id, label: module.title || 'this module' })}
                         className="p-1 text-gray-400 hover:text-red-600 rounded"
                       >
                         <TrashIcon className="h-4 w-4" />
@@ -979,15 +976,7 @@ export const CourseEditorPage: React.FC = () => {
                               <EyeIcon className="h-4 w-4" />
                             </button>
                             <button
-                              onClick={() => {
-                                if (window.confirm('Delete this content?')) {
-                                  deleteContentMutation.mutate({
-                                    courseId: courseId!,
-                                    moduleId: module.id,
-                                    contentId: content.id,
-                                  });
-                                }
-                              }}
+                              onClick={() => setConfirmDelete({ type: 'content', moduleId: module.id, contentId: content.id, label: content.title || 'this content' })}
                               className="p-1 text-gray-400 hover:text-red-600 rounded"
                             >
                               <TrashIcon className="h-4 w-4" />
@@ -1568,6 +1557,32 @@ export const CourseEditorPage: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Delete confirmation dialog */}
+      <ConfirmDialog
+        isOpen={!!confirmDelete}
+        onClose={() => setConfirmDelete(null)}
+        onConfirm={() => {
+          if (!confirmDelete) return;
+          if (confirmDelete.type === 'module') {
+            deleteModuleMutation.mutate({ courseId: courseId!, moduleId: confirmDelete.moduleId });
+          } else if (confirmDelete.contentId) {
+            deleteContentMutation.mutate({
+              courseId: courseId!,
+              moduleId: confirmDelete.moduleId,
+              contentId: confirmDelete.contentId,
+            });
+          }
+        }}
+        title={confirmDelete?.type === 'module' ? 'Delete Module' : 'Delete Content'}
+        message={
+          confirmDelete?.type === 'module'
+            ? `Are you sure you want to delete "${confirmDelete.label}" and all its content? This cannot be undone.`
+            : `Are you sure you want to delete "${confirmDelete?.label}"? This cannot be undone.`
+        }
+        confirmLabel="Delete"
+        variant="danger"
+      />
     </div>
   );
 };

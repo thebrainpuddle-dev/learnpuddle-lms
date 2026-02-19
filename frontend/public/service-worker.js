@@ -2,8 +2,9 @@
 // Service Worker for Brain LMS PWA
 // Provides offline support, caching, and push notifications
 
-// IMPORTANT: Increment this version to force cache clear on all clients
-const SW_VERSION = 3;
+// Auto-replaced by postbuild script with git hash + timestamp on production builds.
+// In development, '__BUILD_HASH__' is treated as a static string (caches persist across reloads).
+const SW_VERSION = '__BUILD_HASH__';
 const CACHE_NAME = `brain-lms-v${SW_VERSION}`;
 const STATIC_CACHE = `brain-lms-static-v${SW_VERSION}`;
 const DYNAMIC_CACHE = `brain-lms-dynamic-v${SW_VERSION}`;

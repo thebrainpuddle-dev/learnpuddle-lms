@@ -2,7 +2,7 @@
 
 import React, { useState, useRef, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Button, Input, useToast, HlsVideoPlayer } from '../../components/common';
+import { Button, Input, useToast, HlsVideoPlayer, ConfirmDialog } from '../../components/common';
 import {
   adminMediaService,
   type MediaAsset,
@@ -67,6 +67,7 @@ export const MediaLibraryPage: React.FC = () => {
   const [previewAsset, setPreviewAsset] = useState<MediaAsset | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState<MediaAsset | null>(null);
 
   // Upload form state
   const [uploadOpen, setUploadOpen] = useState(false);
@@ -277,10 +278,7 @@ export const MediaLibraryPage: React.FC = () => {
                     <EyeIcon className="h-4 w-4 text-gray-700" />
                   </button>
                   <button
-                    onClick={() => {
-                      if (window.confirm(`Delete "${asset.title}"?`))
-                        deleteMut.mutate(asset.id);
-                    }}
+                    onClick={() => setDeleteTarget(asset)}
                     className="p-2 bg-white rounded-full shadow hover:bg-red-50"
                     title="Delete"
                   >
@@ -515,16 +513,23 @@ export const MediaLibraryPage: React.FC = () => {
                   )
                 ) : a.media_type === 'DOCUMENT' ? (
                   a.file_url ? (
-                    <div className="flex flex-col items-center justify-center py-12">
-                      <div className="w-20 h-24 bg-gradient-to-br from-orange-50 to-amber-100 rounded-lg flex items-center justify-center mb-4 shadow-sm border border-orange-200">
-                        <DocumentTextIcon className="h-10 w-10 text-orange-500" />
-                      </div>
-                      <p className="font-semibold text-gray-900 text-lg">{a.title}</p>
-                      <p className="text-sm text-gray-500 mt-1">{a.file_name}</p>
-                      {a.file_size && (
-                        <p className="text-xs text-gray-400 mt-0.5">{formatFileSize(a.file_size)}</p>
+                    <div className="flex flex-col h-full">
+                      {/* Embed PDF if file is a PDF */}
+                      {(a.file_name || '').toLowerCase().endsWith('.pdf') ? (
+                        <iframe
+                          src={resolveUrl(a.file_url)}
+                          title={a.title}
+                          className="w-full flex-1 rounded-lg border border-gray-200"
+                          style={{ minHeight: '500px' }}
+                        />
+                      ) : (
+                        <div className="flex-1 flex items-center justify-center">
+                          <div className="w-20 h-24 bg-gradient-to-br from-orange-50 to-amber-100 rounded-lg flex items-center justify-center shadow-sm border border-orange-200">
+                            <DocumentTextIcon className="h-10 w-10 text-orange-500" />
+                          </div>
+                        </div>
                       )}
-                      <div className="flex items-center gap-3 mt-5">
+                      <div className="flex items-center justify-center gap-3 pt-4">
                         <a
                           href={resolveUrl(a.file_url)}
                           target="_blank"
@@ -586,6 +591,19 @@ export const MediaLibraryPage: React.FC = () => {
           </div>
         );
       })()}
+
+      {/* Delete confirmation dialog */}
+      <ConfirmDialog
+        isOpen={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={() => {
+          if (deleteTarget) deleteMut.mutate(deleteTarget.id);
+        }}
+        title="Delete Media Asset"
+        message={`Are you sure you want to delete "${deleteTarget?.title}"? This action cannot be undone.`}
+        confirmLabel="Delete"
+        variant="danger"
+      />
     </div>
   );
 };
