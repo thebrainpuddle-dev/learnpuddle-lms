@@ -2,10 +2,12 @@
 // Service Worker for Brain LMS PWA
 // Provides offline support, caching, and push notifications
 
-const CACHE_NAME = 'brain-lms-v2';
-const STATIC_CACHE = 'brain-lms-static-v2';
-const DYNAMIC_CACHE = 'brain-lms-dynamic-v2';
-const API_CACHE = 'brain-lms-api-v2';
+// IMPORTANT: Increment this version to force cache clear on all clients
+const SW_VERSION = 3;
+const CACHE_NAME = `brain-lms-v${SW_VERSION}`;
+const STATIC_CACHE = `brain-lms-static-v${SW_VERSION}`;
+const DYNAMIC_CACHE = `brain-lms-dynamic-v${SW_VERSION}`;
+const API_CACHE = `brain-lms-api-v${SW_VERSION}`;
 
 // Resources to cache immediately on install
 const STATIC_ASSETS = [
@@ -42,16 +44,18 @@ self.addEventListener('install', (event) => {
   );
 });
 
-// Activate event - clean up old caches
+// Activate event - clean up ALL old caches and force refresh clients
 self.addEventListener('activate', (event) => {
-  console.log('[SW] Activating service worker...');
+  console.log(`[SW] Activating service worker v${SW_VERSION}...`);
+  
+  const currentCaches = [CACHE_NAME, STATIC_CACHE, DYNAMIC_CACHE, API_CACHE];
   
   event.waitUntil(
     caches.keys()
       .then((keys) => {
         return Promise.all(
           keys
-            .filter((key) => key !== STATIC_CACHE && key !== DYNAMIC_CACHE && key !== API_CACHE)
+            .filter((key) => !currentCaches.includes(key))
             .map((key) => {
               console.log('[SW] Removing old cache:', key);
               return caches.delete(key);
@@ -59,6 +63,15 @@ self.addEventListener('activate', (event) => {
         );
       })
       .then(() => self.clients.claim())
+      .then(() => {
+        // Notify all clients that a new version is active
+        return self.clients.matchAll({ type: 'window' });
+      })
+      .then((clients) => {
+        clients.forEach((client) => {
+          client.postMessage({ type: 'SW_UPDATED', version: SW_VERSION });
+        });
+      })
   );
 });
 
@@ -292,6 +305,23 @@ self.addEventListener('message', (event) => {
     event.waitUntil(
       caches.open(DYNAMIC_CACHE)
         .then((cache) => cache.addAll(event.data.urls))
+    );
+  }
+  
+  if (event.data && event.data.type === 'GET_VERSION') {
+    event.ports[0].postMessage({ version: SW_VERSION });
+  }
+  
+  if (event.data && event.data.type === 'CLEAR_ALL_CACHES') {
+    event.waitUntil(
+      caches.keys().then((keys) => {
+        return Promise.all(keys.map((key) => caches.delete(key)));
+      }).then(() => {
+        console.log('[SW] All caches cleared');
+        if (event.ports[0]) {
+          event.ports[0].postMessage({ cleared: true });
+        }
+      })
     );
   }
 });
