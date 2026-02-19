@@ -546,6 +546,10 @@ EMAIL_HOST_USER = config('EMAIL_HOST_USER', default='')
 EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD', default='')
 DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default=f'noreply@{_platform_domain_early}')
 
+# Reminder email sending (disabled by default - uses in-app notifications only)
+# Set REMINDER_EMAIL_ENABLED=True to also send reminder emails
+REMINDER_EMAIL_ENABLED = config('REMINDER_EMAIL_ENABLED', default=False, cast=bool)
+
 # Platform branding (used in emails and public pages)
 PLATFORM_NAME = config('PLATFORM_NAME', default='LearnPuddle')
 PLATFORM_DOMAIN = _platform_domain_early
