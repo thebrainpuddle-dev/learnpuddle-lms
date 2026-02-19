@@ -1,3 +1,4 @@
+from django.db import models
 from rest_framework import serializers
 
 from apps.progress.models import TeacherProgress
@@ -183,11 +184,19 @@ class TeacherCourseListSerializer(serializers.ModelSerializer):
         ).count()
 
     def get_progress_percentage(self, obj):
+        teacher = self._get_teacher()
         total = self.get_total_content_count(obj)
         if total == 0:
             return 0.0
-        completed = self.get_completed_content_count(obj)
-        return round((completed / total) * 100.0, 2)
+        
+        # Sum of all content progress percentages (average across all content)
+        progress_sum = TeacherProgress.objects.filter(
+            teacher=teacher,
+            course=obj,
+            content__isnull=False,
+        ).aggregate(total=models.Sum('progress_percentage'))['total'] or 0
+        
+        return round(float(progress_sum) / total, 2)
 
 
 class TeacherCourseDetailSerializer(serializers.ModelSerializer):
@@ -233,6 +242,14 @@ class TeacherCourseDetailSerializer(serializers.ModelSerializer):
             content__isnull=False,
             status="COMPLETED",
         ).count()
-        pct = round((completed / total) * 100.0, 2) if total else 0.0
+        
+        # Calculate percentage as average of content progress percentages
+        progress_sum = TeacherProgress.objects.filter(
+            teacher=teacher,
+            course=obj,
+            content__isnull=False,
+        ).aggregate(total=models.Sum('progress_percentage'))['total'] or 0
+        pct = round(float(progress_sum) / total, 2) if total else 0.0
+        
         return {"completed_content_count": completed, "total_content_count": total, "percentage": pct}
 
