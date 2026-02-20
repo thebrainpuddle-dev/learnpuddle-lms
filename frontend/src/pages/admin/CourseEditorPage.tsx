@@ -505,11 +505,7 @@ export const CourseEditorPage: React.FC = () => {
   };
 
   const handleAddModule = () => {
-    if (!courseId) return;
-    if (!newModuleTitle.trim()) {
-      toast.error('Module title required', 'Please enter a title for the module.');
-      return;
-    }
+    if (!newModuleTitle.trim() || !courseId) return;
     moduleMutation.mutate({
       courseId,
       data: {
@@ -849,6 +845,7 @@ export const CourseEditorPage: React.FC = () => {
               <Button
                 variant="primary"
                 onClick={handleAddModule}
+                disabled={!newModuleTitle.trim()}
                 loading={moduleMutation.isPending}
               >
                 <PlusIcon className="h-5 w-5 mr-1" />
