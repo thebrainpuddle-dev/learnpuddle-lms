@@ -33,6 +33,21 @@ test.describe('Authentication', () => {
     await expect(page).toHaveURL(/.*\/teacher\/dashboard/, { timeout: 15000 });
   });
 
+  test('logs in successfully even when stale tokens exist in storage', async ({ page }) => {
+    await page.evaluate(() => {
+      localStorage.setItem('access_token', 'stale-access-token');
+      localStorage.setItem('refresh_token', 'stale-refresh-token');
+      sessionStorage.setItem('access_token', 'stale-access-token');
+      sessionStorage.setItem('refresh_token', 'stale-refresh-token');
+    });
+
+    await page.getByLabel(/email/i).fill(credentials.teacher.email);
+    await page.getByLabel(/password/i).fill(credentials.teacher.password);
+    await page.getByRole('button', { name: /sign in/i }).click();
+
+    await expect(page).toHaveURL(/.*\/teacher\/dashboard/, { timeout: 15000 });
+  });
+
   test('logs in admin successfully', async ({ page }) => {
     await page.getByLabel(/email/i).fill(credentials.admin.email);
     await page.getByLabel(/password/i).fill(credentials.admin.password);

@@ -54,6 +54,17 @@ class AuthenticationTestCase(TestCase):
         })
         
         self.assertEqual(response.status_code, 400)
+
+    def test_login_ignores_stale_authorization_header(self):
+        """Login should work even when a stale Bearer token is present."""
+        self.client.credentials(HTTP_AUTHORIZATION='Bearer invalid.token.value')
+        response = self.client.post('/api/users/auth/login/', {
+            'email': 'teacher@test.com',
+            'password': 'testpass123'
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('tokens', response.data)
     
     def test_login_inactive_user(self):
         """Test that inactive users cannot login."""
@@ -116,6 +127,22 @@ class AuthenticationTestCase(TestCase):
         })
         
         self.assertEqual(response.status_code, 401)
+
+    def test_token_refresh_ignores_stale_authorization_header(self):
+        """Refresh should not be blocked by a stale Authorization header."""
+        login_response = self.client.post('/api/users/auth/login/', {
+            'email': 'teacher@test.com',
+            'password': 'testpass123'
+        })
+        refresh_token = login_response.data['tokens']['refresh']
+
+        self.client.credentials(HTTP_AUTHORIZATION='Bearer invalid.token.value')
+        response = self.client.post('/api/users/auth/refresh/', {
+            'refresh_token': refresh_token
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('access', response.data)
     
     def test_logout(self):
         """Test logout blacklists token."""
