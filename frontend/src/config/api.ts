@@ -206,6 +206,23 @@ api.interceptors.response.use(
       }
     }
 
+    // 403 Forbidden — treat as invalid session (e.g. token rejected, tenant mismatch).
+    // Log user out and send to login for a clean re-auth instead of a broken dashboard.
+    if (error.response?.status === 403) {
+      const currentPath = window.location.pathname;
+      const loginPath = currentPath.startsWith('/super-admin')
+        ? '/super-admin/login'
+        : '/login';
+      const isOnLoginPage = currentPath === '/login' || currentPath === '/super-admin/login';
+
+      sessionStorage.removeItem('access_token');
+      sessionStorage.removeItem('refresh_token');
+      localStorage.removeItem('access_token');
+      localStorage.removeItem('refresh_token');
+      clearPersistedAuth();
+      if (!isOnLoginPage) window.location.href = loginPath;
+    }
+
     return Promise.reject(error);
   }
 );
