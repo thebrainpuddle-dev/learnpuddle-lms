@@ -22,7 +22,6 @@ const ACTIVITY_EVENTS: Array<keyof WindowEventMap> = [
   'keydown',
   'scroll',
   'touchstart',
-  'focus',
 ];
 
 const ACTIVITY_SYNC_THROTTLE_MS = 15000;
@@ -88,16 +87,7 @@ export function useSessionLifecycle() {
       }
     };
 
-    const checkIdleTimeout = async () => {
-      if (logoutInProgressRef.current) {
-        return;
-      }
-
-      const lastActivity = getLastActivityTimestamp() || Date.now();
-      if (Date.now() - lastActivity < idleTimeoutMs) {
-        return;
-      }
-
+    const terminateForIdleTimeout = async () => {
       logoutInProgressRef.current = true;
       const refreshToken = getRefreshToken();
       try {
@@ -114,21 +104,59 @@ export function useSessionLifecycle() {
       }
     };
 
+    const checkIdleTimeout = async (): Promise<boolean> => {
+      if (logoutInProgressRef.current) {
+        return true;
+      }
+
+      const lastActivity = getLastActivityTimestamp();
+      if (!lastActivity) {
+        const now = Date.now();
+        lastActivityWriteRef.current = now;
+        setLastActivityTimestamp(now);
+        return false;
+      }
+
+      if (Date.now() - lastActivity < idleTimeoutMs) {
+        return false;
+      }
+
+      await terminateForIdleTimeout();
+      return true;
+    };
+
+    const handleActivity = () => {
+      void (async () => {
+        const timedOut = await checkIdleTimeout();
+        if (!timedOut) {
+          writeActivity();
+        }
+      })();
+    };
+
     const handleVisibilityChange = () => {
       if (!document.hidden) {
-        writeActivity();
+        handleActivity();
       }
     };
 
-    if (!getLastActivityTimestamp()) {
-      setLastActivityTimestamp(Date.now());
+    const initialLastActivity = getLastActivityTimestamp();
+    if (initialLastActivity) {
+      lastActivityWriteRef.current = initialLastActivity;
+    } else {
+      const now = Date.now();
+      lastActivityWriteRef.current = now;
+      setLastActivityTimestamp(now);
     }
 
     for (const eventName of ACTIVITY_EVENTS) {
-      window.addEventListener(eventName, writeActivity, { passive: true });
+      window.addEventListener(eventName, handleActivity, { passive: true });
     }
+    window.addEventListener('focus', handleActivity);
     document.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('storage', handleStorage);
+
+    void checkIdleTimeout();
 
     const intervalId = window.setInterval(() => {
       void checkIdleTimeout();
@@ -137,8 +165,9 @@ export function useSessionLifecycle() {
     return () => {
       window.clearInterval(intervalId);
       for (const eventName of ACTIVITY_EVENTS) {
-        window.removeEventListener(eventName, writeActivity);
+        window.removeEventListener(eventName, handleActivity);
       }
+      window.removeEventListener('focus', handleActivity);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('storage', handleStorage);
     };

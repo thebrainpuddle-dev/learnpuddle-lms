@@ -14,6 +14,7 @@ import logging
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from channels.db import database_sync_to_async
 from django.contrib.auth.models import AnonymousUser
+from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
@@ -128,7 +129,7 @@ class NotificationConsumer(AsyncJsonWebsocketConsumer):
     def get_unread_count(self) -> int:
         """Get count of unread notifications for the user within their tenant."""
         from .models import Notification
-        filters = {'user': self.user, 'is_read': False}
+        filters = {'teacher': self.user, 'is_read': False}
         if self.tenant_id:
             filters['tenant_id'] = self.tenant_id
         return Notification.objects.filter(**filters).count()
@@ -137,19 +138,19 @@ class NotificationConsumer(AsyncJsonWebsocketConsumer):
     def mark_notifications_read(self, notification_ids: list) -> int:
         """Mark specific notifications as read (tenant-isolated)."""
         from .models import Notification
-        filters = {'user': self.user, 'id__in': notification_ids, 'is_read': False}
+        filters = {'teacher': self.user, 'id__in': notification_ids, 'is_read': False}
         if self.tenant_id:
             filters['tenant_id'] = self.tenant_id
-        return Notification.objects.filter(**filters).update(is_read=True)
+        return Notification.objects.filter(**filters).update(is_read=True, read_at=timezone.now())
     
     @database_sync_to_async
     def mark_all_read(self):
         """Mark all notifications as read for the user (tenant-isolated)."""
         from .models import Notification
-        filters = {'user': self.user, 'is_read': False}
+        filters = {'teacher': self.user, 'is_read': False}
         if self.tenant_id:
             filters['tenant_id'] = self.tenant_id
-        Notification.objects.filter(**filters).update(is_read=True)
+        Notification.objects.filter(**filters).update(is_read=True, read_at=timezone.now())
 
 
 def get_user_group_name(user_id: str) -> str:

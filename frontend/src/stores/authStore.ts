@@ -8,6 +8,7 @@ import { User } from '../types';
 const ACCESS_TOKEN_KEY = 'access_token';
 const REFRESH_TOKEN_KEY = 'refresh_token';
 const REMEMBER_ME_KEY = 'remember_me';
+const SESSION_LAST_ACTIVITY_KEY = 'auth:last_activity_at';
 
 /**
  * Get the appropriate storage based on remember me preference.
@@ -84,6 +85,7 @@ export const useAuthStore = create<AuthState>()(
         const storage = rememberMe ? localStorage : sessionStorage;
         storage.setItem(ACCESS_TOKEN_KEY, tokens.access);
         storage.setItem(REFRESH_TOKEN_KEY, tokens.refresh);
+        localStorage.setItem(SESSION_LAST_ACTIVITY_KEY, String(Date.now()));
         
         set({
           user,
@@ -100,6 +102,7 @@ export const useAuthStore = create<AuthState>()(
         localStorage.removeItem(REMEMBER_ME_KEY);
         sessionStorage.removeItem(ACCESS_TOKEN_KEY);
         sessionStorage.removeItem(REFRESH_TOKEN_KEY);
+        localStorage.removeItem(SESSION_LAST_ACTIVITY_KEY);
         
         set({
           user: null,
