@@ -322,14 +322,14 @@ export const CoursesPage: React.FC = () => {
           <h1 className="text-2xl font-bold text-gray-900">Courses</h1>
           <p className="mt-1 text-gray-500">Manage your training courses</p>
         </div>
-        <Button variant="primary" onClick={() => navigate('/admin/courses/new')}>
+        <Button data-tour="admin-courses-create" variant="primary" onClick={() => navigate('/admin/courses/new')}>
           <PlusIcon className="h-5 w-5 mr-2" />
           Create Course
         </Button>
       </div>
 
       {/* Filters + View Toggle */}
-      <div className="bg-white rounded-xl border border-gray-200 p-4">
+      <div data-tour="admin-courses-filters" className="bg-white rounded-xl border border-gray-200 p-4">
         <div className="flex flex-col lg:flex-row gap-4">
           <form onSubmit={handleSearch} className="flex-1">
             <div className="relative">
@@ -390,7 +390,7 @@ export const CoursesPage: React.FC = () => {
       {isLoading ? (
         <div className="flex items-center justify-center py-12"><Loading /></div>
       ) : data?.results.length === 0 ? (
-        <div className="bg-white rounded-xl border border-gray-200 text-center py-12">
+        <div data-tour="admin-courses-list" className="bg-white rounded-xl border border-gray-200 text-center py-12">
           <AcademicCapIcon className="h-12 w-12 mx-auto text-gray-400 mb-4" />
           <h3 className="text-lg font-medium text-gray-900 mb-1">No courses found</h3>
           <p className="text-gray-500 mb-4">
@@ -404,7 +404,7 @@ export const CoursesPage: React.FC = () => {
         </div>
       ) : viewMode === 'board' ? (
         /* ════════ BOARD VIEW (Kanban) ════════ */
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div data-tour="admin-courses-list" className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {/* Draft column */}
           <div
             className="rounded-xl border-2 border-dashed border-yellow-200 bg-yellow-50/50 p-4 min-h-[300px] transition-all"
@@ -465,7 +465,7 @@ export const CoursesPage: React.FC = () => {
         </div>
       ) : (
         /* ════════ TABLE VIEW ════════ */
-        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <div data-tour="admin-courses-list" className="bg-white rounded-xl border border-gray-200 overflow-hidden">
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">

@@ -70,6 +70,7 @@ export const SchoolsPage: React.FC = () => {
           <p className="mt-1 text-gray-500">Manage all schools on the platform</p>
         </div>
         <button
+          data-tour="superadmin-schools-onboard"
           onClick={() => setShowOnboard(true)}
           className="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition-colors"
         >
@@ -81,6 +82,7 @@ export const SchoolsPage: React.FC = () => {
       <div className="relative max-w-md">
         <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
         <input
+          data-tour="superadmin-schools-search"
           type="text"
           placeholder="Search schools..."
           value={search}
@@ -90,7 +92,7 @@ export const SchoolsPage: React.FC = () => {
       </div>
 
       {/* Table */}
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <div data-tour="superadmin-schools-table" className="bg-white rounded-xl border border-gray-200 overflow-hidden">
         <table className="min-w-full divide-y divide-gray-200">
           <thead className="bg-gray-50">
             <tr>
@@ -117,7 +119,13 @@ export const SchoolsPage: React.FC = () => {
               </tr>
             ) : (
               tenants.map((t) => (
-                <tr key={t.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => nav(`/super-admin/schools/${t.id}`)}>
+                <tr
+                  key={t.id}
+                  data-tour="superadmin-school-row"
+                  data-tenant-id={t.id}
+                  className="hover:bg-gray-50 cursor-pointer"
+                  onClick={() => nav(`/super-admin/schools/${t.id}`)}
+                >
                   <td className="px-6 py-4 font-medium text-gray-900">{t.name}</td>
                   <td className="px-6 py-4 text-sm text-gray-600">{t.subdomain}</td>
                   <td className="px-6 py-4 text-sm text-gray-600">{t.teacher_count}</td>

@@ -141,7 +141,7 @@ export const GroupsPage: React.FC = () => {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Groups list */}
-        <div className="card lg:col-span-1">
+        <div data-tour="admin-groups-list" className="card lg:col-span-1">
           <div className="flex items-center mb-3">
             <Input
               value={groupSearch}
@@ -178,7 +178,7 @@ export const GroupsPage: React.FC = () => {
         </div>
 
         {/* Members */}
-        <div className="card lg:col-span-2">
+        <div data-tour="admin-groups-members" className="card lg:col-span-2">
           {!selectedGroup ? (
             <div className="text-center py-12 text-gray-500">
               <UsersIcon className="h-12 w-12 mx-auto mb-3 text-gray-300" />

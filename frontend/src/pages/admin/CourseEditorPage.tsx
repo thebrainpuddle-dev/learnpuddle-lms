@@ -1,7 +1,7 @@
 // src/pages/admin/CourseEditorPage.tsx
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { usePageTitle } from '../../hooks/usePageTitle';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button, Input, Loading, useToast, HlsVideoPlayer, ConfirmDialog } from '../../components/common';
@@ -162,6 +162,7 @@ export const CourseEditorPage: React.FC = () => {
   const toast = useToast();
   const { courseId } = useParams<{ courseId: string }>();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const thumbnailInputRef = useRef<HTMLInputElement>(null);
   const contentFileInputRef = useRef<HTMLInputElement>(null);
@@ -220,7 +221,13 @@ export const CourseEditorPage: React.FC = () => {
     return () => stopPolling();
   }, [pollingContentId, pollingModuleId, courseId, stopPolling, toast, queryClient]);
 
-  const [activeTab, setActiveTab] = useState<'details' | 'content' | 'assignment'>('details');
+  const getTabFromQuery = React.useCallback((): 'details' | 'content' | 'assignment' => {
+    const raw = searchParams.get('tab');
+    if (raw === 'assignment') return 'assignment';
+    if (raw === 'content') return 'content';
+    return 'details';
+  }, [searchParams]);
+  const [activeTab, setActiveTab] = useState<'details' | 'content' | 'assignment'>(() => getTabFromQuery());
   const [thumbnailPreview, setThumbnailPreview] = useState<string | null>(null);
   const [thumbnailFile, setThumbnailFile] = useState<File | null>(null);
   const [expandedModules, setExpandedModules] = useState<string[]>([]);
@@ -361,6 +368,25 @@ export const CourseEditorPage: React.FC = () => {
   });
 
   const courseMutationPending = createCourseMutation.isPending || updateCourseMutation.isPending;
+
+  React.useEffect(() => {
+    const next = getTabFromQuery();
+    if (!isEditing && next === 'content') {
+      if (activeTab !== 'details') setActiveTab('details');
+      return;
+    }
+    if (next !== activeTab) {
+      setActiveTab(next);
+    }
+  }, [activeTab, getTabFromQuery, isEditing]);
+
+  React.useEffect(() => {
+    if (!isEditing && activeTab === 'content') return;
+    if (searchParams.get('tab') === activeTab) return;
+    const params = new URLSearchParams(searchParams);
+    params.set('tab', activeTab);
+    setSearchParams(params, { replace: true });
+  }, [activeTab, isEditing, searchParams, setSearchParams]);
 
   const moduleMutation = useMutation({
     mutationFn: createModule,
@@ -716,7 +742,7 @@ export const CourseEditorPage: React.FC = () => {
 
       {/* Tabs */}
       <div className="border-b border-gray-200">
-        <nav className="-mb-px flex space-x-8">
+        <nav data-tour="admin-course-editor-tabs" className="-mb-px flex space-x-8">
           {[
             { key: 'details', label: 'Details' },
             { key: 'content', label: 'Content', disabled: !isEditing },
@@ -743,7 +769,7 @@ export const CourseEditorPage: React.FC = () => {
 
       {/* Details Tab */}
       {activeTab === 'details' && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div data-tour="admin-course-details-panel" className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 space-y-6">
             <div className="bg-white rounded-xl border border-gray-200 p-6">
               <h2 className="text-lg font-semibold text-gray-900 mb-4">Basic Information</h2>
@@ -846,7 +872,7 @@ export const CourseEditorPage: React.FC = () => {
 
       {/* Content Tab */}
       {activeTab === 'content' && isEditing && (
-        <div className="space-y-4">
+        <div data-tour="admin-course-content-panel" className="space-y-4">
           {/* Add Module */}
           <div className="bg-white rounded-xl border border-gray-200 p-4">
             <div className="flex items-center space-x-3">
@@ -1169,7 +1195,7 @@ export const CourseEditorPage: React.FC = () => {
 
       {/* Assignment Tab */}
       {activeTab === 'assignment' && (
-        <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-6">
+        <div data-tour="admin-course-assignment-panel" className="bg-white rounded-xl border border-gray-200 p-6 space-y-6">
           <h2 className="text-lg font-semibold text-gray-900">Course Assignment</h2>
           
           {/* Assign to All */}

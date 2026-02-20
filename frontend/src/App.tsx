@@ -46,6 +46,7 @@ import api from './config/api';
 import { useSessionLifecycle } from './hooks/useSessionLifecycle';
 import { useAuthStore } from './stores/authStore';
 import { useTenantStore } from './stores/tenantStore';
+import { TourProvider } from './components/tour';
 import './assets/styles/index.css';
 
 const queryClient = new QueryClient({
@@ -350,7 +351,9 @@ function App() {
         <ToastProvider>
           <BrowserRouter>
             <OfflineIndicator />
-            <AppContent />
+            <TourProvider>
+              <AppContent />
+            </TourProvider>
             <PWAPrompt />
           </BrowserRouter>
         </ToastProvider>

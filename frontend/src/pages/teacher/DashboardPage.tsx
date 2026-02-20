@@ -198,7 +198,7 @@ export const DashboardPage: React.FC = () => {
       )}
 
       {/* Stats Grid */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div data-tour="teacher-dashboard-stats" className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <ProgressCard
           title="Overall Progress"
           value={`${dashboard?.stats.overall_progress || 0}%`}
@@ -240,7 +240,7 @@ export const DashboardPage: React.FC = () => {
       {/* Continue Learning + Deadlines */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         {/* Continue Learning */}
-        <div className="lg:col-span-2">
+        <div data-tour="teacher-dashboard-continue" className="lg:col-span-2">
           <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold text-gray-900">Continue Learning</h2>
@@ -311,7 +311,7 @@ export const DashboardPage: React.FC = () => {
         </div>
         
         {/* Upcoming Deadlines */}
-        <div className="lg:col-span-1">
+        <div data-tour="teacher-dashboard-deadlines" className="lg:col-span-1">
           <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-100 h-full">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold text-gray-900">Upcoming Deadlines</h2>

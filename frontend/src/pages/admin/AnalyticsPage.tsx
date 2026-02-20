@@ -276,7 +276,7 @@ export const AnalyticsPage: React.FC = () => {
       </div>
 
       {/* Summary Cards - clickable */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+      <div data-tour="admin-analytics-summary" className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         {summaryCards.map(card => (
           <button
             key={card.label}
@@ -298,7 +298,7 @@ export const AnalyticsPage: React.FC = () => {
       </div>
 
       {/* Filters */}
-      <div className="bg-white rounded-xl border border-gray-200 p-4">
+      <div data-tour="admin-analytics-filters" className="bg-white rounded-xl border border-gray-200 p-4">
         <div className="flex flex-wrap items-center gap-4">
           <div className="flex items-center gap-2 text-sm font-medium text-gray-700">
             <FunnelIcon className="h-4 w-4" />

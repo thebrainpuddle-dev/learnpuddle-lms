@@ -70,7 +70,7 @@ export const DashboardPage: React.FC = () => {
   return (
     <div className="space-y-8 max-w-7xl mx-auto pb-12">
       {/* ─── Hero Header ──────────────────────────────────────────────── */}
-      <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-indigo-600 via-purple-600 to-indigo-800 text-white p-8 shadow-xl shadow-indigo-200/50">
+      <div data-tour="admin-dashboard-hero" className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-indigo-600 via-purple-600 to-indigo-800 text-white p-8 shadow-xl shadow-indigo-200/50">
         <div className="absolute top-0 right-0 p-12 opacity-10 transform translate-x-1/4 -translate-y-1/4">
           <SparklesIcon className="w-64 h-64" />
         </div>
@@ -101,7 +101,7 @@ export const DashboardPage: React.FC = () => {
       </div>
 
       {/* ─── Primary Stats Grid ───────────────────────────────────────── */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+      <div data-tour="admin-dashboard-stats" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
         <StatsCard
           title="Total Teachers"
           value={stats?.total_teachers || 0}
@@ -159,7 +159,7 @@ export const DashboardPage: React.FC = () => {
         <div className="lg:col-span-8 space-y-8">
           
           {/* Recent Activity "Notebook" */}
-          <div className="bg-white rounded-3xl border border-gray-200 shadow-sm overflow-hidden">
+          <div data-tour="admin-dashboard-activity" className="bg-white rounded-3xl border border-gray-200 shadow-sm overflow-hidden">
             <div className="bg-slate-50 px-6 py-4 border-b border-gray-200 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <div className="p-2 bg-white rounded-lg shadow-sm">
@@ -214,7 +214,7 @@ export const DashboardPage: React.FC = () => {
           </div>
 
           {/* Quick Actions Grid */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          <div data-tour="admin-dashboard-quick-actions" className="grid grid-cols-2 sm:grid-cols-4 gap-4">
             <button onClick={() => navigate('/admin/courses/new')} className="flex flex-col items-center justify-center p-6 bg-white border border-gray-200 rounded-2xl hover:border-indigo-300 hover:shadow-md hover:-translate-y-1 transition-all group">
               <div className="w-12 h-12 bg-indigo-50 rounded-2xl flex items-center justify-center mb-3 group-hover:bg-indigo-100 transition-colors">
                 <BookOpenIcon className="w-6 h-6 text-indigo-600" />

@@ -36,13 +36,14 @@ export const SuperAdminDashboardPage: React.FC = () => {
   };
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-8" data-tour="superadmin-dashboard-page">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Platform Dashboard</h1>
           <p className="mt-1 text-gray-500">Overview of all schools on the platform</p>
         </div>
         <button
+          data-tour="superadmin-dashboard-onboard"
           onClick={() => navigate('/super-admin/schools?onboard=true')}
           className="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition-colors"
         >
@@ -61,7 +62,7 @@ export const SuperAdminDashboardPage: React.FC = () => {
           ))}
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+        <div data-tour="superadmin-dashboard-stats" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
           {cards.map((card) => (
             <div key={card.label} className="bg-white rounded-xl border border-gray-200 p-6 flex items-start gap-4">
               <div className={`${card.color} p-2.5 rounded-lg`}>
@@ -78,7 +79,7 @@ export const SuperAdminDashboardPage: React.FC = () => {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Plan Distribution */}
-        <div className="bg-white rounded-xl border border-gray-200 p-6">
+        <div data-tour="superadmin-dashboard-plan-distribution" className="bg-white rounded-xl border border-gray-200 p-6">
           <h2 className="font-semibold text-gray-900 mb-4">Plan Distribution</h2>
           {stats?.plan_distribution ? (
             <div className="space-y-3">
@@ -103,7 +104,7 @@ export const SuperAdminDashboardPage: React.FC = () => {
         </div>
 
         {/* Recent Onboards */}
-        <div className="bg-white rounded-xl border border-gray-200 p-6">
+        <div data-tour="superadmin-dashboard-recent-onboards" className="bg-white rounded-xl border border-gray-200 p-6">
           <h2 className="font-semibold text-gray-900 mb-4">Recently Onboarded</h2>
           {stats?.recent_onboards && stats.recent_onboards.length > 0 ? (
             <div className="space-y-3">
@@ -125,7 +126,7 @@ export const SuperAdminDashboardPage: React.FC = () => {
         </div>
 
         {/* Schools Near Limits */}
-        <div className="bg-white rounded-xl border border-gray-200 p-6">
+        <div data-tour="superadmin-dashboard-near-limits" className="bg-white rounded-xl border border-gray-200 p-6">
           <h2 className="font-semibold text-gray-900 mb-4">Near Limits</h2>
           {stats?.schools_near_limits && stats.schools_near_limits.length > 0 ? (
             <div className="space-y-3">

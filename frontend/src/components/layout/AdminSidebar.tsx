@@ -15,11 +15,13 @@ import {
   Cog6ToothIcon,
   ArrowRightOnRectangleIcon,
   FolderIcon,
+  QuestionMarkCircleIcon,
 } from '@heroicons/react/24/outline';
 import { useAuthStore } from '../../stores/authStore';
 import { authService } from '../../services/authService';
 import { useTenantStore } from '../../stores/tenantStore';
 import { broadcastLogout } from '../../utils/authSession';
+import { useGuidedTour } from '../tour';
 
 interface AdminSidebarProps {
   open: boolean;
@@ -27,20 +29,21 @@ interface AdminSidebarProps {
 }
 
 const ALL_NAV_ITEMS = [
-  { name: 'Dashboard', href: '/admin/dashboard', icon: HomeIcon, feature: null },
-  { name: 'Courses', href: '/admin/courses', icon: AcademicCapIcon, feature: null },
-  { name: 'Media', href: '/admin/media', icon: FolderIcon, feature: null },
-  { name: 'Teachers', href: '/admin/teachers', icon: UserGroupIcon, feature: null },
-  { name: 'Groups', href: '/admin/groups', icon: UsersIcon, feature: 'groups' as const },
-  { name: 'Analytics', href: '/admin/analytics', icon: ChartBarIcon, feature: null },
-  { name: 'Reminders', href: '/admin/reminders', icon: PaperAirplaneIcon, feature: 'reminders' as const },
-  { name: 'Announcements', href: '/admin/announcements', icon: MegaphoneIcon, feature: null },
-  { name: 'Settings', href: '/admin/settings', icon: Cog6ToothIcon, feature: null },
+  { name: 'Dashboard', href: '/admin/dashboard', icon: HomeIcon, feature: null, tourId: 'admin-nav-dashboard' },
+  { name: 'Courses', href: '/admin/courses', icon: AcademicCapIcon, feature: null, tourId: 'admin-nav-courses' },
+  { name: 'Media', href: '/admin/media', icon: FolderIcon, feature: null, tourId: 'admin-nav-media' },
+  { name: 'Teachers', href: '/admin/teachers', icon: UserGroupIcon, feature: null, tourId: 'admin-nav-teachers' },
+  { name: 'Groups', href: '/admin/groups', icon: UsersIcon, feature: 'groups' as const, tourId: 'admin-nav-groups' },
+  { name: 'Analytics', href: '/admin/analytics', icon: ChartBarIcon, feature: null, tourId: 'admin-nav-analytics' },
+  { name: 'Reminders', href: '/admin/reminders', icon: PaperAirplaneIcon, feature: 'reminders' as const, tourId: 'admin-nav-reminders' },
+  { name: 'Announcements', href: '/admin/announcements', icon: MegaphoneIcon, feature: null, tourId: 'admin-nav-announcements' },
+  { name: 'Settings', href: '/admin/settings', icon: Cog6ToothIcon, feature: null, tourId: 'admin-nav-settings' },
 ];
 
 export const AdminSidebar: React.FC<AdminSidebarProps> = ({ open, onClose }) => {
   const { user, clearAuth, refreshToken } = useAuthStore();
   const { theme, hasFeature } = useTenantStore();
+  const { startTour } = useGuidedTour();
 
   // Filter navigation items based on tenant feature flags
   const navigation = ALL_NAV_ITEMS.filter(
@@ -62,7 +65,7 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({ open, onClose }) => 
   };
   
   const SidebarContent = () => (
-    <div className="flex flex-col h-full bg-white border-r border-gray-200">
+    <div data-tour="admin-sidebar" className="flex flex-col h-full bg-white border-r border-gray-200">
       {/* Logo */}
       <div className="flex items-center justify-between h-16 px-6 border-b border-gray-200">
         <div className="flex items-center">
@@ -118,6 +121,7 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({ open, onClose }) => 
           <NavLink
             key={item.name}
             to={item.href}
+            data-tour={item.tourId}
             className={({ isActive }) =>
               isActive
                 ? 'sidebar-link sidebar-link-active'
@@ -132,6 +136,15 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({ open, onClose }) => 
       
       {/* Logout */}
       <div className="px-4 py-4 border-t border-gray-200">
+        <button
+          type="button"
+          data-tour="admin-tour-replay"
+          onClick={startTour}
+          className="flex items-center w-full px-4 py-3 mb-2 text-gray-700 hover:bg-primary-50 hover:text-primary-700 rounded-lg transition-colors"
+        >
+          <QuestionMarkCircleIcon className="h-5 w-5 mr-3" />
+          Start Tour
+        </button>
         <button
           onClick={handleLogout}
           className="flex items-center w-full px-4 py-3 text-gray-700 hover:bg-red-50 hover:text-red-700 rounded-lg transition-colors"

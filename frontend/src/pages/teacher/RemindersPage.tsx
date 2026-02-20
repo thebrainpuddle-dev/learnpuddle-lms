@@ -116,7 +116,7 @@ export const RemindersPage: React.FC = () => {
       </div>
 
       {/* Filter tabs */}
-      <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1 w-fit">
+      <div data-tour="teacher-reminders-filters" className="flex items-center gap-1 bg-gray-100 rounded-lg p-1 w-fit">
         {([
           { key: 'ALL' as Filter, label: 'All', count: reminders.length },
           { key: 'UNREAD' as Filter, label: 'Unread', count: unreadCount },
@@ -143,7 +143,7 @@ export const RemindersPage: React.FC = () => {
       </div>
 
       {/* Reminders list */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+      <div data-tour="teacher-reminders-list" className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
         {isLoading ? (
           <div className="p-12 text-center text-gray-500 text-sm">Loading reminders...</div>
         ) : filtered.length === 0 ? (

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { superAdminService, PLAN_OPTIONS, FEATURE_FLAGS } from '../../services/superAdminService';
 import { Button, useToast } from '../../components/common';
@@ -17,9 +17,30 @@ export const SchoolDetailPage: React.FC = () => {
   usePageTitle('School Details');
   const { tenantId } = useParams<{ tenantId: string }>();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const toast = useToast();
   const qc = useQueryClient();
-  const [tab, setTab] = useState<Tab>('overview');
+  const getTabFromQuery = (): Tab => {
+    const raw = searchParams.get('tab');
+    if (raw === 'plan' || raw === 'features' || raw === 'overview') return raw;
+    return 'overview';
+  };
+  const [tab, setTab] = useState<Tab>(getTabFromQuery());
+
+  React.useEffect(() => {
+    const next = getTabFromQuery();
+    if (next !== tab) {
+      setTab(next);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
+  React.useEffect(() => {
+    if (searchParams.get('tab') === tab) return;
+    const params = new URLSearchParams(searchParams);
+    params.set('tab', tab);
+    setSearchParams(params, { replace: true });
+  }, [searchParams, setSearchParams, tab]);
 
   const { data: tenant, isLoading } = useQuery({
     queryKey: ['tenant', tenantId],
@@ -91,7 +112,7 @@ export const SchoolDetailPage: React.FC = () => {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center gap-4">
+      <div data-tour="superadmin-school-header" className="flex items-center gap-4">
         <button onClick={() => navigate('/super-admin/schools')} className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg"><ArrowLeftIcon className="h-5 w-5" /></button>
         <div className="flex-1">
           <div className="flex items-center gap-3">
@@ -110,9 +131,14 @@ export const SchoolDetailPage: React.FC = () => {
 
       {/* Tabs */}
       <div className="border-b border-gray-200">
-        <nav className="-mb-px flex space-x-8">
+        <nav data-tour="superadmin-school-tabs" className="-mb-px flex space-x-8">
           {tabs.map((t) => (
-            <button key={t.key} onClick={() => setTab(t.key)} className={`py-3 px-1 border-b-2 text-sm font-medium transition-colors ${tab === t.key ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+            <button
+              key={t.key}
+              data-tour={t.key === 'plan' ? 'superadmin-school-tab-plan' : t.key === 'features' ? 'superadmin-school-tab-features' : undefined}
+              onClick={() => setTab(t.key)}
+              className={`py-3 px-1 border-b-2 text-sm font-medium transition-colors ${tab === t.key ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+            >
               {t.label}
             </button>
           ))}
@@ -124,7 +150,7 @@ export const SchoolDetailPage: React.FC = () => {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 space-y-6">
             {/* Usage */}
-            <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
+            <div data-tour="superadmin-school-overview-usage" className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
               <h2 className="font-semibold text-gray-900">Usage</h2>
               {usage && (
                 <>
@@ -171,7 +197,7 @@ export const SchoolDetailPage: React.FC = () => {
 
       {/* Plan & Limits */}
       {tab === 'plan' && (
-        <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-6">
+        <div data-tour="superadmin-school-plan-card" className="bg-white rounded-xl border border-gray-200 p-6 space-y-6">
           <div>
             <h2 className="font-semibold text-gray-900 mb-3">Subscription Plan</h2>
             <div className="flex items-center gap-3">
@@ -228,7 +254,7 @@ export const SchoolDetailPage: React.FC = () => {
 
       {/* Features */}
       {tab === 'features' && (
-        <div className="bg-white rounded-xl border border-gray-200 p-6">
+        <div data-tour="superadmin-school-features-grid" className="bg-white rounded-xl border border-gray-200 p-6">
           <h2 className="font-semibold text-gray-900 mb-4">Feature Flags</h2>
           <p className="text-sm text-gray-500 mb-6">Toggle features on/off for this school. Changes save immediately.</p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

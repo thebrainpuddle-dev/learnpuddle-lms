@@ -73,7 +73,7 @@ export const MyCoursesPage: React.FC = () => {
       </div>
       
       {/* Filters */}
-      <div className="flex flex-col sm:flex-row gap-4">
+      <div data-tour="teacher-courses-filters" className="flex flex-col sm:flex-row gap-4">
         {/* Search */}
         <div className="flex-1">
           <div className="relative">
@@ -114,19 +114,21 @@ export const MyCoursesPage: React.FC = () => {
       
       {/* Course Grid */}
       {isLoading ? (
-        <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+        <div data-tour="teacher-courses-grid" className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {Array.from({ length: 8 }).map((_, i) => (
             <CourseCard key={i} loading id="" title="" description="" progress={0} totalModules={0} completedModules={0} estimatedHours={0} status="NOT_STARTED" />
           ))}
         </div>
       ) : filteredCourses && filteredCourses.length > 0 ? (
-        <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+        <div data-tour="teacher-courses-grid" className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {filteredCourses.map((course) => (
-            <CourseCard key={course.id} {...toCourseCard(course)} />
+            <div key={course.id} data-tour="teacher-course-card" data-course-id={course.id}>
+              <CourseCard {...toCourseCard(course)} />
+            </div>
           ))}
         </div>
       ) : (
-        <div className="text-center py-12">
+        <div data-tour="teacher-courses-grid" className="text-center py-12">
           <div className="text-gray-400 mb-4">
             <MagnifyingGlassIcon className="h-12 w-12 mx-auto" />
           </div>

@@ -140,7 +140,7 @@ export const RemindersPage: React.FC = () => {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Composer */}
-        <div className="card space-y-4">
+        <div data-tour="admin-reminders-composer" className="card space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Type</label>
@@ -307,7 +307,7 @@ export const RemindersPage: React.FC = () => {
 
         {/* Preview + History */}
         <div className="space-y-6">
-          <div className="card">
+          <div data-tour="admin-reminders-history" className="card">
             <h2 className="text-lg font-semibold text-gray-900 mb-3">Preview</h2>
             {!previewMutation.data ? (
               <div className="text-sm text-gray-500">Click Preview to see recipients and final email content.</div>
@@ -371,4 +371,3 @@ export const RemindersPage: React.FC = () => {
     </div>
   );
 };
-
