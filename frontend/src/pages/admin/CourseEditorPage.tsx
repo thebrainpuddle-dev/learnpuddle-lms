@@ -388,8 +388,16 @@ export const CourseEditorPage: React.FC = () => {
 
   const deleteModuleMutation = useMutation({
     mutationFn: deleteModule,
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['adminCourse', courseId] });
+      // Reset upload/processing state if the deleted module contained a processing video
+      if (pollingModuleId === variables.moduleId) {
+        stopPolling();
+        setPollingContentId(null);
+        setPollingModuleId(null);
+      }
+      setUploadPhase('idle');
+      setUploadProgress(0);
       toast.success('Module deleted', 'Module and its content have been removed.');
     },
     onError: () => {
@@ -427,8 +435,16 @@ export const CourseEditorPage: React.FC = () => {
 
   const deleteContentMutation = useMutation({
     mutationFn: deleteContent,
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['adminCourse', courseId] });
+      // Reset upload/processing state if the deleted content was being processed
+      if (pollingContentId === variables.contentId) {
+        stopPolling();
+        setPollingContentId(null);
+        setPollingModuleId(null);
+      }
+      setUploadPhase('idle');
+      setUploadProgress(0);
       toast.success('Content deleted', 'Content has been removed.');
     },
     onError: () => {
