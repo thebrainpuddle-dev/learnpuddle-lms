@@ -121,7 +121,7 @@ export const SecuritySettings: React.FC = () => {
       <h1 className="text-2xl font-bold text-gray-900 mb-6">Security Settings</h1>
 
       {/* Two-Factor Authentication */}
-      <section className="bg-white rounded-lg shadow p-6 mb-6">
+      <section data-tour="security-2fa-section" className="bg-white rounded-lg shadow p-6 mb-6">
         <h2 className="text-lg font-semibold text-gray-900 mb-4">
           Two-Factor Authentication (2FA)
         </h2>
@@ -252,7 +252,7 @@ export const SecuritySettings: React.FC = () => {
       </section>
 
       {/* Single Sign-On */}
-      <section className="bg-white rounded-lg shadow p-6">
+      <section data-tour="security-sso-section" className="bg-white rounded-lg shadow p-6">
         <h2 className="text-lg font-semibold text-gray-900 mb-4">Single Sign-On (SSO)</h2>
 
         {ssoProviders?.providers && ssoProviders.providers.length > 0 ? (

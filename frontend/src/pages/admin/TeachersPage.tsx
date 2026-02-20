@@ -131,11 +131,11 @@ export const TeachersPage: React.FC = () => {
         </div>
       </div>
 
-      <div className="card">
+      <div data-tour="admin-teachers-search" className="card">
         <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search by name or email" leftIcon={<MagnifyingGlassIcon className="h-5 w-5" />} />
       </div>
 
-      <div className="card overflow-x-auto">
+      <div data-tour="admin-teachers-table" className="card overflow-x-auto">
         <table className="min-w-full text-sm">
           <thead className="text-left text-gray-500">
             <tr>

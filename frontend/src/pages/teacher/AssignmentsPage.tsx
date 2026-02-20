@@ -96,7 +96,7 @@ export const AssignmentsPage: React.FC = () => {
       </div>
       
       {/* Stats */}
-      <div className="grid grid-cols-3 gap-4">
+      <div data-tour="teacher-assignments-stats" className="grid grid-cols-3 gap-4">
         <div className="bg-white rounded-xl p-4 border border-gray-100">
           <p className="text-sm text-gray-500">Total</p>
           <p className="text-2xl font-bold text-gray-900">{statusCounts.ALL}</p>
@@ -112,7 +112,7 @@ export const AssignmentsPage: React.FC = () => {
       </div>
       
       {/* Tabs */}
-      <div className="border-b border-gray-200">
+      <div data-tour="teacher-assignments-tabs" className="border-b border-gray-200">
         <nav className="-mb-px flex space-x-8">
           {tabs.map((tab) => (
             <button
@@ -139,7 +139,7 @@ export const AssignmentsPage: React.FC = () => {
       
       {/* Assignment List */}
       {isLoading ? (
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <div data-tour="teacher-assignments-list" className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           {Array.from({ length: 4 }).map((_, i) => (
             <AssignmentCard
               key={i}
@@ -154,7 +154,7 @@ export const AssignmentsPage: React.FC = () => {
           ))}
         </div>
       ) : assignments && assignments.length > 0 ? (
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <div data-tour="teacher-assignments-list" className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           {assignments?.map((assignment) => (
             <AssignmentCard
               key={assignment.id}
@@ -186,7 +186,7 @@ export const AssignmentsPage: React.FC = () => {
           ))}
         </div>
       ) : (
-        <div className="text-center py-12">
+        <div data-tour="teacher-assignments-list" className="text-center py-12">
           <ClipboardDocumentListIcon className="h-12 w-12 mx-auto text-gray-400 mb-4" />
           <h3 className="text-lg font-medium text-gray-900 mb-1">No assignments found</h3>
           <p className="text-gray-500">

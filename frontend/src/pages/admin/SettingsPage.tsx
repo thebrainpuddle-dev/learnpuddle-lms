@@ -190,7 +190,7 @@ export const SettingsPage: React.FC = () => {
 
       <form onSubmit={handleSubmit} className="space-y-8">
         {/* General Settings */}
-        <div className="bg-white rounded-xl border border-gray-200 p-6">
+        <div data-tour="admin-settings-general" className="bg-white rounded-xl border border-gray-200 p-6">
           <h2 className="text-lg font-semibold text-gray-900 mb-4">General</h2>
           
           <div className="space-y-4">
@@ -226,7 +226,7 @@ export const SettingsPage: React.FC = () => {
         </div>
 
         {/* Branding Settings */}
-        <div className="bg-white rounded-xl border border-gray-200 p-6">
+        <div data-tour="admin-settings-branding" className="bg-white rounded-xl border border-gray-200 p-6">
           <h2 className="text-lg font-semibold text-gray-900 mb-4">Branding</h2>
           
           <div className="space-y-6">

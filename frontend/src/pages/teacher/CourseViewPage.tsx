@@ -197,7 +197,7 @@ export const CourseViewPage: React.FC = () => {
       {/* Main content area */}
       <div className="flex flex-1 overflow-hidden mt-4">
         {/* Content player */}
-        <div className={`flex-1 overflow-y-auto pr-4 ${sidebarOpen ? 'lg:mr-80' : ''}`}>
+        <div data-tour="teacher-course-player" className={`flex-1 overflow-y-auto pr-4 ${sidebarOpen ? 'lg:mr-80' : ''}`}>
           {selectedContent ? (
             <ContentPlayer
               content={{
@@ -230,7 +230,7 @@ export const CourseViewPage: React.FC = () => {
         </div>
         
         {/* Sidebar - Module list */}
-        <div className={`fixed right-0 top-0 bottom-0 w-80 bg-white border-l border-gray-200 overflow-y-auto transform transition-transform lg:translate-x-0 lg:static lg:right-auto lg:top-auto lg:bottom-auto ${
+        <div data-tour="teacher-course-structure" className={`fixed right-0 top-0 bottom-0 w-80 bg-white border-l border-gray-200 overflow-y-auto transform transition-transform lg:translate-x-0 lg:static lg:right-auto lg:top-auto lg:bottom-auto ${
           sidebarOpen ? 'translate-x-0' : 'translate-x-full'
         }`} style={{ marginTop: '64px', paddingTop: '24px' }}>
           <div className="p-4">

@@ -6,6 +6,7 @@ import { Button } from '../../components/common/Button';
 import { Input } from '../../components/common/Input';
 import { useToast } from '../../components/common';
 import api from '../../config/api';
+import { useGuidedTour } from '../../components/tour';
 import {
   UserCircleIcon,
   EnvelopeIcon,
@@ -46,6 +47,7 @@ const backendOrigin = (process.env.REACT_APP_API_URL || 'http://localhost:8000/a
 export const ProfilePage: React.FC = () => {
   usePageTitle('Profile');
   const toast = useToast();
+  const { startTour } = useGuidedTour();
   const { user, setUser } = useAuthStore();
   const [activeSection, setActiveSection] = useState<'profile' | 'password' | 'notifications'>('profile');
   const [isSaving, setIsSaving] = useState(false);
@@ -178,9 +180,19 @@ export const ProfilePage: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      <div>
+      <div className="flex items-start justify-between gap-4">
+        <div>
         <h1 className="text-2xl font-bold text-gray-900">Profile Settings</h1>
         <p className="mt-1 text-gray-500">Manage your account settings and preferences</p>
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          onClick={startTour}
+          data-tour="teacher-profile-tour-replay"
+        >
+          Start Tour
+        </Button>
       </div>
 
       <div className="flex flex-col lg:flex-row gap-6">
@@ -214,7 +226,7 @@ export const ProfilePage: React.FC = () => {
               )}
             </div>
 
-            <nav className="p-2">
+            <nav data-tour="teacher-profile-sections" className="p-2">
               {sections.map((section) => (
                 <button
                   key={section.id}
@@ -239,7 +251,7 @@ export const ProfilePage: React.FC = () => {
 
             {/* ── Profile Section ── */}
             {activeSection === 'profile' && (
-              <form onSubmit={handleProfileSubmit}>
+              <form data-tour="teacher-profile-form" onSubmit={handleProfileSubmit}>
                 <h2 className="text-lg font-semibold text-gray-900 mb-6">Profile Information</h2>
 
                 <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">

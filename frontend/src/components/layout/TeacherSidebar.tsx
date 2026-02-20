@@ -12,12 +12,14 @@ import {
   UserCircleIcon,
   ArrowRightOnRectangleIcon,
   BellAlertIcon,
+  QuestionMarkCircleIcon,
 } from '@heroicons/react/24/outline';
 import { useAuthStore } from '../../stores/authStore';
 import { authService } from '../../services/authService';
 import { useTenantStore } from '../../stores/tenantStore';
 import { notificationService } from '../../services/notificationService';
 import { broadcastLogout } from '../../utils/authSession';
+import { useGuidedTour } from '../tour';
 
 interface TeacherSidebarProps {
   open: boolean;
@@ -25,16 +27,17 @@ interface TeacherSidebarProps {
 }
 
 const navigation = [
-  { name: 'Dashboard', href: '/teacher/dashboard', icon: HomeIcon },
-  { name: 'My Courses', href: '/teacher/courses', icon: BookOpenIcon },
-  { name: 'Assignments', href: '/teacher/assignments', icon: ClipboardDocumentListIcon },
-  { name: 'Reminders', href: '/teacher/reminders', icon: BellAlertIcon, badgeKey: 'reminders' as const },
-  { name: 'Profile', href: '/teacher/profile', icon: UserCircleIcon },
+  { name: 'Dashboard', href: '/teacher/dashboard', icon: HomeIcon, tourId: 'teacher-nav-dashboard' },
+  { name: 'My Courses', href: '/teacher/courses', icon: BookOpenIcon, tourId: 'teacher-nav-courses' },
+  { name: 'Assignments', href: '/teacher/assignments', icon: ClipboardDocumentListIcon, tourId: 'teacher-nav-assignments' },
+  { name: 'Reminders', href: '/teacher/reminders', icon: BellAlertIcon, badgeKey: 'reminders' as const, tourId: 'teacher-nav-reminders' },
+  { name: 'Profile', href: '/teacher/profile', icon: UserCircleIcon, tourId: 'teacher-nav-profile' },
 ];
 
 export const TeacherSidebar: React.FC<TeacherSidebarProps> = ({ open, onClose }) => {
   const { user, clearAuth, refreshToken } = useAuthStore();
   const { theme } = useTenantStore();
+  const { startTour } = useGuidedTour();
 
   // Poll unread reminder count for sidebar badge (every 30s)
   const { data: unreadReminderCount = 0 } = useQuery({
@@ -58,7 +61,7 @@ export const TeacherSidebar: React.FC<TeacherSidebarProps> = ({ open, onClose })
   };
   
   const SidebarContent = () => (
-    <div className="flex flex-col h-full bg-gradient-to-b from-slate-900 to-slate-800">
+    <div data-tour="teacher-sidebar" className="flex flex-col h-full bg-gradient-to-b from-slate-900 to-slate-800">
       {/* Logo */}
       <div className="flex items-center justify-between h-16 px-6 border-b border-slate-700">
         <div className="flex items-center">
@@ -114,6 +117,7 @@ export const TeacherSidebar: React.FC<TeacherSidebarProps> = ({ open, onClose })
             <NavLink
               key={item.name}
               to={item.href}
+              data-tour={item.tourId}
               className={({ isActive }) =>
                 `flex items-center px-4 py-3 text-sm font-medium rounded-lg transition-all duration-200 ${
                   isActive
@@ -136,6 +140,15 @@ export const TeacherSidebar: React.FC<TeacherSidebarProps> = ({ open, onClose })
       
       {/* Logout */}
       <div className="px-4 py-4 border-t border-slate-700">
+        <button
+          type="button"
+          data-tour="teacher-tour-replay"
+          onClick={startTour}
+          className="flex items-center w-full px-4 py-3 mb-2 text-slate-300 hover:bg-emerald-500/10 hover:text-emerald-300 rounded-lg transition-colors"
+        >
+          <QuestionMarkCircleIcon className="h-5 w-5 mr-3" />
+          Start Tour
+        </button>
         <button
           onClick={handleLogout}
           className="flex items-center w-full px-4 py-3 text-slate-300 hover:bg-red-500/10 hover:text-red-400 rounded-lg transition-colors"

@@ -171,14 +171,14 @@ export const MediaLibraryPage: React.FC = () => {
             )}
           </p>
         </div>
-        <Button variant="primary" onClick={() => setUploadOpen(true)}>
+        <Button data-tour="admin-media-upload" variant="primary" onClick={() => setUploadOpen(true)}>
           <ArrowUpTrayIcon className="h-4 w-4 mr-2" />
           Upload
         </Button>
       </div>
 
       {/* Tabs */}
-      <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-lg w-fit">
+      <div data-tour="admin-media-tabs" className="flex items-center gap-1 bg-gray-100 p-1 rounded-lg w-fit">
         {TABS.map((tab) => {
             const count =
               tab.key === 'ALL'
@@ -220,7 +220,7 @@ export const MediaLibraryPage: React.FC = () => {
       {isLoading ? (
         <div className="text-center py-16 text-gray-500">Loading...</div>
       ) : assets.length === 0 ? (
-        <div className="text-center py-16">
+        <div data-tour="admin-media-grid" className="text-center py-16">
           <FolderIcon className="h-16 w-16 mx-auto text-gray-300 mb-4" />
           <h3 className="text-lg font-medium text-gray-900 mb-1">No media assets</h3>
           <p className="text-gray-500 mb-4">Upload documents, videos, or links to get started.</p>
@@ -230,7 +230,7 @@ export const MediaLibraryPage: React.FC = () => {
           </Button>
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+        <div data-tour="admin-media-grid" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
           {assets.map((asset) => (
             <div
               key={asset.id}

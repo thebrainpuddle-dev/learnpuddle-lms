@@ -119,7 +119,7 @@ export const AnnouncementsPage: React.FC = () => {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Create Announcement Form */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+        <div data-tour="admin-announcements-compose" className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
           <div className="flex items-center gap-2 mb-6">
             <MegaphoneIcon className="h-6 w-6 text-emerald-600" />
             <h2 className="text-lg font-semibold text-gray-900">New Announcement</h2>
@@ -229,7 +229,7 @@ export const AnnouncementsPage: React.FC = () => {
         </div>
 
         {/* Announcement History */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+        <div data-tour="admin-announcements-history" className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
           <h2 className="text-lg font-semibold text-gray-900 mb-4">Recent Announcements</h2>
 
           {loadingAnnouncements ? (

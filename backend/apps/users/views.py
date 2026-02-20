@@ -1,7 +1,7 @@
 # apps/users/views.py
 
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes, throttle_classes
+from rest_framework.decorators import api_view, permission_classes, throttle_classes, authentication_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
@@ -41,6 +41,7 @@ class ResendVerifyThrottle(ScopedRateThrottle):
 @csrf_exempt
 @api_view(['POST'])
 @permission_classes([AllowAny])
+@authentication_classes([])
 @throttle_classes([LoginThrottle])
 def login_view(request):
     """
@@ -125,6 +126,7 @@ def logout_view(request):
 @csrf_exempt
 @api_view(['POST'])
 @permission_classes([AllowAny])
+@authentication_classes([])
 def refresh_token_view(request):
     """
     Refresh access token using refresh token.
@@ -313,6 +315,7 @@ def change_password_view(request):
 @csrf_exempt
 @api_view(['POST'])
 @permission_classes([AllowAny])
+@authentication_classes([])
 @throttle_classes([PasswordResetThrottle])
 def request_password_reset_view(request):
     """
@@ -368,6 +371,7 @@ def request_password_reset_view(request):
 @csrf_exempt
 @api_view(['POST'])
 @permission_classes([AllowAny])
+@authentication_classes([])
 @throttle_classes([PasswordResetThrottle])
 def confirm_password_reset_view(request):
     """
@@ -418,6 +422,7 @@ def confirm_password_reset_view(request):
 @csrf_exempt
 @api_view(['POST'])
 @permission_classes([AllowAny])
+@authentication_classes([])
 @throttle_classes([EmailVerifyThrottle])
 def verify_email_view(request):
     """

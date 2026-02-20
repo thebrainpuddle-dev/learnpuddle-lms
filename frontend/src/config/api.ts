@@ -25,6 +25,29 @@ export const api: AxiosInstance = axios.create({
   timeout: 30000,
 });
 
+const AUTH_HEADER_BYPASS_PATHS = [
+  '/users/auth/login/',
+  '/users/auth/refresh/',
+  '/users/auth/request-password-reset/',
+  '/users/auth/confirm-password-reset/',
+  '/users/auth/verify-email/',
+  '/users/auth/sso/providers/',
+  '/tenants/theme/',
+];
+
+function normalizeRequestPath(url: string = ''): string {
+  try {
+    return new URL(url, API_BASE_URL).pathname;
+  } catch {
+    return url;
+  }
+}
+
+function shouldBypassAuthHeader(url: string = ''): boolean {
+  const path = normalizeRequestPath(url);
+  return AUTH_HEADER_BYPASS_PATHS.some((allowedPath) => path.endsWith(allowedPath));
+}
+
 function terminateSession(reason: 'session_expired' | 'tenant_access_denied') {
   try {
     useAuthStore.getState().clearAuth();
@@ -80,9 +103,15 @@ function isTenantAccessDenied(error: any): boolean {
  */
 api.interceptors.request.use(
   (config) => {
-    const token = getAccessToken();
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
+    if (shouldBypassAuthHeader(String(config.url || ''))) {
+      if (config.headers && 'Authorization' in config.headers) {
+        delete (config.headers as any).Authorization;
+      }
+    } else {
+      const token = getAccessToken();
+      if (token) {
+        config.headers.Authorization = `Bearer ${token}`;
+      }
     }
     
     // Set Content-Type for JSON, but let axios auto-detect for FormData
@@ -134,9 +163,10 @@ api.interceptors.response.use(
     const originalRequest = error.config;
     const requestUrl = String(originalRequest?.url || '');
     const isRefreshRequest = requestUrl.includes('/users/auth/refresh/');
+    const isBypassRequest = shouldBypassAuthHeader(requestUrl);
 
     // Recover token-expiration scenarios on both 401 and token-related 403.
-    if (shouldAttemptRefresh(error) && !isRefreshRequest && !originalRequest?._retry) {
+    if (shouldAttemptRefresh(error) && !isRefreshRequest && !isBypassRequest && !originalRequest?._retry) {
       originalRequest._retry = true;
 
       const refreshToken = getRefreshToken();
