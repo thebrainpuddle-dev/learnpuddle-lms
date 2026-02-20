@@ -91,14 +91,8 @@ export function usePWA(): UsePWAReturn {
       window.location.reload();
     });
 
-    // Listen for SW_UPDATED message from service worker
-    navigator.serviceWorker.addEventListener('message', (event) => {
-      if (event.data && event.data.type === 'SW_UPDATED') {
-        console.log(`[PWA] Service worker updated to v${event.data.version}, reloading...`);
-        // Small delay to ensure the new SW is fully active
-        setTimeout(() => window.location.reload(), 100);
-      }
-    });
+    // SW_UPDATED message handler removed: the 'controllerchange' event below
+    // already handles the single clean reload when a new SW takes over.
   }, []);
 
   // Online/offline detection

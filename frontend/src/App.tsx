@@ -52,13 +52,35 @@ const queryClient = new QueryClient({
     queries: {
       refetchOnWindowFocus: false,
       retry: 1,
+      staleTime: 2 * 60 * 1000, // 2 minutes — prevents cascading refetches on every mount
     },
   },
 });
 
 function AppContent() {
-  const { isAuthenticated, user } = useAuthStore();
+  const { isAuthenticated, user, setUser, clearAuth } = useAuthStore();
   const { setConfig } = useTenantStore();
+  const [authValidated, setAuthValidated] = React.useState(!isAuthenticated);
+
+  // On startup, validate any persisted token by calling /auth/me/.
+  // If the token is expired or missing, clear auth and redirect to login
+  // instead of rendering protected pages with broken API calls.
+  React.useEffect(() => {
+    if (!isAuthenticated) {
+      setAuthValidated(true);
+      return;
+    }
+    api.get('/users/auth/me/')
+      .then((res) => {
+        setUser(res.data);
+        setAuthValidated(true);
+      })
+      .catch(() => {
+        clearAuth();
+        setAuthValidated(true);
+      });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // intentionally runs once on mount
 
   // Fetch tenant config (features + limits) after login
   React.useEffect(() => {
@@ -67,6 +89,14 @@ function AppContent() {
       .then((res) => setConfig(res.data))
       .catch(() => {});
   }, [isAuthenticated, user?.role, setConfig]);
+
+  if (!authValidated) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600" />
+      </div>
+    );
+  }
 
   return (
     <Routes>

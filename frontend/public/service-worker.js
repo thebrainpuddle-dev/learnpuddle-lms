@@ -64,15 +64,9 @@ self.addEventListener('activate', (event) => {
         );
       })
       .then(() => self.clients.claim())
-      .then(() => {
-        // Notify all clients that a new version is active
-        return self.clients.matchAll({ type: 'window' });
-      })
-      .then((clients) => {
-        clients.forEach((client) => {
-          client.postMessage({ type: 'SW_UPDATED', version: SW_VERSION });
-        });
-      })
+      // SW_UPDATED postMessage removed: the 'controllerchange' event in the page
+      // already triggers window.location.reload() once. Sending SW_UPDATED on top
+      // caused a second reload in rapid succession, wiping in-flight state.
   );
 });
 
@@ -142,26 +136,14 @@ async function cacheFirstStrategy(request) {
 }
 
 // Network-first strategy (for API calls)
+// API responses are NEVER cached — authenticated responses must always come from the network.
+// Serving a stale cached API response after a token change causes 403 errors and stale UI.
 async function networkFirstStrategy(request) {
   try {
-    const networkResponse = await fetch(request);
-    
-    if (networkResponse.ok) {
-      // Cache successful API responses
-      const cache = await caches.open(API_CACHE);
-      cache.put(request, networkResponse.clone());
-    }
-    
-    return networkResponse;
+    return await fetch(request);
   } catch (error) {
-    console.log('[SW] Network failed, trying cache:', request.url);
-    
-    const cachedResponse = await caches.match(request);
-    if (cachedResponse) {
-      return cachedResponse;
-    }
-    
-    // Return offline response for API
+    console.log('[SW] Network failed for API request:', request.url);
+    // Return a clean offline response — never fall back to a cached API response
     return new Response(
       JSON.stringify({ error: 'Offline', cached: false }),
       {

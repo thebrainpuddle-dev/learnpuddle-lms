@@ -38,12 +38,34 @@ function clearPersistedAuth() {
 }
 
 /**
- * Request interceptor to add auth token and set Content-Type
- * Uses sessionStorage for tab-isolated sessions (prevents cross-tab token conflicts)
+ * Read access token from whichever storage holds it (localStorage for "Remember Me", sessionStorage otherwise).
+ */
+function getAccessToken(): string | null {
+  return sessionStorage.getItem('access_token') || localStorage.getItem('access_token');
+}
+
+/**
+ * Read refresh token from whichever storage holds it.
+ */
+function getRefreshToken(): string | null {
+  return sessionStorage.getItem('refresh_token') || localStorage.getItem('refresh_token');
+}
+
+/**
+ * Determine which storage the refresh token lives in and return it.
+ * Used to write new tokens back to the same storage after a refresh.
+ */
+function getTokenStorage(): Storage {
+  return localStorage.getItem('refresh_token') ? localStorage : sessionStorage;
+}
+
+/**
+ * Request interceptor to add auth token and set Content-Type.
+ * Checks both sessionStorage and localStorage so "Remember Me" users are handled correctly.
  */
 api.interceptors.request.use(
   (config) => {
-    const token = sessionStorage.getItem('access_token');
+    const token = getAccessToken();
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
@@ -100,7 +122,7 @@ api.interceptors.response.use(
     if (error.response?.status === 401 && !originalRequest._retry) {
       originalRequest._retry = true;
 
-      const refreshToken = sessionStorage.getItem('refresh_token');
+      const refreshToken = getRefreshToken();
       // Determine which login page to redirect to based on current path
       const currentPath = window.location.pathname;
       const loginPath = currentPath.startsWith('/super-admin')
@@ -114,6 +136,8 @@ api.interceptors.response.use(
         // No refresh token - session expired
         sessionStorage.removeItem('access_token');
         sessionStorage.removeItem('refresh_token');
+        localStorage.removeItem('access_token');
+        localStorage.removeItem('refresh_token');
         clearPersistedAuth();
         if (!isOnLoginPage) window.location.href = loginPath;
         return Promise.reject(error);
@@ -142,16 +166,20 @@ api.interceptors.response.use(
         });
 
         const { access } = response.data;
-        sessionStorage.setItem('access_token', access);
+        // Save back to whichever storage originally held the token
+        const tokenStorage = getTokenStorage();
+        tokenStorage.setItem('access_token', access);
 
-        // Update Zustand store if available
+        // Update Zustand store in both storages (best-effort)
         try {
-          const authData = sessionStorage.getItem('auth-storage');
-          if (authData) {
-            const parsed = JSON.parse(authData);
-            if (parsed?.state) {
-              parsed.state.accessToken = access;
-              sessionStorage.setItem('auth-storage', JSON.stringify(parsed));
+          for (const storage of [sessionStorage, localStorage]) {
+            const authData = storage.getItem('auth-storage');
+            if (authData) {
+              const parsed = JSON.parse(authData);
+              if (parsed?.state) {
+                parsed.state.accessToken = access;
+                storage.setItem('auth-storage', JSON.stringify(parsed));
+              }
             }
           }
         } catch {
@@ -167,9 +195,11 @@ api.interceptors.response.use(
       } catch (refreshError) {
         isRefreshing = false;
         onRefreshFailed(refreshError);
-        // Refresh failed, logout user and redirect to login
+        // Refresh failed — clear tokens from both storages and redirect to login
         sessionStorage.removeItem('access_token');
         sessionStorage.removeItem('refresh_token');
+        localStorage.removeItem('access_token');
+        localStorage.removeItem('refresh_token');
         clearPersistedAuth();
         if (!isOnLoginPage) window.location.href = loginPath;
         return Promise.reject(refreshError);
