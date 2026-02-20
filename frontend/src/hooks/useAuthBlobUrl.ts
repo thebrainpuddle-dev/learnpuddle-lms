@@ -4,6 +4,7 @@
 // cannot be attached natively.
 
 import { useEffect, useState } from 'react';
+import { getAccessToken } from '../utils/authSession';
 
 export function useAuthBlobUrl(protectedUrl: string | null | undefined): string | null {
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
@@ -19,7 +20,7 @@ export function useAuthBlobUrl(protectedUrl: string | null | undefined): string 
 
     const fetchBlob = async () => {
       try {
-        const token = sessionStorage.getItem('access_token');
+        const token = getAccessToken();
         const headers: HeadersInit = {};
         if (token) headers['Authorization'] = `Bearer ${token}`;
 

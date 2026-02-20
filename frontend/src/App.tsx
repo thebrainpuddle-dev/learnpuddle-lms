@@ -43,6 +43,7 @@ import {
   SchoolDetailPage as SuperAdminSchoolDetailPage,
 } from './pages/superadmin';
 import api from './config/api';
+import { useSessionLifecycle } from './hooks/useSessionLifecycle';
 import { useAuthStore } from './stores/authStore';
 import { useTenantStore } from './stores/tenantStore';
 import './assets/styles/index.css';
@@ -61,6 +62,7 @@ function AppContent() {
   const { isAuthenticated, user, setUser, clearAuth } = useAuthStore();
   const { setConfig } = useTenantStore();
   const [authValidated, setAuthValidated] = React.useState(!isAuthenticated);
+  useSessionLifecycle();
 
   // On startup, validate any persisted token by calling /auth/me/.
   // If the token is expired or missing, clear auth and redirect to login

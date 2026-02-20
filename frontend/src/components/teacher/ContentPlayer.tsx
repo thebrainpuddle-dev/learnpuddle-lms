@@ -11,6 +11,7 @@ import {
 } from '@heroicons/react/24/solid';
 import { ArrowTopRightOnSquareIcon } from '@heroicons/react/24/outline';
 import { teacherService } from '../../services/teacherService';
+import { getAccessToken } from '../../utils/authSession';
 
 interface ContentPlayerProps {
   content: {
@@ -88,7 +89,7 @@ export const ContentPlayer: React.FC<ContentPlayerProps> = ({
         enableWorker: true,
         // Add auth headers for the HLS proxy endpoint
         xhrSetup: (xhr) => {
-          const token = sessionStorage.getItem('access_token');
+          const token = getAccessToken();
           if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
         },
       });

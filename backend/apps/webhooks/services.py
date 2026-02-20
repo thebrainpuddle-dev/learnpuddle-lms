@@ -138,7 +138,7 @@ def execute_delivery(delivery: WebhookDelivery) -> bool:
         'X-Webhook-Event': delivery.event_type,
         'X-Webhook-Signature': f'sha256={signature}',
         'X-Webhook-Timestamp': str(int(time.time())),
-        'User-Agent': 'BrainLMS-Webhook/1.0',
+        'User-Agent': 'LearnPuddle-Webhook/1.0',
     }
     
     delivery.attempt_count += 1

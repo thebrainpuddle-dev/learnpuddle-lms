@@ -266,7 +266,7 @@ def _send_verification_email(user, request=None):
     verify_link = f"{base}/verify-email?uid={uid}&token={token}"
 
     send_mail(
-        subject=f"Welcome to {getattr(settings, 'PLATFORM_NAME', 'Brain LMS')} — Verify your email",
+        subject=f"Welcome to {getattr(settings, 'PLATFORM_NAME', 'LearnPuddle')} — Verify your email",
         message=(
             f"Hi {user.first_name},\n\n"
             f"Your account has been created. Please verify your email address by clicking the link below:\n\n"
@@ -349,7 +349,7 @@ def request_password_reset_view(request):
     reset_link = f"{base}/reset-password?uid={uid}&token={token}"
 
     send_mail(
-        subject=f"Password reset — {getattr(settings, 'PLATFORM_NAME', 'Brain LMS')}",
+        subject=f"Password reset — {getattr(settings, 'PLATFORM_NAME', 'LearnPuddle')}",
         message=(
             f"Hi {user.first_name},\n\n"
             f"Click the link below to reset your password:\n\n"

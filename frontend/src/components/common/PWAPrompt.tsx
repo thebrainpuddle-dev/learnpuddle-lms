@@ -78,7 +78,7 @@ export const PWAPrompt: React.FC<PWAPromptProps> = ({ className = '' }) => {
             </svg>
           </div>
           <div className="flex-1">
-            <h3 className="text-sm font-semibold text-gray-900">Install Brain LMS</h3>
+            <h3 className="text-sm font-semibold text-gray-900">Install LearnPuddle</h3>
             <p className="text-sm text-gray-600 mt-1">
               Install our app for a better experience with offline access.
             </p>

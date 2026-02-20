@@ -89,7 +89,7 @@ def _call_openrouter(
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
         "HTTP-Referer": getattr(conf, "PLATFORM_DOMAIN", "lms.com"),
-        "X-Title": getattr(conf, "PLATFORM_NAME", "Brain LMS"),
+        "X-Title": getattr(conf, "PLATFORM_NAME", "LearnPuddle"),
     }
 
     for attempt in range(OPENROUTER_MAX_RETRIES + 1):

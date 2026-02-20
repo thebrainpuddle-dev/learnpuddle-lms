@@ -1,5 +1,5 @@
 /* eslint-disable no-restricted-globals */
-// Service Worker for Brain LMS PWA
+// Service Worker for LearnPuddle PWA
 // Provides offline support, caching, and push notifications
 
 // Auto-replaced by postbuild script with git hash + timestamp on production builds.
@@ -184,7 +184,7 @@ self.addEventListener('push', (event) => {
   console.log('[SW] Push notification received');
   
   let data = {
-    title: 'Brain LMS',
+    title: 'LearnPuddle',
     body: 'You have a new notification',
     icon: '/logo192.png',
     badge: '/logo192.png',

@@ -288,7 +288,7 @@ def tenant_reset_admin_password(request, tenant_id):
     # Best-effort email with reset link (NOT plaintext password)
     try:
         send_mail(
-            subject=f"Password reset — {getattr(settings, 'PLATFORM_NAME', 'Brain LMS')}",
+            subject=f"Password reset — {getattr(settings, 'PLATFORM_NAME', 'LearnPuddle')}",
             message=(
                 f"Hi {admin_user.first_name},\n\n"
                 f"Your password has been reset by the platform admin.\n\n"

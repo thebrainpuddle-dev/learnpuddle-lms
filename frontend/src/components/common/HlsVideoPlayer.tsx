@@ -2,6 +2,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import Hls from 'hls.js';
+import { getAccessToken } from '../../utils/authSession';
 
 interface HlsVideoPlayerProps {
   src: string;
@@ -33,7 +34,7 @@ export const HlsVideoPlayer: React.FC<HlsVideoPlayerProps> = ({
     if (isHls && Hls.isSupported()) {
       const hls = new Hls({
         xhrSetup: (xhr) => {
-          const token = sessionStorage.getItem('access_token');
+          const token = getAccessToken();
           if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
         },
         maxBufferLength: 30,

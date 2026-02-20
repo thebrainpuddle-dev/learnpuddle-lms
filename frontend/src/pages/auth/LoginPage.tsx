@@ -4,7 +4,7 @@
 // Super admins use the separate /super-admin/login page.
 
 import React, { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, Link, useSearchParams } from 'react-router-dom';
 import { Input } from '../../components/common/Input';
 import { Button } from '../../components/common/Button';
 import { Checkbox } from '../../components/common/Checkbox';
@@ -17,6 +17,7 @@ import { EnvelopeIcon, LockClosedIcon } from '@heroicons/react/24/outline';
 export const LoginPage: React.FC = () => {
   usePageTitle('Login');
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { setAuth, setLoading } = useAuthStore();
   const { theme } = useTenantStore();
 
@@ -25,6 +26,7 @@ export const LoginPage: React.FC = () => {
   const [rememberMe, setRememberMe] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoadingState] = useState(false);
+  const logoutReason = searchParams.get('reason');
 
   // Tenant name from the loaded theme (resolved from subdomain during app boot)
   const tenantName = theme?.name || 'School';
@@ -107,6 +109,23 @@ export const LoginPage: React.FC = () => {
               <p className="text-sm text-red-600">{error}</p>
             </div>
           )}
+          {!error && logoutReason === 'idle_timeout' && (
+            <div className="mb-4 p-4 bg-amber-50 border border-amber-200 rounded-lg">
+              <p className="text-sm text-amber-700">
+                You were signed out after 30 minutes of inactivity.
+              </p>
+            </div>
+          )}
+          {!error && logoutReason === 'session_expired' && (
+            <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+              <p className="text-sm text-blue-700">Your session expired. Please sign in again.</p>
+            </div>
+          )}
+          {!error && logoutReason === 'tenant_access_denied' && (
+            <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+              <p className="text-sm text-blue-700">Your session context changed. Please sign in again.</p>
+            </div>
+          )}
 
           <form onSubmit={handleSubmit} className="space-y-6">
             <Input
@@ -174,7 +193,7 @@ export const LoginPage: React.FC = () => {
 
         {/* Footer */}
         <p className="text-center text-sm text-gray-600 mt-8">
-          Powered by Brain LMS &copy; {new Date().getFullYear()}
+          Powered by LearnPuddle &copy; {new Date().getFullYear()}
         </p>
       </div>
     </div>

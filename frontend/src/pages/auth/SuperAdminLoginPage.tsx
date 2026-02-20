@@ -1,7 +1,7 @@
 // src/pages/auth/SuperAdminLoginPage.tsx
 
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Button } from '../../components/common/Button';
 import { useAuthStore } from '../../stores/authStore';
 import { usePageTitle } from '../../hooks/usePageTitle';
@@ -15,12 +15,14 @@ import {
 export const SuperAdminLoginPage: React.FC = () => {
   usePageTitle('Super Admin Login');
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { setAuth, setLoading } = useAuthStore();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoadingState] = useState(false);
+  const logoutReason = searchParams.get('reason');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -71,7 +73,7 @@ export const SuperAdminLoginPage: React.FC = () => {
             <ShieldCheckIcon className="h-9 w-9 text-white" />
           </div>
           <h1 className="text-3xl font-bold text-white">Command Center</h1>
-          <p className="text-slate-400 mt-2">Brain LMS Platform Administration</p>
+          <p className="text-slate-400 mt-2">LearnPuddle Platform Administration</p>
         </div>
 
         {/* Login Card */}
@@ -83,6 +85,23 @@ export const SuperAdminLoginPage: React.FC = () => {
           {error && (
             <div className="mb-4 p-4 bg-red-500/10 border border-red-500/20 rounded-lg">
               <p className="text-sm text-red-300">{error}</p>
+            </div>
+          )}
+          {!error && logoutReason === 'idle_timeout' && (
+            <div className="mb-4 p-4 bg-amber-500/10 border border-amber-500/20 rounded-lg">
+              <p className="text-sm text-amber-300">
+                You were signed out after 30 minutes of inactivity.
+              </p>
+            </div>
+          )}
+          {!error && logoutReason === 'session_expired' && (
+            <div className="mb-4 p-4 bg-sky-500/10 border border-sky-500/20 rounded-lg">
+              <p className="text-sm text-sky-300">Session expired. Please sign in again.</p>
+            </div>
+          )}
+          {!error && logoutReason === 'tenant_access_denied' && (
+            <div className="mb-4 p-4 bg-sky-500/10 border border-sky-500/20 rounded-lg">
+              <p className="text-sm text-sky-300">Session context changed. Please sign in again.</p>
             </div>
           )}
 

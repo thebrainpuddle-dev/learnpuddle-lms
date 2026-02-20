@@ -182,7 +182,7 @@ def generate_certificate_pdf(
         elements.append(Paragraph(f"Certificate ID: {certificate_id}", footer_style))
     
     # Platform branding
-    platform_name = getattr(settings, 'PLATFORM_NAME', 'Brain LMS')
+    platform_name = getattr(settings, 'PLATFORM_NAME', 'LearnPuddle')
     elements.append(Paragraph(f"Powered by {platform_name}", footer_style))
     
     # Build PDF

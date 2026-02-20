@@ -629,7 +629,7 @@ SOCIAL_AUTH_GOOGLE_OAUTH2_WHITELISTED_DOMAINS = config(
 # -----------------------------------------------------------------------------
 # Two-Factor Authentication (2FA / MFA)
 # -----------------------------------------------------------------------------
-OTP_TOTP_ISSUER = config('OTP_ISSUER', default='Brain LMS')
+OTP_TOTP_ISSUER = config('OTP_ISSUER', default='LearnPuddle')
 
 # Number of backup codes to generate
 OTP_STATIC_THROTTLE_FACTOR = 1

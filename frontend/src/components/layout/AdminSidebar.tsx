@@ -19,6 +19,7 @@ import {
 import { useAuthStore } from '../../stores/authStore';
 import { authService } from '../../services/authService';
 import { useTenantStore } from '../../stores/tenantStore';
+import { broadcastLogout } from '../../utils/authSession';
 
 interface AdminSidebarProps {
   open: boolean;
@@ -54,6 +55,7 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({ open, onClose }) => 
     } catch (error) {
       console.error('Logout error:', error);
     } finally {
+      broadcastLogout('manual_logout');
       clearAuth();
       window.location.href = '/login';
     }

@@ -164,7 +164,7 @@ export const SignupPage: React.FC = () => {
       <header className="py-4 px-6">
         <div className="max-w-7xl mx-auto flex justify-between items-center">
           <Link to="/" className="text-2xl font-bold text-primary-600">
-            Brain LMS
+            LearnPuddle
           </Link>
           <Link to="/login" className="text-sm text-gray-600 hover:text-primary-600">
             Already have an account? Sign in

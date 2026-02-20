@@ -6,6 +6,7 @@ import {
   ArrowRightOnRectangleIcon,
 } from '@heroicons/react/24/outline';
 import { useAuthStore } from '../../stores/authStore';
+import { broadcastLogout } from '../../utils/authSession';
 
 const navItems = [
   { to: '/super-admin/dashboard', label: 'Dashboard', icon: HomeIcon },
@@ -45,7 +46,11 @@ export const SuperAdminSidebar: React.FC = () => {
       {/* Footer */}
       <div className="p-3 border-t border-slate-800">
         <button
-          onClick={() => { clearAuth(); window.location.href = '/super-admin/login'; }}
+          onClick={() => {
+            broadcastLogout('manual_logout');
+            clearAuth();
+            window.location.href = '/super-admin/login';
+          }}
           className="flex items-center gap-3 w-full px-3 py-2.5 rounded-lg text-sm font-medium text-slate-300 hover:bg-slate-800 hover:text-white transition-colors"
         >
           <ArrowRightOnRectangleIcon className="h-5 w-5" />
