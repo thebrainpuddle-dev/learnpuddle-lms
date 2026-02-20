@@ -1,6 +1,7 @@
 // src/config/api.ts
 
 import axios, { AxiosInstance } from 'axios';
+import { useAuthStore } from '../stores/authStore';
 import {
   broadcastLogout,
   buildLoginRedirectUrl,
@@ -25,6 +26,11 @@ export const api: AxiosInstance = axios.create({
 });
 
 function terminateSession(reason: 'session_expired' | 'tenant_access_denied') {
+  try {
+    useAuthStore.getState().clearAuth();
+  } catch {
+    // In-memory store cleanup is best-effort.
+  }
   clearAuthArtifacts();
   broadcastLogout(reason);
   if (!isLoginPath()) {

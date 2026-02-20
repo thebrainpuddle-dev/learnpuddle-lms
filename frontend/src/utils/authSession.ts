@@ -69,6 +69,7 @@ export function clearPersistedAuthState() {
 export function clearAuthArtifacts() {
   clearStoredTokens();
   clearPersistedAuthState();
+  localStorage.removeItem(SESSION_LAST_ACTIVITY_KEY);
 }
 
 export function isLoginPath(pathname: string = window.location.pathname): boolean {

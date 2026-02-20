@@ -16,6 +16,14 @@ const mockedUseTenantStore = useTenantStore as jest.MockedFunction<typeof useTen
 // Mock api to prevent actual network calls
 jest.mock('./config/api', () => ({
   __esModule: true,
+  api: {
+    get: jest.fn(),
+    post: jest.fn(),
+    interceptors: {
+      request: { use: jest.fn() },
+      response: { use: jest.fn() },
+    },
+  },
   default: {
     get: jest.fn(),
     post: jest.fn(),
@@ -47,11 +55,16 @@ describe('App', () => {
     mockedUseTenantStore.mockReturnValue({
       theme: {
         name: 'Test School',
-        primary_color: '#3b82f6',
-        secondary_color: '#6366f1',
+        subdomain: 'demo',
+        primaryColor: '#3b82f6',
+        secondaryColor: '#6366f1',
+        fontFamily: 'Inter',
+        tenantFound: true,
         logo: null,
       },
       setTheme: jest.fn(),
+      setConfig: jest.fn(),
+      hasFeature: jest.fn(() => true),
       clearTheme: jest.fn(),
     });
   });

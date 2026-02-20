@@ -24,15 +24,15 @@ def get_tenant_from_request(request):
     """
     host = request.get_host().split(':')[0].lower()  # Remove port, lowercase
 
-    # Platform root — no tenant (command center, signup, marketing)
-    platform_domain = getattr(settings, 'PLATFORM_DOMAIN', '').lower()
-    if platform_domain and host == platform_domain:
-        return None
-
     # Development mode - use demo tenant
     if host in ['localhost', '127.0.0.1']:
         subdomain = 'demo'
     else:
+        # Platform root — no tenant (command center, signup, marketing)
+        platform_domain = getattr(settings, 'PLATFORM_DOMAIN', '').lower()
+        if platform_domain and host == platform_domain:
+            return None
+
         # First, try to match a custom domain
         try:
             tenant = Tenant.objects.get(

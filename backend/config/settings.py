@@ -291,7 +291,7 @@ REST_FRAMEWORK = {
     'DEFAULT_THROTTLE_RATES': {
         'anon': config('THROTTLE_ANON', default='200/minute'),
         'user': config('THROTTLE_USER', default='1000/minute'),
-        'login': '5/minute',
+        'login': config('THROTTLE_LOGIN', default='5/minute'),
         'password_reset': '3/minute',
         'register': '10/minute',
         'reminder_send': '10/hour',

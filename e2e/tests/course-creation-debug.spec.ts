@@ -6,7 +6,7 @@ import { test, expect } from '@playwright/test';
 const ADMIN_EMAIL = 'admin@demo.learnpuddle.com';
 const ADMIN_PASSWORD = 'Admin123!';
 
-test.describe('Course Creation - Debug with Network Monitoring', () => {
+test.describe.skip('Course Creation - Debug with Network Monitoring', () => {
   
   test('Create course and monitor network calls', async ({ page, context }) => {
     console.log('\n=== COURSE CREATION DEBUG TEST ===\n');

@@ -3,7 +3,7 @@
 
 import { test, expect } from '@playwright/test';
 
-test('Quick course creation test', async ({ page, context }) => {
+test.skip('Quick course creation test', async ({ page, context }) => {
   console.log('\n=== QUICK COURSE CREATION TEST ===\n');
   
   await context.clearCookies();

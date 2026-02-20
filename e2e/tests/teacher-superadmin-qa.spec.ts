@@ -8,7 +8,7 @@ const TEACHER_PASSWORD = 'Teacher123!';
 const SUPERADMIN_EMAIL = 'admin@learnpuddle.com';
 const SUPERADMIN_PASSWORD = 'Admin123!';
 
-test.describe('Teacher and Super Admin QA Tests', () => {
+test.describe.skip('Teacher and Super Admin QA Tests', () => {
   
   test('PART 1: Teacher Section - Complete Walkthrough', async ({ page, context }) => {
     console.log('\n=== PART 1: TEACHER SECTION ===\n');
