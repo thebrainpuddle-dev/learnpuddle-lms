@@ -17,6 +17,7 @@ import { useAuthStore } from '../../stores/authStore';
 import { authService } from '../../services/authService';
 import { useTenantStore } from '../../stores/tenantStore';
 import { notificationService } from '../../services/notificationService';
+import { broadcastLogout } from '../../utils/authSession';
 
 interface TeacherSidebarProps {
   open: boolean;
@@ -50,6 +51,7 @@ export const TeacherSidebar: React.FC<TeacherSidebarProps> = ({ open, onClose })
     } catch (error) {
       console.error('Logout error:', error);
     } finally {
+      broadcastLogout('manual_logout');
       clearAuth();
       window.location.href = '/login';
     }

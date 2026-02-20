@@ -1,6 +1,15 @@
 // src/config/api.ts
 
 import axios, { AxiosInstance } from 'axios';
+import {
+  broadcastLogout,
+  buildLoginRedirectUrl,
+  clearAuthArtifacts,
+  getAccessToken,
+  getRefreshToken,
+  getTokenStorage,
+  isLoginPath,
+} from '../utils/authSession';
 
 const API_BASE_URL =
   process.env.REACT_APP_API_URL ||
@@ -15,48 +24,48 @@ export const api: AxiosInstance = axios.create({
   timeout: 30000,
 });
 
-/**
- * Clear persisted Zustand auth state so stale isAuthenticated=true
- * does not cause redirect loops on page reload.
- */
-function clearPersistedAuth() {
-  try {
-    for (const storage of [sessionStorage, localStorage]) {
-      const raw = storage.getItem('auth-storage');
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (parsed?.state) {
-          parsed.state.isAuthenticated = false;
-          parsed.state.user = null;
-          parsed.state.accessToken = null;
-          parsed.state.refreshToken = null;
-          storage.setItem('auth-storage', JSON.stringify(parsed));
-        }
-      }
-    }
-  } catch { /* best-effort */ }
+function terminateSession(reason: 'session_expired' | 'tenant_access_denied') {
+  clearAuthArtifacts();
+  broadcastLogout(reason);
+  if (!isLoginPath()) {
+    window.location.href = buildLoginRedirectUrl(reason);
+  }
 }
 
-/**
- * Read access token from whichever storage holds it (localStorage for "Remember Me", sessionStorage otherwise).
- */
-function getAccessToken(): string | null {
-  return sessionStorage.getItem('access_token') || localStorage.getItem('access_token');
+function shouldAttemptRefresh(error: any): boolean {
+  const status = error?.response?.status;
+  if (status === 401) {
+    return true;
+  }
+  if (status !== 403) {
+    return false;
+  }
+
+  const data = error?.response?.data || {};
+  const detail = String(data.detail || data.error || '').toLowerCase();
+  const code = String(data.code || '').toLowerCase();
+  const messages = Array.isArray(data.messages)
+    ? data.messages.map((item: any) => String(item?.message || '')).join(' ').toLowerCase()
+    : '';
+
+  return (
+    code.includes('token_not_valid') ||
+    (detail.includes('token') && (detail.includes('expired') || detail.includes('invalid'))) ||
+    messages.includes('token')
+  );
 }
 
-/**
- * Read refresh token from whichever storage holds it.
- */
-function getRefreshToken(): string | null {
-  return sessionStorage.getItem('refresh_token') || localStorage.getItem('refresh_token');
-}
-
-/**
- * Determine which storage the refresh token lives in and return it.
- * Used to write new tokens back to the same storage after a refresh.
- */
-function getTokenStorage(): Storage {
-  return localStorage.getItem('refresh_token') ? localStorage : sessionStorage;
+function isTenantAccessDenied(error: any): boolean {
+  if (error?.response?.status !== 403) {
+    return false;
+  }
+  const data = error?.response?.data || {};
+  const detail = String(data.detail || data.error || '').toLowerCase();
+  return (
+    detail.includes('does not belong to this tenant') ||
+    detail.includes('tenant required') ||
+    (detail.includes('tenant') && detail.includes('access denied'))
+  );
 }
 
 /**
@@ -117,29 +126,17 @@ api.interceptors.response.use(
   (response) => response,
   async (error) => {
     const originalRequest = error.config;
+    const requestUrl = String(originalRequest?.url || '');
+    const isRefreshRequest = requestUrl.includes('/users/auth/refresh/');
 
-    // If token expired and not already retrying this specific request
-    if (error.response?.status === 401 && !originalRequest._retry) {
+    // Recover token-expiration scenarios on both 401 and token-related 403.
+    if (shouldAttemptRefresh(error) && !isRefreshRequest && !originalRequest?._retry) {
       originalRequest._retry = true;
 
       const refreshToken = getRefreshToken();
-      // Determine which login page to redirect to based on current path
-      const currentPath = window.location.pathname;
-      const loginPath = currentPath.startsWith('/super-admin')
-        ? '/super-admin/login'
-        : '/login';
-
-      // Avoid redirect loop: if already on a login page, just reject
-      const isOnLoginPage = currentPath === '/login' || currentPath === '/super-admin/login';
 
       if (!refreshToken) {
-        // No refresh token - session expired
-        sessionStorage.removeItem('access_token');
-        sessionStorage.removeItem('refresh_token');
-        localStorage.removeItem('access_token');
-        localStorage.removeItem('refresh_token');
-        clearPersistedAuth();
-        if (!isOnLoginPage) window.location.href = loginPath;
+        terminateSession('session_expired');
         return Promise.reject(error);
       }
 
@@ -195,15 +192,14 @@ api.interceptors.response.use(
       } catch (refreshError) {
         isRefreshing = false;
         onRefreshFailed(refreshError);
-        // Refresh failed — clear tokens from both storages and redirect to login
-        sessionStorage.removeItem('access_token');
-        sessionStorage.removeItem('refresh_token');
-        localStorage.removeItem('access_token');
-        localStorage.removeItem('refresh_token');
-        clearPersistedAuth();
-        if (!isOnLoginPage) window.location.href = loginPath;
+        terminateSession('session_expired');
         return Promise.reject(refreshError);
       }
+    }
+
+    // Token/state drift can surface as tenant-level 403s. Force clean logout.
+    if (isTenantAccessDenied(error)) {
+      terminateSession('tenant_access_denied');
     }
 
     return Promise.reject(error);

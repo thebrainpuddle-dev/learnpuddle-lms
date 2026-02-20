@@ -26,7 +26,7 @@ def send_onboard_welcome_email(result: dict) -> None:
     subdomain = tenant.subdomain
     login_url = _build_login_url(subdomain)
 
-    subject = f"Welcome to {getattr(settings, 'PLATFORM_NAME', 'Brain LMS')} — Your school is ready!"
+    subject = f"Welcome to {getattr(settings, 'PLATFORM_NAME', 'LearnPuddle')} — Your school is ready!"
     body = (
         f"Hi {admin.first_name},\n\n"
         f"Your school \"{tenant.name}\" has been set up on our platform.\n\n"
@@ -36,7 +36,7 @@ def send_onboard_welcome_email(result: dict) -> None:
         f"  Password: (the one provided during onboarding)\n\n"
         f"Please change your password after your first login.\n\n"
         f"If you have any questions, reply to this email.\n\n"
-        f"— The {getattr(settings, 'PLATFORM_NAME', 'Brain LMS')} Team"
+        f"— The {getattr(settings, 'PLATFORM_NAME', 'LearnPuddle')} Team"
     )
 
     send_mail(
@@ -58,11 +58,11 @@ def send_trial_expiry_warning_email(tenant, days_left: int) -> None:
     subject = f"Your trial expires in {days_left} day{'s' if days_left != 1 else ''}"
     body = (
         f"Hi {admin.first_name},\n\n"
-        f"Your trial for \"{tenant.name}\" on {getattr(settings, 'PLATFORM_NAME', 'Brain LMS')} "
+        f"Your trial for \"{tenant.name}\" on {getattr(settings, 'PLATFORM_NAME', 'LearnPuddle')} "
         f"will expire in {days_left} day{'s' if days_left != 1 else ''}.\n\n"
         f"Log in at {login_url} to continue using the platform.\n\n"
         f"To upgrade or extend your trial, please contact us by replying to this email.\n\n"
-        f"— The {getattr(settings, 'PLATFORM_NAME', 'Brain LMS')} Team"
+        f"— The {getattr(settings, 'PLATFORM_NAME', 'LearnPuddle')} Team"
     )
 
     send_mail(

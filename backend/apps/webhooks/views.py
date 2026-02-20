@@ -267,7 +267,7 @@ def webhook_test(request, webhook_id):
     
     test_payload = {
         'test': True,
-        'message': 'This is a test webhook from Brain LMS',
+        'message': 'This is a test webhook from LearnPuddle',
         'triggered_by': request.user.email,
     }
     
