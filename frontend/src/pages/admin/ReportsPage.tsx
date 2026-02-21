@@ -12,6 +12,7 @@ import {
   ClipboardDocumentCheckIcon,
   FunnelIcon,
   MagnifyingGlassIcon,
+  LockClosedIcon,
 } from '@heroicons/react/24/outline';
 
 type Tab = 'COURSE' | 'ASSIGNMENT';
@@ -99,7 +100,6 @@ export const ReportsPage: React.FC = () => {
   const courseSelectedCount = selectedTeacherIds.length;
   const assignmentSelectedCount = selectedAssignmentTeacherIds.length;
 
-  const canSendCourseReminder = !!courseId && courseSelectedCount > 0;
   const canSendAssignmentReminder = !!assignmentId && assignmentSelectedCount > 0;
 
   const courseAllSelected = useMemo(() => courseRows.length > 0 && courseSelectedCount === courseRows.length, [courseRows.length, courseSelectedCount]);
@@ -185,21 +185,10 @@ export const ReportsPage: React.FC = () => {
             <div className="text-sm text-gray-600">
               Selected: <span className="font-medium">{courseSelectedCount}</span>
             </div>
-            <Button
-              variant="primary"
-              disabled={!canSendCourseReminder}
-              loading={sendReminderMutation.isPending}
-              onClick={() =>
-                sendReminderMutation.mutate({
-                  reminder_type: 'COURSE_DEADLINE',
-                  course_id: courseId,
-                  teacher_ids: selectedTeacherIds,
-                })
-              }
-            >
-              <PaperAirplaneIcon className="h-4 w-4 mr-2" />
-              Send reminder
-            </Button>
+            <div className="inline-flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              <LockClosedIcon className="h-4 w-4" />
+              Course deadline reminders are automated (manual send locked).
+            </div>
           </div>
 
           <div className="card overflow-x-auto">
@@ -382,4 +371,3 @@ export const ReportsPage: React.FC = () => {
     </div>
   );
 };
-

@@ -6,7 +6,7 @@ import { useToast } from '../../components/common';
 import { adminReportsService } from '../../services/adminReportsService';
 import { adminRemindersService } from '../../services/adminRemindersService';
 import { adminTeachersService } from '../../services/adminTeachersService';
-import { PaperAirplaneIcon, EyeIcon, ClockIcon, MagnifyingGlassIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import { PaperAirplaneIcon, EyeIcon, ClockIcon, MagnifyingGlassIcon, XMarkIcon, LockClosedIcon } from '@heroicons/react/24/outline';
 import { usePageTitle } from '../../hooks/usePageTitle';
 
 // Debounce hook
@@ -19,13 +19,12 @@ function useDebounce<T>(value: T, delay: number): T {
   return debouncedValue;
 }
 
-type ReminderType = 'COURSE_DEADLINE' | 'ASSIGNMENT_DUE' | 'CUSTOM';
+type ReminderType = 'ASSIGNMENT_DUE' | 'CUSTOM';
 
 export const RemindersPage: React.FC = () => {
   usePageTitle('Reminders');
   const toast = useToast();
-  const [reminderType, setReminderType] = useState<ReminderType>('COURSE_DEADLINE');
-  const [courseId, setCourseId] = useState('');
+  const [reminderType, setReminderType] = useState<ReminderType>('CUSTOM');
   const [assignmentId, setAssignmentId] = useState('');
   const [deadlineOverride, setDeadlineOverride] = useState('');
   const [subject, setSubject] = useState('');
@@ -36,14 +35,14 @@ export const RemindersPage: React.FC = () => {
 
   const teacherIds = selectedTeacherIds.length > 0 ? selectedTeacherIds : undefined;
 
-  const { data: courses } = useQuery({
-    queryKey: ['reportCourses'],
-    queryFn: adminReportsService.listCourses,
-  });
-
   const { data: assignments } = useQuery({
     queryKey: ['reportAssignments'],
     queryFn: () => adminReportsService.listAssignments(),
+  });
+
+  const automationStatusQuery = useQuery({
+    queryKey: ['remindersAutomationStatus'],
+    queryFn: adminRemindersService.automationStatus,
   });
 
   const { data: teachers } = useQuery({
@@ -64,9 +63,8 @@ export const RemindersPage: React.FC = () => {
     mutationFn: () =>
       adminRemindersService.preview({
         reminder_type: reminderType,
-        course_id: reminderType === 'COURSE_DEADLINE' ? courseId : undefined,
         assignment_id: reminderType === 'ASSIGNMENT_DUE' ? assignmentId : undefined,
-        deadline_override: deadlineOverride || undefined,
+        deadline_override: reminderType === 'ASSIGNMENT_DUE' ? (deadlineOverride || undefined) : undefined,
         subject: subject || undefined,
         message: message || undefined,
         teacher_ids: teacherIds,
@@ -92,9 +90,8 @@ export const RemindersPage: React.FC = () => {
     mutationFn: () =>
       adminRemindersService.send({
         reminder_type: reminderType,
-        course_id: reminderType === 'COURSE_DEADLINE' ? courseId : undefined,
         assignment_id: reminderType === 'ASSIGNMENT_DUE' ? assignmentId : undefined,
-        deadline_override: deadlineOverride || undefined,
+        deadline_override: reminderType === 'ASSIGNMENT_DUE' ? (deadlineOverride || undefined) : undefined,
         subject: subject || undefined,
         message: message || undefined,
         teacher_ids: teacherIds,
@@ -128,7 +125,6 @@ export const RemindersPage: React.FC = () => {
 
   const canPreview =
     reminderType === 'CUSTOM' ||
-    (reminderType === 'COURSE_DEADLINE' && !!courseId) ||
     (reminderType === 'ASSIGNMENT_DUE' && !!assignmentId);
 
   return (
@@ -136,6 +132,25 @@ export const RemindersPage: React.FC = () => {
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Reminders</h1>
         <p className="mt-1 text-sm text-gray-500">Send bulk or targeted email reminders and track history.</p>
+      </div>
+
+      <div className="card border border-amber-200 bg-amber-50/60">
+        <div className="flex items-start gap-3">
+          <LockClosedIcon className="h-5 w-5 text-amber-700 mt-0.5" />
+          <div className="space-y-1">
+            <h2 className="text-sm font-semibold text-amber-900">Course Deadline Reminders Are Automated</h2>
+            <p className="text-sm text-amber-800">
+              Manual course-deadline sends are locked. The scheduler automatically targets enrolled teachers who have not completed each course.
+            </p>
+            <p className="text-xs text-amber-700">
+              Lead days: {automationStatusQuery.data?.lead_days?.join(', ') || '7, 3, 1, 0'}.
+              {' '}Upcoming courses in window: {automationStatusQuery.data?.upcoming_courses_count ?? 0}.
+            </p>
+            <p className="text-xs text-amber-700">
+              Last automated run: {automationStatusQuery.data?.last_run_at ? new Date(automationStatusQuery.data.last_run_at).toLocaleString() : 'No run yet'}.
+            </p>
+          </div>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -151,13 +166,13 @@ export const RemindersPage: React.FC = () => {
                 onChange={(e) => setReminderType(e.target.value as ReminderType)}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg"
               >
-                <option value="COURSE_DEADLINE">Course deadline</option>
                 <option value="ASSIGNMENT_DUE">Assignment due</option>
                 <option value="CUSTOM">Custom</option>
               </select>
             </div>
 
-            <div>
+            {reminderType === 'ASSIGNMENT_DUE' && (
+              <div>
               <label htmlFor="reminder-deadline-override" className="block text-sm font-medium text-gray-700 mb-1">
                 <ClockIcon className="h-4 w-4 inline mr-1" />
                 Deadline override (optional)
@@ -171,28 +186,9 @@ export const RemindersPage: React.FC = () => {
                 onChange={(e) => setDeadlineOverride(e.target.value)}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg"
               />
-            </div>
+              </div>
+            )}
           </div>
-
-          {reminderType === 'COURSE_DEADLINE' && (
-            <div>
-              <label htmlFor="reminder-course" className="block text-sm font-medium text-gray-700 mb-1">Course</label>
-              <select
-                id="reminder-course"
-                name="course_id"
-                value={courseId}
-                onChange={(e) => setCourseId(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-              >
-                <option value="">Select a course…</option>
-                {(courses ?? []).map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.title}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
 
           {reminderType === 'ASSIGNMENT_DUE' && (
             <div>
@@ -241,7 +237,7 @@ export const RemindersPage: React.FC = () => {
               Target specific teachers (optional)
             </label>
             <p className="text-xs text-gray-500 mb-2">
-              Leave empty to target all relevant teachers (e.g., not completed / not submitted).
+              Leave empty to target all relevant teachers. For custom reminders, that means everyone.
             </p>
 
             {/* Selected teachers */}

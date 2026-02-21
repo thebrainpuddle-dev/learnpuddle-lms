@@ -10,14 +10,25 @@ export interface ReminderPreviewResponse {
 export interface ReminderCampaign {
   id: string;
   reminder_type: string;
+  source: 'MANUAL' | 'AUTOMATED';
   course: string | null;
   assignment: string | null;
   subject: string;
   message: string;
   deadline_override: string | null;
+  automation_key: string;
   created_at: string;
   sent_count: number;
   failed_count: number;
+}
+
+export interface ReminderAutomationStatus {
+  enabled: boolean;
+  locked_manual_types: string[];
+  lead_days: number[];
+  upcoming_courses_count: number;
+  last_run_at: string | null;
+  next_run_note: string;
 }
 
 export const adminRemindersService = {
@@ -35,5 +46,9 @@ export const adminRemindersService = {
     const res = await api.get('/reminders/history/');
     return res.data;
   },
-};
 
+  async automationStatus(): Promise<ReminderAutomationStatus> {
+    const res = await api.get('/reminders/automation-status/');
+    return res.data;
+  },
+};

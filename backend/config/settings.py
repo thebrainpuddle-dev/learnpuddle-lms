@@ -551,6 +551,10 @@ DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default=f'noreply@{_platform_d
 # Reminder email sending (disabled by default - uses in-app notifications only)
 # Set REMINDER_EMAIL_ENABLED=True to also send reminder emails
 REMINDER_EMAIL_ENABLED = config('REMINDER_EMAIL_ENABLED', default=False, cast=bool)
+AUTO_COURSE_REMINDERS_ENABLED = config('AUTO_COURSE_REMINDERS_ENABLED', default=True, cast=bool)
+# CSV list of lead-day checkpoints when automation sends reminders.
+# Example: "7,3,1,0" => one week, three days, one day, and due day.
+AUTO_COURSE_REMINDER_LEAD_DAYS = config('AUTO_COURSE_REMINDER_LEAD_DAYS', default='7,3,1,0')
 
 # Platform branding (used in emails and public pages)
 PLATFORM_NAME = config('PLATFORM_NAME', default='LearnPuddle')

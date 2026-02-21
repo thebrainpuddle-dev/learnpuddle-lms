@@ -17,6 +17,10 @@ app.conf.beat_schedule = {
         "task": "tenants.check_trial_expirations",
         "schedule": crontab(hour=6, minute=0),  # every day at 06:00 UTC
     },
+    "send-automated-course-deadline-reminders-daily": {
+        "task": "reminders.send_automated_course_deadline_reminders",
+        "schedule": crontab(hour=6, minute=30),  # every day at 06:30 UTC
+    },
     "ops-synthetic-probes-30s": {
         "task": "apps.ops.tasks.ops_run_synthetic_probes",
         "schedule": 30.0,

@@ -26,11 +26,13 @@ class ReminderCampaignSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "reminder_type",
+            "source",
             "course",
             "assignment",
             "subject",
             "message",
             "deadline_override",
+            "automation_key",
             "created_at",
             "sent_count",
             "failed_count",
@@ -50,4 +52,3 @@ class ReminderDeliverySerializer(serializers.ModelSerializer):
     class Meta:
         model = ReminderDelivery
         fields = ["id", "teacher", "teacher_email", "teacher_name", "status", "error", "sent_at", "created_at"]
-
