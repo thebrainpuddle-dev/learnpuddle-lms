@@ -80,6 +80,11 @@ docker compose -f docker-compose.prod.yml run --rm web python manage.py createsu
 echo "Starting all services..."
 docker compose -f docker-compose.prod.yml up -d
 
+DOMAIN="$(awk -F= '/^PLATFORM_DOMAIN=/{print $2}' .env 2>/dev/null | tail -1 | tr -d '\r')"
+if [ -z "$DOMAIN" ]; then DOMAIN="localhost"; fi
+echo "Running origin health checks via domain: $DOMAIN"
+./scripts/check-origin-health.sh docker-compose.prod.yml "$DOMAIN"
+
 echo ""
 echo "=== Deployment complete! ==="
 echo "Check: curl -s http://localhost/health/"

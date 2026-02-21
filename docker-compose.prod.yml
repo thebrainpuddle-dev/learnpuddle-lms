@@ -64,6 +64,17 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     restart: always
+    command: >
+      gunicorn config.wsgi:application
+      --bind 0.0.0.0:8000
+      --workers ${GUNICORN_WORKERS:-3}
+      --timeout ${GUNICORN_TIMEOUT:-120}
+      --graceful-timeout ${GUNICORN_GRACEFUL_TIMEOUT:-30}
+      --keep-alive ${GUNICORN_KEEPALIVE:-5}
+      --max-requests ${GUNICORN_MAX_REQUESTS:-1000}
+      --max-requests-jitter ${GUNICORN_MAX_REQUESTS_JITTER:-100}
+      --access-logfile -
+      --error-logfile -
     depends_on:
       db:
         condition: service_healthy
@@ -112,6 +123,12 @@ services:
       - frontend
     expose:
       - "8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health/', timeout=5)\""]
+      interval: 15s
+      timeout: 7s
+      retries: 4
+      start_period: 20s
     deploy:
       resources:
         limits:
@@ -146,6 +163,12 @@ services:
       - frontend
     expose:
       - "8001"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8001/health/', timeout=5)\""]
+      interval: 20s
+      timeout: 7s
+      retries: 5
+      start_period: 25s
     deploy:
       resources:
         limits:
@@ -264,8 +287,10 @@ services:
       - "80:80"
       - "443:443"
     depends_on:
-      - web
-      - asgi
+      web:
+        condition: service_healthy
+      asgi:
+        condition: service_healthy
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
       - ./nginx/ssl:/etc/nginx/ssl:ro
@@ -275,6 +300,12 @@ services:
       - certbot_www:/var/www/certbot:ro
     networks:
       - frontend
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -T 5 -O /dev/null http://127.0.0.1/health/"]
+      interval: 20s
+      timeout: 7s
+      retries: 5
+      start_period: 15s
     deploy:
       resources:
         limits:

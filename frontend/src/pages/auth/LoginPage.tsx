@@ -69,6 +69,8 @@ export const LoginPage: React.FC = () => {
         setError(detail || 'Invalid email or password');
       } else if (err.response?.status === 403) {
         setError('Your account has been disabled');
+      } else if ([502, 503, 504].includes(err.response?.status)) {
+        setError('Service is temporarily unavailable. Please retry in a few seconds.');
       } else {
         setError('An error occurred. Please try again.');
       }

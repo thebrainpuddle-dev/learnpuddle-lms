@@ -1,24 +1,24 @@
 # Cloudflare → Host Error: Troubleshooting Guide
 
-When Cloudflare shows "Host Error" or similar (521, 522, 523, 524), the connection between Cloudflare and your origin (Droplet) is failing. Use this checklist to fix it.
+When Cloudflare shows "Host Error" or gateway errors (502, 521, 522, 523, 524), the connection between Cloudflare and your origin (Droplet) is failing. Use this checklist to fix it.
 
 ---
 
 ## 1. Cloudflare SSL/TLS Mode
 
-**Required: Flexible** (when origin has no SSL certificate)
+**Required: Full (Strict)** (origin serves HTTPS with valid Origin cert)
 
 - Cloudflare Dashboard → SSL/TLS → Overview
-- Set to **Flexible**
-- Flexible = HTTPS (user ↔ Cloudflare) + HTTP (Cloudflare ↔ origin)
-- Our nginx listens on port 80 (HTTP) only
+- Set to **Full (Strict)**
+- Full (Strict) = HTTPS (user ↔ Cloudflare) + HTTPS (Cloudflare ↔ origin with valid cert)
+- Our nginx serves both port 80 and 443, with Origin cert on 443
 
 | Mode | User → CF | CF → Origin | Our setup |
 |------|-----------|-------------|-----------|
-| Off | HTTP | HTTP | ✓ |
-| Flexible | HTTPS | HTTP | ✓ **Use this** |
-| Full | HTTPS | HTTPS | ✗ Origin has no cert |
-| Full (Strict) | HTTPS | HTTPS (valid cert) | ✗ |
+| Off | HTTP | HTTP | ✗ |
+| Flexible | HTTPS | HTTP | ✗ |
+| Full | HTTPS | HTTPS | △ |
+| Full (Strict) | HTTPS | HTTPS (valid cert) | ✓ **Use this** |
 
 ---
 
@@ -106,6 +106,7 @@ If the Host header doesn't match, Django returns 400 Bad Request.
 
 | Code | Meaning | Fix |
 |------|---------|-----|
+| 502 | Bad gateway from origin/proxy | Check nginx upstream + web container reachability |
 | 521 | Origin web server down | Check Docker, nginx, web service |
 | 522 | Connection timed out | Firewall, wrong IP, port closed |
 | 523 | Origin unreachable | DNS, network, wrong IP |
@@ -115,7 +116,7 @@ If the Host header doesn't match, Django returns 400 Bad Request.
 
 ## 8. Quick Checklist
 
-- [ ] Cloudflare SSL mode = **Flexible**
+- [ ] Cloudflare SSL mode = **Full (Strict)**
 - [ ] DNS: `@` and `*` A records → Droplet IP
 - [ ] Droplet: ports 80, 443 open (ufw)
 - [ ] Docker: `docker compose ps` shows all Up
@@ -124,11 +125,11 @@ If the Host header doesn't match, Django returns 400 Bad Request.
 
 ---
 
-## 9. Optional: Cloudflare "Full" Mode (HTTPS to Origin)
+## 9. Recommended: Cloudflare "Full (Strict)" Mode
 
-To use Full or Full Strict:
+For Full (Strict):
 
 1. Generate Cloudflare Origin Certificate (Dashboard → SSL/TLS → Origin Server)
 2. Save cert and key to Droplet
 3. Uncomment the SSL server block in `nginx/nginx.conf`
-4. Set Cloudflare SSL to **Full** or **Full (Strict)**
+4. Set Cloudflare SSL to **Full (Strict)**

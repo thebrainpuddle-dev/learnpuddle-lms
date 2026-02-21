@@ -302,6 +302,27 @@ describe('LoginPage', () => {
         expect(screen.getByText('An error occurred. Please try again.')).toBeInTheDocument();
       });
     });
+
+    it('should display temporary outage message on gateway errors', async () => {
+      mockedApi.post.mockRejectedValueOnce({
+        response: {
+          status: 502,
+          data: {},
+        },
+      });
+
+      renderLoginPage();
+
+      await userEvent.type(screen.getByLabelText(/email address/i), 'test@example.test');
+      await userEvent.type(screen.getByLabelText(/password/i), 'TestPass@123');
+      await userEvent.click(screen.getByRole('button', { name: /sign in/i }));
+
+      await waitFor(() => {
+        expect(
+          screen.getByText('Service is temporarily unavailable. Please retry in a few seconds.')
+        ).toBeInTheDocument();
+      });
+    });
   });
 
   describe('loading state', () => {

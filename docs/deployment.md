@@ -121,8 +121,12 @@ curl -s http://localhost/health/
 
 ### 2.6 Cloudflare Setup
 
-1. **SSL mode**: Set to **Flexible** (HTTPS to user, HTTP to origin). See `docs/CLOUDFLARE_TROUBLESHOOTING.md` if you see "Host Error".
+1. **SSL mode**: Set to **Full (Strict)** (HTTPS end-to-end).
 2. **DNS**: Add A records for `@` and `*` pointing to your Droplet IP (both proxied).
+3. **Post-deploy origin check**:
+   ```bash
+   ./scripts/check-origin-health.sh docker-compose.prod.yml learnpuddle.com
+   ```
 
 ### 2.7 Post-Deploy: First School
 
@@ -136,5 +140,5 @@ curl -s http://localhost/health/
 For future deployments (pull latest and restart):
 
 ```bash
-cd /opt/lms && git pull && docker compose -f docker-compose.prod.yml build --no-cache web nginx && docker compose -f docker-compose.prod.yml run --rm web python manage.py migrate --noinput && docker compose -f docker-compose.prod.yml run --rm -u root web python manage.py collectstatic --noinput && docker compose -f docker-compose.prod.yml up -d --build
+cd /opt/lms && git pull && docker compose -f docker-compose.prod.yml build --no-cache web nginx && docker compose -f docker-compose.prod.yml run --rm web python manage.py migrate --noinput && docker compose -f docker-compose.prod.yml run --rm -u root web python manage.py collectstatic --noinput && docker compose -f docker-compose.prod.yml up -d --build && ./scripts/check-origin-health.sh docker-compose.prod.yml learnpuddle.com
 ```

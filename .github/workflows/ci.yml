@@ -207,6 +207,8 @@ jobs:
           key: ${{ secrets.STAGING_SSH_KEY }}
           script: |
             cd /opt/lms-staging
+            DOMAIN="$(awk -F= '/^STAGING_DOMAIN=/{print $2}' .env.staging 2>/dev/null | tail -1 | tr -d '\r')"
+            if [ -z "$DOMAIN" ]; then DOMAIN="staging.learnpuddle.com"; fi
             # Pull new staging images
             docker compose -f docker-compose.staging.yml pull
             # Run migrations
@@ -215,9 +217,9 @@ jobs:
             docker compose -f docker-compose.staging.yml run --rm -T -u root web python manage.py collectstatic --noinput
             # Restart all services
             docker compose -f docker-compose.staging.yml up -d --remove-orphans
-            # Verify health
+            # Verify container + nginx origin health (auto-restarts nginx once on failure)
             sleep 10
-            docker compose -f docker-compose.staging.yml exec -T web python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/')"
+            ./scripts/check-origin-health.sh docker-compose.staging.yml "$DOMAIN"
             echo "Staging deployment complete!"
 
   # ── Build & push Docker images (production - main branch) ────────────────
@@ -269,6 +271,8 @@ jobs:
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           script: |
             cd /opt/lms
+            DOMAIN="$(awk -F= '/^PLATFORM_DOMAIN=/{print $2}' .env 2>/dev/null | tail -1 | tr -d '\r')"
+            if [ -z "$DOMAIN" ]; then DOMAIN="localhost"; fi
             # Pull new images
             docker compose -f docker-compose.prod.yml pull
             # Run migrations BEFORE restarting app containers (prevents schema mismatch)
@@ -277,7 +281,7 @@ jobs:
             docker compose -f docker-compose.prod.yml run --rm -T -u root web python manage.py collectstatic --noinput
             # Now restart all services with new code (migrations already applied)
             docker compose -f docker-compose.prod.yml up -d --remove-orphans
-            # Verify health
+            # Verify container + nginx origin health (auto-restarts nginx once on failure)
             sleep 10
-            docker compose -f docker-compose.prod.yml exec -T web python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/')"
+            ./scripts/check-origin-health.sh docker-compose.prod.yml "$DOMAIN"
             echo "Production deployment complete!"

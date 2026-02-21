@@ -48,6 +48,47 @@ function shouldBypassAuthHeader(url: string = ''): boolean {
   return AUTH_HEADER_BYPASS_PATHS.some((allowedPath) => path.endsWith(allowedPath));
 }
 
+function isGatewayFailure(error: any): boolean {
+  const status = error?.response?.status;
+  if (status === 502 || status === 503 || status === 504) {
+    return true;
+  }
+  // Covers transient network/proxy edge failures where status may be absent.
+  const code = String(error?.code || '').toUpperCase();
+  return code === 'ECONNABORTED' || code === 'ERR_NETWORK';
+}
+
+function isGatewayRetryableRequest(config: any): boolean {
+  const method = String(config?.method || 'get').toLowerCase();
+  if (method === 'get' || method === 'head' || method === 'options') {
+    return true;
+  }
+
+  const path = normalizeRequestPath(String(config?.url || ''));
+  // POST retries are intentionally narrow to avoid duplicate writes.
+  return (
+    method === 'post' &&
+    (path.endsWith('/users/auth/login/') || path.endsWith('/users/auth/refresh/'))
+  );
+}
+
+async function maybeRetryGatewayFailure(error: any): Promise<any | null> {
+  const originalRequest = error?.config;
+  if (!originalRequest || !isGatewayFailure(error) || !isGatewayRetryableRequest(originalRequest)) {
+    return null;
+  }
+
+  const attempt = Number((originalRequest as any)._gatewayRetryCount || 0);
+  if (attempt >= 2) {
+    return null;
+  }
+
+  (originalRequest as any)._gatewayRetryCount = attempt + 1;
+  const delayMs = 300 * (2 ** attempt) + Math.floor(Math.random() * 200);
+  await new Promise((resolve) => setTimeout(resolve, delayMs));
+  return api(originalRequest);
+}
+
 function terminateSession(reason: 'session_expired' | 'tenant_access_denied') {
   try {
     useAuthStore.getState().clearAuth();
@@ -160,6 +201,11 @@ function onRefreshFailed(error: unknown) {
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
+    const retriedResponse = await maybeRetryGatewayFailure(error);
+    if (retriedResponse) {
+      return retriedResponse;
+    }
+
     const originalRequest = error.config;
     const requestUrl = String(originalRequest?.url || '');
     const isRefreshRequest = requestUrl.includes('/users/auth/refresh/');
