@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { superAdminService, PLAN_OPTIONS, FEATURE_FLAGS } from '../../services/superAdminService';
@@ -20,27 +20,25 @@ export const SchoolDetailPage: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const toast = useToast();
   const qc = useQueryClient();
-  const getTabFromQuery = (): Tab => {
-    const raw = searchParams.get('tab');
-    if (raw === 'plan' || raw === 'features' || raw === 'overview') return raw;
-    return 'overview';
-  };
-  const [tab, setTab] = useState<Tab>(getTabFromQuery());
+  const rawTab = searchParams.get('tab');
+  const tab: Tab = rawTab === 'plan' || rawTab === 'features' || rawTab === 'overview' ? rawTab : 'overview';
 
   React.useEffect(() => {
-    const next = getTabFromQuery();
-    if (next !== tab) {
-      setTab(next);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams]);
-
-  React.useEffect(() => {
-    if (searchParams.get('tab') === tab) return;
+    if (rawTab === tab) return;
     const params = new URLSearchParams(searchParams);
     params.set('tab', tab);
     setSearchParams(params, { replace: true });
-  }, [searchParams, setSearchParams, tab]);
+  }, [rawTab, searchParams, setSearchParams, tab]);
+
+  const setTab = React.useCallback(
+    (nextTab: Tab) => {
+      if (nextTab === tab) return;
+      const params = new URLSearchParams(searchParams);
+      params.set('tab', nextTab);
+      setSearchParams(params, { replace: true });
+    },
+    [searchParams, setSearchParams, tab]
+  );
 
   const { data: tenant, isLoading } = useQuery({
     queryKey: ['tenant', tenantId],
@@ -163,7 +161,10 @@ export const SchoolDetailPage: React.FC = () => {
             {/* Notes */}
             <div className="bg-white rounded-xl border border-gray-200 p-6">
               <h2 className="font-semibold text-gray-900 mb-3">Internal Notes</h2>
+              <label htmlFor="tenant-internal-notes" className="sr-only">Internal notes</label>
               <textarea
+                id="tenant-internal-notes"
+                name="internal_notes"
                 defaultValue={tenant.internal_notes}
                 onBlur={(e) => { if (e.target.value !== tenant.internal_notes) updateMut.mutate({ internal_notes: e.target.value }); }}
                 rows={4}

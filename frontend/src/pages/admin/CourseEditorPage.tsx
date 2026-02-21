@@ -87,6 +87,8 @@ interface Course {
   modules: Module[];
 }
 
+type EditorTab = 'details' | 'content' | 'assignment';
+
 const fetchCourse = async (id: string): Promise<Course> => {
   const response = await api.get(`/courses/${id}/`);
   return response.data;
@@ -221,13 +223,25 @@ export const CourseEditorPage: React.FC = () => {
     return () => stopPolling();
   }, [pollingContentId, pollingModuleId, courseId, stopPolling, toast, queryClient]);
 
-  const getTabFromQuery = React.useCallback((): 'details' | 'content' | 'assignment' => {
-    const raw = searchParams.get('tab');
-    if (raw === 'assignment') return 'assignment';
-    if (raw === 'content') return 'content';
-    return 'details';
-  }, [searchParams]);
-  const [activeTab, setActiveTab] = useState<'details' | 'content' | 'assignment'>(() => getTabFromQuery());
+  const resolveTab = React.useCallback(
+    (raw: string | null): EditorTab => {
+      if (raw === 'assignment') return 'assignment';
+      if (raw === 'content' && isEditing) return 'content';
+      return 'details';
+    },
+    [isEditing]
+  );
+  const activeTab = resolveTab(searchParams.get('tab'));
+  const setActiveTab = React.useCallback(
+    (nextTab: EditorTab) => {
+      const sanitizedTab = !isEditing && nextTab === 'content' ? 'details' : nextTab;
+      if (activeTab === sanitizedTab) return;
+      const params = new URLSearchParams(searchParams);
+      params.set('tab', sanitizedTab);
+      setSearchParams(params, { replace: true });
+    },
+    [activeTab, isEditing, searchParams, setSearchParams]
+  );
   const [thumbnailPreview, setThumbnailPreview] = useState<string | null>(null);
   const [thumbnailFile, setThumbnailFile] = useState<File | null>(null);
   const [expandedModules, setExpandedModules] = useState<string[]>([]);
@@ -370,23 +384,13 @@ export const CourseEditorPage: React.FC = () => {
   const courseMutationPending = createCourseMutation.isPending || updateCourseMutation.isPending;
 
   React.useEffect(() => {
-    const next = getTabFromQuery();
-    if (!isEditing && next === 'content') {
-      if (activeTab !== 'details') setActiveTab('details');
-      return;
-    }
-    if (next !== activeTab) {
-      setActiveTab(next);
-    }
-  }, [activeTab, getTabFromQuery, isEditing]);
-
-  React.useEffect(() => {
-    if (!isEditing && activeTab === 'content') return;
-    if (searchParams.get('tab') === activeTab) return;
+    const rawTab = searchParams.get('tab');
+    const normalizedTab = resolveTab(rawTab);
+    if (rawTab === normalizedTab) return;
     const params = new URLSearchParams(searchParams);
-    params.set('tab', activeTab);
+    params.set('tab', normalizedTab);
     setSearchParams(params, { replace: true });
-  }, [activeTab, isEditing, searchParams, setSearchParams]);
+  }, [resolveTab, searchParams, setSearchParams]);
 
   const moduleMutation = useMutation({
     mutationFn: createModule,
@@ -750,7 +754,7 @@ export const CourseEditorPage: React.FC = () => {
           ].map((tab) => (
             <button
               key={tab.key}
-              onClick={() => !tab.disabled && setActiveTab(tab.key as any)}
+              onClick={() => !tab.disabled && setActiveTab(tab.key as EditorTab)}
               disabled={tab.disabled}
               className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
                 activeTab === tab.key
@@ -785,10 +789,11 @@ export const CourseEditorPage: React.FC = () => {
                 />
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <label htmlFor="course-description" className="block text-sm font-medium text-gray-700 mb-1">
                     Description
                   </label>
                   <textarea
+                    id="course-description"
                     name="description"
                     value={formData.description}
                     onChange={handleInputChange}
@@ -860,6 +865,8 @@ export const CourseEditorPage: React.FC = () => {
               </div>
               <input
                 ref={thumbnailInputRef}
+                id="course-thumbnail-upload"
+                name="course_thumbnail"
                 type="file"
                 accept="image/png,image/jpeg,image/jpg"
                 onChange={handleThumbnailChange}
@@ -877,6 +884,8 @@ export const CourseEditorPage: React.FC = () => {
           <div className="bg-white rounded-xl border border-gray-200 p-4">
             <div className="flex items-center space-x-3">
               <input
+                id="new-module-title"
+                name="new_module_title"
                 type="text"
                 value={newModuleTitle}
                 onChange={(e) => setNewModuleTitle(e.target.value)}
@@ -921,6 +930,9 @@ export const CourseEditorPage: React.FC = () => {
                       
                       {editingModule === module.id ? (
                         <input
+                          id={`module-title-${module.id}`}
+                          name="module_title"
+                          aria-label={`Module title for ${module.title}`}
                           type="text"
                           defaultValue={module.title}
                           className="px-2 py-1 border border-gray-300 rounded"
@@ -1020,14 +1032,24 @@ export const CourseEditorPage: React.FC = () => {
                       {addingContentToModule === module.id ? (
                         <div className="p-4 bg-blue-50 rounded-lg space-y-3">
                           <div className="grid grid-cols-2 gap-3">
+                            <label htmlFor={`new-content-title-${module.id}`} className="sr-only">
+                              Content title
+                            </label>
                             <input
+                              id={`new-content-title-${module.id}`}
+                              name="new_content_title"
                               type="text"
                               value={newContentData.title}
                               onChange={(e) => setNewContentData(prev => ({ ...prev, title: e.target.value }))}
                               placeholder="Content title"
                               className="px-3 py-2 border border-gray-300 rounded-lg"
                             />
+                            <label htmlFor={`new-content-type-${module.id}`} className="sr-only">
+                              Content type
+                            </label>
                             <select
+                              id={`new-content-type-${module.id}`}
+                              name="new_content_type"
                               value={newContentData.content_type}
                               onChange={(e) => {
                                 const newType = e.target.value as Content['content_type'];
@@ -1050,29 +1072,45 @@ export const CourseEditorPage: React.FC = () => {
                           </div>
 
                           {newContentData.content_type === 'TEXT' && (
-                            <textarea
-                              value={newContentData.text_content}
-                              onChange={(e) => setNewContentData(prev => ({ ...prev, text_content: e.target.value }))}
-                              placeholder="Enter text content..."
-                              rows={4}
-                              className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                            />
+                            <>
+                              <label htmlFor={`new-content-text-${module.id}`} className="sr-only">
+                                Text content
+                              </label>
+                              <textarea
+                                id={`new-content-text-${module.id}`}
+                                name="new_content_text"
+                                value={newContentData.text_content}
+                                onChange={(e) => setNewContentData(prev => ({ ...prev, text_content: e.target.value }))}
+                                placeholder="Enter text content..."
+                                rows={4}
+                                className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                              />
+                            </>
                           )}
 
                           {newContentData.content_type === 'LINK' && (
-                            <input
-                              type="url"
-                              value={newContentData.file_url}
-                              onChange={(e) => setNewContentData(prev => ({ ...prev, file_url: e.target.value }))}
-                              placeholder="https://..."
-                              className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                            />
+                            <>
+                              <label htmlFor={`new-content-link-${module.id}`} className="sr-only">
+                                Link URL
+                              </label>
+                              <input
+                                id={`new-content-link-${module.id}`}
+                                name="new_content_link"
+                                type="url"
+                                value={newContentData.file_url}
+                                onChange={(e) => setNewContentData(prev => ({ ...prev, file_url: e.target.value }))}
+                                placeholder="https://..."
+                                className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                              />
+                            </>
                           )}
 
                           {(newContentData.content_type === 'VIDEO' || newContentData.content_type === 'DOCUMENT') && (
                             <div className="flex items-center gap-2">
                               <input
                                 ref={contentFileInputRef}
+                                id={`module-content-file-${module.id}`}
+                                name="module_content_file"
                                 type="file"
                                 accept={newContentData.content_type === 'VIDEO' ? 'video/*' : '.pdf,.doc,.docx,.ppt,.pptx'}
                                 onChange={(e) => setContentFile(e.target.files?.[0] || null)}
@@ -1341,19 +1379,23 @@ export const CourseEditorPage: React.FC = () => {
                 <div className="space-y-4">
                   <Input
                     label="Group name"
+                    name="group_name"
                     value={createGroupForm.name}
                     onChange={(e) => setCreateGroupForm({ ...createGroupForm, name: e.target.value })}
                     placeholder="e.g., Grade 9, Math Teachers"
                   />
                   <Input
                     label="Description"
+                    name="group_description"
                     value={createGroupForm.description}
                     onChange={(e) => setCreateGroupForm({ ...createGroupForm, description: e.target.value })}
                     placeholder="Optional"
                   />
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Type</label>
+                    <label htmlFor="group-type" className="block text-sm font-medium text-gray-700 mb-1">Type</label>
                     <select
+                      id="group-type"
+                      name="group_type"
                       value={createGroupForm.group_type}
                       onChange={(e) => setCreateGroupForm({ ...createGroupForm, group_type: e.target.value })}
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg"
@@ -1505,8 +1547,11 @@ export const CourseEditorPage: React.FC = () => {
             </div>
             <div className="p-4 border-b border-gray-200">
               <div className="relative">
+                <label htmlFor="library-search" className="sr-only">Search media library</label>
                 <MagnifyingGlassIcon className="h-5 w-5 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
+                  id="library-search"
+                  name="library_search"
                   type="text"
                   value={librarySearch}
                   onChange={async (e) => {

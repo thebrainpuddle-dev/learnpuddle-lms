@@ -111,6 +111,7 @@ const superAdminSteps: TourStep[] = [
     placement: 'bottom',
     optional: true,
     pathMatch: 'startsWith',
+    waitMs: 8000,
   },
   {
     id: 'sa-school-tabs',
@@ -122,6 +123,7 @@ const superAdminSteps: TourStep[] = [
     placement: 'bottom',
     optional: true,
     pathMatch: 'startsWith',
+    waitMs: 7000,
   },
   {
     id: 'sa-school-overview',
@@ -136,6 +138,7 @@ const superAdminSteps: TourStep[] = [
     placement: 'right',
     optional: true,
     pathMatch: 'startsWith',
+    waitMs: 7000,
   },
   {
     id: 'sa-school-plan',
@@ -150,6 +153,7 @@ const superAdminSteps: TourStep[] = [
     placement: 'top',
     optional: true,
     pathMatch: 'startsWith',
+    waitMs: 7000,
   },
   {
     id: 'sa-school-features',
@@ -164,6 +168,7 @@ const superAdminSteps: TourStep[] = [
     placement: 'top',
     optional: true,
     pathMatch: 'startsWith',
+    waitMs: 7000,
   },
   {
     id: 'sa-replay',
@@ -255,6 +260,7 @@ const adminSteps: TourStep[] = [
     path: '/admin/courses/new?tab=details',
     selector: '[data-tour="admin-course-editor-tabs"]',
     placement: 'bottom',
+    waitMs: 7000,
   },
   {
     id: 'admin-course-editor-details',
@@ -263,6 +269,7 @@ const adminSteps: TourStep[] = [
     path: '/admin/courses/new?tab=details',
     selector: '[data-tour="admin-course-details-panel"]',
     placement: 'right',
+    waitMs: 7000,
   },
   {
     id: 'admin-course-editor-content',
@@ -272,6 +279,7 @@ const adminSteps: TourStep[] = [
     selector: '[data-tour="admin-course-content-panel"]',
     placement: 'top',
     optional: true,
+    waitMs: 8000,
   },
   {
     id: 'admin-course-editor-assignment',
@@ -280,6 +288,7 @@ const adminSteps: TourStep[] = [
     path: '/admin/courses/new?tab=assignment',
     selector: '[data-tour="admin-course-assignment-panel"]',
     placement: 'top',
+    waitMs: 7000,
   },
   {
     id: 'admin-media',
@@ -416,6 +425,7 @@ const teacherSteps: TourStep[] = [
     placement: 'top',
     optional: true,
     pathMatch: 'startsWith',
+    waitMs: 12000,
   },
   {
     id: 'teacher-course-structure',
@@ -427,6 +437,7 @@ const teacherSteps: TourStep[] = [
     placement: 'left',
     optional: true,
     pathMatch: 'startsWith',
+    waitMs: 10000,
   },
   {
     id: 'teacher-assignments',

@@ -17,6 +17,12 @@ const TourContext = React.createContext<TourContextValue>({
 });
 
 const TOUR_COMPLETED_PREFIX = 'lms:tour:completed';
+const TOUR_COMPLETED_PREFIX_V2 = 'lms:tour:completed:v2';
+const DEFAULT_SELECTOR_MISS_MESSAGE =
+  "Couldn't locate this element yet. Complete page load or click Next to continue.";
+const AUTO_NAV_COOLDOWN_MS = 700;
+const AUTO_NAV_BURST_WINDOW_MS = 10_000;
+const AUTO_NAV_BURST_LIMIT = 12;
 
 function getTourRole(role?: string | null): TourRole | null {
   if (!role) return null;
@@ -25,8 +31,28 @@ function getTourRole(role?: string | null): TourRole | null {
   return 'TEACHER';
 }
 
-function getTourCompletionKey(userId: string, token: string, role: TourRole): string {
-  return `${TOUR_COMPLETED_PREFIX}:${userId}:${role}:${token.slice(-24)}`;
+function getTourCompletionKey(userId: string, role: TourRole): string {
+  return `${TOUR_COMPLETED_PREFIX_V2}:${window.location.hostname}:${userId}:${role}`;
+}
+
+function hasLegacyTourCompletion(userId: string, role: TourRole): boolean {
+  const legacyPrefix = `${TOUR_COMPLETED_PREFIX}:${userId}:${role}:`;
+  for (let idx = 0; idx < localStorage.length; idx += 1) {
+    const key = localStorage.key(idx);
+    if (!key || !key.startsWith(legacyPrefix)) continue;
+    if (localStorage.getItem(key) === '1') {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isTourCompleted(userId: string, role: TourRole): boolean {
+  const currentKey = getTourCompletionKey(userId, role);
+  if (localStorage.getItem(currentKey) === '1') {
+    return true;
+  }
+  return hasLegacyTourCompletion(userId, role);
 }
 
 function routeMatches(pathname: string, search: string, route: string, pathMatch: TourPathMatch = 'exact'): boolean {
@@ -81,25 +107,45 @@ function waitForElement(selector: string, timeoutMs: number): Promise<HTMLElemen
   });
 }
 
+function isTourDebugEnabled(): boolean {
+  return localStorage.getItem('lpTourDebug') === '1';
+}
+
+function logTourDebug(event: string, payload?: Record<string, unknown>) {
+  if (!isTourDebugEnabled()) return;
+  // eslint-disable-next-line no-console
+  console.info(`[tour] ${event}`, payload ?? {});
+}
+
+function getMissingBehavior(step: TourStep): NonNullable<TourStep['onMissing']> {
+  return step.onMissing ?? 'pause';
+}
+
 export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { user, accessToken, isAuthenticated } = useAuthStore();
+  const { user, isAuthenticated } = useAuthStore();
   const [activeRole, setActiveRole] = React.useState<TourRole | null>(null);
   const [activeStepIndex, setActiveStepIndex] = React.useState(0);
   const [targetElement, setTargetElement] = React.useState<HTMLElement | null>(null);
   const [targetRect, setTargetRect] = React.useState<DOMRect | null>(null);
   const [isResolving, setIsResolving] = React.useState(false);
+  const [blockedReason, setBlockedReason] = React.useState<string | null>(null);
+  const [navigationPausedReason, setNavigationPausedReason] = React.useState<string | null>(null);
 
   const role = getTourRole(user?.role);
   const isActive = Boolean(activeRole);
   const steps = React.useMemo(() => (activeRole ? TOUR_STEPS[activeRole] : []), [activeRole]);
   const currentStep = steps[activeStepIndex];
 
+  const lastAutoNavigationRef = React.useRef<{ targetRoute: string; at: number } | null>(null);
+  const autoNavigationBurstRef = React.useRef<number[]>([]);
+
   const markCurrentTourComplete = React.useCallback(() => {
-    if (!user?.id || !accessToken || !activeRole) return;
-    localStorage.setItem(getTourCompletionKey(user.id, accessToken, activeRole), '1');
-  }, [accessToken, activeRole, user?.id]);
+    if (!user?.id || !activeRole) return;
+    localStorage.setItem(getTourCompletionKey(user.id, activeRole), '1');
+    logTourDebug('tour_completed', { role: activeRole, userId: user.id, host: window.location.hostname });
+  }, [activeRole, user?.id]);
 
   const closeTour = React.useCallback(
     (markComplete: boolean) => {
@@ -111,6 +157,10 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setTargetElement(null);
       setTargetRect(null);
       setIsResolving(false);
+      setBlockedReason(null);
+      setNavigationPausedReason(null);
+      lastAutoNavigationRef.current = null;
+      autoNavigationBurstRef.current = [];
     },
     [markCurrentTourComplete]
   );
@@ -120,6 +170,10 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (!isAuthenticated || !nextRole) return;
     setActiveRole(nextRole);
     setActiveStepIndex(0);
+    setBlockedReason(null);
+    setNavigationPausedReason(null);
+    lastAutoNavigationRef.current = null;
+    autoNavigationBurstRef.current = [];
   }, [isAuthenticated, user?.role]);
 
   const nextStep = React.useCallback(() => {
@@ -128,20 +182,90 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
       closeTour(true);
       return;
     }
+    setBlockedReason(null);
+    setNavigationPausedReason(null);
     setActiveStepIndex((prev) => prev + 1);
   }, [activeStepIndex, closeTour, currentStep, steps.length]);
 
   const prevStep = React.useCallback(() => {
+    setBlockedReason(null);
+    setNavigationPausedReason(null);
     setActiveStepIndex((prev) => Math.max(0, prev - 1));
   }, []);
 
   React.useEffect(() => {
-    if (!isAuthenticated || !user?.id || !accessToken || !role || isActive) return;
-    const key = getTourCompletionKey(user.id, accessToken, role);
-    if (localStorage.getItem(key) === '1') return;
+    if (!isAuthenticated || !user?.id || !role || isActive) return;
+    if (isTourCompleted(user.id, role)) return;
     setActiveRole(role);
     setActiveStepIndex(0);
-  }, [accessToken, isActive, isAuthenticated, role, user?.id]);
+    logTourDebug('tour_autostart', { role, userId: user.id });
+  }, [isActive, isAuthenticated, role, user?.id]);
+
+  const handleMissingStep = React.useCallback(
+    (step: TourStep, context: 'route' | 'selector') => {
+      const behavior = getMissingBehavior(step);
+      logTourDebug('step_missing', { stepId: step.id, behavior, context });
+
+      if (behavior === 'skip') {
+        setIsResolving(false);
+        nextStep();
+        return;
+      }
+
+      if (behavior === 'stop') {
+        closeTour(false);
+        return;
+      }
+
+      setBlockedReason(DEFAULT_SELECTOR_MISS_MESSAGE);
+      setIsResolving(false);
+    },
+    [closeTour, nextStep]
+  );
+
+  const canAutoNavigate = React.useCallback(
+    (targetRoute: string): boolean => {
+      if (navigationPausedReason) {
+        setBlockedReason(navigationPausedReason);
+        return false;
+      }
+
+      const now = Date.now();
+      const lastNavigation = lastAutoNavigationRef.current;
+      if (
+        lastNavigation &&
+        lastNavigation.targetRoute === targetRoute &&
+        now - lastNavigation.at <= AUTO_NAV_COOLDOWN_MS
+      ) {
+        logTourDebug('route_deduped', { targetRoute, deltaMs: now - lastNavigation.at });
+        return false;
+      }
+
+      const recent = autoNavigationBurstRef.current.filter(
+        (timestamp) => now - timestamp <= AUTO_NAV_BURST_WINDOW_MS
+      );
+      recent.push(now);
+      autoNavigationBurstRef.current = recent;
+
+      if (recent.length > AUTO_NAV_BURST_LIMIT) {
+        const reason =
+          'Automatic tour navigation paused to avoid rapid route changes. Use Next or Back to continue manually.';
+        setNavigationPausedReason(reason);
+        setBlockedReason(reason);
+        setIsResolving(false);
+        logTourDebug('route_burst_paused', {
+          targetRoute,
+          countInWindow: recent.length,
+          windowMs: AUTO_NAV_BURST_WINDOW_MS,
+        });
+        return false;
+      }
+
+      lastAutoNavigationRef.current = { targetRoute, at: now };
+      return true;
+    },
+    [navigationPausedReason]
+  );
 
   React.useEffect(() => {
     if (!isActive || !currentStep) return;
@@ -151,21 +275,29 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setIsResolving(true);
       setTargetElement(null);
       setTargetRect(null);
+      setBlockedReason(null);
 
       const resolvedRoute = resolveRoute(currentStep);
       const targetRoute = resolvedRoute || currentStep.fallbackPath || null;
 
       if (!targetRoute) {
-        if (currentStep.optional) {
-          nextStep();
-          return;
-        }
-        setIsResolving(false);
+        handleMissingStep(currentStep, 'route');
         return;
       }
 
       if (!routeMatches(location.pathname, location.search, targetRoute, currentStep.pathMatch)) {
-        navigate(targetRoute);
+        if (!canAutoNavigate(targetRoute)) {
+          setIsResolving(false);
+          return;
+        }
+
+        logTourDebug('route_navigate', {
+          stepId: currentStep.id,
+          fromPathname: location.pathname,
+          fromSearch: location.search,
+          targetRoute,
+        });
+        navigate(targetRoute, { replace: true });
         return;
       }
 
@@ -174,21 +306,36 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return;
       }
 
-      const element = await waitForElement(currentStep.selector, currentStep.waitMs ?? 3500);
+      const waitMs = currentStep.waitMs ?? 3500;
+      const element = await waitForElement(currentStep.selector, waitMs);
       if (cancelled) return;
 
       if (!element) {
-        if (currentStep.optional) {
-          nextStep();
-          return;
-        }
-        setIsResolving(false);
+        logTourDebug('selector_timeout', {
+          stepId: currentStep.id,
+          selector: currentStep.selector,
+          waitMs,
+        });
+        handleMissingStep(currentStep, 'selector');
         return;
       }
 
       element.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      });
+      if (cancelled) return;
+
+      const rect = element.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) {
+        setTargetElement(null);
+        setTargetRect(null);
+        handleMissingStep(currentStep, 'selector');
+        return;
+      }
+
       setTargetElement(element);
-      setTargetRect(element.getBoundingClientRect());
+      setTargetRect(rect);
       setIsResolving(false);
     };
 
@@ -197,30 +344,47 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => {
       cancelled = true;
     };
-  }, [currentStep, isActive, location.pathname, location.search, navigate, nextStep]);
+  }, [
+    canAutoNavigate,
+    currentStep,
+    handleMissingStep,
+    isActive,
+    location.pathname,
+    location.search,
+    navigate,
+  ]);
 
   React.useEffect(() => {
     if (!isActive || !targetElement) return;
 
-    const updateRect = () => {
-      const rect = targetElement.getBoundingClientRect();
-      if (rect.width === 0 || rect.height === 0) {
-        setTargetRect(null);
-        return;
-      }
-      setTargetRect(rect);
+    let frameId: number | null = null;
+
+    const scheduleRectUpdate = () => {
+      if (frameId !== null) return;
+      frameId = requestAnimationFrame(() => {
+        frameId = null;
+        const rect = targetElement.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) {
+          setTargetRect(null);
+          return;
+        }
+        setTargetRect(rect);
+      });
     };
 
-    updateRect();
-    const resizeObserver = new ResizeObserver(updateRect);
+    scheduleRectUpdate();
+    const resizeObserver = new ResizeObserver(scheduleRectUpdate);
     resizeObserver.observe(targetElement);
-    window.addEventListener('resize', updateRect);
-    window.addEventListener('scroll', updateRect, true);
+    window.addEventListener('resize', scheduleRectUpdate);
+    window.addEventListener('scroll', scheduleRectUpdate, true);
 
     return () => {
       resizeObserver.disconnect();
-      window.removeEventListener('resize', updateRect);
-      window.removeEventListener('scroll', updateRect, true);
+      window.removeEventListener('resize', scheduleRectUpdate);
+      window.removeEventListener('scroll', scheduleRectUpdate, true);
+      if (frameId !== null) {
+        cancelAnimationFrame(frameId);
+      }
     };
   }, [isActive, targetElement]);
 
@@ -256,6 +420,7 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
             totalSteps={steps.length}
             targetRect={targetRect}
             isResolving={isResolving}
+            blockedReason={blockedReason}
             onBack={prevStep}
             onNext={nextStep}
             onSkip={() => closeTour(true)}
@@ -267,4 +432,3 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
 };
 
 export const useGuidedTour = (): TourContextValue => React.useContext(TourContext);
-

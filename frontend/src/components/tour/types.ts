@@ -15,6 +15,7 @@ export interface TourStep {
   optional?: boolean;
   waitMs?: number;
   pathMatch?: TourPathMatch;
+  onMissing?: 'pause' | 'skip' | 'stop';
 }
 
 export type TourRole = 'SUPER_ADMIN' | 'SCHOOL_ADMIN' | 'TEACHER';

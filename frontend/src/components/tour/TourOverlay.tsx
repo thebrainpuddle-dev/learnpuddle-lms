@@ -7,6 +7,7 @@ interface TourOverlayProps {
   totalSteps: number;
   targetRect: DOMRect | null;
   isResolving: boolean;
+  blockedReason: string | null;
   onBack: () => void;
   onNext: () => void;
   onSkip: () => void;
@@ -101,6 +102,7 @@ export const TourOverlay: React.FC<TourOverlayProps> = ({
   totalSteps,
   targetRect,
   isResolving,
+  blockedReason,
   onBack,
   onNext,
   onSkip,
@@ -147,6 +149,11 @@ export const TourOverlay: React.FC<TourOverlayProps> = ({
 
         {isResolving && (
           <p className="mt-3 text-xs text-slate-500">Positioning this step...</p>
+        )}
+        {!isResolving && blockedReason && (
+          <p className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs text-amber-700">
+            {blockedReason}
+          </p>
         )}
 
         <div className="mt-5 flex items-center justify-between">
