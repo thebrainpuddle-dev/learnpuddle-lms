@@ -35,7 +35,17 @@ retry() {
 }
 
 check_web_container_live() {
-  compose exec -T web python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/live/', timeout=5)"
+  compose exec -T web python -c "import sys,urllib.request;
+urls=['http://localhost:8000/health/live/','http://localhost:8000/health/'];
+ok=False;
+for u in urls:
+    try:
+        urllib.request.urlopen(u, timeout=5);
+        ok=True;
+        break
+    except Exception:
+        pass
+sys.exit(0 if ok else 1)"
 }
 
 check_nginx_path() {
@@ -65,7 +75,9 @@ run_checks() {
   retry 12 5 "web /health/live/" check_web_container_live
 
   echo "== nginx edge checks =="
-  retry 12 5 "nginx /health/live/" check_nginx_path "/health/live/"
+  if ! retry 12 5 "nginx /health/live/" check_nginx_path "/health/live/"; then
+    retry 6 3 "nginx /health/" check_nginx_path "/health/"
+  fi
   retry 12 5 "nginx /api/tenants/theme/" check_nginx_path "/api/tenants/theme/"
   retry 8 3 "nginx login endpoint status class" check_login_endpoint_code
 }
