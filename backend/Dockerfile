@@ -34,9 +34,6 @@ USER appuser
 
 EXPOSE 8000
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/')" || exit 1
-
 # Default: run gunicorn. Override in docker-compose for celery worker.
 CMD ["gunicorn", "config.wsgi:application", \
      "--bind", "0.0.0.0:8000", \

@@ -13,8 +13,29 @@ compose() {
   docker compose -f "$COMPOSE_FILE" "$@"
 }
 
-check_web_container_health() {
-  compose exec -T web python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/', timeout=5)"
+retry() {
+  local attempts="$1"
+  local sleep_seconds="$2"
+  local label="$3"
+  shift 3
+
+  local i=1
+  while [[ $i -le $attempts ]]; do
+    if "$@"; then
+      echo "[ok] $label"
+      return 0
+    fi
+    echo "[retry $i/$attempts] $label"
+    sleep "$sleep_seconds"
+    i=$((i + 1))
+  done
+
+  echo "[fail] $label"
+  return 1
+}
+
+check_web_container_live() {
+  compose exec -T web python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/live/', timeout=5)"
 }
 
 check_nginx_path() {
@@ -39,14 +60,14 @@ check_login_endpoint_code() {
 run_checks() {
   echo "== docker compose ps =="
   compose ps
-  echo "== web container health =="
-  check_web_container_health
-  echo "== nginx /health/ =="
-  check_nginx_path "/health/"
-  echo "== nginx /api/tenants/theme/ =="
-  check_nginx_path "/api/tenants/theme/"
-  echo "== nginx /api/users/auth/login/ status =="
-  check_login_endpoint_code
+
+  echo "== web container liveness =="
+  retry 12 5 "web /health/live/" check_web_container_live
+
+  echo "== nginx edge checks =="
+  retry 12 5 "nginx /health/live/" check_nginx_path "/health/live/"
+  retry 12 5 "nginx /api/tenants/theme/" check_nginx_path "/api/tenants/theme/"
+  retry 8 3 "nginx login endpoint status class" check_login_endpoint_code
 }
 
 echo "Running origin checks via domain: $DOMAIN"

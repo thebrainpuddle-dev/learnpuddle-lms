@@ -43,7 +43,7 @@ class TenantMiddleware:
     
     def __call__(self, request):
         # Skip tenant resolution entirely for health checks (prevents log spam)
-        if request.path == '/health/':
+        if request.path.startswith('/health/'):
             return self.get_response(request)
         
         # Clear any previous tenant

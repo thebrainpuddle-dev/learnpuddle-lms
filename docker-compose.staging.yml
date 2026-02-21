@@ -104,7 +104,7 @@ services:
     expose:
       - "8000"
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health/', timeout=5)\""]
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health/live/', timeout=5)\""]
       interval: 15s
       timeout: 7s
       retries: 4
@@ -144,6 +144,8 @@ services:
       - media_staging_data:/app/media
     networks:
       - backend
+    healthcheck:
+      disable: true
     deploy:
       resources:
         limits:
@@ -171,6 +173,7 @@ services:
       - DB_HOST=db
       - DB_PORT=5432
       - REDIS_URL=redis://redis:6379/1
+      - CELERY_BROKER_URL=redis://redis:6379/0
       - PLATFORM_DOMAIN=${STAGING_DOMAIN:-staging.learnpuddle.com}
     networks:
       - backend
@@ -178,7 +181,7 @@ services:
     expose:
       - "8001"
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8001/health/', timeout=5)\""]
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8001/health/live/', timeout=5)\""]
       interval: 20s
       timeout: 7s
       retries: 5
@@ -212,6 +215,8 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
     networks:
       - backend
+    healthcheck:
+      disable: true
     deploy:
       resources:
         limits:
@@ -235,6 +240,8 @@ services:
       - frontend
     expose:
       - "5555"
+    healthcheck:
+      disable: true
     deploy:
       resources:
         limits:
@@ -264,7 +271,7 @@ services:
       web:
         condition: service_healthy
       asgi:
-        condition: service_healthy
+        condition: service_started
       frontend:
         condition: service_started
     volumes:
@@ -277,7 +284,7 @@ services:
     networks:
       - frontend
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -T 5 -O /dev/null http://127.0.0.1/health/"]
+      test: ["CMD-SHELL", "wget -q -T 5 -O /dev/null http://127.0.0.1/health/live/"]
       interval: 20s
       timeout: 7s
       retries: 5

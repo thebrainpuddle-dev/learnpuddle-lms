@@ -9,7 +9,7 @@ from drf_spectacular.views import (
     SpectacularSwaggerView,
     SpectacularRedocView,
 )
-from .views import health_view
+from .views import health_live_view, health_ready_view, health_view
 from utils.media_views import protected_media_view, public_media_view
 
 # Versioned API routes — all new clients should use /api/v1/
@@ -34,6 +34,8 @@ _api_patterns = [
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('health/live/', health_live_view),
+    path('health/ready/', health_ready_view),
     path('health/', health_view),
     
     # Public media (thumbnails, logos, profile pics — no auth needed for <img> tags)
