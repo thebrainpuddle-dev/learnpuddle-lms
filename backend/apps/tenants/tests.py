@@ -68,6 +68,20 @@ class TenantUtilsTestCase(TestCase):
         with self.assertRaises(PermissionDenied):
             get_tenant_from_request(request)
 
+    @override_settings(PLATFORM_DOMAIN='learnpuddle.com')
+    def test_platform_root_returns_none(self):
+        """Platform apex domain should not resolve to a tenant."""
+        request = self.factory.get('/', HTTP_HOST='learnpuddle.com')
+        tenant = get_tenant_from_request(request)
+        self.assertIsNone(tenant)
+
+    @override_settings(PLATFORM_DOMAIN='learnpuddle.com')
+    def test_platform_www_root_returns_none(self):
+        """Platform www domain should not resolve to a tenant."""
+        request = self.factory.get('/', HTTP_HOST='www.learnpuddle.com')
+        tenant = get_tenant_from_request(request)
+        self.assertIsNone(tenant)
+
 
 class TenantContextTestCase(TestCase):
     def setUp(self):
@@ -205,6 +219,26 @@ class TenantServiceTestCase(TestCase):
         
         self.assertEqual(stats['total_teachers'], 1)
         self.assertEqual(stats['total_admins'], 1)
+
+
+@override_settings(PLATFORM_DOMAIN='learnpuddle.com', ALLOWED_HOSTS=['*'])
+class TenantThemeViewHostTestCase(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+
+    def test_theme_on_platform_apex_host_returns_platform_theme(self):
+        response = self.client.get('/api/tenants/theme/', HTTP_HOST='learnpuddle.com')
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data.get('tenant_found'))
+        self.assertEqual(response.data.get('subdomain'), '')
+        self.assertEqual(response.data.get('name'), 'LearnPuddle')
+
+    def test_theme_on_platform_www_host_returns_platform_theme(self):
+        response = self.client.get('/api/tenants/theme/', HTTP_HOST='www.learnpuddle.com')
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data.get('tenant_found'))
+        self.assertEqual(response.data.get('subdomain'), '')
+        self.assertEqual(response.data.get('name'), 'LearnPuddle')
 
 
 @override_settings(ALLOWED_HOSTS=['test.lms.com', 'testserver', 'localhost'])

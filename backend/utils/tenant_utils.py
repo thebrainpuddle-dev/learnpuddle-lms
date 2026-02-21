@@ -29,8 +29,9 @@ def get_tenant_from_request(request):
         subdomain = 'demo'
     else:
         # Platform root — no tenant (command center, signup, marketing)
+        # Treat both apex and www host as platform-level.
         platform_domain = getattr(settings, 'PLATFORM_DOMAIN', '').lower()
-        if platform_domain and host == platform_domain:
+        if platform_domain and host in {platform_domain, f"www.{platform_domain}"}:
             return None
 
         # First, try to match a custom domain

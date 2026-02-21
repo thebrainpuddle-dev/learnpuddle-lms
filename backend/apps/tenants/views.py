@@ -32,10 +32,11 @@ def tenant_theme_view(request):
         host = request.get_host().split(':')[0].lower()
         platform_domain = getattr(settings, 'PLATFORM_DOMAIN', '').lower()
 
-        # Platform root (learnpuddle.com) or localhost — no tenant expected; return default theme
+        # Platform root (learnpuddle.com / www.learnpuddle.com) or localhost
+        # no tenant expected; return default theme
         # so super-admin, signup, and marketing pages can render
         is_platform_root = (
-            (platform_domain and host == platform_domain) or
+            (platform_domain and host in {platform_domain, f"www.{platform_domain}"}) or
             host in ('localhost', '127.0.0.1')
         )
         if is_platform_root:
