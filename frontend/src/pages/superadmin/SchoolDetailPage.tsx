@@ -212,31 +212,32 @@ export const SchoolDetailPage: React.FC = () => {
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Max Teachers</label>
-              <input type="number" defaultValue={tenant.max_teachers} onBlur={(e) => updateMut.mutate({ max_teachers: Number(e.target.value) })} className="w-full px-3 py-2 border border-gray-300 rounded-lg" />
+              <label htmlFor="tenant-max-teachers" className="block text-sm font-medium text-gray-700 mb-1">Max Teachers</label>
+              <input id="tenant-max-teachers" name="max_teachers" type="number" defaultValue={tenant.max_teachers} onBlur={(e) => updateMut.mutate({ max_teachers: Number(e.target.value) })} className="w-full px-3 py-2 border border-gray-300 rounded-lg" />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Max Courses</label>
-              <input type="number" defaultValue={tenant.max_courses} onBlur={(e) => updateMut.mutate({ max_courses: Number(e.target.value) })} className="w-full px-3 py-2 border border-gray-300 rounded-lg" />
+              <label htmlFor="tenant-max-courses" className="block text-sm font-medium text-gray-700 mb-1">Max Courses</label>
+              <input id="tenant-max-courses" name="max_courses" type="number" defaultValue={tenant.max_courses} onBlur={(e) => updateMut.mutate({ max_courses: Number(e.target.value) })} className="w-full px-3 py-2 border border-gray-300 rounded-lg" />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Max Storage (MB)</label>
-              <input type="number" defaultValue={tenant.max_storage_mb} onBlur={(e) => updateMut.mutate({ max_storage_mb: Number(e.target.value) })} className="w-full px-3 py-2 border border-gray-300 rounded-lg" />
+              <label htmlFor="tenant-max-storage" className="block text-sm font-medium text-gray-700 mb-1">Max Storage (MB)</label>
+              <input id="tenant-max-storage" name="max_storage_mb" type="number" defaultValue={tenant.max_storage_mb} onBlur={(e) => updateMut.mutate({ max_storage_mb: Number(e.target.value) })} className="w-full px-3 py-2 border border-gray-300 rounded-lg" />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Max Video Duration (min)</label>
-              <input type="number" defaultValue={tenant.max_video_duration_minutes} onBlur={(e) => updateMut.mutate({ max_video_duration_minutes: Number(e.target.value) })} className="w-full px-3 py-2 border border-gray-300 rounded-lg" />
+              <label htmlFor="tenant-max-video-duration" className="block text-sm font-medium text-gray-700 mb-1">Max Video Duration (min)</label>
+              <input id="tenant-max-video-duration" name="max_video_duration_minutes" type="number" defaultValue={tenant.max_video_duration_minutes} onBlur={(e) => updateMut.mutate({ max_video_duration_minutes: Number(e.target.value) })} className="w-full px-3 py-2 border border-gray-300 rounded-lg" />
             </div>
           </div>
 
           <div>
             <h3 className="font-medium text-gray-900 mb-2">Trial Settings</h3>
             <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:gap-4">
-              <label className="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={tenant.is_trial} onChange={(e) => updateMut.mutate({ is_trial: e.target.checked })} className="rounded border-gray-300 text-indigo-600" />
+              <label htmlFor="tenant-is-trial" className="flex items-center gap-2 text-sm">
+                <input id="tenant-is-trial" name="is_trial" type="checkbox" checked={tenant.is_trial} onChange={(e) => updateMut.mutate({ is_trial: e.target.checked })} className="rounded border-gray-300 text-indigo-600" />
                 Is Trial
               </label>
-              <input type="date" defaultValue={tenant.trial_end_date || ''} onBlur={(e) => updateMut.mutate({ trial_end_date: e.target.value || null })} className="px-3 py-2 border border-gray-300 rounded-lg text-sm" />
+              <label htmlFor="tenant-trial-end-date" className="sr-only">Trial end date</label>
+              <input id="tenant-trial-end-date" name="trial_end_date" type="date" defaultValue={tenant.trial_end_date || ''} onBlur={(e) => updateMut.mutate({ trial_end_date: e.target.value || null })} className="px-3 py-2 border border-gray-300 rounded-lg text-sm" />
             </div>
           </div>
 
@@ -263,6 +264,7 @@ export const SchoolDetailPage: React.FC = () => {
                 <span className="text-sm font-medium text-gray-900">{f.label}</span>
                 <div className="relative">
                   <input
+                    name={`feature_${f.key}`}
                     type="checkbox"
                     checked={(tenant as any)[f.key] ?? false}
                     onChange={(e) => updateMut.mutate({ [f.key]: e.target.checked })}

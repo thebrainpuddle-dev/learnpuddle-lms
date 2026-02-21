@@ -327,5 +327,46 @@ describe('ProtectedRoute', () => {
 
       expect(screen.getByText('Protected Content')).toBeInTheDocument();
     });
+
+    it('should send unknown roles to login instead of redirect looping', () => {
+      mockedUseAuthStore.mockReturnValue({
+        isAuthenticated: true,
+        user: {
+          id: 'user-unknown',
+          email: 'unknown@example.com',
+          first_name: 'Unknown',
+          last_name: 'Role',
+          role: 'UNKNOWN_ROLE' as any,
+          is_active: true,
+        },
+        accessToken: 'mock-token',
+        refreshToken: 'mock-refresh',
+        isLoading: false,
+        setAuth: jest.fn(),
+        clearAuth: jest.fn(),
+        setUser: jest.fn(),
+        setLoading: jest.fn(),
+        initializeFromStorage: jest.fn(),
+      });
+
+      render(
+        <MemoryRouter initialEntries={['/teacher/dashboard']}>
+          <Routes>
+            <Route path="/login" element={<LoginPage />} />
+            <Route
+              path="/teacher/dashboard"
+              element={
+                <ProtectedRoute allowedRoles={['TEACHER', 'HOD', 'IB_COORDINATOR']}>
+                  <TestComponent />
+                </ProtectedRoute>
+              }
+            />
+          </Routes>
+        </MemoryRouter>
+      );
+
+      expect(screen.getByText('Login Page')).toBeInTheDocument();
+      expect(screen.queryByText('Protected Content')).not.toBeInTheDocument();
+    });
   });
 });

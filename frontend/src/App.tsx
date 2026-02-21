@@ -59,16 +59,19 @@ const queryClient = new QueryClient({
   },
 });
 
+function getDashboardPathForRole(role?: string | null): string | null {
+  if (role === 'SUPER_ADMIN') return '/super-admin/dashboard';
+  if (role === 'SCHOOL_ADMIN') return '/admin/dashboard';
+  if (role === 'TEACHER' || role === 'HOD' || role === 'IB_COORDINATOR') return '/teacher/dashboard';
+  return null;
+}
+
 function AppContent() {
   const { isAuthenticated, user, setUser, clearAuth } = useAuthStore();
   const { setConfig } = useTenantStore();
   const [authValidated, setAuthValidated] = React.useState(!isAuthenticated);
   useSessionLifecycle();
-  const dashboardPath = user?.role === 'SUPER_ADMIN'
-    ? '/super-admin/dashboard'
-    : user?.role === 'SCHOOL_ADMIN'
-    ? '/admin/dashboard'
-    : '/teacher/dashboard';
+  const dashboardPath = getDashboardPathForRole(user?.role);
 
   // On startup, validate any persisted token by calling /auth/me/.
   // If the token is expired or missing, clear auth and redirect to login
@@ -112,7 +115,7 @@ function AppContent() {
       <Route
         path="/login"
         element={
-          isAuthenticated && user ? (
+          isAuthenticated && user && dashboardPath ? (
             <Navigate to={dashboardPath} replace />
           ) : (
             <LoginPage />
@@ -135,7 +138,7 @@ function AppContent() {
         path="/super-admin/login"
         element={
           isAuthenticated && user ? (
-            <Navigate to={user.role === 'SUPER_ADMIN' ? '/super-admin/dashboard' : dashboardPath} replace />
+            <Navigate to={getDashboardPathForRole(user.role) || '/login'} replace />
           ) : (
             <SuperAdminLoginPage />
           )
@@ -211,7 +214,7 @@ function AppContent() {
         element={
           <Navigate
             to={
-              isAuthenticated && user
+              isAuthenticated && user && dashboardPath
                 ? dashboardPath
                 : '/login'
             }

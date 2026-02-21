@@ -126,18 +126,7 @@ services:
     healthcheck:
       test:
         - CMD-SHELL
-        - >
-          python -c "import sys,urllib.request;
-          urls=['http://localhost:8000/health/live/','http://localhost:8000/health/'];
-          ok=False;
-          for u in urls:
-              try:
-                  urllib.request.urlopen(u, timeout=5);
-                  ok=True;
-                  break
-              except Exception:
-                  pass
-          sys.exit(0 if ok else 1)"
+        - python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/live/', timeout=5)"
       interval: 15s
       timeout: 7s
       retries: 4
@@ -180,18 +169,7 @@ services:
     healthcheck:
       test:
         - CMD-SHELL
-        - >
-          python -c "import sys,urllib.request;
-          urls=['http://localhost:8001/health/live/','http://localhost:8001/health/'];
-          ok=False;
-          for u in urls:
-              try:
-                  urllib.request.urlopen(u, timeout=5);
-                  ok=True;
-                  break
-              except Exception:
-                  pass
-          sys.exit(0 if ok else 1)"
+        - python -c "import urllib.request; urllib.request.urlopen('http://localhost:8001/health/live/', timeout=5)"
       interval: 20s
       timeout: 7s
       retries: 5
@@ -292,7 +270,16 @@ services:
       redis:
         condition: service_healthy
     environment:
+      - DEBUG=False
+      - SECRET_KEY=${SECRET_KEY}
+      - DB_NAME=${DB_NAME:-learnpuddle_db}
+      - DB_USER=${DB_USER:-learnpuddle}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_HOST=db
+      - DB_PORT=5432
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-changeme}@redis:6379/1
       - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:-changeme}@redis:6379/0
+      - PLATFORM_DOMAIN=${PLATFORM_DOMAIN}
       - FLOWER_PURGE_OFFLINE_WORKERS=60
       - FLOWER_BASIC_AUTH=${FLOWER_USER:-admin}:${FLOWER_PASSWORD:?Set FLOWER_PASSWORD}
     networks:

@@ -9,6 +9,13 @@ interface ProtectedRouteProps {
   allowedRoles?: string[];
 }
 
+function getDashboardPathForRole(role?: string | null): string | null {
+  if (role === 'SUPER_ADMIN') return '/super-admin/dashboard';
+  if (role === 'SCHOOL_ADMIN') return '/admin/dashboard';
+  if (role === 'TEACHER' || role === 'HOD' || role === 'IB_COORDINATOR') return '/teacher/dashboard';
+  return null;
+}
+
 export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
   children,
   allowedRoles,
@@ -26,14 +33,15 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
   
   // Check role if specified
   if (allowedRoles && !allowedRoles.includes(user.role)) {
-    // Wrong role - redirect to appropriate dashboard
-    if (user.role === 'SUPER_ADMIN') {
-      return <Navigate to="/super-admin/dashboard" replace />;
-    } else if (user.role === 'SCHOOL_ADMIN') {
-      return <Navigate to="/admin/dashboard" replace />;
-    } else {
-      return <Navigate to="/teacher/dashboard" replace />;
+    // Wrong/unknown role - redirect safely without self-redirect loops.
+    const fallbackPath = getDashboardPathForRole(user.role) || '/login';
+    if (fallbackPath === location.pathname) {
+      const loginPath = location.pathname.startsWith('/super-admin')
+        ? '/super-admin/login'
+        : '/login';
+      return <Navigate to={loginPath} replace />;
     }
+    return <Navigate to={fallbackPath} replace />;
   }
   
   return <>{children}</>;
