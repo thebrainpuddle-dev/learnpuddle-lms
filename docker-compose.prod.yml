@@ -268,6 +268,7 @@ services:
       - asgi
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
       - static_data:/var/www/static:ro
       - media_data:/var/www/media:ro
       - certbot_conf:/etc/letsencrypt:ro
