@@ -750,17 +750,25 @@ export const CourseEditorPage: React.FC = () => {
 
       {/* Tabs */}
       <div className="border-b border-gray-200">
-        <nav data-tour="admin-course-editor-tabs" className="-mb-px flex space-x-8">
+        <nav data-tour="admin-course-editor-tabs" className="-mb-px flex gap-6 overflow-x-auto">
           {[
             { key: 'details', label: 'Details' },
             { key: 'content', label: 'Content', disabled: !isEditing },
             { key: 'assignment', label: 'Assignment' },
           ].map((tab) => (
             <button
+              type="button"
               key={tab.key}
+              data-tour={
+                tab.key === 'details'
+                  ? 'admin-course-editor-tab-details'
+                  : tab.key === 'content'
+                  ? 'admin-course-editor-tab-content'
+                  : 'admin-course-editor-tab-assignment'
+              }
               onClick={() => !tab.disabled && setActiveTab(tab.key as EditorTab)}
               disabled={tab.disabled}
-              className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
+              className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors whitespace-nowrap ${
                 activeTab === tab.key
                   ? 'border-primary-500 text-primary-600'
                   : tab.disabled

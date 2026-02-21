@@ -274,12 +274,11 @@ const adminSteps: TourStep[] = [
   {
     id: 'admin-course-editor-content',
     title: 'Content Builder',
-    description: 'Once saved, use this tab to create modules and add videos, docs, links, and text.',
+    description: 'Use this tab to build modules and add videos, docs, links, and text. Save first to unlock full content editing.',
     path: '/admin/courses/new?tab=details',
-    selector: '[data-tour="admin-course-content-panel"]',
+    selector: '[data-tour="admin-course-editor-tab-content"]',
     placement: 'top',
-    optional: true,
-    waitMs: 8000,
+    waitMs: 7000,
   },
   {
     id: 'admin-course-editor-assignment',
