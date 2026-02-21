@@ -255,12 +255,13 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     restart: always
-    command: celery -A config flower --port=5555 --basic_auth=${FLOWER_USER:-admin}:${FLOWER_PASSWORD:-staging123}
+    command: celery -A config flower --port=5555 --url_prefix=flower --persistent=False
     depends_on:
       redis:
         condition: service_healthy
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
+      - FLOWER_BASIC_AUTH=${FLOWER_USER:-admin}:${FLOWER_PASSWORD:-staging123}
     networks:
       - backend
       - frontend
