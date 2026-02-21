@@ -6,14 +6,25 @@
  */
 
 import React from 'react';
-import { usePWA } from '../../hooks/usePWA';
+import { useEffect, useState } from 'react';
 
 interface OfflineIndicatorProps {
   className?: string;
 }
 
 export const OfflineIndicator: React.FC<OfflineIndicatorProps> = ({ className = '' }) => {
-  const { isOnline } = usePWA();
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+
+  useEffect(() => {
+    const onOnline = () => setIsOnline(true);
+    const onOffline = () => setIsOnline(false);
+    window.addEventListener('online', onOnline);
+    window.addEventListener('offline', onOffline);
+    return () => {
+      window.removeEventListener('online', onOnline);
+      window.removeEventListener('offline', onOffline);
+    };
+  }, []);
 
   if (isOnline) {
     return null;

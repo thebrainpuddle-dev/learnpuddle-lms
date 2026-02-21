@@ -48,6 +48,10 @@ for u in urls:
 sys.exit(0 if ok else 1)"
 }
 
+check_db_schema_uptodate() {
+  compose exec -T web python manage.py migrate --check --noinput >/dev/null
+}
+
 check_nginx_path() {
   local path="$1"
   curl -fsS --max-time 10 -H "Host: $DOMAIN" "http://127.0.0.1${path}" >/dev/null
@@ -70,6 +74,9 @@ check_login_endpoint_code() {
 run_checks() {
   echo "== docker compose ps =="
   compose ps
+
+  echo "== migration status =="
+  retry 3 4 "django migrate --check" check_db_schema_uptodate
 
   echo "== web container liveness =="
   retry 12 5 "web /health/live/" check_web_container_live

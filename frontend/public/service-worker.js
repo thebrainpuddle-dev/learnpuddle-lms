@@ -21,12 +21,6 @@ const STATIC_ASSETS = [
   '/offline.html',
 ];
 
-// API routes to cache
-const API_ROUTES = [
-  '/api/v1/tenants/theme/',
-  '/api/v1/users/auth/me/',
-];
-
 // Install event - cache static assets
 self.addEventListener('install', (event) => {
   console.log('[SW] Installing service worker...');
@@ -85,9 +79,10 @@ self.addEventListener('fetch', (event) => {
     return;
   }
   
-  // Handle API requests
+  // Never intercept API calls in the service worker.
+  // API auth/session flow must always go directly browser -> origin to avoid
+  // replay/amplification behavior during token/session transitions.
   if (url.pathname.startsWith('/api/')) {
-    event.respondWith(networkFirstStrategy(request));
     return;
   }
   
@@ -132,25 +127,6 @@ async function cacheFirstStrategy(request) {
   } catch (error) {
     console.warn('[SW] Cache-first fetch failed:', request.url);
     return new Response('Offline', { status: 503 });
-  }
-}
-
-// Network-first strategy (for API calls)
-// API responses are NEVER cached — authenticated responses must always come from the network.
-// Serving a stale cached API response after a token change causes 403 errors and stale UI.
-async function networkFirstStrategy(request) {
-  try {
-    return await fetch(request);
-  } catch (error) {
-    console.log('[SW] Network failed for API request:', request.url);
-    // Return a clean offline response — never fall back to a cached API response
-    return new Response(
-      JSON.stringify({ error: 'Offline', cached: false }),
-      {
-        status: 503,
-        headers: { 'Content-Type': 'application/json' },
-      }
-    );
   }
 }
 

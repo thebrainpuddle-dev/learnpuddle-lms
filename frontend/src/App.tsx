@@ -54,7 +54,15 @@ const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       refetchOnWindowFocus: false,
-      retry: 1,
+      retry: (failureCount, error: any) => {
+        const status = Number(error?.response?.status || 0);
+        // Do not amplify auth/permission/validation failures.
+        if (status >= 400 && status < 500) {
+          return false;
+        }
+        // Single retry for transient server/network errors.
+        return failureCount < 1;
+      },
       staleTime: 2 * 60 * 1000, // 2 minutes — prevents cascading refetches on every mount
     },
   },

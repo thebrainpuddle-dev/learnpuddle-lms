@@ -10,6 +10,7 @@ class TenantListSerializer(serializers.ModelSerializer):
     teacher_count = serializers.SerializerMethodField()
     admin_count = serializers.SerializerMethodField()
     course_count = serializers.SerializerMethodField()
+    logo = serializers.SerializerMethodField()
 
     class Meta:
         model = Tenant
@@ -31,6 +32,15 @@ class TenantListSerializer(serializers.ModelSerializer):
 
     def get_course_count(self, obj):
         return Course.objects.filter(tenant=obj).count()
+
+    def get_logo(self, obj):
+        if not obj.logo:
+            return None
+        try:
+            return obj.logo.url
+        except Exception:
+            # Storage/backing CDN outages should not break super-admin tenant list.
+            return None
 
 
 class TenantDetailSerializer(TenantListSerializer):

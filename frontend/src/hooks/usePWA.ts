@@ -32,6 +32,8 @@ interface UsePWAReturn extends PWAState {
   unsubscribeFromPush: () => Promise<boolean>;
 }
 
+const PWA_ENABLED = process.env.REACT_APP_ENABLE_PWA === 'true';
+
 export function usePWA(): UsePWAReturn {
   const [state, setState] = useState<PWAState>({
     isOnline: navigator.onLine,
@@ -42,17 +44,51 @@ export function usePWA(): UsePWAReturn {
     deferredPrompt: null,
   });
 
-  // Register service worker
+  // Register service worker (optional; disabled by default for LMS web reliability)
   useEffect(() => {
+    if (!PWA_ENABLED) {
+      const disableServiceWorker = async () => {
+        try {
+          if ('serviceWorker' in navigator) {
+            const registrations = await navigator.serviceWorker.getRegistrations();
+            await Promise.all(registrations.map((registration) => registration.unregister()));
+          }
+          if ('caches' in window) {
+            const keys = await caches.keys();
+            await Promise.all(
+              keys
+                .filter((key) => key.startsWith('brain-lms-'))
+                .map((key) => caches.delete(key)),
+            );
+          }
+        } catch (error) {
+          console.warn('Service Worker cleanup failed:', error);
+        }
+      };
+
+      void disableServiceWorker();
+      return;
+    }
+
     if (!('serviceWorker' in navigator)) {
       console.log('Service Worker not supported');
       return;
     }
 
+    let didReloadOnControllerChange = false;
+    const onControllerChange = () => {
+      if (didReloadOnControllerChange) {
+        return;
+      }
+      didReloadOnControllerChange = true;
+      window.location.reload();
+    };
+
     const registerServiceWorker = async () => {
       try {
         const registration = await navigator.serviceWorker.register('/service-worker.js', {
           scope: '/',
+          updateViaCache: 'none',
         });
 
         console.log('Service Worker registered:', registration.scope);
@@ -84,15 +120,16 @@ export function usePWA(): UsePWAReturn {
       }
     };
 
-    registerServiceWorker();
+    void registerServiceWorker();
 
     // Handle controller change (after update)
-    navigator.serviceWorker.addEventListener('controllerchange', () => {
-      window.location.reload();
-    });
+    navigator.serviceWorker.addEventListener('controllerchange', onControllerChange);
 
     // SW_UPDATED message handler removed: the 'controllerchange' event below
     // already handles the single clean reload when a new SW takes over.
+    return () => {
+      navigator.serviceWorker.removeEventListener('controllerchange', onControllerChange);
+    };
   }, []);
 
   // Online/offline detection
@@ -138,6 +175,9 @@ export function usePWA(): UsePWAReturn {
 
   // Install app
   const installApp = useCallback(async (): Promise<boolean> => {
+    if (!PWA_ENABLED) {
+      return false;
+    }
     if (!state.deferredPrompt) {
       return false;
     }
@@ -161,6 +201,9 @@ export function usePWA(): UsePWAReturn {
 
   // Update app
   const updateApp = useCallback(() => {
+    if (!PWA_ENABLED) {
+      return;
+    }
     if (state.registration?.waiting) {
       state.registration.waiting.postMessage({ type: 'SKIP_WAITING' });
     }
@@ -168,6 +211,9 @@ export function usePWA(): UsePWAReturn {
 
   // Subscribe to push notifications
   const subscribeToPush = useCallback(async (): Promise<PushSubscription | null> => {
+    if (!PWA_ENABLED) {
+      return null;
+    }
     if (!state.registration) {
       console.warn('Service Worker not registered');
       return null;
@@ -205,6 +251,9 @@ export function usePWA(): UsePWAReturn {
 
   // Unsubscribe from push notifications
   const unsubscribeFromPush = useCallback(async (): Promise<boolean> => {
+    if (!PWA_ENABLED) {
+      return false;
+    }
     if (!state.registration) {
       return false;
     }

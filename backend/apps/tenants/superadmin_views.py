@@ -4,6 +4,8 @@ Command-center API endpoints for SUPER_ADMIN users.
 Allows onboarding schools, listing tenants, impersonation, and platform stats.
 """
 
+import logging
+
 from django.conf import settings
 from django.shortcuts import get_object_or_404
 from rest_framework import status
@@ -28,6 +30,8 @@ from .superadmin_serializers import (
     OnboardTenantSerializer,
     TenantUpdateSerializer,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class ImpersonateThrottle(ScopedRateThrottle):
@@ -68,8 +72,14 @@ def platform_stats(request):
 
     # Schools near limits (>80% of any resource)
     schools_near_limits = []
+    usage_errors = 0
     for t in Tenant.objects.filter(is_active=True):
-        usage = get_tenant_usage(t)
+        try:
+            usage = get_tenant_usage(t)
+        except Exception:
+            usage_errors += 1
+            logger.exception("platform_stats: usage calculation failed for tenant_id=%s", t.id)
+            continue
         for resource, bucket in usage.items():
             if bucket["limit"] > 0 and bucket["used"] / bucket["limit"] > 0.8:
                 schools_near_limits.append({
@@ -86,6 +96,8 @@ def platform_stats(request):
         "plan_distribution": plan_distribution,
         "recent_onboards": recent_onboards,
         "schools_near_limits": schools_near_limits,
+        "degraded": usage_errors > 0,
+        "usage_errors": usage_errors,
     })
 
 
@@ -112,8 +124,48 @@ def tenant_list_create(request):
 
         paginator = TenantPagination()
         page = paginator.paginate_queryset(qs, request)
-        serializer = TenantListSerializer(page, many=True, context={"request": request})
-        return paginator.get_paginated_response(serializer.data)
+        try:
+            serializer = TenantListSerializer(page, many=True, context={"request": request})
+            return paginator.get_paginated_response(serializer.data)
+        except Exception:
+            logger.exception("tenant_list_create: serializer failure, returning degraded payload")
+            fallback_rows = []
+            for tenant in page:
+                try:
+                    teacher_count = User.objects.filter(tenant=tenant, role="TEACHER", is_active=True).count()
+                    admin_count = User.objects.filter(tenant=tenant, role="SCHOOL_ADMIN", is_active=True).count()
+                    from apps.courses.models import Course
+                    course_count = Course.objects.filter(tenant=tenant).count()
+                except Exception:
+                    teacher_count = 0
+                    admin_count = 0
+                    course_count = 0
+                fallback_rows.append({
+                    "id": str(tenant.id),
+                    "name": tenant.name,
+                    "slug": tenant.slug,
+                    "subdomain": tenant.subdomain,
+                    "email": tenant.email,
+                    "is_active": tenant.is_active,
+                    "is_trial": tenant.is_trial,
+                    "trial_end_date": tenant.trial_end_date,
+                    "plan": tenant.plan,
+                    "plan_started_at": tenant.plan_started_at,
+                    "plan_expires_at": tenant.plan_expires_at,
+                    "max_teachers": tenant.max_teachers,
+                    "max_courses": tenant.max_courses,
+                    "max_storage_mb": tenant.max_storage_mb,
+                    "primary_color": tenant.primary_color,
+                    "logo": None,
+                    "teacher_count": teacher_count,
+                    "admin_count": admin_count,
+                    "course_count": course_count,
+                    "created_at": tenant.created_at,
+                    "updated_at": tenant.updated_at,
+                })
+            response = paginator.get_paginated_response(fallback_rows)
+            response.data["degraded"] = True
+            return response
 
     # POST — onboard a new school
     serializer = OnboardTenantSerializer(data=request.data)
