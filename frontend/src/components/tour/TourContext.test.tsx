@@ -59,6 +59,7 @@ describe('TourContext', () => {
 
   beforeEach(() => {
     localStorage.clear();
+    sessionStorage.clear();
     jest.clearAllMocks();
 
     mockedTourSteps.SUPER_ADMIN = [];

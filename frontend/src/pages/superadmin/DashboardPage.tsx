@@ -36,7 +36,7 @@ export const SuperAdminDashboardPage: React.FC = () => {
   };
 
   return (
-    <div className="space-y-8" data-tour="superadmin-dashboard-page">
+    <div className="space-y-6 sm:space-y-8" data-tour="superadmin-dashboard-page">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl">Platform Dashboard</h1>
@@ -77,9 +77,9 @@ export const SuperAdminDashboardPage: React.FC = () => {
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 gap-4 sm:gap-6 lg:grid-cols-3">
         {/* Plan Distribution */}
-        <div data-tour="superadmin-dashboard-plan-distribution" className="bg-white rounded-xl border border-gray-200 p-6">
+        <div data-tour="superadmin-dashboard-plan-distribution" className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6">
           <h2 className="font-semibold text-gray-900 mb-4">Plan Distribution</h2>
           {stats?.plan_distribution ? (
             <div className="space-y-3">
@@ -104,7 +104,7 @@ export const SuperAdminDashboardPage: React.FC = () => {
         </div>
 
         {/* Recent Onboards */}
-        <div data-tour="superadmin-dashboard-recent-onboards" className="bg-white rounded-xl border border-gray-200 p-6">
+        <div data-tour="superadmin-dashboard-recent-onboards" className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6">
           <h2 className="font-semibold text-gray-900 mb-4">Recently Onboarded</h2>
           {stats?.recent_onboards && stats.recent_onboards.length > 0 ? (
             <div className="space-y-3">
@@ -112,7 +112,7 @@ export const SuperAdminDashboardPage: React.FC = () => {
                 <button
                   key={s.id}
                   onClick={() => navigate(`/super-admin/schools/${s.id}`)}
-                  className="w-full flex items-center justify-between p-3 rounded-lg hover:bg-gray-50 text-left"
+                  className="w-full flex flex-col items-start gap-1 rounded-lg p-3 text-left hover:bg-gray-50 sm:flex-row sm:items-center sm:justify-between"
                 >
                   <div>
                     <p className="text-sm font-medium text-gray-900">{s.name}</p>
@@ -126,7 +126,7 @@ export const SuperAdminDashboardPage: React.FC = () => {
         </div>
 
         {/* Schools Near Limits */}
-        <div data-tour="superadmin-dashboard-near-limits" className="bg-white rounded-xl border border-gray-200 p-6">
+        <div data-tour="superadmin-dashboard-near-limits" className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6">
           <h2 className="font-semibold text-gray-900 mb-4">Near Limits</h2>
           {stats?.schools_near_limits && stats.schools_near_limits.length > 0 ? (
             <div className="space-y-3">

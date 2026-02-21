@@ -96,7 +96,7 @@ export const AssignmentsPage: React.FC = () => {
       </div>
       
       {/* Stats */}
-      <div data-tour="teacher-assignments-stats" className="grid grid-cols-3 gap-4">
+      <div data-tour="teacher-assignments-stats" className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <div className="bg-white rounded-xl p-4 border border-gray-100">
           <p className="text-sm text-gray-500">Total</p>
           <p className="text-2xl font-bold text-gray-900">{statusCounts.ALL}</p>
@@ -113,12 +113,13 @@ export const AssignmentsPage: React.FC = () => {
       
       {/* Tabs */}
       <div data-tour="teacher-assignments-tabs" className="border-b border-gray-200">
-        <nav className="-mb-px flex space-x-8">
+        <nav className="-mb-px flex gap-6 overflow-x-auto">
           {tabs.map((tab) => (
             <button
+              type="button"
               key={tab.key}
               onClick={() => setActiveTab(tab.key)}
-              className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
+              className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors whitespace-nowrap ${
                 activeTab === tab.key
                   ? 'border-emerald-500 text-emerald-600'
                   : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'

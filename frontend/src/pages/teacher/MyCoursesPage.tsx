@@ -73,7 +73,7 @@ export const MyCoursesPage: React.FC = () => {
       </div>
       
       {/* Filters */}
-      <div data-tour="teacher-courses-filters" className="flex flex-col sm:flex-row gap-4">
+      <div data-tour="teacher-courses-filters" className="flex flex-col gap-4 sm:flex-row">
         {/* Search */}
         <div className="flex-1">
           <div className="relative">
@@ -84,7 +84,8 @@ export const MyCoursesPage: React.FC = () => {
             <input
               id="teacher-courses-search"
               name="search"
-              type="text"
+              type="search"
+              autoComplete="off"
               placeholder="Search courses..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -94,11 +95,12 @@ export const MyCoursesPage: React.FC = () => {
         </div>
         
         {/* Status filter */}
-        <div className="flex items-center space-x-2">
+        <div className="flex items-start gap-2 overflow-x-auto pb-1">
           <FunnelIcon className="h-5 w-5 text-gray-400" />
-          <div className="flex rounded-lg border border-gray-300 overflow-hidden">
+          <div className="flex rounded-lg border border-gray-300 overflow-hidden min-w-max">
             {(['ALL', 'NOT_STARTED', 'IN_PROGRESS', 'COMPLETED'] as StatusFilter[]).map((status) => (
               <button
+                type="button"
                 key={status}
                 onClick={() => setStatusFilter(status)}
                 className={`px-3 py-2 text-sm font-medium transition-colors ${

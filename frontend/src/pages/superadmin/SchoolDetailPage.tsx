@@ -109,10 +109,10 @@ export const SchoolDetailPage: React.FC = () => {
   ];
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 pb-4 sm:space-y-6">
       {/* Header */}
-      <div data-tour="superadmin-school-header" className="flex flex-col items-start gap-4 sm:flex-row sm:items-center">
-        <button onClick={() => navigate('/super-admin/schools')} className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg"><ArrowLeftIcon className="h-5 w-5" /></button>
+      <div data-tour="superadmin-school-header" className="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:gap-4">
+        <button type="button" onClick={() => navigate('/super-admin/schools')} className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg"><ArrowLeftIcon className="h-5 w-5" /></button>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2 sm:gap-3">
             <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl">{tenant.name}</h1>
@@ -130,13 +130,14 @@ export const SchoolDetailPage: React.FC = () => {
 
       {/* Tabs */}
       <div className="border-b border-gray-200">
-        <nav data-tour="superadmin-school-tabs" className="-mb-px flex gap-6 overflow-x-auto pb-1 sm:space-x-8">
+        <nav data-tour="superadmin-school-tabs" className="-mb-px flex gap-2 overflow-x-auto pb-1 sm:gap-6 sm:space-x-8">
           {tabs.map((t) => (
             <button
+              type="button"
               key={t.key}
               data-tour={t.key === 'plan' ? 'superadmin-school-tab-plan' : t.key === 'features' ? 'superadmin-school-tab-features' : undefined}
               onClick={() => setTab(t.key)}
-              className={`py-3 px-1 border-b-2 text-sm font-medium transition-colors ${tab === t.key ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+              className={`whitespace-nowrap py-3 px-1 border-b-2 text-sm font-medium transition-colors ${tab === t.key ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
             >
               {t.label}
             </button>
@@ -147,9 +148,9 @@ export const SchoolDetailPage: React.FC = () => {
       {/* Overview */}
       {tab === 'overview' && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="lg:col-span-2 space-y-6">
+          <div className="space-y-4 sm:space-y-6 lg:col-span-2">
             {/* Usage */}
-            <div data-tour="superadmin-school-overview-usage" className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
+            <div data-tour="superadmin-school-overview-usage" className="bg-white rounded-xl border border-gray-200 p-4 space-y-4 sm:p-6">
               <h2 className="font-semibold text-gray-900">Usage</h2>
               {usage && (
                 <>
@@ -160,7 +161,7 @@ export const SchoolDetailPage: React.FC = () => {
               )}
             </div>
             {/* Notes */}
-            <div className="bg-white rounded-xl border border-gray-200 p-6">
+            <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6">
               <h2 className="font-semibold text-gray-900 mb-3">Internal Notes</h2>
               <label htmlFor="tenant-internal-notes" className="sr-only">Internal notes</label>
               <textarea
@@ -175,8 +176,8 @@ export const SchoolDetailPage: React.FC = () => {
             </div>
           </div>
           {/* Sidebar info */}
-          <div className="space-y-6">
-            <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-3">
+          <div className="space-y-4 sm:space-y-6">
+            <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3 sm:p-6">
               <h2 className="font-semibold text-gray-900">School Info</h2>
               <div className="text-sm"><span className="text-gray-500">Admin:</span> <span className="text-gray-900">{tenant.admin_name || '-'}</span></div>
               <div className="text-sm"><span className="text-gray-500">Email:</span> <span className="text-gray-900">{tenant.admin_email || '-'}</span></div>
@@ -184,12 +185,12 @@ export const SchoolDetailPage: React.FC = () => {
               <div className="text-sm"><span className="text-gray-500">Plan:</span> <span className="text-gray-900">{tenant.plan}</span></div>
               {tenant.is_trial && <div className="text-sm"><span className="text-gray-500">Trial ends:</span> <span className="text-gray-900">{tenant.trial_end_date || 'No date set'}</span></div>}
             </div>
-            <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-3">
+            <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3 sm:p-6">
               <h2 className="font-semibold text-gray-900">Actions</h2>
-              <button onClick={() => updateMut.mutate({ is_active: !tenant.is_active })} className={`w-full text-sm font-medium px-4 py-2 rounded-lg border ${tenant.is_active ? 'border-red-200 text-red-700 hover:bg-red-50' : 'border-emerald-200 text-emerald-700 hover:bg-emerald-50'}`}>
+              <button type="button" onClick={() => updateMut.mutate({ is_active: !tenant.is_active })} className={`w-full text-sm font-medium px-4 py-2 rounded-lg border ${tenant.is_active ? 'border-red-200 text-red-700 hover:bg-red-50' : 'border-emerald-200 text-emerald-700 hover:bg-emerald-50'}`}>
                 {tenant.is_active ? 'Deactivate School' : 'Activate School'}
               </button>
-              <button onClick={() => { if (window.confirm('Reset admin password?')) resetPwMut.mutate(); }} className="w-full text-sm font-medium px-4 py-2 rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50">
+              <button type="button" onClick={() => { if (window.confirm('Reset admin password?')) resetPwMut.mutate(); }} className="w-full text-sm font-medium px-4 py-2 rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50">
                 Reset Admin Password
               </button>
             </div>
@@ -199,12 +200,12 @@ export const SchoolDetailPage: React.FC = () => {
 
       {/* Plan & Limits */}
       {tab === 'plan' && (
-        <div data-tour="superadmin-school-plan-card" className="bg-white rounded-xl border border-gray-200 p-6 space-y-6">
+        <div data-tour="superadmin-school-plan-card" className="bg-white rounded-xl border border-gray-200 p-4 space-y-6 sm:p-6">
           <div>
             <h2 className="font-semibold text-gray-900 mb-3">Subscription Plan</h2>
             <div className="flex flex-wrap items-center gap-2 sm:gap-3">
               {PLAN_OPTIONS.map((p) => (
-                <button key={p} onClick={() => applyPlanMut.mutate(p)} className={`px-4 py-2 text-sm font-medium rounded-lg border transition-colors ${tenant.plan === p ? 'bg-indigo-600 text-white border-indigo-600' : 'border-gray-200 text-gray-700 hover:border-indigo-300'}`}>
+                <button type="button" key={p} onClick={() => applyPlanMut.mutate(p)} className={`px-3 py-2 text-sm font-medium rounded-lg border transition-colors sm:px-4 ${tenant.plan === p ? 'bg-indigo-600 text-white border-indigo-600' : 'border-gray-200 text-gray-700 hover:border-indigo-300'}`}>
                   {p}
                 </button>
               ))}
@@ -215,19 +216,19 @@ export const SchoolDetailPage: React.FC = () => {
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
               <label htmlFor="tenant-max-teachers" className="block text-sm font-medium text-gray-700 mb-1">Max Teachers</label>
-              <input id="tenant-max-teachers" name="max_teachers" type="number" defaultValue={tenant.max_teachers} onBlur={(e) => updateMut.mutate({ max_teachers: Number(e.target.value) })} className="w-full px-3 py-2 border border-gray-300 rounded-lg" />
+              <input id="tenant-max-teachers" name="max_teachers" type="number" inputMode="numeric" defaultValue={tenant.max_teachers} onBlur={(e) => updateMut.mutate({ max_teachers: Number(e.target.value) })} className="w-full px-3 py-2 border border-gray-300 rounded-lg" />
             </div>
             <div>
               <label htmlFor="tenant-max-courses" className="block text-sm font-medium text-gray-700 mb-1">Max Courses</label>
-              <input id="tenant-max-courses" name="max_courses" type="number" defaultValue={tenant.max_courses} onBlur={(e) => updateMut.mutate({ max_courses: Number(e.target.value) })} className="w-full px-3 py-2 border border-gray-300 rounded-lg" />
+              <input id="tenant-max-courses" name="max_courses" type="number" inputMode="numeric" defaultValue={tenant.max_courses} onBlur={(e) => updateMut.mutate({ max_courses: Number(e.target.value) })} className="w-full px-3 py-2 border border-gray-300 rounded-lg" />
             </div>
             <div>
               <label htmlFor="tenant-max-storage" className="block text-sm font-medium text-gray-700 mb-1">Max Storage (MB)</label>
-              <input id="tenant-max-storage" name="max_storage_mb" type="number" defaultValue={tenant.max_storage_mb} onBlur={(e) => updateMut.mutate({ max_storage_mb: Number(e.target.value) })} className="w-full px-3 py-2 border border-gray-300 rounded-lg" />
+              <input id="tenant-max-storage" name="max_storage_mb" type="number" inputMode="numeric" defaultValue={tenant.max_storage_mb} onBlur={(e) => updateMut.mutate({ max_storage_mb: Number(e.target.value) })} className="w-full px-3 py-2 border border-gray-300 rounded-lg" />
             </div>
             <div>
               <label htmlFor="tenant-max-video-duration" className="block text-sm font-medium text-gray-700 mb-1">Max Video Duration (min)</label>
-              <input id="tenant-max-video-duration" name="max_video_duration_minutes" type="number" defaultValue={tenant.max_video_duration_minutes} onBlur={(e) => updateMut.mutate({ max_video_duration_minutes: Number(e.target.value) })} className="w-full px-3 py-2 border border-gray-300 rounded-lg" />
+              <input id="tenant-max-video-duration" name="max_video_duration_minutes" type="number" inputMode="numeric" defaultValue={tenant.max_video_duration_minutes} onBlur={(e) => updateMut.mutate({ max_video_duration_minutes: Number(e.target.value) })} className="w-full px-3 py-2 border border-gray-300 rounded-lg" />
             </div>
           </div>
 
@@ -257,7 +258,7 @@ export const SchoolDetailPage: React.FC = () => {
 
       {/* Features */}
       {tab === 'features' && (
-        <div data-tour="superadmin-school-features-grid" className="bg-white rounded-xl border border-gray-200 p-6">
+        <div data-tour="superadmin-school-features-grid" className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6">
           <h2 className="font-semibold text-gray-900 mb-4">Feature Flags</h2>
           <p className="text-sm text-gray-500 mb-6">Toggle features on/off for this school. Changes save immediately.</p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

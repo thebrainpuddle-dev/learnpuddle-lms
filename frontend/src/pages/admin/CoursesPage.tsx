@@ -1,6 +1,6 @@
 // src/pages/admin/CoursesPage.tsx
 
-import React, { useState, useRef } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { usePageTitle } from '../../hooks/usePageTitle';
@@ -175,6 +175,26 @@ export const CoursesPage: React.FC = () => {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const dragCourseRef = useRef<Course | null>(null);
 
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return;
+    }
+    const media = window.matchMedia('(max-width: 767px)');
+    const updateViewMode = (matches: boolean) => {
+      if (matches) setViewMode('board');
+    };
+    updateViewMode(media.matches);
+    const onChange = (event: MediaQueryListEvent) => updateViewMode(event.matches);
+
+    if (media.addEventListener) {
+      media.addEventListener('change', onChange);
+      return () => media.removeEventListener('change', onChange);
+    }
+
+    media.addListener(onChange);
+    return () => media.removeListener(onChange);
+  }, []);
+
   const { data, isLoading, error } = useQuery({
     queryKey: ['adminCourses', search, publishedFilter, mandatoryFilter, page],
     queryFn: () => fetchCourses({
@@ -330,12 +350,18 @@ export const CoursesPage: React.FC = () => {
 
       {/* Filters + View Toggle */}
       <div data-tour="admin-courses-filters" className="bg-white rounded-xl border border-gray-200 p-4">
-        <div className="flex flex-col lg:flex-row gap-4">
+        <div className="flex flex-col gap-4 lg:flex-row">
           <form onSubmit={handleSearch} className="flex-1">
             <div className="relative">
+              <label htmlFor="admin-courses-search" className="sr-only">
+                Search courses
+              </label>
               <MagnifyingGlassIcon className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-gray-400" />
               <input
-                type="text"
+                id="admin-courses-search"
+                name="courses_search"
+                type="search"
+                autoComplete="off"
                 placeholder="Search courses..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
@@ -344,9 +370,10 @@ export const CoursesPage: React.FC = () => {
             </div>
           </form>
 
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <FunnelIcon className="h-5 w-5 text-gray-400" />
             <select
+              name="published_filter"
               value={publishedFilter}
               onChange={(e) => { setPublishedFilter(e.target.value); setPage(1); }}
               className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-primary-500 focus:border-primary-500"
@@ -356,6 +383,7 @@ export const CoursesPage: React.FC = () => {
               <option value="false">Draft</option>
             </select>
             <select
+              name="mandatory_filter"
               value={mandatoryFilter}
               onChange={(e) => { setMandatoryFilter(e.target.value); setPage(1); }}
               className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-primary-500 focus:border-primary-500"
@@ -368,6 +396,7 @@ export const CoursesPage: React.FC = () => {
             {/* View toggle */}
             <div className="flex bg-gray-100 rounded-lg p-0.5 ml-2">
               <button
+                type="button"
                 onClick={() => setViewMode('table')}
                 className={`p-1.5 rounded-md ${viewMode === 'table' ? 'bg-white shadow text-primary-600' : 'text-gray-400 hover:text-gray-600'}`}
                 title="Table view"
@@ -375,6 +404,7 @@ export const CoursesPage: React.FC = () => {
                 <TableCellsIcon className="h-4 w-4" />
               </button>
               <button
+                type="button"
                 onClick={() => setViewMode('board')}
                 className={`p-1.5 rounded-md ${viewMode === 'board' ? 'bg-white shadow text-primary-600' : 'text-gray-400 hover:text-gray-600'}`}
                 title="Board view"
@@ -472,6 +502,9 @@ export const CoursesPage: React.FC = () => {
                 <tr>
                   <th className="px-3 py-3 w-10">
                     <input
+                      id="courses-select-all"
+                      name="courses_select_all"
+                      aria-label="Select all courses"
                       type="checkbox"
                       checked={courses.length > 0 && selectedIds.size === courses.length}
                       onChange={toggleSelectAll}
@@ -493,6 +526,9 @@ export const CoursesPage: React.FC = () => {
                     <tr key={course.id} className={`hover:bg-gray-50 ${selectedIds.has(course.id) ? 'bg-emerald-50' : ''}`}>
                       <td className="px-3 py-4">
                         <input
+                          id={`course-select-${course.id}`}
+                          name={`course_select_${course.id}`}
+                          aria-label={`Select ${course.title}`}
                           type="checkbox"
                           checked={selectedIds.has(course.id)}
                           onChange={() => toggleSelection(course.id)}

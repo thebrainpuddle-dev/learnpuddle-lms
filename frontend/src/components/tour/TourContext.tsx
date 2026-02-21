@@ -18,6 +18,7 @@ const TourContext = React.createContext<TourContextValue>({
 
 const TOUR_COMPLETED_PREFIX = 'lms:tour:completed';
 const TOUR_COMPLETED_PREFIX_V2 = 'lms:tour:completed:v2';
+const TOUR_AUTOSTART_SESSION_PREFIX = 'lms:tour:autostarted:v1';
 const DEFAULT_SELECTOR_MISS_MESSAGE =
   "Couldn't locate this element yet. Complete page load or click Next to continue.";
 const AUTO_NAV_COOLDOWN_MS = 700;
@@ -33,8 +34,27 @@ function getTourRole(role?: string | null): TourRole | null {
   return 'TEACHER';
 }
 
+function getTourHostScope(): string {
+  const host = window.location.hostname.toLowerCase();
+  return host.startsWith('www.') ? host.slice(4) : host;
+}
+
 function getTourCompletionKey(userId: string, role: TourRole): string {
-  return `${TOUR_COMPLETED_PREFIX_V2}:${window.location.hostname}:${userId}:${role}`;
+  return `${TOUR_COMPLETED_PREFIX_V2}:${getTourHostScope()}:${userId}:${role}`;
+}
+
+function getCandidateTourCompletionKeys(userId: string, role: TourRole): string[] {
+  const host = window.location.hostname.toLowerCase();
+  const normalizedHost = getTourHostScope();
+  const keys = [`${TOUR_COMPLETED_PREFIX_V2}:${normalizedHost}:${userId}:${role}`];
+  if (host !== normalizedHost) {
+    keys.push(`${TOUR_COMPLETED_PREFIX_V2}:${host}:${userId}:${role}`);
+  }
+  return keys;
+}
+
+function getTourAutostartSessionKey(userId: string, role: TourRole): string {
+  return `${TOUR_AUTOSTART_SESSION_PREFIX}:${getTourHostScope()}:${userId}:${role}`;
 }
 
 function hasLegacyTourCompletion(userId: string, role: TourRole): boolean {
@@ -50,9 +70,10 @@ function hasLegacyTourCompletion(userId: string, role: TourRole): boolean {
 }
 
 function isTourCompleted(userId: string, role: TourRole): boolean {
-  const currentKey = getTourCompletionKey(userId, role);
-  if (localStorage.getItem(currentKey) === '1') {
-    return true;
+  for (const key of getCandidateTourCompletionKeys(userId, role)) {
+    if (localStorage.getItem(key) === '1') {
+      return true;
+    }
   }
   return hasLegacyTourCompletion(userId, role);
 }
@@ -143,6 +164,13 @@ function getMissingBehavior(step: TourStep): NonNullable<TourStep['onMissing']> 
   return step.onMissing ?? 'pause';
 }
 
+function shouldAutostartTour(): boolean {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+    return true;
+  }
+  return window.matchMedia('(min-width: 1024px)').matches;
+}
+
 export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -224,7 +252,11 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   React.useEffect(() => {
     if (!isAuthenticated || !user?.id || !role || isActive) return;
+    if (!shouldAutostartTour()) return;
     if (isTourCompleted(user.id, role)) return;
+    const sessionAutostartKey = getTourAutostartSessionKey(user.id, role);
+    if (sessionStorage.getItem(sessionAutostartKey) === '1') return;
+    sessionStorage.setItem(sessionAutostartKey, '1');
     setActiveRole(role);
     setActiveStepIndex(0);
     logTourDebug('tour_autostart', { role, userId: user.id });

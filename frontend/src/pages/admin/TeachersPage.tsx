@@ -112,7 +112,7 @@ export const TeachersPage: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Teachers</h1>
           <p className="mt-1 text-sm text-gray-500">
@@ -120,27 +120,38 @@ export const TeachersPage: React.FC = () => {
             {usage && <span className="ml-2 text-gray-400">({usage.teachers.used}/{usage.teachers.limit} used)</span>}
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <input ref={csvRef} type="file" accept=".csv" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) importMut.mutate(f); }} />
-          <Button variant="outline" onClick={() => csvRef.current?.click()} loading={importMut.isPending}>
+        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
+          <input ref={csvRef} name="teachers_csv_import" type="file" accept=".csv" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) importMut.mutate(f); }} />
+          <Button className="w-full sm:w-auto" variant="outline" onClick={() => csvRef.current?.click()} loading={importMut.isPending}>
             <ArrowUpTrayIcon className="h-4 w-4 mr-2" />CSV Import
           </Button>
-          <Button variant="primary" onClick={() => navigate('/admin/teachers/new')}>
+          <Button className="w-full sm:w-auto" variant="primary" onClick={() => navigate('/admin/teachers/new')}>
             <UserPlusIcon className="h-4 w-4 mr-2" />Create Teacher
           </Button>
         </div>
       </div>
 
       <div data-tour="admin-teachers-search" className="card">
-        <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search by name or email" leftIcon={<MagnifyingGlassIcon className="h-5 w-5" />} />
+        <Input
+          id="teachers-search"
+          name="teachers_search"
+          autoComplete="off"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search by name or email"
+          leftIcon={<MagnifyingGlassIcon className="h-5 w-5" />}
+        />
       </div>
 
-      <div data-tour="admin-teachers-table" className="card overflow-x-auto">
+      <div data-tour="admin-teachers-table" className="hidden md:block card overflow-x-auto">
         <table className="min-w-full text-sm">
           <thead className="text-left text-gray-500">
             <tr>
               <th className="py-3 pr-3 w-10">
                 <input
+                  id="teachers-select-all"
+                  name="teachers_select_all"
+                  aria-label="Select all teachers"
                   type="checkbox"
                   checked={rows.length > 0 && selectedIds.size === rows.length}
                   onChange={toggleSelectAll}
@@ -165,6 +176,9 @@ export const TeachersPage: React.FC = () => {
                 <tr key={t.id} className={`text-gray-800 hover:bg-gray-50 ${selectedIds.has(t.id) ? 'bg-emerald-50' : ''}`}>
                   <td className="py-3 pr-3">
                     <input
+                      id={`teacher-row-select-${t.id}`}
+                      name={`teacher_row_select_${t.id}`}
+                      aria-label={`Select ${t.first_name} ${t.last_name}`}
                       type="checkbox"
                       checked={selectedIds.has(t.id)}
                       onChange={() => toggleSelection(t.id)}
@@ -200,6 +214,55 @@ export const TeachersPage: React.FC = () => {
         </table>
       </div>
 
+      <div className="md:hidden space-y-3">
+        {isLoading ? (
+          <div className="card text-sm text-gray-500">Loading...</div>
+        ) : rows.length === 0 ? (
+          <div className="card text-sm text-gray-500">No teachers found.</div>
+        ) : (
+          rows.map((t) => (
+            <div key={t.id} className={`card ${selectedIds.has(t.id) ? 'ring-2 ring-emerald-200' : ''}`}>
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="font-semibold text-gray-900">{t.first_name} {t.last_name}</p>
+                  <p className="text-xs text-gray-500 break-all">{t.email}</p>
+                </div>
+                <input
+                  id={`teacher-select-${t.id}`}
+                  name={`teacher_select_${t.id}`}
+                  type="checkbox"
+                  checked={selectedIds.has(t.id)}
+                  onChange={() => toggleSelection(t.id)}
+                  className="rounded border-gray-300 text-emerald-600 focus:ring-emerald-500 mt-1"
+                />
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-gray-600">
+                <p>Department: <span className="text-gray-900">{t.department || '-'}</span></p>
+                <p>Role: <span className="text-gray-900">{t.role}</span></p>
+                <p>
+                  Status:{' '}
+                  {t.is_active ? (
+                    <span className="inline-flex items-center gap-1 text-emerald-700"><CheckCircleIcon className="h-3.5 w-3.5" />Active</span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 text-red-600"><XCircleIcon className="h-3.5 w-3.5" />Inactive</span>
+                  )}
+                </p>
+              </div>
+              <div className="mt-3 flex items-center gap-2">
+                <Button className="flex-1" variant="outline" onClick={() => openEdit(t)}>
+                  <PencilIcon className="h-4 w-4 mr-2" />Edit
+                </Button>
+                {t.is_active && (
+                  <Button className="flex-1" variant="outline" onClick={() => setDeactivateTarget(t)}>
+                    <XCircleIcon className="h-4 w-4 mr-2" />Deactivate
+                  </Button>
+                )}
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
       {/* Bulk Actions Bar */}
       <BulkActionsBar
         selectedCount={selectedIds.size}
@@ -211,28 +274,28 @@ export const TeachersPage: React.FC = () => {
 
       {/* Edit modal */}
       {editingTeacher && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl p-6 max-w-lg w-full mx-4 space-y-4">
+        <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50">
+          <div className="bg-white rounded-t-2xl sm:rounded-xl p-6 max-w-lg w-full mx-0 sm:mx-4 space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-bold text-gray-900">Edit Teacher</h3>
-              <button onClick={() => setEditingTeacher(null)} className="text-gray-400 hover:text-gray-600"><XMarkIcon className="h-6 w-6" /></button>
+              <button type="button" onClick={() => setEditingTeacher(null)} className="text-gray-400 hover:text-gray-600"><XMarkIcon className="h-6 w-6" /></button>
             </div>
-            <div className="grid grid-cols-2 gap-4">
-              <Input label="First Name" value={editForm.first_name || ''} onChange={(e) => setEditForm({ ...editForm, first_name: e.target.value })} />
-              <Input label="Last Name" value={editForm.last_name || ''} onChange={(e) => setEditForm({ ...editForm, last_name: e.target.value })} />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Input id="edit-teacher-first-name" name="first_name" label="First Name" autoComplete="given-name" value={editForm.first_name || ''} onChange={(e) => setEditForm({ ...editForm, first_name: e.target.value })} />
+              <Input id="edit-teacher-last-name" name="last_name" label="Last Name" autoComplete="family-name" value={editForm.last_name || ''} onChange={(e) => setEditForm({ ...editForm, last_name: e.target.value })} />
             </div>
-            <Input label="Department" value={editForm.department || ''} onChange={(e) => setEditForm({ ...editForm, department: e.target.value })} />
-            <Input label="Employee ID" value={editForm.employee_id || ''} onChange={(e) => setEditForm({ ...editForm, employee_id: e.target.value })} />
+            <Input id="edit-teacher-department" name="department" label="Department" autoComplete="organization-title" value={editForm.department || ''} onChange={(e) => setEditForm({ ...editForm, department: e.target.value })} />
+            <Input id="edit-teacher-employee-id" name="employee_id" label="Employee ID" autoComplete="off" value={editForm.employee_id || ''} onChange={(e) => setEditForm({ ...editForm, employee_id: e.target.value })} />
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
-              <select value={editForm.role || 'TEACHER'} onChange={(e) => setEditForm({ ...editForm, role: e.target.value as any })} className="w-full px-3 py-2 border border-gray-300 rounded-lg">
+              <label htmlFor="edit-teacher-role" className="block text-sm font-medium text-gray-700 mb-1">Role</label>
+              <select id="edit-teacher-role" name="role" value={editForm.role || 'TEACHER'} onChange={(e) => setEditForm({ ...editForm, role: e.target.value as any })} className="w-full px-3 py-2 border border-gray-300 rounded-lg">
                 <option value="TEACHER">Teacher</option>
                 <option value="HOD">HOD</option>
                 <option value="IB_COORDINATOR">IB Coordinator</option>
               </select>
             </div>
-            <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={editForm.is_active ?? true} onChange={(e) => setEditForm({ ...editForm, is_active: e.target.checked })} className="rounded border-gray-300 text-indigo-600" />
+            <label htmlFor="edit-teacher-active" className="flex items-center gap-2 text-sm">
+              <input id="edit-teacher-active" name="is_active" type="checkbox" checked={editForm.is_active ?? true} onChange={(e) => setEditForm({ ...editForm, is_active: e.target.checked })} className="rounded border-gray-300 text-indigo-600" />
               Active
             </label>
             <div className="flex justify-end gap-3 pt-2">

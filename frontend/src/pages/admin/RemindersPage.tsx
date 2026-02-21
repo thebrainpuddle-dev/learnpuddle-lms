@@ -143,8 +143,10 @@ export const RemindersPage: React.FC = () => {
         <div data-tour="admin-reminders-composer" className="card space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Type</label>
+              <label htmlFor="reminder-type" className="block text-sm font-medium text-gray-700 mb-1">Type</label>
               <select
+                id="reminder-type"
+                name="reminder_type"
                 value={reminderType}
                 onChange={(e) => setReminderType(e.target.value as ReminderType)}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg"
@@ -156,12 +158,15 @@ export const RemindersPage: React.FC = () => {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label htmlFor="reminder-deadline-override" className="block text-sm font-medium text-gray-700 mb-1">
                 <ClockIcon className="h-4 w-4 inline mr-1" />
                 Deadline override (optional)
               </label>
               <input
+                id="reminder-deadline-override"
+                name="deadline_override"
                 type="datetime-local"
+                autoComplete="off"
                 value={deadlineOverride}
                 onChange={(e) => setDeadlineOverride(e.target.value)}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg"
@@ -171,8 +176,10 @@ export const RemindersPage: React.FC = () => {
 
           {reminderType === 'COURSE_DEADLINE' && (
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Course</label>
+              <label htmlFor="reminder-course" className="block text-sm font-medium text-gray-700 mb-1">Course</label>
               <select
+                id="reminder-course"
+                name="course_id"
                 value={courseId}
                 onChange={(e) => setCourseId(e.target.value)}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg"
@@ -189,8 +196,10 @@ export const RemindersPage: React.FC = () => {
 
           {reminderType === 'ASSIGNMENT_DUE' && (
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Assignment</label>
+              <label htmlFor="reminder-assignment" className="block text-sm font-medium text-gray-700 mb-1">Assignment</label>
               <select
+                id="reminder-assignment"
+                name="assignment_id"
                 value={assignmentId}
                 onChange={(e) => setAssignmentId(e.target.value)}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg"
@@ -205,10 +214,19 @@ export const RemindersPage: React.FC = () => {
             </div>
           )}
 
-          <Input label="Subject (optional)" value={subject} onChange={(e) => setSubject(e.target.value)} />
+          <Input
+            id="reminder-subject"
+            name="subject"
+            label="Subject (optional)"
+            autoComplete="off"
+            value={subject}
+            onChange={(e) => setSubject(e.target.value)}
+          />
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Message (optional)</label>
+            <label htmlFor="reminder-message" className="block text-sm font-medium text-gray-700 mb-1">Message (optional)</label>
             <textarea
+              id="reminder-message"
+              name="message"
               value={message}
               onChange={(e) => setMessage(e.target.value)}
               rows={4}
@@ -256,9 +274,12 @@ export const RemindersPage: React.FC = () => {
 
             {/* Search and add teachers */}
             <Input
+              id="reminder-teacher-search"
+              name="teacher_search"
               value={teacherSearch}
               onChange={(e) => setTeacherSearch(e.target.value)}
               placeholder="Search teachers to add…"
+              autoComplete="off"
               leftIcon={<MagnifyingGlassIcon className="h-5 w-5" />}
             />
             {debouncedTeacherSearch && availableTeachers.length > 0 && (
@@ -283,7 +304,7 @@ export const RemindersPage: React.FC = () => {
             )}
           </div>
 
-          <div className="flex items-center justify-end gap-3">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end">
             <Button
               variant="outline"
               onClick={() => previewMutation.mutate()}

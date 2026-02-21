@@ -60,6 +60,7 @@ export const SchoolsPage: React.FC = () => {
   });
 
   const tenants: TenantListItem[] = data?.results ?? [];
+  const platformDomain = (process.env.REACT_APP_PLATFORM_DOMAIN || 'learnpuddle.com').replace(':3000', '');
 
   return (
     <div className="space-y-6">
@@ -97,9 +98,75 @@ export const SchoolsPage: React.FC = () => {
         />
       </div>
 
-      {/* Table */}
+      {/* Table / Cards */}
       <div data-tour="superadmin-schools-table" className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-        <div className="overflow-x-auto">
+        <div className="md:hidden">
+          {isLoading ? (
+            <div className="space-y-3 p-4">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <div key={i} className="rounded-lg border border-gray-200 p-4 animate-pulse">
+                  <div className="h-4 w-1/2 rounded bg-gray-100 mb-2" />
+                  <div className="h-3 w-1/3 rounded bg-gray-100 mb-3" />
+                  <div className="h-8 rounded bg-gray-100" />
+                </div>
+              ))}
+            </div>
+          ) : tenants.length === 0 ? (
+            <div className="px-6 py-12 text-center">
+              <BuildingOffice2Icon className="h-10 w-10 mx-auto text-gray-300 mb-3" />
+              <p className="text-gray-500">No schools found</p>
+            </div>
+          ) : (
+            <div className="space-y-3 p-3">
+              {tenants.map((t) => (
+                <div
+                  key={t.id}
+                  data-tour="superadmin-school-row"
+                  data-tenant-id={t.id}
+                  className="rounded-lg border border-gray-200 p-4 cursor-pointer hover:bg-gray-50"
+                  onClick={() => nav(`/super-admin/schools/${t.id}`)}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="font-semibold text-gray-900 truncate">{t.name}</p>
+                      <p className="text-xs text-gray-500 truncate">{t.subdomain}.{platformDomain}</p>
+                    </div>
+                    {t.is_active ? (
+                      <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700 bg-emerald-50 rounded-full px-2 py-1 shrink-0">
+                        <CheckCircleIcon className="h-3.5 w-3.5" /> Active
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 text-[11px] font-medium text-red-700 bg-red-50 rounded-full px-2 py-1 shrink-0">
+                        <XCircleIcon className="h-3.5 w-3.5" /> Inactive
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-3 text-xs text-gray-600">
+                    <p>Teachers: <span className="font-medium text-gray-900">{t.teacher_count}</span></p>
+                    <p>Courses: <span className="font-medium text-gray-900">{t.course_count}</span></p>
+                    <p>Plan: <span className="font-medium text-gray-900">{t.is_trial ? 'Trial' : 'Active'}</span></p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleMutation.mutate({ id: t.id, is_active: !t.is_active });
+                    }}
+                    className={`mt-3 w-full text-xs font-medium px-3 py-2 rounded-lg border ${
+                      t.is_active
+                        ? 'border-red-200 text-red-700 hover:bg-red-50'
+                        : 'border-emerald-200 text-emerald-700 hover:bg-emerald-50'
+                    }`}
+                  >
+                    {t.is_active ? 'Deactivate' : 'Activate'}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="hidden md:block overflow-x-auto">
           <table className="min-w-[760px] divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr>
@@ -180,8 +247,8 @@ export const SchoolsPage: React.FC = () => {
 
       {/* Onboard modal */}
       {showOnboard && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="max-h-[90vh] w-full max-w-lg space-y-4 overflow-y-auto rounded-xl bg-white p-4 sm:p-6">
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-0 sm:items-center sm:p-4">
+          <div className="max-h-[92vh] w-full max-w-lg space-y-4 overflow-y-auto rounded-t-2xl bg-white p-4 pb-6 sm:rounded-xl sm:p-6">
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-bold text-gray-900">Onboard New School</h3>
               <button type="button" onClick={() => setShowOnboard(false)} className="text-gray-400 hover:text-gray-600">
@@ -251,7 +318,8 @@ export const SchoolsPage: React.FC = () => {
               placeholder="abcschool"
             />
 
-            <div className="flex flex-col-reverse gap-3 pt-2 sm:flex-row sm:justify-end">
+            <div className="sticky bottom-0 -mx-4 bg-white px-4 pt-3 sm:static sm:mx-0 sm:px-0">
+              <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
               <Button variant="outline" onClick={() => setShowOnboard(false)}>Cancel</Button>
               <Button
                 variant="primary"
@@ -261,6 +329,7 @@ export const SchoolsPage: React.FC = () => {
               >
                 Onboard School
               </Button>
+            </div>
             </div>
           </div>
         </div>
