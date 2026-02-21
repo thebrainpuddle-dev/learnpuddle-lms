@@ -64,22 +64,22 @@ export const SchoolsPage: React.FC = () => {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Schools</h1>
+          <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl">Schools</h1>
           <p className="mt-1 text-gray-500">Manage all schools on the platform</p>
         </div>
         <button
           data-tour="superadmin-schools-onboard"
           onClick={() => setShowOnboard(true)}
-          className="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition-colors"
+          className="w-full rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-700 sm:w-auto"
         >
           + Onboard School
         </button>
       </div>
 
       {/* Search */}
-      <div className="relative max-w-md">
+      <div className="relative w-full max-w-md">
         <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
         <input
           data-tour="superadmin-schools-search"
@@ -93,84 +93,89 @@ export const SchoolsPage: React.FC = () => {
 
       {/* Table */}
       <div data-tour="superadmin-schools-table" className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-        <table className="min-w-full divide-y divide-gray-200">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">School</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Subdomain</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Teachers</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Courses</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Plan</th>
-              <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-200">
-            {isLoading ? (
-              Array.from({ length: 4 }).map((_, i) => (
-                <tr key={i}><td colSpan={7} className="px-6 py-4"><div className="h-4 bg-gray-100 rounded animate-pulse" /></td></tr>
-              ))
-            ) : tenants.length === 0 ? (
+        <div className="overflow-x-auto">
+          <table className="min-w-[760px] divide-y divide-gray-200">
+            <thead className="bg-gray-50">
               <tr>
-                <td colSpan={7} className="px-6 py-12 text-center">
-                  <BuildingOffice2Icon className="h-10 w-10 mx-auto text-gray-300 mb-3" />
-                  <p className="text-gray-500">No schools found</p>
-                </td>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">School</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Subdomain</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Teachers</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Courses</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Plan</th>
+                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Actions</th>
               </tr>
-            ) : (
-              tenants.map((t) => (
-                <tr
-                  key={t.id}
-                  data-tour="superadmin-school-row"
-                  data-tenant-id={t.id}
-                  className="hover:bg-gray-50 cursor-pointer"
-                  onClick={() => nav(`/super-admin/schools/${t.id}`)}
-                >
-                  <td className="px-6 py-4 font-medium text-gray-900">{t.name}</td>
-                  <td className="px-6 py-4 text-sm text-gray-600">{t.subdomain}</td>
-                  <td className="px-6 py-4 text-sm text-gray-600">{t.teacher_count}</td>
-                  <td className="px-6 py-4 text-sm text-gray-600">{t.course_count}</td>
-                  <td className="px-6 py-4">
-                    {t.is_active ? (
-                      <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 bg-emerald-50 rounded-full px-2 py-1">
-                        <CheckCircleIcon className="h-3.5 w-3.5" /> Active
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1 text-xs font-medium text-red-700 bg-red-50 rounded-full px-2 py-1">
-                        <XCircleIcon className="h-3.5 w-3.5" /> Inactive
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-6 py-4 text-sm">
-                    {t.is_trial ? (
-                      <span className="text-amber-600 font-medium">Trial</span>
-                    ) : (
-                      <span className="text-indigo-600 font-medium">Active</span>
-                    )}
-                  </td>
-                  <td className="px-6 py-4 text-right">
-                    <button
-                      onClick={() => toggleMutation.mutate({ id: t.id, is_active: !t.is_active })}
-                      className={`text-xs font-medium px-3 py-1 rounded-lg border ${
-                        t.is_active
-                          ? 'border-red-200 text-red-700 hover:bg-red-50'
-                          : 'border-emerald-200 text-emerald-700 hover:bg-emerald-50'
-                      }`}
-                    >
-                      {t.is_active ? 'Deactivate' : 'Activate'}
-                    </button>
+            </thead>
+            <tbody className="divide-y divide-gray-200">
+              {isLoading ? (
+                Array.from({ length: 4 }).map((_, i) => (
+                  <tr key={i}><td colSpan={7} className="px-6 py-4"><div className="h-4 bg-gray-100 rounded animate-pulse" /></td></tr>
+                ))
+              ) : tenants.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="px-6 py-12 text-center">
+                    <BuildingOffice2Icon className="h-10 w-10 mx-auto text-gray-300 mb-3" />
+                    <p className="text-gray-500">No schools found</p>
                   </td>
                 </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+              ) : (
+                tenants.map((t) => (
+                  <tr
+                    key={t.id}
+                    data-tour="superadmin-school-row"
+                    data-tenant-id={t.id}
+                    className="hover:bg-gray-50 cursor-pointer"
+                    onClick={() => nav(`/super-admin/schools/${t.id}`)}
+                  >
+                    <td className="px-6 py-4 font-medium text-gray-900">{t.name}</td>
+                    <td className="px-6 py-4 text-sm text-gray-600">{t.subdomain}</td>
+                    <td className="px-6 py-4 text-sm text-gray-600">{t.teacher_count}</td>
+                    <td className="px-6 py-4 text-sm text-gray-600">{t.course_count}</td>
+                    <td className="px-6 py-4">
+                      {t.is_active ? (
+                        <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 bg-emerald-50 rounded-full px-2 py-1">
+                          <CheckCircleIcon className="h-3.5 w-3.5" /> Active
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-xs font-medium text-red-700 bg-red-50 rounded-full px-2 py-1">
+                          <XCircleIcon className="h-3.5 w-3.5" /> Inactive
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-6 py-4 text-sm">
+                      {t.is_trial ? (
+                        <span className="text-amber-600 font-medium">Trial</span>
+                      ) : (
+                        <span className="text-indigo-600 font-medium">Active</span>
+                      )}
+                    </td>
+                    <td className="px-6 py-4 text-right">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleMutation.mutate({ id: t.id, is_active: !t.is_active });
+                        }}
+                        className={`text-xs font-medium px-3 py-1 rounded-lg border ${
+                          t.is_active
+                            ? 'border-red-200 text-red-700 hover:bg-red-50'
+                            : 'border-emerald-200 text-emerald-700 hover:bg-emerald-50'
+                        }`}
+                      >
+                        {t.is_active ? 'Deactivate' : 'Activate'}
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       {/* Onboard modal */}
       {showOnboard && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl p-6 max-w-lg w-full mx-4 space-y-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="max-h-[90vh] w-full max-w-lg space-y-4 overflow-y-auto rounded-xl bg-white p-4 sm:p-6">
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-bold text-gray-900">Onboard New School</h3>
               <button onClick={() => setShowOnboard(false)} className="text-gray-400 hover:text-gray-600">
@@ -185,7 +190,7 @@ export const SchoolsPage: React.FC = () => {
               placeholder="ABC International School"
               required
             />
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <Input
                 label="Admin First Name"
                 value={onboardForm.admin_first_name}
@@ -222,7 +227,7 @@ export const SchoolsPage: React.FC = () => {
               placeholder="abcschool"
             />
 
-            <div className="flex justify-end gap-3 pt-2">
+            <div className="flex flex-col-reverse gap-3 pt-2 sm:flex-row sm:justify-end">
               <Button variant="outline" onClick={() => setShowOnboard(false)}>Cancel</Button>
               <Button
                 variant="primary"

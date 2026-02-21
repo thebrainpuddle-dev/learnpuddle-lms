@@ -37,15 +37,15 @@ export const SuperAdminDashboardPage: React.FC = () => {
 
   return (
     <div className="space-y-8" data-tour="superadmin-dashboard-page">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Platform Dashboard</h1>
+          <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl">Platform Dashboard</h1>
           <p className="mt-1 text-gray-500">Overview of all schools on the platform</p>
         </div>
         <button
           data-tour="superadmin-dashboard-onboard"
           onClick={() => navigate('/super-admin/schools?onboard=true')}
-          className="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition-colors"
+          className="w-full rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-700 sm:w-auto"
         >
           + Onboard School
         </button>
@@ -55,7 +55,7 @@ export const SuperAdminDashboardPage: React.FC = () => {
       {isLoading ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
           {Array.from({ length: 5 }).map((_, i) => (
-            <div key={i} className="bg-white rounded-xl border border-gray-200 p-6 animate-pulse">
+            <div key={i} className="rounded-xl border border-gray-200 bg-white p-4 animate-pulse sm:p-6">
               <div className="h-4 bg-gray-200 rounded w-2/3 mb-3" />
               <div className="h-8 bg-gray-200 rounded w-1/3" />
             </div>
@@ -64,7 +64,7 @@ export const SuperAdminDashboardPage: React.FC = () => {
       ) : (
         <div data-tour="superadmin-dashboard-stats" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
           {cards.map((card) => (
-            <div key={card.label} className="bg-white rounded-xl border border-gray-200 p-6 flex items-start gap-4">
+            <div key={card.label} className="flex items-start gap-3 rounded-xl border border-gray-200 bg-white p-4 sm:gap-4 sm:p-6">
               <div className={`${card.color} p-2.5 rounded-lg`}>
                 <card.icon className="h-5 w-5 text-white" />
               </div>

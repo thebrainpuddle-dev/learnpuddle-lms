@@ -22,12 +22,12 @@ export const TeacherLayout: React.FC = () => {
       </div>
       
       {/* Main content */}
-      <div className="lg:pl-64 flex flex-col flex-1">
+      <div className="lg:pl-64 flex min-w-0 flex-1 flex-col">
         <TeacherHeader onMenuClick={() => setSidebarOpen(true)} />
         
-        <main className="flex-1">
+        <main className="flex-1 min-w-0">
           <div className="py-6">
-            <div className="max-w-7xl mx-auto px-4 sm:px-6 md:px-8">
+            <div className="mx-auto max-w-7xl px-4 sm:px-6 md:px-8">
               <Outlet />
             </div>
           </div>

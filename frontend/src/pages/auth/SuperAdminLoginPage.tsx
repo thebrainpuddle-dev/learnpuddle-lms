@@ -72,12 +72,12 @@ export const SuperAdminLoginPage: React.FC = () => {
           <div className="mx-auto h-16 w-16 bg-indigo-600 rounded-2xl flex items-center justify-center mb-4 shadow-lg shadow-indigo-500/30">
             <ShieldCheckIcon className="h-9 w-9 text-white" />
           </div>
-          <h1 className="text-3xl font-bold text-white">Command Center</h1>
+          <h1 className="text-2xl font-bold text-white sm:text-3xl">Command Center</h1>
           <p className="text-slate-400 mt-2">LearnPuddle Platform Administration</p>
         </div>
 
         {/* Login Card */}
-        <div className="bg-white/5 backdrop-blur-sm border border-white/10 rounded-2xl shadow-2xl p-8">
+        <div className="bg-white/5 backdrop-blur-sm border border-white/10 rounded-2xl shadow-2xl p-5 sm:p-8">
           <h2 className="text-xl font-semibold text-white mb-6">
             Platform Admin Sign In
           </h2>
