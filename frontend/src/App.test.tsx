@@ -6,40 +6,52 @@ import App from './App';
 import { useAuthStore } from './stores/authStore';
 import { useTenantStore } from './stores/tenantStore';
 import api from './config/api';
+import { isPlatformRequest } from './utils/hostRouting';
 
 // Mock stores
 jest.mock('./stores/authStore');
 jest.mock('./stores/tenantStore');
+jest.mock('./utils/hostRouting', () => ({
+  isPlatformRequest: jest.fn(),
+}));
 
 const mockedUseAuthStore = useAuthStore as jest.MockedFunction<typeof useAuthStore>;
 const mockedUseTenantStore = useTenantStore as jest.MockedFunction<typeof useTenantStore>;
 const mockedApi = api as jest.Mocked<typeof api>;
+const mockedIsPlatformRequest = isPlatformRequest as jest.MockedFunction<typeof isPlatformRequest>;
 
 // Mock api to prevent actual network calls
-jest.mock('./config/api', () => ({
-  __esModule: true,
-  api: {
+jest.mock('./config/api', () => {
+  const shared = {
     get: jest.fn(),
     post: jest.fn(),
     interceptors: {
       request: { use: jest.fn() },
       response: { use: jest.fn() },
     },
-  },
-  default: {
-    get: jest.fn(),
-    post: jest.fn(),
-    interceptors: {
-      request: { use: jest.fn() },
-      response: { use: jest.fn() },
-    },
-  },
-}));
+  };
+
+  return {
+    __esModule: true,
+    api: shared,
+    default: shared,
+  };
+});
 
 describe('App', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    mockedApi.get.mockResolvedValue({ data: {} } as any);
+    mockedApi.get.mockResolvedValue({
+      data: {
+        name: 'LearnPuddle',
+        subdomain: '',
+        primary_color: '#8B7CFA',
+        secondary_color: '#6D47E8',
+        font_family: 'Inter',
+        tenant_found: true,
+      },
+    } as any);
+    mockedIsPlatformRequest.mockReturnValue(false);
 
     // Default unauthenticated state
     mockedUseAuthStore.mockReturnValue({
@@ -107,6 +119,32 @@ describe('App', () => {
 
     await waitFor(() => {
       expect(screen.getByText(/sign in to your account/i)).toBeInTheDocument();
+    });
+  });
+
+  it('shows product landing page at root on platform host', async () => {
+    mockedIsPlatformRequest.mockReturnValue(true);
+    window.history.pushState({}, '', '/');
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/custom lms for schools, hospitality, corporate, and independent academies/i),
+      ).toBeInTheDocument();
+    });
+  });
+
+  it('redirects /login to / on platform host', async () => {
+    mockedIsPlatformRequest.mockReturnValue(true);
+    window.history.pushState({}, '', '/login');
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/custom lms for schools, hospitality, corporate, and independent academies/i),
+      ).toBeInTheDocument();
     });
   });
 });

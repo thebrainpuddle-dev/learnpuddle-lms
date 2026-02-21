@@ -43,11 +43,13 @@ import {
   SchoolsPage as SuperAdminSchoolsPage,
   SchoolDetailPage as SuperAdminSchoolDetailPage,
 } from './pages/superadmin';
+import { ProductLandingPage } from './pages/marketing';
 import api from './config/api';
 import { useSessionLifecycle } from './hooks/useSessionLifecycle';
 import { useAuthStore } from './stores/authStore';
 import { useTenantStore } from './stores/tenantStore';
 import { TourProvider } from './components/tour';
+import { isPlatformRequest } from './utils/hostRouting';
 import './assets/styles/index.css';
 
 const queryClient = new QueryClient({
@@ -81,6 +83,7 @@ function AppContent() {
   const [authValidated, setAuthValidated] = React.useState(!isAuthenticated);
   useSessionLifecycle();
   const dashboardPath = getDashboardPathForRole(user?.role);
+  const onPlatformHost = isPlatformRequest();
 
   // On startup, validate any persisted token by calling /auth/me/.
   // If the token is expired or missing, clear auth and redirect to login
@@ -124,7 +127,9 @@ function AppContent() {
       <Route
         path="/login"
         element={
-          isAuthenticated && user && dashboardPath ? (
+          onPlatformHost ? (
+            <Navigate to="/" replace />
+          ) : isAuthenticated && user && dashboardPath ? (
             <Navigate to={dashboardPath} replace />
           ) : (
             <LoginPage />
@@ -225,14 +230,18 @@ function AppContent() {
       <Route
         path="/"
         element={
-          <Navigate
-            to={
-              isAuthenticated && user && dashboardPath
-                ? dashboardPath
-                : '/login'
-            }
-            replace
-          />
+          onPlatformHost ? (
+            <ProductLandingPage />
+          ) : (
+            <Navigate
+              to={
+                isAuthenticated && user && dashboardPath
+                  ? dashboardPath
+                  : '/login'
+              }
+              replace
+            />
+          )
         }
       />
       

@@ -313,6 +313,8 @@ services:
       dockerfile: nginx/Dockerfile
       args:
         REACT_APP_API_URL: /api
+        REACT_APP_PLATFORM_DOMAIN: ${PLATFORM_DOMAIN:-learnpuddle.com}
+        REACT_APP_BOOK_DEMO_URL: ${REACT_APP_BOOK_DEMO_URL:-}
     restart: always
     ports:
       - "80:80"

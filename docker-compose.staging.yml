@@ -279,6 +279,8 @@ services:
       dockerfile: Dockerfile
       args:
         REACT_APP_API_URL: /api
+        REACT_APP_PLATFORM_DOMAIN: ${STAGING_DOMAIN:-staging.learnpuddle.com}
+        REACT_APP_BOOK_DEMO_URL: ${REACT_APP_BOOK_DEMO_URL:-}
     restart: "no"
     command: ["sh", "-c", "cp -r /usr/share/nginx/html/* /frontend-build/"]
     volumes:
