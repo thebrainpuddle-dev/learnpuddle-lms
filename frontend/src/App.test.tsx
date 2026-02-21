@@ -5,6 +5,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import App from './App';
 import { useAuthStore } from './stores/authStore';
 import { useTenantStore } from './stores/tenantStore';
+import api from './config/api';
 
 // Mock stores
 jest.mock('./stores/authStore');
@@ -12,6 +13,7 @@ jest.mock('./stores/tenantStore');
 
 const mockedUseAuthStore = useAuthStore as jest.MockedFunction<typeof useAuthStore>;
 const mockedUseTenantStore = useTenantStore as jest.MockedFunction<typeof useTenantStore>;
+const mockedApi = api as jest.Mocked<typeof api>;
 
 // Mock api to prevent actual network calls
 jest.mock('./config/api', () => ({
@@ -37,6 +39,7 @@ jest.mock('./config/api', () => ({
 describe('App', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockedApi.get.mockResolvedValue({ data: {} } as any);
 
     // Default unauthenticated state
     mockedUseAuthStore.mockReturnValue({
@@ -80,6 +83,29 @@ describe('App', () => {
 
     await waitFor(() => {
       // The login page should be rendered for unauthenticated users
+      expect(screen.getByText(/sign in to your account/i)).toBeInTheDocument();
+    });
+  });
+
+  it('keeps user on login page when auth is partial (prevents redirect loop)', async () => {
+    mockedApi.get.mockRejectedValue(new Error('expired'));
+    window.history.pushState({}, '', '/login');
+    mockedUseAuthStore.mockReturnValue({
+      isAuthenticated: true,
+      user: null,
+      accessToken: 'stale-access-token',
+      refreshToken: 'stale-refresh-token',
+      isLoading: false,
+      setAuth: jest.fn(),
+      clearAuth: jest.fn(),
+      setUser: jest.fn(),
+      setLoading: jest.fn(),
+      initializeFromStorage: jest.fn(),
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
       expect(screen.getByText(/sign in to your account/i)).toBeInTheDocument();
     });
   });

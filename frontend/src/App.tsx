@@ -64,6 +64,11 @@ function AppContent() {
   const { setConfig } = useTenantStore();
   const [authValidated, setAuthValidated] = React.useState(!isAuthenticated);
   useSessionLifecycle();
+  const dashboardPath = user?.role === 'SUPER_ADMIN'
+    ? '/super-admin/dashboard'
+    : user?.role === 'SCHOOL_ADMIN'
+    ? '/admin/dashboard'
+    : '/teacher/dashboard';
 
   // On startup, validate any persisted token by calling /auth/me/.
   // If the token is expired or missing, clear auth and redirect to login
@@ -107,17 +112,8 @@ function AppContent() {
       <Route
         path="/login"
         element={
-          isAuthenticated ? (
-            <Navigate
-              to={
-                user?.role === 'SUPER_ADMIN'
-                  ? '/super-admin/dashboard'
-                  : user?.role === 'SCHOOL_ADMIN'
-                  ? '/admin/dashboard'
-                  : '/teacher/dashboard'
-              }
-              replace
-            />
+          isAuthenticated && user ? (
+            <Navigate to={dashboardPath} replace />
           ) : (
             <LoginPage />
           )
@@ -138,8 +134,8 @@ function AppContent() {
       <Route
         path="/super-admin/login"
         element={
-          isAuthenticated && user?.role === 'SUPER_ADMIN' ? (
-            <Navigate to="/super-admin/dashboard" replace />
+          isAuthenticated && user ? (
+            <Navigate to={user.role === 'SUPER_ADMIN' ? '/super-admin/dashboard' : dashboardPath} replace />
           ) : (
             <SuperAdminLoginPage />
           )
@@ -215,12 +211,8 @@ function AppContent() {
         element={
           <Navigate
             to={
-              isAuthenticated
-                ? user?.role === 'SUPER_ADMIN'
-                  ? '/super-admin/dashboard'
-                  : user?.role === 'SCHOOL_ADMIN'
-                  ? '/admin/dashboard'
-                  : '/teacher/dashboard'
+              isAuthenticated && user
+                ? dashboardPath
                 : '/login'
             }
             replace
