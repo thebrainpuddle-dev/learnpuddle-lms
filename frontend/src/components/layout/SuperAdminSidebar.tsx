@@ -4,6 +4,7 @@ import { NavLink } from 'react-router-dom';
 import {
   XMarkIcon,
   HomeIcon,
+  SignalIcon,
   BuildingOffice2Icon,
   ArrowRightOnRectangleIcon,
   QuestionMarkCircleIcon,
@@ -14,6 +15,7 @@ import { useGuidedTour } from '../tour';
 
 const navItems = [
   { to: '/super-admin/dashboard', label: 'Dashboard', icon: HomeIcon, tourId: 'superadmin-nav-dashboard' },
+  { to: '/super-admin/operations', label: 'Operations', icon: SignalIcon, tourId: 'superadmin-nav-operations' },
   { to: '/super-admin/schools', label: 'Schools', icon: BuildingOffice2Icon, tourId: 'superadmin-nav-schools' },
 ];
 

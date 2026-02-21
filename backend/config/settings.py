@@ -92,6 +92,7 @@ INSTALLED_APPS = [
     'apps.notifications',
     'apps.webhooks',
     'apps.discussions',
+    'apps.ops',
 ]
 
 # Custom User Model
@@ -115,6 +116,7 @@ MIDDLEWARE = [
 
     # IMPORTANT: Tenant middleware must be after AuthenticationMiddleware
     'utils.tenant_middleware.TenantMiddleware',
+    'utils.maintenance_middleware.MaintenanceModeWriteBlockMiddleware',
     
     # Logging context — must be after Auth and Tenant to capture user_id and tenant_id
     'utils.request_id_middleware.LoggingContextMiddleware',
@@ -553,6 +555,13 @@ REMINDER_EMAIL_ENABLED = config('REMINDER_EMAIL_ENABLED', default=False, cast=bo
 # Platform branding (used in emails and public pages)
 PLATFORM_NAME = config('PLATFORM_NAME', default='LearnPuddle')
 PLATFORM_DOMAIN = _platform_domain_early
+
+# Ops / super-admin operations pipeline settings
+OPS_PROBE_TIMEOUT_SECONDS = config("OPS_PROBE_TIMEOUT_SECONDS", default=5, cast=int)
+OPS_PROBE_BASE_URL = config("OPS_PROBE_BASE_URL", default="")
+OPS_PROBE_SCHEME = config("OPS_PROBE_SCHEME", default="https" if not DEBUG else "http")
+OPS_HARNESS_SHARED_SECRET = config("OPS_HARNESS_SHARED_SECRET", default="")
+OPS_RETENTION_DAYS = config("OPS_RETENTION_DAYS", default=30, cast=int)
 
 # -----------------------------------------------------------------------------
 # Content Security Policy (CSP) configuration

@@ -33,6 +33,9 @@ class Tenant(models.Model):
     is_active = models.BooleanField(default=True)
     is_trial = models.BooleanField(default=True)
     trial_end_date = models.DateField(null=True, blank=True)
+    maintenance_mode_enabled = models.BooleanField(default=False)
+    maintenance_mode_reason = models.TextField(blank=True, default="")
+    maintenance_mode_ends_at = models.DateTimeField(null=True, blank=True)
 
     # Subscription plan
     PLAN_CHOICES = [
@@ -103,6 +106,7 @@ class Tenant(models.Model):
             models.Index(fields=['slug']),
             models.Index(fields=['subdomain']),
             models.Index(fields=['is_active']),
+            models.Index(fields=['maintenance_mode_enabled']),
             models.Index(fields=['custom_domain']),
         ]
     

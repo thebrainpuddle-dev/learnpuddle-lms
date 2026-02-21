@@ -61,6 +61,87 @@ export interface TenantUsage {
   storage_mb: { used: number; limit: number };
 }
 
+export type OpsDataQuality = 'ok' | 'degraded' | 'stale';
+
+export interface OpsReadMeta {
+  generated_at: string;
+  data_freshness_seconds: number;
+  pipeline_lag_seconds: number;
+  data_quality: OpsDataQuality;
+}
+
+export interface OpsOverview extends OpsReadMeta {
+  refresh_seconds: number;
+  totals: {
+    tenants: number;
+    healthy: number;
+    degraded: number;
+    down: number;
+    maintenance: number;
+  };
+  mttr_targets: {
+    p1_minutes: number;
+    p2_minutes: number;
+  };
+  open_incidents: Array<{
+    id: string;
+    severity: 'P1' | 'P2';
+    status: 'OPEN' | 'ACKED' | 'RESOLVED';
+    title: string;
+    started_at: string;
+    tenant_id: string | null;
+    tenant_name: string | null;
+    owner_email: string | null;
+    scope: 'GLOBAL' | 'TENANT';
+  }>;
+  top_failure_categories: Array<{
+    category: string;
+    count: number;
+  }>;
+}
+
+export interface OpsTenantRow {
+  tenant_id: string;
+  name: string;
+  subdomain: string;
+  status: 'HEALTHY' | 'DEGRADED' | 'DOWN' | 'MAINTENANCE';
+  last_check_at: string | null;
+  last_latency_ms: number | null;
+  active_failures_24h: number;
+  failures_week: Record<string, number>;
+  maintenance_mode: boolean;
+}
+
+export interface OpsTenantsResponse extends OpsReadMeta {
+  count: number;
+  next: string | null;
+  previous: string | null;
+  results: OpsTenantRow[];
+}
+
+export interface OpsIncident {
+  id: string;
+  severity: 'P1' | 'P2';
+  scope: 'GLOBAL' | 'TENANT';
+  status: 'OPEN' | 'ACKED' | 'RESOLVED';
+  rule_id: string;
+  title: string;
+  description: string;
+  tenant_id: string | null;
+  tenant_name: string | null;
+  owner_email: string | null;
+  started_at: string;
+  acknowledged_at: string | null;
+  resolved_at: string | null;
+  mttr_seconds: number | null;
+  last_seen_at: string;
+  metadata: Record<string, any>;
+}
+
+export interface OpsIncidentsResponse extends OpsReadMeta {
+  results: OpsIncident[];
+}
+
 export interface OnboardPayload {
   school_name: string;
   admin_email: string;
@@ -127,5 +208,30 @@ export const superAdminService = {
   async impersonate(tenantId: string) {
     const res = await api.post(`/super-admin/tenants/${tenantId}/impersonate/`);
     return res.data as { tokens: { access: string; refresh: string }; user_email: string; tenant_subdomain: string };
+  },
+
+  async getOpsOverview(): Promise<OpsOverview> {
+    const res = await api.get('/super-admin/ops/overview/');
+    return res.data;
+  },
+
+  async listOpsTenants(params?: { search?: string; status?: string; category?: string; page?: number; page_size?: number }) {
+    const res = await api.get('/super-admin/ops/tenants/', { params });
+    return res.data as OpsTenantsResponse;
+  },
+
+  async listOpsIncidents(params?: { status?: string; severity?: string }) {
+    const res = await api.get('/super-admin/ops/incidents/', { params });
+    return res.data as OpsIncidentsResponse;
+  },
+
+  async acknowledgeIncident(id: string) {
+    const res = await api.post(`/super-admin/ops/incidents/${id}/acknowledge/`);
+    return res.data as { ok: boolean };
+  },
+
+  async resolveIncident(id: string) {
+    const res = await api.post(`/super-admin/ops/incidents/${id}/resolve/`);
+    return res.data as { ok: boolean };
   },
 };

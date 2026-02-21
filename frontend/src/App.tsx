@@ -39,6 +39,7 @@ import {
 import { SuperAdminLayout } from './components/layout/SuperAdminLayout';
 import {
   SuperAdminDashboardPage,
+  OperationsPage as SuperAdminOperationsPage,
   SchoolsPage as SuperAdminSchoolsPage,
   SchoolDetailPage as SuperAdminSchoolDetailPage,
 } from './pages/superadmin';
@@ -155,6 +156,7 @@ function AppContent() {
         }
       >
         <Route path="dashboard" element={<SuperAdminDashboardPage />} />
+        <Route path="operations" element={<SuperAdminOperationsPage />} />
         <Route path="schools" element={<SuperAdminSchoolsPage />} />
         <Route path="schools/:tenantId" element={<SuperAdminSchoolDetailPage />} />
         <Route index element={<Navigate to="/super-admin/dashboard" replace />} />

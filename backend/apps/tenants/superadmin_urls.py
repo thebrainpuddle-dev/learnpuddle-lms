@@ -1,10 +1,11 @@
-from django.urls import path
+from django.urls import include, path
 from . import superadmin_views
 
 app_name = "superadmin"
 
 urlpatterns = [
     path("stats/", superadmin_views.platform_stats, name="platform_stats"),
+    path("ops/", include("apps.ops.urls")),
     path("tenants/", superadmin_views.tenant_list_create, name="tenant_list_create"),
     path("tenants/<uuid:tenant_id>/", superadmin_views.tenant_detail, name="tenant_detail"),
     path("tenants/<uuid:tenant_id>/impersonate/", superadmin_views.tenant_impersonate, name="tenant_impersonate"),

@@ -17,5 +17,24 @@ app.conf.beat_schedule = {
         "task": "tenants.check_trial_expirations",
         "schedule": crontab(hour=6, minute=0),  # every day at 06:00 UTC
     },
+    "ops-synthetic-probes-30s": {
+        "task": "apps.ops.tasks.ops_run_synthetic_probes",
+        "schedule": 30.0,
+    },
+    "ops-internal-failure-sweep-60s": {
+        "task": "apps.ops.tasks.ops_sweep_internal_failures",
+        "schedule": 60.0,
+    },
+    "ops-incident-evaluation-60s": {
+        "task": "apps.ops.tasks.ops_evaluate_incidents",
+        "schedule": 60.0,
+    },
+    "ops-maintenance-scheduler-5m": {
+        "task": "apps.ops.tasks.ops_run_maintenance_scheduler",
+        "schedule": 300.0,
+    },
+    "ops-data-cleanup-daily": {
+        "task": "apps.ops.tasks.ops_cleanup_data",
+        "schedule": crontab(hour=2, minute=30),
+    },
 }
-
