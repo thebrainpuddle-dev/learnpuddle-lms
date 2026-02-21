@@ -152,6 +152,7 @@ services:
     environment:
       - DEBUG=False
       - SECRET_KEY=${SECRET_KEY}
+      - SECURE_SSL_REDIRECT=False
       - DB_NAME=${DB_NAME:-learnpuddle_db}
       - DB_USER=${DB_USER:-learnpuddle}
       - DB_PASSWORD=${DB_PASSWORD}
