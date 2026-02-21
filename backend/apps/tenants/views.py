@@ -140,7 +140,17 @@ def tenant_config_view(request):
             "max_storage_mb": tenant.max_storage_mb,
             "max_video_duration_minutes": tenant.max_video_duration_minutes,
         }
-        config["usage"] = get_tenant_usage(tenant)
+        try:
+            config["usage"] = get_tenant_usage(tenant)
+            config["degraded"] = False
+        except Exception:
+            # Usage should never hard-fail tenant app bootstrap.
+            config["usage"] = {
+                "teachers": {"used": 0, "limit": tenant.max_teachers},
+                "courses": {"used": 0, "limit": tenant.max_courses},
+                "storage_mb": {"used": 0, "limit": tenant.max_storage_mb},
+            }
+            config["degraded"] = True
     return Response(config, status=status.HTTP_200_OK)
 
 

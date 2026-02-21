@@ -267,7 +267,17 @@ def tenant_usage(request, tenant_id):
     """Return current resource usage vs limits for a tenant."""
     from apps.tenants.services import get_tenant_usage
     tenant = get_object_or_404(Tenant, id=tenant_id)
-    usage = get_tenant_usage(tenant)
+    try:
+        usage = get_tenant_usage(tenant)
+        usage["degraded"] = False
+    except Exception:
+        logger.exception("tenant_usage: usage calculation failed for tenant_id=%s", tenant.id)
+        usage = {
+            "teachers": {"used": 0, "limit": tenant.max_teachers},
+            "courses": {"used": 0, "limit": tenant.max_courses},
+            "storage_mb": {"used": 0, "limit": tenant.max_storage_mb},
+            "degraded": True,
+        }
     return Response(usage)
 
 

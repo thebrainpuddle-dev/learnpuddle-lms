@@ -24,14 +24,19 @@ const DEFAULT_SELECTOR_MISS_MESSAGE =
 const AUTO_NAV_COOLDOWN_MS = 700;
 const AUTO_NAV_BURST_WINDOW_MS = 10_000;
 const AUTO_NAV_BURST_LIMIT = 12;
-const AUTO_NAV_STEP_ATTEMPT_WINDOW_MS = 5_000;
-const AUTO_NAV_STEP_ATTEMPT_LIMIT = 2;
+const AUTO_NAV_STEP_ATTEMPT_LIMIT = 1;
 
 function getTourRole(role?: string | null): TourRole | null {
   if (!role) return null;
   if (role === 'SUPER_ADMIN') return 'SUPER_ADMIN';
   if (role === 'SCHOOL_ADMIN') return 'SCHOOL_ADMIN';
   return 'TEACHER';
+}
+
+function getDashboardRouteForRole(role: TourRole): string {
+  if (role === 'SUPER_ADMIN') return '/super-admin/dashboard';
+  if (role === 'SCHOOL_ADMIN') return '/admin/dashboard';
+  return '/teacher/dashboard';
 }
 
 function getTourHostScope(): string {
@@ -164,11 +169,14 @@ function getMissingBehavior(step: TourStep): NonNullable<TourStep['onMissing']> 
   return step.onMissing ?? 'pause';
 }
 
-function shouldAutostartTour(): boolean {
+function shouldAutostartTour(role: TourRole, pathname: string): boolean {
   if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
     return true;
   }
-  return window.matchMedia('(min-width: 1024px)').matches;
+  if (!window.matchMedia('(min-width: 1024px)').matches) {
+    return false;
+  }
+  return pathname === getDashboardRouteForRole(role);
 }
 
 export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -191,7 +199,7 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const lastAutoNavigationRef = React.useRef<{ targetRoute: string; at: number } | null>(null);
   const autoNavigationBurstRef = React.useRef<number[]>([]);
   const stepNavigationAttemptRef = React.useRef<
-    Record<string, { targetRoute: string; count: number; firstAttemptAt: number }>
+    Record<string, { targetRoute: string; count: number }>
   >({});
 
   const markCurrentTourComplete = React.useCallback(() => {
@@ -252,7 +260,7 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   React.useEffect(() => {
     if (!isAuthenticated || !user?.id || !role || isActive) return;
-    if (!shouldAutostartTour()) return;
+    if (!shouldAutostartTour(role, location.pathname)) return;
     if (isTourCompleted(user.id, role)) return;
     const sessionAutostartKey = getTourAutostartSessionKey(user.id, role);
     if (sessionStorage.getItem(sessionAutostartKey) === '1') return;
@@ -260,7 +268,7 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setActiveRole(role);
     setActiveStepIndex(0);
     logTourDebug('tour_autostart', { role, userId: user.id });
-  }, [isActive, isAuthenticated, role, user?.id]);
+  }, [isActive, isAuthenticated, location.pathname, role, user?.id]);
 
   const handleMissingStep = React.useCallback(
     (step: TourStep, context: 'route' | 'selector') => {
@@ -299,11 +307,7 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       const existingStepAttempt = stepNavigationAttemptRef.current[stepId];
-      if (
-        existingStepAttempt &&
-        existingStepAttempt.targetRoute === normalizedTargetRoute &&
-        now - existingStepAttempt.firstAttemptAt <= AUTO_NAV_STEP_ATTEMPT_WINDOW_MS
-      ) {
+      if (existingStepAttempt && existingStepAttempt.targetRoute === normalizedTargetRoute) {
         if (existingStepAttempt.count >= AUTO_NAV_STEP_ATTEMPT_LIMIT) {
           const reason =
             'Automatic tour navigation paused on this step to avoid redirect loops. Use Next or Back to continue manually.';
@@ -314,7 +318,6 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
             stepId,
             targetRoute: normalizedTargetRoute,
             count: existingStepAttempt.count,
-            windowMs: AUTO_NAV_STEP_ATTEMPT_WINDOW_MS,
           });
           return false;
         }
@@ -323,7 +326,6 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
         stepNavigationAttemptRef.current[stepId] = {
           targetRoute: normalizedTargetRoute,
           count: 1,
-          firstAttemptAt: now,
         };
       }
 

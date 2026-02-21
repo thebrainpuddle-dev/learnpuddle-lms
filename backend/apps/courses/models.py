@@ -225,6 +225,7 @@ class RichTextImageAsset(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     objects = TenantManager()
+    all_objects = models.Manager()
 
     class Meta:
         db_table = 'rich_text_image_assets'

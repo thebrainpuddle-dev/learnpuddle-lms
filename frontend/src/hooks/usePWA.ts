@@ -32,7 +32,9 @@ interface UsePWAReturn extends PWAState {
   unsubscribeFromPush: () => Promise<boolean>;
 }
 
-const PWA_ENABLED = process.env.REACT_APP_ENABLE_PWA === 'true';
+const PWA_ENABLED =
+  process.env.REACT_APP_ENABLE_PWA === 'true' &&
+  (process.env.NODE_ENV !== 'production' || process.env.REACT_APP_ENABLE_PWA_IN_PROD === 'true');
 
 export function usePWA(): UsePWAReturn {
   const [state, setState] = useState<PWAState>({

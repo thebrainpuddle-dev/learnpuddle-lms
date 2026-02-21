@@ -72,6 +72,8 @@ function isGatewayRetryableRequest(config: any): boolean {
   );
 }
 
+let sessionTerminationInProgress = false;
+
 async function maybeRetryGatewayFailure(error: any): Promise<any | null> {
   const originalRequest = error?.config;
   if (!originalRequest || !isGatewayFailure(error) || !isGatewayRetryableRequest(originalRequest)) {
@@ -90,6 +92,10 @@ async function maybeRetryGatewayFailure(error: any): Promise<any | null> {
 }
 
 function terminateSession(reason: 'session_expired' | 'tenant_access_denied') {
+  if (sessionTerminationInProgress) {
+    return;
+  }
+  sessionTerminationInProgress = true;
   try {
     useAuthStore.getState().clearAuth();
   } catch {
@@ -99,7 +105,9 @@ function terminateSession(reason: 'session_expired' | 'tenant_access_denied') {
   broadcastLogout(reason);
   if (!isLoginPath()) {
     window.location.href = buildLoginRedirectUrl(reason);
+    return;
   }
+  sessionTerminationInProgress = false;
 }
 
 function shouldAttemptRefresh(error: any): boolean {

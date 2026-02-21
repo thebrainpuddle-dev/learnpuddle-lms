@@ -1,6 +1,9 @@
 # apps/tenants/tests.py
 
+from unittest.mock import patch
+
 from django.test import TestCase, RequestFactory, override_settings
+from rest_framework.test import APIClient
 from apps.tenants.models import Tenant
 from apps.users.models import User
 from utils.tenant_utils import get_tenant_from_request
@@ -202,3 +205,39 @@ class TenantServiceTestCase(TestCase):
         
         self.assertEqual(stats['total_teachers'], 1)
         self.assertEqual(stats['total_admins'], 1)
+
+
+@override_settings(ALLOWED_HOSTS=['test.lms.com', 'testserver', 'localhost'])
+class TenantConfigViewTestCase(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.tenant = Tenant.objects.create(
+            name='Config School',
+            slug='config-school',
+            subdomain='test',
+            email='config@test.com'
+        )
+        self.admin = User.objects.create_user(
+            email='admin@test.com',
+            password='testpass123',
+            first_name='Admin',
+            last_name='User',
+            tenant=self.tenant,
+            role='SCHOOL_ADMIN'
+        )
+        self.client.force_authenticate(user=self.admin)
+
+    def test_tenant_config_returns_limits_and_usage(self):
+        response = self.client.get('/api/tenants/config/', HTTP_HOST='test.lms.com')
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('limits', response.data)
+        self.assertIn('usage', response.data)
+        self.assertFalse(response.data.get('degraded', False))
+
+    @patch('apps.tenants.services.get_tenant_usage', side_effect=RuntimeError('usage failure'))
+    def test_tenant_config_returns_degraded_response_when_usage_fails(self, _mock_usage):
+        response = self.client.get('/api/tenants/config/', HTTP_HOST='test.lms.com')
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data.get('degraded'))
+        self.assertIn('usage', response.data)
+        self.assertEqual(response.data['usage']['teachers']['limit'], self.tenant.max_teachers)
