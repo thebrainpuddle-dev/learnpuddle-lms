@@ -482,12 +482,19 @@ def preferences_view(request):
         'email_courses', 'email_assignments', 'email_reminders',
         'email_announcements', 'in_app_courses', 'in_app_assignments',
         'in_app_reminders', 'in_app_announcements',
+        'content_editor_mode',
     }
     user = request.user
     if request.method == 'PATCH':
         prefs = user.notification_preferences or {}
         for key, value in request.data.items():
-            if key in ALLOWED_PREF_KEYS and isinstance(value, bool):
+            if key not in ALLOWED_PREF_KEYS:
+                continue
+            if key == 'content_editor_mode':
+                if isinstance(value, str) and value in {'WYSIWYG', 'MARKDOWN'}:
+                    prefs[key] = value
+                continue
+            if isinstance(value, bool):
                 prefs[key] = value
         user.notification_preferences = prefs
         user.save(update_fields=['notification_preferences'])

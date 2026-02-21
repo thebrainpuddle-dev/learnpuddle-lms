@@ -12,6 +12,7 @@ export interface TenantFeatures {
   reports_export: boolean;
   groups: boolean;
   certificates: boolean;
+  teacher_authoring: boolean;
 }
 
 export interface TenantLimits {
@@ -36,6 +37,7 @@ const DEFAULT_FEATURES: TenantFeatures = {
   reports_export: false,
   groups: true,
   certificates: false,
+  teacher_authoring: false,
 };
 
 interface TenantState {

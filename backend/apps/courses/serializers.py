@@ -6,6 +6,12 @@ from django.db.models import Q
 from .models import Course, Module, Content, TeacherGroup
 from apps.users.models import User
 from utils.s3_utils import sign_file_field, sign_url
+from utils.rich_text import (
+    build_rich_text_image_url_map,
+    collect_rich_text_image_ids,
+    rewrite_rich_text_html_for_output,
+    sanitize_rich_text_html,
+)
 
 
 class ContentSerializer(serializers.ModelSerializer):
@@ -58,6 +64,30 @@ class ContentSerializer(serializers.ModelSerializer):
                 pass
         return asset.status if asset else None
 
+    def validate_text_content(self, value):
+        return sanitize_rich_text_html(value)
+
+    def _rewrite_rich_text(self, raw_html: str) -> str:
+        image_ids = collect_rich_text_image_ids(raw_html)
+        if not image_ids:
+            return raw_html
+
+        cache = self.context.setdefault("_rich_text_image_url_map", {})
+        missing = [image_id for image_id in image_ids if image_id not in cache]
+        if missing:
+            cache.update(
+                build_rich_text_image_url_map(
+                    missing,
+                    request=self.context.get("request"),
+                )
+            )
+        return rewrite_rich_text_html_for_output(raw_html, cache)
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["text_content"] = self._rewrite_rich_text(data.get("text_content", ""))
+        return data
+
 
 class ModuleSerializer(serializers.ModelSerializer):
     """Serializer for course modules."""
@@ -76,6 +106,30 @@ class ModuleSerializer(serializers.ModelSerializer):
     
     def get_content_count(self, obj):
         return obj.contents.filter(is_active=True).count()
+
+    def validate_description(self, value):
+        return sanitize_rich_text_html(value)
+
+    def _rewrite_rich_text(self, raw_html: str) -> str:
+        image_ids = collect_rich_text_image_ids(raw_html)
+        if not image_ids:
+            return raw_html
+
+        cache = self.context.setdefault("_rich_text_image_url_map", {})
+        missing = [image_id for image_id in image_ids if image_id not in cache]
+        if missing:
+            cache.update(
+                build_rich_text_image_url_map(
+                    missing,
+                    request=self.context.get("request"),
+                )
+            )
+        return rewrite_rich_text_html_for_output(raw_html, cache)
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["description"] = self._rewrite_rich_text(data.get("description", ""))
+        return data
 
 
 class CourseListSerializer(serializers.ModelSerializer):
@@ -327,6 +381,9 @@ class CreateModuleSerializer(serializers.ModelSerializer):
     class Meta:
         model = Module
         fields = ['title', 'description', 'order', 'is_active']
+
+    def validate_description(self, value):
+        return sanitize_rich_text_html(value)
     
     def create(self, validated_data):
         course_id = self.context.get('course_id')
@@ -344,6 +401,9 @@ class CreateContentSerializer(serializers.ModelSerializer):
             'file_url', 'file_size', 'duration',
             'text_content', 'is_mandatory', 'is_active'
         ]
+
+    def validate_text_content(self, value):
+        return sanitize_rich_text_html(value)
     
     def create(self, validated_data):
         module_id = self.context.get('module_id')

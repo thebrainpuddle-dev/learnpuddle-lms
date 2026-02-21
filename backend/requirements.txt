@@ -27,6 +27,8 @@ redis==5.0.1
 django-storages==1.14.2
 boto3==1.34.34
 requests==2.32.4
+bleach==6.2.0
+beautifulsoup4==4.13.4
 
 # WebSocket (real-time notifications)
 channels==4.0.0

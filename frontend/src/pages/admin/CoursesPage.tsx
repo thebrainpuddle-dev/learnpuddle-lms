@@ -2,10 +2,11 @@
 
 import React, { useEffect, useState, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { usePageTitle } from '../../hooks/usePageTitle';
 import { Button, Loading, useToast, BulkActionsBar, BulkAction } from '../../components/common';
 import api from '../../config/api';
+import { useAuthStore } from '../../stores/authStore';
 import {
   PlusIcon,
   MagnifyingGlassIcon,
@@ -104,7 +105,8 @@ const KanbanCard: React.FC<{
   onPublish: () => void;
   onDelete: () => void;
   onDragStart: (e: React.DragEvent) => void;
-}> = ({ course, onEdit, onPublish, onDelete, onDragStart }) => {
+  canPublish: boolean;
+}> = ({ course, onEdit, onPublish, onDelete, onDragStart, canPublish }) => {
   const src = thumbSrc(course);
   return (
     <div
@@ -145,9 +147,11 @@ const KanbanCard: React.FC<{
           </div>
         )}
         <div className="flex items-center justify-end gap-1 pt-1 border-t border-gray-100">
-          <button onClick={onPublish} className="p-1 text-gray-400 hover:text-gray-600 rounded" title={course.is_published ? 'Unpublish' : 'Publish'}>
-            {course.is_published ? <EyeSlashIcon className="h-4 w-4" /> : <EyeIcon className="h-4 w-4" />}
-          </button>
+          {canPublish && (
+            <button onClick={onPublish} className="p-1 text-gray-400 hover:text-gray-600 rounded" title={course.is_published ? 'Unpublish' : 'Publish'}>
+              {course.is_published ? <EyeSlashIcon className="h-4 w-4" /> : <EyeIcon className="h-4 w-4" />}
+            </button>
+          )}
           <button onClick={onEdit} className="p-1 text-gray-400 hover:text-primary-600 rounded" title="Edit">
             <PencilSquareIcon className="h-4 w-4" />
           </button>
@@ -161,10 +165,17 @@ const KanbanCard: React.FC<{
 };
 
 export const CoursesPage: React.FC = () => {
-  usePageTitle('Courses');
   const toast = useToast();
   const navigate = useNavigate();
+  const location = useLocation();
+  const { user } = useAuthStore();
   const queryClient = useQueryClient();
+  const isTeacherAuthoring = location.pathname.startsWith('/teacher/authoring');
+  const routeBase = isTeacherAuthoring ? '/teacher/authoring' : '/admin/courses';
+  const canPublish = !isTeacherAuthoring && user?.role === 'SCHOOL_ADMIN';
+  const canDuplicate = !isTeacherAuthoring;
+  const canBulk = !isTeacherAuthoring;
+  usePageTitle(isTeacherAuthoring ? 'Course Authoring' : 'Courses');
   
   const [search, setSearch] = useState('');
   const [publishedFilter, setPublishedFilter] = useState<string>('');
@@ -224,7 +235,7 @@ export const CoursesPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['adminCourses'] });
       queryClient.invalidateQueries({ queryKey: ['adminDashboardStats'] });
       toast.success('Course duplicated', 'You can now edit the copy.');
-      navigate(`/admin/courses/${newCourse.id}/edit`);
+      navigate(`${routeBase}/${newCourse.id}/edit`);
     },
     onError: () => {
       toast.error('Failed to duplicate course', 'Please try again.');
@@ -295,9 +306,11 @@ export const CoursesPage: React.FC = () => {
   };
 
   const bulkActions: BulkAction[] = [
-    { id: 'publish', label: 'Publish', icon: EyeIcon, variant: 'success' },
-    { id: 'unpublish', label: 'Unpublish', icon: EyeSlashIcon, variant: 'default' },
-    { id: 'delete', label: 'Delete', icon: TrashIcon, variant: 'danger', requiresConfirmation: true },
+    ...(canPublish ? [
+      { id: 'publish', label: 'Publish', icon: EyeIcon, variant: 'success' as const },
+      { id: 'unpublish', label: 'Unpublish', icon: EyeSlashIcon, variant: 'default' as const },
+    ] : []),
+    { id: 'delete', label: 'Delete', icon: TrashIcon, variant: 'danger' as const, requiresConfirmation: true },
   ];
 
   /* ── Kanban drag handlers ─────────────────────────────────────── */
@@ -339,10 +352,10 @@ export const CoursesPage: React.FC = () => {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Courses</h1>
-          <p className="mt-1 text-gray-500">Manage your training courses</p>
+          <h1 className="text-2xl font-bold text-gray-900">{isTeacherAuthoring ? 'Course Authoring' : 'Courses'}</h1>
+          <p className="mt-1 text-gray-500">{isTeacherAuthoring ? 'Create and manage your authored courses' : 'Manage your training courses'}</p>
         </div>
-        <Button data-tour="admin-courses-create" variant="primary" onClick={() => navigate('/admin/courses/new')}>
+        <Button data-tour="admin-courses-create" variant="primary" onClick={() => navigate(`${routeBase}/new`)}>
           <PlusIcon className="h-5 w-5 mr-2" />
           Create Course
         </Button>
@@ -427,7 +440,7 @@ export const CoursesPage: React.FC = () => {
             {search ? 'Try adjusting your search or filters' : 'Get started by creating your first course'}
           </p>
           {!search && (
-            <Button variant="primary" onClick={() => navigate('/admin/courses/new')}>
+            <Button variant="primary" onClick={() => navigate(`${routeBase}/new`)}>
               <PlusIcon className="h-5 w-5 mr-2" /> Create Course
             </Button>
           )}
@@ -438,9 +451,9 @@ export const CoursesPage: React.FC = () => {
           {/* Draft column */}
           <div
             className="rounded-xl border-2 border-dashed border-yellow-200 bg-yellow-50/50 p-4 min-h-[300px] transition-all"
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop(false)}
+            onDragOver={canPublish ? handleDragOver : undefined}
+            onDragLeave={canPublish ? handleDragLeave : undefined}
+            onDrop={canPublish ? handleDrop(false) : undefined}
           >
             <div className="flex items-center gap-2 mb-4">
               <span className="h-2.5 w-2.5 rounded-full bg-yellow-400" />
@@ -452,10 +465,11 @@ export const CoursesPage: React.FC = () => {
                 <KanbanCard
                   key={course.id}
                   course={course}
-                  onEdit={() => navigate(`/admin/courses/${course.id}/edit`)}
-                  onPublish={() => publishMutation.mutate(course)}
+                  onEdit={() => navigate(`${routeBase}/${course.id}/edit`)}
+                  onPublish={() => canPublish && publishMutation.mutate(course)}
                   onDelete={() => setDeleteConfirm(course.id)}
                   onDragStart={() => { dragCourseRef.current = course; }}
+                  canPublish={canPublish}
                 />
               ))}
               {draftCourses.length === 0 && (
@@ -467,9 +481,9 @@ export const CoursesPage: React.FC = () => {
           {/* Published column */}
           <div
             className="rounded-xl border-2 border-dashed border-green-200 bg-green-50/50 p-4 min-h-[300px] transition-all"
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop(true)}
+            onDragOver={canPublish ? handleDragOver : undefined}
+            onDragLeave={canPublish ? handleDragLeave : undefined}
+            onDrop={canPublish ? handleDrop(true) : undefined}
           >
             <div className="flex items-center gap-2 mb-4">
               <span className="h-2.5 w-2.5 rounded-full bg-green-500" />
@@ -481,10 +495,11 @@ export const CoursesPage: React.FC = () => {
                 <KanbanCard
                   key={course.id}
                   course={course}
-                  onEdit={() => navigate(`/admin/courses/${course.id}/edit`)}
-                  onPublish={() => publishMutation.mutate(course)}
+                  onEdit={() => navigate(`${routeBase}/${course.id}/edit`)}
+                  onPublish={() => canPublish && publishMutation.mutate(course)}
                   onDelete={() => setDeleteConfirm(course.id)}
                   onDragStart={() => { dragCourseRef.current = course; }}
+                  canPublish={canPublish}
                 />
               ))}
               {publishedCourses.length === 0 && (
@@ -586,15 +601,19 @@ export const CoursesPage: React.FC = () => {
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                         <div className="flex items-center justify-end space-x-2">
-                          <button onClick={() => publishMutation.mutate(course)} className="p-1.5 text-gray-400 hover:text-gray-600 rounded" title={course.is_published ? 'Unpublish' : 'Publish'}>
-                            {course.is_published ? <EyeSlashIcon className="h-5 w-5" /> : <EyeIcon className="h-5 w-5" />}
-                          </button>
-                          <button onClick={() => navigate(`/admin/courses/${course.id}/edit`)} className="p-1.5 text-gray-400 hover:text-primary-600 rounded" title="Edit">
+                          {canPublish && (
+                            <button onClick={() => publishMutation.mutate(course)} className="p-1.5 text-gray-400 hover:text-gray-600 rounded" title={course.is_published ? 'Unpublish' : 'Publish'}>
+                              {course.is_published ? <EyeSlashIcon className="h-5 w-5" /> : <EyeIcon className="h-5 w-5" />}
+                            </button>
+                          )}
+                          <button onClick={() => navigate(`${routeBase}/${course.id}/edit`)} className="p-1.5 text-gray-400 hover:text-primary-600 rounded" title="Edit">
                             <PencilSquareIcon className="h-5 w-5" />
                           </button>
-                          <button onClick={() => duplicateMutation.mutate(course.id)} className="p-1.5 text-gray-400 hover:text-blue-600 rounded" title="Duplicate" disabled={duplicateMutation.isPending}>
-                            <DocumentDuplicateIcon className="h-5 w-5" />
-                          </button>
+                          {canDuplicate && (
+                            <button onClick={() => duplicateMutation.mutate(course.id)} className="p-1.5 text-gray-400 hover:text-blue-600 rounded" title="Duplicate" disabled={duplicateMutation.isPending}>
+                              <DocumentDuplicateIcon className="h-5 w-5" />
+                            </button>
+                          )}
                           <button onClick={() => setDeleteConfirm(course.id)} className="p-1.5 text-gray-400 hover:text-red-600 rounded" title="Delete">
                             <TrashIcon className="h-5 w-5" />
                           </button>
@@ -648,13 +667,15 @@ export const CoursesPage: React.FC = () => {
       )}
 
       {/* Bulk Actions Bar */}
-      <BulkActionsBar
-        selectedCount={selectedIds.size}
-        actions={bulkActions}
-        onAction={handleBulkAction}
-        onClearSelection={clearSelection}
-        isLoading={bulkActionMutation.isPending}
-      />
+      {canBulk && (
+        <BulkActionsBar
+          selectedCount={selectedIds.size}
+          actions={bulkActions}
+          onAction={handleBulkAction}
+          onClearSelection={clearSelection}
+          isLoading={bulkActionMutation.isPending}
+        />
+      )}
     </div>
   );
 };

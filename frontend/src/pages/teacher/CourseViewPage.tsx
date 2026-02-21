@@ -3,6 +3,7 @@
 import React, { useState, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import DOMPurify from 'dompurify';
 import { ContentPlayer } from '../../components/teacher';
 import { teacherService } from '../../services/teacherService';
 import type { TeacherCourseDetail } from '../../services/teacherService';
@@ -66,6 +67,10 @@ export const CourseViewPage: React.FC = () => {
     enabled: Boolean(courseId),
     queryFn: () => teacherService.getCourse(courseId as string),
   });
+  const selectedModule = React.useMemo(() => {
+    if (!course || !selectedContent) return null;
+    return course.modules.find((module) => module.contents.some((item) => item.id === selectedContent.id)) || null;
+  }, [course, selectedContent]);
   
   // Initialize expanded modules and selected content
   React.useEffect(() => {
@@ -198,6 +203,15 @@ export const CourseViewPage: React.FC = () => {
       <div className="flex flex-1 overflow-hidden mt-4">
         {/* Content player */}
         <div data-tour="teacher-course-player" className={`flex-1 overflow-y-auto pr-4 ${sidebarOpen ? 'lg:mr-80' : ''}`}>
+          {selectedModule?.description && (
+            <div className="mb-4 rounded-xl border border-gray-200 bg-white p-4">
+              <h2 className="mb-2 text-sm font-semibold text-gray-900">Module Overview</h2>
+              <div
+                className="prose prose-sm max-w-none text-gray-700"
+                dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(selectedModule.description) }}
+              />
+            </div>
+          )}
           {selectedContent ? (
             <ContentPlayer
               content={{
@@ -284,6 +298,14 @@ export const CourseViewPage: React.FC = () => {
                     
                     {isExpanded && (
                       <div className="border-t border-gray-200">
+                        {module.description && (
+                          <div className="border-b border-gray-100 bg-gray-50 px-3 py-2">
+                            <div
+                              className="prose prose-sm max-w-none text-gray-600"
+                              dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(module.description) }}
+                            />
+                          </div>
+                        )}
                         {module.contents.map((content) => (
                           <button
                             key={content.id}

@@ -4,8 +4,10 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useLocation, useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { usePageTitle } from '../../hooks/usePageTitle';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Button, Input, Loading, useToast, HlsVideoPlayer, ConfirmDialog } from '../../components/common';
+import { Button, Input, Loading, useToast, HlsVideoPlayer, ConfirmDialog, RichTextEditor } from '../../components/common';
+import DOMPurify from 'dompurify';
 import { useTenantStore } from '../../stores/tenantStore';
+import { useAuthStore } from '../../stores/authStore';
 import { adminService } from '../../services/adminService';
 import { adminMediaService, type MediaAsset } from '../../services/adminMediaService';
 import api from '../../config/api';
@@ -88,6 +90,7 @@ interface Course {
 }
 
 type EditorTab = 'details' | 'content' | 'assignment';
+type TextEditorMode = 'WYSIWYG' | 'MARKDOWN';
 
 const fetchCourse = async (id: string): Promise<Course> => {
   const response = await api.get(`/courses/${id}/`);
@@ -137,13 +140,20 @@ const createContent = async ({ courseId, moduleId, data }: { courseId: string; m
   return response.data;
 };
 
-// TODO: implement inline content editing
-// const updateContent = async ({ courseId, moduleId, contentId, data }: { courseId: string; moduleId: string; contentId: string; data: FormData }): Promise<Content> => {
-//   const response = await api.patch(`/courses/${courseId}/modules/${moduleId}/contents/${contentId}/`, data, {
-//     headers: { 'Content-Type': 'multipart/form-data' },
-//   });
-//   return response.data;
-// };
+const updateContent = async ({
+  courseId,
+  moduleId,
+  contentId,
+  data,
+}: {
+  courseId: string;
+  moduleId: string;
+  contentId: string;
+  data: Record<string, any>;
+}): Promise<Content> => {
+  const response = await api.patch(`/courses/${courseId}/modules/${moduleId}/contents/${contentId}/`, data);
+  return response.data;
+};
 
 const deleteContent = async ({ courseId, moduleId, contentId }: { courseId: string; moduleId: string; contentId: string }): Promise<void> => {
   await api.delete(`/courses/${courseId}/modules/${moduleId}/contents/${contentId}/`);
@@ -159,18 +169,32 @@ const uploadFile = async (file: File, type: 'thumbnail' | 'content'): Promise<st
   return response.data.url;
 };
 
+const uploadEditorImage = async (file: File): Promise<{ src: string; imageId: string }> => {
+  const formData = new FormData();
+  formData.append('file', file);
+  const response = await api.post('/uploads/editor-image/', formData);
+  return {
+    src: response.data.preview_url,
+    imageId: response.data.asset_id,
+  };
+};
+
 export const CourseEditorPage: React.FC = () => {
-  usePageTitle('Course Editor');
   const toast = useToast();
   const { courseId } = useParams<{ courseId: string }>();
   const navigate = useNavigate();
   const location = useLocation();
+  const { user } = useAuthStore();
   const [, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const thumbnailInputRef = useRef<HTMLInputElement>(null);
   const contentFileInputRef = useRef<HTMLInputElement>(null);
   const { hasFeature } = useTenantStore();
   const canUploadVideo = hasFeature('video_upload');
+  const isTeacherAuthoring = location.pathname.startsWith('/teacher/authoring');
+  const canManageAssignments = !isTeacherAuthoring && (user?.role === 'SCHOOL_ADMIN' || user?.role === 'SUPER_ADMIN');
+  const courseListPath = isTeacherAuthoring ? '/teacher/authoring' : '/admin/courses';
+  usePageTitle(isTeacherAuthoring ? 'Course Authoring Editor' : 'Course Editor');
 
   const isEditing = !!courseId && courseId !== 'new';
 
@@ -226,11 +250,11 @@ export const CourseEditorPage: React.FC = () => {
 
   const resolveTab = React.useCallback(
     (raw: string | null): EditorTab => {
-      if (raw === 'assignment') return 'assignment';
+      if (raw === 'assignment' && canManageAssignments) return 'assignment';
       if (raw === 'content' && isEditing) return 'content';
       return 'details';
     },
-    [isEditing]
+    [canManageAssignments, isEditing]
   );
   const activeTab = React.useMemo(
     () => resolveTab(new URLSearchParams(location.search).get('tab')),
@@ -238,20 +262,28 @@ export const CourseEditorPage: React.FC = () => {
   );
   const setActiveTab = React.useCallback(
     (nextTab: EditorTab) => {
-      const sanitizedTab = !isEditing && nextTab === 'content' ? 'details' : nextTab;
+      const assignmentSafeTab = !canManageAssignments && nextTab === 'assignment' ? 'details' : nextTab;
+      const sanitizedTab = !isEditing && assignmentSafeTab === 'content' ? 'details' : assignmentSafeTab;
       if (activeTab === sanitizedTab) return;
       const params = new URLSearchParams(location.search);
       params.set('tab', sanitizedTab);
       setSearchParams(params, { replace: true });
     },
-    [activeTab, isEditing, location.search, setSearchParams]
+    [activeTab, canManageAssignments, isEditing, location.search, setSearchParams]
   );
+  const [editorMode, setEditorMode] = useState<TextEditorMode>('WYSIWYG');
+  const [showEditorChooser, setShowEditorChooser] = useState(false);
+  const [rememberEditorMode, setRememberEditorMode] = useState(true);
+  const [editingModuleDescriptionId, setEditingModuleDescriptionId] = useState<string | null>(null);
+  const [moduleDescriptionDrafts, setModuleDescriptionDrafts] = useState<Record<string, string>>({});
+  const [editingTextContentId, setEditingTextContentId] = useState<string | null>(null);
+  const [editingTextModuleId, setEditingTextModuleId] = useState<string | null>(null);
+  const [textContentDraft, setTextContentDraft] = useState('');
   const [thumbnailPreview, setThumbnailPreview] = useState<string | null>(null);
   const [thumbnailFile, setThumbnailFile] = useState<File | null>(null);
   const [expandedModules, setExpandedModules] = useState<string[]>([]);
   const [editingModule, setEditingModule] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<{ type: 'module' | 'content'; moduleId: string; contentId?: string; label: string } | null>(null);
-  // const [editingContent, setEditingContent] = useState<string | null>(null); // TODO: implement inline content editing
   const [newModuleTitle, setNewModuleTitle] = useState('');
   const [addingContentToModule, setAddingContentToModule] = useState<string | null>(null);
   const [newContentData, setNewContentData] = useState({
@@ -282,6 +314,27 @@ export const CourseEditorPage: React.FC = () => {
     assigned_teachers: [] as string[],
   });
 
+  useEffect(() => {
+    let isMounted = true;
+    api.get('/users/auth/preferences/')
+      .then((res) => {
+        if (!isMounted) return;
+        const mode = res?.data?.content_editor_mode;
+        if (mode === 'WYSIWYG' || mode === 'MARKDOWN') {
+          setEditorMode(mode);
+        } else {
+          setShowEditorChooser(true);
+        }
+      })
+      .catch(() => {
+        if (!isMounted) return;
+        setShowEditorChooser(true);
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
   // Fetch course if editing
   const { data: course, isLoading: courseLoading } = useQuery({
     queryKey: ['adminCourse', courseId],
@@ -309,11 +362,13 @@ export const CourseEditorPage: React.FC = () => {
   const { data: teachers } = useQuery({
     queryKey: ['adminTeachers'],
     queryFn: fetchTeachers,
+    enabled: canManageAssignments,
   });
 
   const { data: groups } = useQuery({
     queryKey: ['adminGroups'],
     queryFn: fetchGroups,
+    enabled: canManageAssignments,
   });
 
   const createGroupMutation = useMutation({
@@ -365,7 +420,7 @@ export const CourseEditorPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['adminCourses'] });
       queryClient.invalidateQueries({ queryKey: ['adminDashboardStats'] });
       toast.success('Course created', 'Now add modules and content.');
-      navigate(`/admin/courses/${data.id}/edit`);
+      navigate(`${courseListPath}/${data.id}/edit`);
     },
     onError: () => {
       toast.error('Failed to create course', 'Please check the details and try again.');
@@ -459,13 +514,19 @@ export const CourseEditorPage: React.FC = () => {
     },
   });
 
-  // TODO: implement inline content editing
-  // const updateContentMutation = useMutation({
-  //   mutationFn: updateContent,
-  //   onSuccess: () => {
-  //     queryClient.invalidateQueries({ queryKey: ['adminCourse', courseId] });
-  //   },
-  // });
+  const updateContentMutation = useMutation({
+    mutationFn: updateContent,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['adminCourse', courseId] });
+      setEditingTextContentId(null);
+      setEditingTextModuleId(null);
+      setTextContentDraft('');
+      toast.success('Content updated', 'Text lesson saved.');
+    },
+    onError: () => {
+      toast.error('Failed to update content', 'Please try again.');
+    },
+  });
 
   const deleteContentMutation = useMutation({
     mutationFn: deleteContent,
@@ -528,6 +589,86 @@ export const CourseEditorPage: React.FC = () => {
     }
   };
 
+  const persistEditorMode = useCallback(async (mode: TextEditorMode) => {
+    try {
+      await api.patch('/users/auth/preferences/', { content_editor_mode: mode });
+    } catch {
+      // Non-blocking preference save.
+    }
+  }, []);
+
+  const handleEditorModeChange = useCallback((mode: TextEditorMode) => {
+    setEditorMode(mode);
+    if (rememberEditorMode) {
+      void persistEditorMode(mode);
+    }
+  }, [persistEditorMode, rememberEditorMode]);
+
+  const handleSaveEditorChoice = async () => {
+    if (rememberEditorMode) {
+      await persistEditorMode(editorMode);
+    }
+    setShowEditorChooser(false);
+  };
+
+  const handleModeWarning = useCallback((message: string) => {
+    toast.info('Markdown note', message);
+  }, [toast]);
+
+  const startModuleDescriptionEdit = (module: Module) => {
+    setEditingModuleDescriptionId(module.id);
+    setModuleDescriptionDrafts((prev) => ({ ...prev, [module.id]: module.description || '' }));
+  };
+
+  const saveModuleDescription = (moduleId: string) => {
+    if (!courseId) return;
+    updateModuleMutation.mutate({
+      courseId,
+      moduleId,
+      data: { description: moduleDescriptionDrafts[moduleId] || '' },
+    }, {
+      onSuccess: () => {
+        setEditingModuleDescriptionId(null);
+      },
+    });
+  };
+
+  const cancelModuleDescriptionEdit = (moduleId: string) => {
+    setEditingModuleDescriptionId(null);
+    setModuleDescriptionDrafts((prev) => {
+      const next = { ...prev };
+      delete next[moduleId];
+      return next;
+    });
+  };
+
+  const startTextContentEdit = (moduleId: string, content: Content) => {
+    setEditingTextModuleId(moduleId);
+    setEditingTextContentId(content.id);
+    setTextContentDraft(content.text_content || '');
+  };
+
+  const saveTextContent = () => {
+    if (!courseId || !editingTextModuleId || !editingTextContentId) return;
+    const plainText = textContentDraft.replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').trim();
+    if (!plainText) {
+      toast.error('Missing text', 'Please add some text before saving.');
+      return;
+    }
+    updateContentMutation.mutate({
+      courseId,
+      moduleId: editingTextModuleId,
+      contentId: editingTextContentId,
+      data: { text_content: textContentDraft },
+    });
+  };
+
+  const cancelTextContentEdit = () => {
+    setEditingTextContentId(null);
+    setEditingTextModuleId(null);
+    setTextContentDraft('');
+  };
+
   const handleSaveCourse = async () => {
     const data = new FormData();
     data.append('title', formData.title);
@@ -535,9 +676,9 @@ export const CourseEditorPage: React.FC = () => {
     data.append('is_mandatory', String(formData.is_mandatory));
     if (formData.deadline) data.append('deadline', formData.deadline);
     data.append('estimated_hours', String(formData.estimated_hours));
-    data.append('assigned_to_all', String(formData.assigned_to_all));
+    data.append('assigned_to_all', String(canManageAssignments ? formData.assigned_to_all : false));
 
-    if (!formData.assigned_to_all) {
+    if (canManageAssignments && !formData.assigned_to_all) {
       // Append each ID separately - DRF's parser will combine into array
       formData.assigned_groups.forEach(id => data.append('assigned_groups', id));
       formData.assigned_teachers.forEach(id => data.append('assigned_teachers', id));
@@ -564,6 +705,35 @@ export const CourseEditorPage: React.FC = () => {
         order: (course?.modules?.length || 0) + 1,
       },
     });
+  };
+
+  const handleAddIntroText = (moduleId: string) => {
+    if (!courseId) return;
+    const module = course?.modules?.find((m) => m.id === moduleId);
+    if (!module) return;
+
+    const existingText = (module.contents || [])
+      .filter((c) => c.content_type === 'TEXT')
+      .sort((a, b) => (a.order || 0) - (b.order || 0))[0];
+
+    if (existingText) {
+      updateContentMutation.mutate({
+        courseId,
+        moduleId,
+        contentId: existingText.id,
+        data: { order: 0 },
+      });
+      toast.success('Intro moved to top', 'Existing text lesson was moved before videos.');
+      return;
+    }
+
+    const data = new FormData();
+    data.append('title', 'Module Introduction');
+    data.append('content_type', 'TEXT');
+    data.append('is_mandatory', 'true');
+    data.append('order', '0');
+    data.append('text_content', '<p>Add module overview, key links, or context before videos.</p>');
+    contentMutation.mutate({ courseId, moduleId, data });
   };
 
   const handleAddContent = async (moduleId: string) => {
@@ -638,6 +808,11 @@ export const CourseEditorPage: React.FC = () => {
     }
 
     if (newContentData.content_type === 'TEXT') {
+      const plainText = newContentData.text_content.replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').trim();
+      if (!plainText) {
+        toast.error('Missing text', 'Please add text content.');
+        return;
+      }
       data.append('text_content', newContentData.text_content);
     } else if (newContentData.content_type === 'LINK') {
       data.append('file_url', newContentData.file_url);
@@ -645,6 +820,7 @@ export const CourseEditorPage: React.FC = () => {
       // Upload file first
       const fileUrl = await uploadFile(contentFile, 'content');
       data.append('file_url', fileUrl);
+      data.append('file_size', String(contentFile.size));
       // Also register in Media Library so it appears on the Media Library page
       if (newContentData.content_type === 'DOCUMENT') {
         try {
@@ -698,23 +874,35 @@ export const CourseEditorPage: React.FC = () => {
       <div className="flex items-center justify-between">
         <div className="flex items-center">
           <button
-            onClick={() => navigate('/admin/courses')}
+            onClick={() => navigate(courseListPath)}
             className="mr-4 p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg"
           >
             <ArrowLeftIcon className="h-5 w-5" />
           </button>
           <div>
             <h1 className="text-2xl font-bold text-gray-900">
-              {isEditing ? 'Edit Course' : 'Create Course'}
+              {isTeacherAuthoring
+                ? isEditing
+                  ? 'Edit Authored Course'
+                  : 'Create Authored Course'
+                : isEditing
+                ? 'Edit Course'
+                : 'Create Course'}
             </h1>
             <p className="mt-1 text-gray-500">
-              {isEditing ? 'Update course details and content' : 'Set up a new training course'}
+              {isTeacherAuthoring
+                ? isEditing
+                  ? 'Update your draft course content'
+                  : 'Create a draft course with modules and rich lessons'
+                : isEditing
+                ? 'Update course details and content'
+                : 'Set up a new training course'}
             </p>
           </div>
         </div>
 
         <div className="flex items-center space-x-3">
-          {isEditing && (
+          {isEditing && canManageAssignments && (
             <>
               <span
                 className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
@@ -748,13 +936,77 @@ export const CourseEditorPage: React.FC = () => {
         </div>
       </div>
 
+      {showEditorChooser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-3xl rounded-2xl bg-white p-6 shadow-xl">
+            <div className="mb-5 flex items-start justify-between">
+              <div>
+                <h2 className="text-2xl font-semibold text-gray-900">Choose your text editor</h2>
+                <p className="mt-1 text-sm text-gray-500">This choice can be saved to your profile.</p>
+              </div>
+              <button
+                onClick={() => setShowEditorChooser(false)}
+                className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+                aria-label="Close chooser"
+              >
+                <XMarkIcon className="h-6 w-6" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              {[
+                {
+                  key: 'WYSIWYG' as TextEditorMode,
+                  title: 'WYSIWYG',
+                  description: 'Format text visually with toolbar controls and embedded media.',
+                },
+                {
+                  key: 'MARKDOWN' as TextEditorMode,
+                  title: 'Markdown',
+                  description: 'Write with markdown syntax while keeping rich output support.',
+                },
+              ].map((choice) => (
+                <button
+                  key={choice.key}
+                  onClick={() => setEditorMode(choice.key)}
+                  className={`rounded-xl border p-5 text-left transition-colors ${
+                    editorMode === choice.key
+                      ? 'border-primary-500 bg-primary-50'
+                      : 'border-gray-200 hover:border-gray-300'
+                  }`}
+                >
+                  <p className="text-lg font-semibold text-gray-900">{choice.title}</p>
+                  <p className="mt-2 text-sm text-gray-600">{choice.description}</p>
+                </button>
+              ))}
+            </div>
+
+            <label className="mt-5 flex items-center text-sm text-gray-700">
+              <input
+                type="checkbox"
+                checked={rememberEditorMode}
+                onChange={(e) => setRememberEditorMode(e.target.checked)}
+                className="mr-2 h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+              />
+              Remember my preference
+            </label>
+
+            <div className="mt-6 flex justify-end">
+              <Button variant="primary" onClick={() => void handleSaveEditorChoice()}>
+                Save
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Tabs */}
       <div className="border-b border-gray-200">
         <nav data-tour="admin-course-editor-tabs" className="-mb-px flex gap-6 overflow-x-auto">
           {[
             { key: 'details', label: 'Details' },
             { key: 'content', label: 'Content', disabled: !isEditing },
-            { key: 'assignment', label: 'Assignment' },
+            ...(canManageAssignments ? [{ key: 'assignment', label: 'Assignment' }] : []),
           ].map((tab) => (
             <button
               type="button"
@@ -989,56 +1241,174 @@ export const CourseEditorPage: React.FC = () => {
                   {/* Module Content */}
                   {expandedModules.includes(module.id) && (
                     <div className="p-4 space-y-3">
-                      {/* Content Items */}
-                      {module.contents?.map((content, contentIndex) => (
-                        <div
-                          key={content.id}
-                          className="flex items-center justify-between p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors"
-                        >
-                          <div className="flex items-center min-w-0">
-                            {getContentIcon(content.content_type)}
-                            <span className="ml-3 text-sm text-gray-900 truncate">{content.title}</span>
-                            <span className="ml-2 text-xs text-gray-500 uppercase flex-shrink-0">
-                              {content.content_type}
-                            </span>
-                            {/* Video processing status badge */}
-                            {content.content_type === 'VIDEO' && content.video_status && (
-                              content.video_status === 'READY' ? (
-                                <span className="ml-2 inline-flex items-center gap-1 text-xs font-medium text-emerald-700 bg-emerald-50 rounded-full px-2 py-0.5">
-                                  <CheckCircleIcon className="h-3 w-3" /> Ready
-                                </span>
-                              ) : content.video_status === 'FAILED' ? (
-                                <span className="ml-2 inline-flex items-center gap-1 text-xs font-medium text-red-700 bg-red-50 rounded-full px-2 py-0.5" title="Processing failed">
-                                  <ExclamationCircleIcon className="h-3 w-3" /> Failed
-                                </span>
-                              ) : (
-                                <span className="ml-2 inline-flex items-center gap-1 text-xs font-medium text-amber-700 bg-amber-50 rounded-full px-2 py-0.5 animate-pulse">
-                                  <ArrowPathIcon className="h-3 w-3 animate-spin" /> Processing
-                                </span>
-                              )
+                      <div className="rounded-lg border border-gray-200 bg-white p-4">
+                        <div className="mb-3 flex items-center justify-between">
+                          <h4 className="text-sm font-semibold text-gray-900">Module Description</h4>
+                          <div className="flex items-center gap-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleAddIntroText(module.id)}
+                            >
+                              Add Intro Text Before Videos
+                            </Button>
+                            {editingModuleDescriptionId === module.id ? (
+                              <>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => cancelModuleDescriptionEdit(module.id)}
+                                >
+                                  <XMarkIcon className="mr-1 h-4 w-4" />
+                                  Cancel
+                                </Button>
+                                <Button
+                                  variant="primary"
+                                  size="sm"
+                                  onClick={() => saveModuleDescription(module.id)}
+                                  loading={updateModuleMutation.isPending}
+                                >
+                                  <CheckIcon className="mr-1 h-4 w-4" />
+                                  Save
+                                </Button>
+                              </>
+                            ) : (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => startModuleDescriptionEdit(module)}
+                              >
+                                <PencilIcon className="mr-1 h-4 w-4" />
+                                Edit
+                              </Button>
                             )}
                           </div>
-                          <div className="flex items-center space-x-1 flex-shrink-0">
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setPreviewContent(content);
-                              }}
-                              className="p-1 text-gray-400 hover:text-primary-600 rounded"
-                              title="Preview"
-                            >
-                              <EyeIcon className="h-4 w-4" />
-                            </button>
-                            <button
-                              onClick={() => setConfirmDelete({ type: 'content', moduleId: module.id, contentId: content.id, label: content.title || 'this content' })}
-                              className="p-1 text-gray-400 hover:text-red-600 rounded"
-                            >
-                              <TrashIcon className="h-4 w-4" />
-                            </button>
-                          </div>
                         </div>
-                      ))}
+
+                        {editingModuleDescriptionId === module.id ? (
+                          <RichTextEditor
+                            value={moduleDescriptionDrafts[module.id] || ''}
+                            onChange={(html) =>
+                              setModuleDescriptionDrafts((prev) => ({ ...prev, [module.id]: html }))
+                            }
+                            mode={editorMode}
+                            onModeChange={handleEditorModeChange}
+                            onImageUpload={uploadEditorImage}
+                            onModeWarning={handleModeWarning}
+                            placeholder="Add context, links, and key points that appear before lessons."
+                            minHeightClassName="min-h-[180px]"
+                          />
+                        ) : (
+                          <div className="rounded-md bg-gray-50 p-3">
+                            {module.description ? (
+                              <div
+                                className="prose prose-sm max-w-none text-gray-700"
+                                dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(module.description) }}
+                              />
+                            ) : (
+                              <p className="text-sm text-gray-500">No module description yet.</p>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Content Items */}
+                      {module.contents?.map((content) => {
+                        const isEditingText = editingTextContentId === content.id && editingTextModuleId === module.id;
+                        if (isEditingText && content.content_type === 'TEXT') {
+                          return (
+                            <div key={content.id} className="rounded-lg border border-blue-200 bg-blue-50 p-4">
+                              <div className="mb-2 flex items-center justify-between">
+                                <span className="text-sm font-medium text-blue-900">Editing text lesson: {content.title}</span>
+                                <div className="flex items-center gap-2">
+                                  <Button variant="outline" size="sm" onClick={cancelTextContentEdit}>
+                                    <XMarkIcon className="mr-1 h-4 w-4" />
+                                    Cancel
+                                  </Button>
+                                  <Button
+                                    variant="primary"
+                                    size="sm"
+                                    onClick={saveTextContent}
+                                    loading={updateContentMutation.isPending}
+                                  >
+                                    <CheckIcon className="mr-1 h-4 w-4" />
+                                    Save Text
+                                  </Button>
+                                </div>
+                              </div>
+                              <RichTextEditor
+                                value={textContentDraft}
+                                onChange={setTextContentDraft}
+                                mode={editorMode}
+                                onModeChange={handleEditorModeChange}
+                                onImageUpload={uploadEditorImage}
+                                onModeWarning={handleModeWarning}
+                                placeholder="Write module intro, links, and supporting context..."
+                                minHeightClassName="min-h-[180px]"
+                              />
+                            </div>
+                          );
+                        }
+
+                        return (
+                          <div
+                            key={content.id}
+                            className="flex items-center justify-between rounded-lg bg-gray-50 p-3 transition-colors hover:bg-gray-100"
+                          >
+                            <div className="min-w-0 flex items-center">
+                              {getContentIcon(content.content_type)}
+                              <span className="ml-3 truncate text-sm text-gray-900">{content.title}</span>
+                              <span className="ml-2 flex-shrink-0 text-xs uppercase text-gray-500">
+                                {content.content_type}
+                              </span>
+                              {content.content_type === 'VIDEO' && content.video_status && (
+                                content.video_status === 'READY' ? (
+                                  <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
+                                    <CheckCircleIcon className="h-3 w-3" /> Ready
+                                  </span>
+                                ) : content.video_status === 'FAILED' ? (
+                                  <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700" title="Processing failed">
+                                    <ExclamationCircleIcon className="h-3 w-3" /> Failed
+                                  </span>
+                                ) : (
+                                  <span className="ml-2 inline-flex animate-pulse items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700">
+                                    <ArrowPathIcon className="h-3 w-3 animate-spin" /> Processing
+                                  </span>
+                                )
+                              )}
+                            </div>
+                            <div className="flex flex-shrink-0 items-center space-x-1">
+                              {content.content_type === 'TEXT' && (
+                                <button
+                                  type="button"
+                                  onClick={() => startTextContentEdit(module.id, content)}
+                                  className="rounded p-1 text-gray-400 hover:text-primary-600"
+                                  title="Edit text"
+                                >
+                                  <PencilIcon className="h-4 w-4" />
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setPreviewContent(content);
+                                }}
+                                className="rounded p-1 text-gray-400 hover:text-primary-600"
+                                title="Preview"
+                              >
+                                <EyeIcon className="h-4 w-4" />
+                              </button>
+                              <button
+                                onClick={() => setConfirmDelete({ type: 'content', moduleId: module.id, contentId: content.id, label: content.title || 'this content' })}
+                                className="rounded p-1 text-gray-400 hover:text-red-600"
+                              >
+                                <TrashIcon className="h-4 w-4" />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
 
                       {/* Add Content Form */}
                       {addingContentToModule === module.id ? (
@@ -1084,20 +1454,16 @@ export const CourseEditorPage: React.FC = () => {
                           </div>
 
                           {newContentData.content_type === 'TEXT' && (
-                            <>
-                              <label htmlFor={`new-content-text-${module.id}`} className="sr-only">
-                                Text content
-                              </label>
-                              <textarea
-                                id={`new-content-text-${module.id}`}
-                                name="new_content_text"
-                                value={newContentData.text_content}
-                                onChange={(e) => setNewContentData(prev => ({ ...prev, text_content: e.target.value }))}
-                                placeholder="Enter text content..."
-                                rows={4}
-                                className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                              />
-                            </>
+                            <RichTextEditor
+                              value={newContentData.text_content}
+                              onChange={(html) => setNewContentData((prev) => ({ ...prev, text_content: html }))}
+                              mode={editorMode}
+                              onModeChange={handleEditorModeChange}
+                              onImageUpload={uploadEditorImage}
+                              onModeWarning={handleModeWarning}
+                              placeholder="Start writing module intro, links, notes, or pasted code..."
+                              minHeightClassName="min-h-[160px]"
+                            />
                           )}
 
                           {newContentData.content_type === 'LINK' && (
@@ -1244,7 +1610,7 @@ export const CourseEditorPage: React.FC = () => {
       )}
 
       {/* Assignment Tab */}
-      {activeTab === 'assignment' && (
+      {activeTab === 'assignment' && canManageAssignments && (
         <div data-tour="admin-course-assignment-panel" className="bg-white rounded-xl border border-gray-200 p-6 space-y-6">
           <h2 className="text-lg font-semibold text-gray-900">Course Assignment</h2>
           
@@ -1531,9 +1897,14 @@ export const CourseEditorPage: React.FC = () => {
                   )
                 ) : c.content_type === 'TEXT' ? (
                   <div className="prose prose-sm max-w-none">
-                    <div className="p-4 bg-gray-50 rounded-lg whitespace-pre-wrap text-gray-700 leading-relaxed">
-                      {c.text_content || 'No text content'}
-                    </div>
+                    {c.text_content ? (
+                      <div
+                        className="p-4 bg-gray-50 rounded-lg text-gray-700 leading-relaxed"
+                        dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(c.text_content) }}
+                      />
+                    ) : (
+                      <div className="p-4 bg-gray-50 rounded-lg text-gray-500">No text content</div>
+                    )}
                   </div>
                 ) : (
                   <p className="text-gray-400 text-center py-8">Preview not available for this content type</p>

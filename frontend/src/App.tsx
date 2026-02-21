@@ -201,6 +201,9 @@ function AppContent() {
         <Route path="dashboard" element={<TeacherDashboardPage />} />
         <Route path="courses" element={<MyCoursesPage />} />
         <Route path="courses/:courseId" element={<CourseViewPage />} />
+        <Route path="authoring" element={<AdminCoursesPage />} />
+        <Route path="authoring/new" element={<CourseEditorPage />} />
+        <Route path="authoring/:courseId/edit" element={<CourseEditorPage />} />
         <Route path="assignments" element={<AssignmentsPage />} />
         <Route path="reminders" element={<TeacherRemindersPage />} />
         <Route path="quizzes/:assignmentId" element={<QuizPage />} />

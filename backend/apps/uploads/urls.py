@@ -8,5 +8,5 @@ urlpatterns = [
     path("tenant-logo/", views.upload_tenant_logo, name="upload_tenant_logo"),
     path("course-thumbnail/", views.upload_course_thumbnail, name="upload_course_thumbnail"),
     path("content-file/", views.upload_content_file, name="upload_content_file"),
+    path("editor-image/", views.upload_editor_image, name="upload_editor_image"),
 ]
-

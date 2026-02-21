@@ -47,6 +47,21 @@ ALLOWED_VIDEO_MIMES = {
     "video/x-matroska", "video/x-ms-wmv", "video/mpeg",
 }
 
+TEACHER_AUTHORING_ROLES = {"TEACHER", "HOD", "IB_COORDINATOR"}
+
+
+def _is_teacher_authoring_user(request):
+    return request.user.role in TEACHER_AUTHORING_ROLES
+
+
+def _require_teacher_authoring_feature(request):
+    if _is_teacher_authoring_user(request) and not getattr(request.tenant, "feature_teacher_authoring", False):
+        return Response(
+            {"error": "Teacher course authoring is not available on your plan.", "upgrade_required": True},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    return None
+
 
 def _ext_from_name(name: str) -> str:
     if "." in (name or ""):
@@ -65,7 +80,7 @@ def _maybe_absolute(request, url: str) -> str:
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 @throttle_classes([VideoUploadThrottle])
-@admin_only
+@teacher_or_admin
 @tenant_required
 @check_feature("feature_video_upload")
 def upload_video_content(request, course_id, module_id):
@@ -73,7 +88,14 @@ def upload_video_content(request, course_id, module_id):
     Upload a video file, create Content(VIDEO) + VideoAsset, and enqueue processing.
     Validates: file type, file size, storage quota.
     """
-    course = get_object_or_404(Course, id=course_id)
+    denied = _require_teacher_authoring_feature(request)
+    if denied:
+        return denied
+
+    course_qs = Course.objects.filter(id=course_id)
+    if _is_teacher_authoring_user(request):
+        course_qs = course_qs.filter(created_by=request.user)
+    course = get_object_or_404(course_qs)
     module = get_object_or_404(Module, id=module_id, course=course)
 
     f = request.FILES.get("file") or request.FILES.get("video")
@@ -172,7 +194,7 @@ def upload_video_content(request, course_id, module_id):
 
     return Response(
         {
-            "content": ContentSerializer(content).data,
+            "content": ContentSerializer(content, context={"request": request}).data,
             "video_asset": {
                 "id": str(asset.id),
                 "status": asset.status,
@@ -187,10 +209,17 @@ def upload_video_content(request, course_id, module_id):
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
-@admin_only
+@teacher_or_admin
 @tenant_required
 def video_status(request, course_id, module_id, content_id):
-    course = get_object_or_404(Course, id=course_id)
+    denied = _require_teacher_authoring_feature(request)
+    if denied:
+        return denied
+
+    course_qs = Course.objects.filter(id=course_id)
+    if _is_teacher_authoring_user(request):
+        course_qs = course_qs.filter(created_by=request.user)
+    course = get_object_or_404(course_qs)
     module = get_object_or_404(Module, id=module_id, course=course)
     content = get_object_or_404(Content, id=content_id, module=module, content_type="VIDEO")
     asset = getattr(content, "video_asset", None)
@@ -213,7 +242,7 @@ def video_status(request, course_id, module_id, content_id):
     
     return Response(
         {
-            "content": ContentSerializer(content).data,
+            "content": ContentSerializer(content, context={"request": request}).data,
             "video_asset": (
                 {
                     "id": str(asset.id),

@@ -41,6 +41,7 @@ export interface Tenant {
   feature_reports_export?: boolean;
   feature_groups?: boolean;
   feature_certificates?: boolean;
+  feature_teacher_authoring?: boolean;
   // Limits
   max_teachers?: number;
   max_courses?: number;

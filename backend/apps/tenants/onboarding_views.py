@@ -24,6 +24,7 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from .models import Tenant
+from .services import PLAN_PRESETS, apply_plan_preset
 
 
 class SignupThrottle(ScopedRateThrottle):
@@ -140,14 +141,8 @@ def tenant_signup(request):
                 trial_end_date=trial_end,
                 plan=plan,
                 plan_started_at=timezone.now(),
-                # Feature flags based on plan
-                feature_video_upload=(plan != 'FREE'),
-                feature_auto_quiz=(plan in ['PRO', 'ENTERPRISE']),
-                feature_transcripts=(plan in ['PRO', 'ENTERPRISE']),
-                feature_custom_branding=(plan != 'FREE'),
-                feature_reports_export=(plan != 'FREE'),
-                feature_certificates=(plan != 'FREE'),
             )
+            apply_plan_preset(tenant, plan, save=True)
             
             # Create admin user
             admin_user = User.objects.create_user(
@@ -260,63 +255,50 @@ def available_plans(request):
     
     Returns list of plans with pricing and features.
     """
-    plans = [
-        {
-            'id': 'FREE',
-            'name': 'Free',
-            'price': 0,
-            'price_yearly': 0,
-            'max_teachers': 5,
-            'max_courses': 3,
-            'max_storage_mb': 100,
+    price_map = {
+        'FREE': (0, 0),
+        'STARTER': (29, 290),
+        'PRO': (79, 790),
+    }
+    feature_labels = {
+        'feature_video_upload': 'Video uploads',
+        'feature_auto_quiz': 'AI quiz generation',
+        'feature_transcripts': 'Auto transcripts',
+        'feature_reminders': 'Reminders',
+        'feature_custom_branding': 'Custom branding',
+        'feature_reports_export': 'Reports export',
+        'feature_groups': 'Groups',
+        'feature_certificates': 'Certificates',
+        'feature_teacher_authoring': 'Teacher course authoring',
+    }
+
+    def _storage_label(max_storage_mb: int) -> str:
+        if max_storage_mb >= 1024:
+            return f"{max_storage_mb // 1024} GB storage"
+        return f"{max_storage_mb} MB storage"
+
+    plans = []
+    for plan_id in ['FREE', 'STARTER', 'PRO']:
+        preset = PLAN_PRESETS[plan_id]
+        price, yearly = price_map[plan_id]
+        enabled_feature_labels = [
+            label for flag, label in feature_labels.items() if preset.get(flag) is True
+        ]
+        plans.append({
+            'id': plan_id,
+            'name': 'Professional' if plan_id == 'PRO' else plan_id.title(),
+            'price': price,
+            'price_yearly': yearly,
+            'max_teachers': preset['max_teachers'],
+            'max_courses': preset['max_courses'],
+            'max_storage_mb': preset['max_storage_mb'],
             'features': [
-                'Up to 5 teachers',
-                'Up to 3 courses',
-                '100 MB storage',
-                'Basic reporting',
-                'Email support',
+                f"Up to {preset['max_teachers']} teachers",
+                f"Up to {preset['max_courses']} courses",
+                _storage_label(preset['max_storage_mb']),
+                *enabled_feature_labels,
             ],
-            'recommended': False,
-        },
-        {
-            'id': 'STARTER',
-            'name': 'Starter',
-            'price': 29,
-            'price_yearly': 290,
-            'max_teachers': 25,
-            'max_courses': 20,
-            'max_storage_mb': 5000,
-            'features': [
-                'Up to 25 teachers',
-                'Up to 20 courses',
-                '5 GB storage',
-                'Video uploads',
-                'Custom branding',
-                'Certificates',
-                'Priority support',
-            ],
-            'recommended': True,
-        },
-        {
-            'id': 'PRO',
-            'name': 'Professional',
-            'price': 79,
-            'price_yearly': 790,
-            'max_teachers': 100,
-            'max_courses': 100,
-            'max_storage_mb': 50000,
-            'features': [
-                'Up to 100 teachers',
-                'Unlimited courses',
-                '50 GB storage',
-                'AI quiz generation',
-                'Auto transcripts',
-                'Advanced analytics',
-                'API access',
-                'Dedicated support',
-            ],
-            'recommended': False,
-        },
-    ]
+            'recommended': plan_id == 'STARTER',
+        })
     
     return Response(plans)

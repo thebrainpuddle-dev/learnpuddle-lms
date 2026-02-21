@@ -44,7 +44,7 @@ class TenantDetailSerializer(TenantListSerializer):
             "max_video_duration_minutes",
             "feature_video_upload", "feature_auto_quiz", "feature_transcripts",
             "feature_reminders", "feature_custom_branding", "feature_reports_export",
-            "feature_groups", "feature_certificates",
+            "feature_groups", "feature_certificates", "feature_teacher_authoring",
             "internal_notes",
             "published_course_count", "admin_email", "admin_name",
         ]
@@ -91,7 +91,7 @@ class TenantUpdateSerializer(serializers.ModelSerializer):
             "max_teachers", "max_courses", "max_storage_mb", "max_video_duration_minutes",
             "feature_video_upload", "feature_auto_quiz", "feature_transcripts",
             "feature_reminders", "feature_custom_branding", "feature_reports_export",
-            "feature_groups", "feature_certificates",
+            "feature_groups", "feature_certificates", "feature_teacher_authoring",
             "internal_notes",
             "primary_color", "secondary_color", "font_family",
         ]

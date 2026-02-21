@@ -49,6 +49,7 @@ export interface TenantDetail extends TenantListItem {
   feature_reports_export: boolean;
   feature_groups: boolean;
   feature_certificates: boolean;
+  feature_teacher_authoring?: boolean;
   internal_notes: string;
   published_course_count: number;
   admin_email: string | null;
@@ -162,6 +163,7 @@ export const FEATURE_FLAGS = [
   { key: 'feature_reports_export', label: 'Reports Export' },
   { key: 'feature_groups', label: 'Groups' },
   { key: 'feature_certificates', label: 'Certificates' },
+  { key: 'feature_teacher_authoring', label: 'Teacher Authoring' },
 ] as const;
 
 export const superAdminService = {

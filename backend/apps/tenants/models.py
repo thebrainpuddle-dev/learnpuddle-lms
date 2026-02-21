@@ -63,6 +63,7 @@ class Tenant(models.Model):
     feature_reports_export = models.BooleanField(default=False)
     feature_groups = models.BooleanField(default=True)
     feature_certificates = models.BooleanField(default=False)
+    feature_teacher_authoring = models.BooleanField(default=False)
     feature_sso = models.BooleanField(default=False)
     feature_2fa = models.BooleanField(default=False)
 

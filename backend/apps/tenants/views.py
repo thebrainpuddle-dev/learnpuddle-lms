@@ -130,6 +130,7 @@ def tenant_config_view(request):
             "reports_export": tenant.feature_reports_export,
             "groups": tenant.feature_groups,
             "certificates": tenant.feature_certificates,
+            "teacher_authoring": tenant.feature_teacher_authoring,
         },
     }
     if is_admin:

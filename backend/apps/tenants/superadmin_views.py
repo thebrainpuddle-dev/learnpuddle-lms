@@ -240,7 +240,7 @@ def tenant_apply_plan(request, tenant_id):
         "max_teachers", "max_courses", "max_storage_mb", "max_video_duration_minutes",
         "feature_video_upload", "feature_auto_quiz", "feature_transcripts",
         "feature_reminders", "feature_custom_branding", "feature_reports_export",
-        "feature_groups", "feature_certificates",
+        "feature_groups", "feature_certificates", "feature_teacher_authoring",
         "is_trial", "trial_end_date", "plan_expires_at",
     }
     overrides = {k: v for k, v in request.data.items() if k != "plan" and k in ALLOWED_PLAN_OVERRIDES}

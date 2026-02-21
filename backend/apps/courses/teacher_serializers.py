@@ -4,6 +4,11 @@ from rest_framework import serializers
 from apps.progress.models import TeacherProgress
 from .models import Course, Module, Content
 from utils.s3_utils import sign_file_field, sign_url
+from utils.rich_text import (
+    build_rich_text_image_url_map,
+    collect_rich_text_image_ids,
+    rewrite_rich_text_html_for_output,
+)
 
 
 class TeacherContentProgressSerializer(serializers.ModelSerializer):
@@ -121,6 +126,27 @@ class TeacherContentProgressSerializer(serializers.ModelSerializer):
         # Generate signed URL for private S3/DO Spaces files
         return sign_url(vtt_url)
 
+    def _rewrite_rich_text(self, raw_html: str) -> str:
+        image_ids = collect_rich_text_image_ids(raw_html)
+        if not image_ids:
+            return raw_html
+
+        cache = self.context.setdefault("_rich_text_image_url_map", {})
+        missing = [image_id for image_id in image_ids if image_id not in cache]
+        if missing:
+            cache.update(
+                build_rich_text_image_url_map(
+                    missing,
+                    request=self.context.get("request"),
+                )
+            )
+        return rewrite_rich_text_html_for_output(raw_html, cache)
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["text_content"] = self._rewrite_rich_text(data.get("text_content", ""))
+        return data
+
 
 class TeacherModuleSerializer(serializers.ModelSerializer):
     contents = serializers.SerializerMethodField()
@@ -134,6 +160,27 @@ class TeacherModuleSerializer(serializers.ModelSerializer):
         return TeacherContentProgressSerializer(
             contents, many=True, context=self.context
         ).data
+
+    def _rewrite_rich_text(self, raw_html: str) -> str:
+        image_ids = collect_rich_text_image_ids(raw_html)
+        if not image_ids:
+            return raw_html
+
+        cache = self.context.setdefault("_rich_text_image_url_map", {})
+        missing = [image_id for image_id in image_ids if image_id not in cache]
+        if missing:
+            cache.update(
+                build_rich_text_image_url_map(
+                    missing,
+                    request=self.context.get("request"),
+                )
+            )
+        return rewrite_rich_text_html_for_output(raw_html, cache)
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["description"] = self._rewrite_rich_text(data.get("description", ""))
+        return data
 
 
 class TeacherCourseListSerializer(serializers.ModelSerializer):
@@ -252,4 +299,3 @@ class TeacherCourseDetailSerializer(serializers.ModelSerializer):
         pct = round(float(progress_sum) / total, 2) if total else 0.0
         
         return {"completed_content_count": completed, "total_content_count": total, "percentage": pct}
-

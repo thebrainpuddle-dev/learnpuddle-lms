@@ -35,6 +35,7 @@ class TeacherGroup(models.Model):
     group_type = models.CharField(max_length=20, choices=GROUP_TYPE_CHOICES, default='CUSTOM')
     
     objects = TenantManager()
+    all_objects = models.Manager()
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -201,6 +202,40 @@ class Content(SoftDeleteMixin, models.Model):
 
     def __str__(self):
         return f"{self.module.title} - {self.title}"
+
+
+class RichTextImageAsset(models.Model):
+    """
+    Tenant-scoped inline images used inside rich-text course/module content.
+    HTML stores `rtimg:<asset_id>` placeholders and serializers rewrite to signed URLs.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tenant = models.ForeignKey('tenants.Tenant', on_delete=models.CASCADE, related_name='rich_text_images')
+    storage_key = models.CharField(max_length=512, unique=True)
+    file_size = models.BigIntegerField(null=True, blank=True, help_text="File size in bytes")
+    uploaded_by = models.ForeignKey(
+        'users.User',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='uploaded_rich_text_images',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    objects = TenantManager()
+
+    class Meta:
+        db_table = 'rich_text_image_assets'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['tenant', 'created_at']),
+            models.Index(fields=['tenant', 'storage_key']),
+        ]
+
+    def __str__(self):
+        return f"RichTextImageAsset({self.id})"
 
 
 # Ensure Django registers video-related models that live in a separate module.

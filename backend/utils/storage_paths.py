@@ -163,6 +163,12 @@ def course_document_path(tenant_id: str, content_id: str, filename: str) -> str:
     return f"course_content/tenant/{tenant_id}/documents/{content_id}/{_unique_name(ext)}"
 
 
+def rich_text_image_path(tenant_id: str, filename: str) -> str:
+    """Path for inline rich-text images inside module/text content."""
+    ext = _extract_ext(filename) or '.png'
+    return f"course_content/tenant/{tenant_id}/rich_text_images/{_unique_name(ext)}"
+
+
 # -----------------------------------------------------------------------------
 # Previews (thumbnails/previews for media items)
 # -----------------------------------------------------------------------------

@@ -21,6 +21,28 @@ from .serializers import (
 
 logger = logging.getLogger(__name__)
 
+TEACHER_AUTHORING_ROLES = {"TEACHER", "HOD", "IB_COORDINATOR"}
+
+
+def _is_teacher_authoring_user(request):
+    return request.user.role in TEACHER_AUTHORING_ROLES
+
+
+def _require_teacher_authoring_feature(request):
+    if _is_teacher_authoring_user(request) and not getattr(request.tenant, "feature_teacher_authoring", False):
+        return Response(
+            {"error": "Teacher course authoring is not available on your plan.", "upgrade_required": True},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    return None
+
+
+def _course_qs_for_request_user(request):
+    qs = Course.objects
+    if _is_teacher_authoring_user(request):
+        qs = qs.filter(created_by=request.user)
+    return qs
+
 
 class CoursePagination(PageNumberPagination):
     page_size = 10
@@ -52,19 +74,23 @@ def _normalize_multipart_list_fields(data, list_fields=None):
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
 @parser_classes([JSONParser, MultiPartParser, FormParser])
-@admin_only
+@teacher_or_admin
 @tenant_required
 def course_list_create(request):
     """
     GET: List all courses for current tenant
     POST: Create new course (supports multipart/form-data for thumbnail upload)
     """
+    denied = _require_teacher_authoring_feature(request)
+    if denied:
+        return denied
+
     if request.method == 'GET':
         is_published = request.GET.get('is_published')
         is_mandatory = request.GET.get('is_mandatory')
         search = request.GET.get('search')
         
-        courses = Course.objects.select_related(
+        courses = _course_qs_for_request_user(request).select_related(
             'tenant', 'created_by'
         ).prefetch_related(
             'modules',
@@ -92,6 +118,13 @@ def course_list_create(request):
     
     elif request.method == 'POST':
         data = _normalize_multipart_list_fields(request.data)
+        if _is_teacher_authoring_user(request):
+            data = dict(data)
+            data['is_published'] = 'false'
+            data['assigned_to_all'] = 'false'
+            data.pop('assigned_groups', None)
+            data.pop('assigned_teachers', None)
+
         serializer = CourseDetailSerializer(
             data=data,
             context={'request': request}
@@ -110,7 +143,7 @@ def course_list_create(request):
 @api_view(['GET', 'PUT', 'PATCH', 'DELETE'])
 @permission_classes([IsAuthenticated])
 @parser_classes([JSONParser, MultiPartParser, FormParser])
-@admin_only
+@teacher_or_admin
 @tenant_required
 def course_detail(request, course_id):
     """
@@ -118,7 +151,11 @@ def course_detail(request, course_id):
     PUT/PATCH: Update course
     DELETE: Delete course
     """
-    course = get_object_or_404(Course, id=course_id)
+    denied = _require_teacher_authoring_feature(request)
+    if denied:
+        return denied
+
+    course = get_object_or_404(_course_qs_for_request_user(request), id=course_id)
     
     if request.method == 'GET':
         serializer = CourseDetailSerializer(course, context={'request': request})
@@ -127,6 +164,12 @@ def course_detail(request, course_id):
     elif request.method in ['PUT', 'PATCH']:
         partial = request.method == 'PATCH'
         data = _normalize_multipart_list_fields(request.data)
+        if _is_teacher_authoring_user(request):
+            data = dict(data)
+            data['is_published'] = 'false'
+            data['assigned_to_all'] = 'false'
+            data.pop('assigned_groups', None)
+            data.pop('assigned_teachers', None)
         serializer = CourseDetailSerializer(
             course,
             data=data,
@@ -268,18 +311,22 @@ def course_duplicate(request, course_id):
 # Module endpoints
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
-@admin_only
+@teacher_or_admin
 @tenant_required
 def module_list_create(request, course_id):
     """
     GET: List modules for a course
     POST: Create new module
     """
-    course = get_object_or_404(Course, id=course_id)
+    denied = _require_teacher_authoring_feature(request)
+    if denied:
+        return denied
+
+    course = get_object_or_404(_course_qs_for_request_user(request), id=course_id)
     
     if request.method == 'GET':
         modules = course.modules.all().order_by('order')
-        serializer = ModuleSerializer(modules, many=True)
+        serializer = ModuleSerializer(modules, many=True, context={'request': request})
         return Response(serializer.data)
     
     elif request.method == 'POST':
@@ -291,34 +338,40 @@ def module_list_create(request, course_id):
         module = serializer.save()
         
         return Response(
-            ModuleSerializer(module).data,
+            ModuleSerializer(module, context={'request': request}).data,
             status=status.HTTP_201_CREATED
         )
 
 
-@api_view(['GET', 'PUT', 'DELETE'])
+@api_view(['GET', 'PUT', 'PATCH', 'DELETE'])
 @permission_classes([IsAuthenticated])
-@admin_only
+@teacher_or_admin
 @tenant_required
 def module_detail(request, course_id, module_id):
     """
     GET/PUT/DELETE specific module
     """
-    module = get_object_or_404(
-        Module,
+    denied = _require_teacher_authoring_feature(request)
+    if denied:
+        return denied
+
+    module_qs = Module.objects.filter(
         id=module_id,
         course_id=course_id,
     )
+    if _is_teacher_authoring_user(request):
+        module_qs = module_qs.filter(course__created_by=request.user)
+    module = get_object_or_404(module_qs)
     
     if request.method == 'GET':
-        serializer = ModuleSerializer(module)
+        serializer = ModuleSerializer(module, context={'request': request})
         return Response(serializer.data)
     
-    elif request.method == 'PUT':
-        serializer = ModuleSerializer(module, data=request.data, partial=True)
+    elif request.method in ['PUT', 'PATCH']:
+        serializer = ModuleSerializer(module, data=request.data, partial=request.method == 'PATCH')
         serializer.is_valid(raise_exception=True)
         serializer.save()
-        return Response(serializer.data)
+        return Response(ModuleSerializer(module, context={'request': request}).data)
     
     elif request.method == 'DELETE':
         module.delete()
@@ -329,22 +382,28 @@ def module_detail(request, course_id, module_id):
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
 @parser_classes([JSONParser, MultiPartParser, FormParser])
-@admin_only
+@teacher_or_admin
 @tenant_required
 def content_list_create(request, course_id, module_id):
     """
     GET: List content for a module
     POST: Create new content
     """
-    module = get_object_or_404(
-        Module,
+    denied = _require_teacher_authoring_feature(request)
+    if denied:
+        return denied
+
+    module_qs = Module.objects.filter(
         id=module_id,
         course_id=course_id,
     )
+    if _is_teacher_authoring_user(request):
+        module_qs = module_qs.filter(course__created_by=request.user)
+    module = get_object_or_404(module_qs)
     
     if request.method == 'GET':
         contents = module.contents.all().order_by('order')
-        serializer = ContentSerializer(contents, many=True)
+        serializer = ContentSerializer(contents, many=True, context={'request': request})
         return Response(serializer.data)
     
     elif request.method == 'POST':
@@ -356,35 +415,41 @@ def content_list_create(request, course_id, module_id):
         content = serializer.save()
         
         return Response(
-            ContentSerializer(content).data,
+            ContentSerializer(content, context={'request': request}).data,
             status=status.HTTP_201_CREATED
         )
 
 
-@api_view(['GET', 'PUT', 'DELETE'])
+@api_view(['GET', 'PUT', 'PATCH', 'DELETE'])
 @permission_classes([IsAuthenticated])
-@admin_only
+@teacher_or_admin
 @tenant_required
 def content_detail(request, course_id, module_id, content_id):
     """
     GET/PUT/DELETE specific content
     """
-    content = get_object_or_404(
-        Content,
+    denied = _require_teacher_authoring_feature(request)
+    if denied:
+        return denied
+
+    content_qs = Content.objects.filter(
         id=content_id,
         module_id=module_id,
         module__course_id=course_id,
     )
+    if _is_teacher_authoring_user(request):
+        content_qs = content_qs.filter(module__course__created_by=request.user)
+    content = get_object_or_404(content_qs)
     
     if request.method == 'GET':
-        serializer = ContentSerializer(content)
+        serializer = ContentSerializer(content, context={'request': request})
         return Response(serializer.data)
     
-    elif request.method == 'PUT':
-        serializer = ContentSerializer(content, data=request.data, partial=True)
+    elif request.method in ['PUT', 'PATCH']:
+        serializer = ContentSerializer(content, data=request.data, partial=request.method == 'PATCH')
         serializer.is_valid(raise_exception=True)
         serializer.save()
-        return Response(serializer.data)
+        return Response(ContentSerializer(content, context={'request': request}).data)
     
     elif request.method == 'DELETE':
         content.delete()

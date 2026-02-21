@@ -10,6 +10,7 @@ import {
   BookOpenIcon,
   ClipboardDocumentListIcon,
   UserCircleIcon,
+  PencilSquareIcon,
   ArrowRightOnRectangleIcon,
   BellAlertIcon,
   QuestionMarkCircleIcon,
@@ -26,18 +27,29 @@ interface TeacherSidebarProps {
   onClose?: () => void;
 }
 
-const navigation = [
-  { name: 'Dashboard', href: '/teacher/dashboard', icon: HomeIcon, tourId: 'teacher-nav-dashboard' },
-  { name: 'My Courses', href: '/teacher/courses', icon: BookOpenIcon, tourId: 'teacher-nav-courses' },
-  { name: 'Assignments', href: '/teacher/assignments', icon: ClipboardDocumentListIcon, tourId: 'teacher-nav-assignments' },
-  { name: 'Reminders', href: '/teacher/reminders', icon: BellAlertIcon, badgeKey: 'reminders' as const, tourId: 'teacher-nav-reminders' },
-  { name: 'Profile', href: '/teacher/profile', icon: UserCircleIcon, tourId: 'teacher-nav-profile' },
-];
-
 export const TeacherSidebar: React.FC<TeacherSidebarProps> = ({ open, onClose }) => {
   const { user, clearAuth, refreshToken } = useAuthStore();
-  const { theme } = useTenantStore();
+  const { theme, hasFeature } = useTenantStore();
   const { startTour } = useGuidedTour();
+  const canAuthorCourses = hasFeature('teacher_authoring');
+  const navigation = React.useMemo(() => {
+    const base = [
+      { name: 'Dashboard', href: '/teacher/dashboard', icon: HomeIcon, tourId: 'teacher-nav-dashboard' },
+      { name: 'My Courses', href: '/teacher/courses', icon: BookOpenIcon, tourId: 'teacher-nav-courses' },
+      { name: 'Assignments', href: '/teacher/assignments', icon: ClipboardDocumentListIcon, tourId: 'teacher-nav-assignments' },
+      { name: 'Reminders', href: '/teacher/reminders', icon: BellAlertIcon, badgeKey: 'reminders' as const, tourId: 'teacher-nav-reminders' },
+      { name: 'Profile', href: '/teacher/profile', icon: UserCircleIcon, tourId: 'teacher-nav-profile' },
+    ];
+    if (canAuthorCourses) {
+      base.splice(2, 0, {
+        name: 'Course Authoring',
+        href: '/teacher/authoring',
+        icon: PencilSquareIcon,
+        tourId: 'teacher-nav-authoring',
+      });
+    }
+    return base;
+  }, [canAuthorCourses]);
 
   // Poll unread reminder count for sidebar badge (every 30s)
   const { data: unreadReminderCount = 0 } = useQuery({

@@ -25,6 +25,7 @@ PLAN_PRESETS = {
         "feature_reports_export": False,
         "feature_groups": True,
         "feature_certificates": False,
+        "feature_teacher_authoring": False,
     },
     "STARTER": {
         "max_teachers": 50,
@@ -39,6 +40,7 @@ PLAN_PRESETS = {
         "feature_reports_export": False,
         "feature_groups": True,
         "feature_certificates": False,
+        "feature_teacher_authoring": True,
     },
     "PRO": {
         "max_teachers": 200,
@@ -53,6 +55,7 @@ PLAN_PRESETS = {
         "feature_reports_export": True,
         "feature_groups": True,
         "feature_certificates": True,
+        "feature_teacher_authoring": True,
     },
     "ENTERPRISE": {
         "max_teachers": 9999,
@@ -67,6 +70,7 @@ PLAN_PRESETS = {
         "feature_reports_export": True,
         "feature_groups": True,
         "feature_certificates": True,
+        "feature_teacher_authoring": True,
     },
 }
 
@@ -90,13 +94,23 @@ TEACHER_ROLES = ("TEACHER", "HOD", "IB_COORDINATOR")
 def get_tenant_usage(tenant: Tenant) -> dict:
     """Return current resource usage counts for a tenant."""
     from apps.courses.models import Course
+    from apps.courses.models import RichTextImageAsset
+    from apps.media.models import MediaAsset
     teacher_count = User.objects.filter(tenant=tenant, role__in=TEACHER_ROLES, is_active=True).count()
     course_count = Course.objects.filter(tenant=tenant).count()
-    # Storage: sum file sizes from Content objects (bytes → MB)
+    # Storage: sum file sizes from tenant-owned assets (bytes → MB)
     from apps.courses.models import Content
-    storage_bytes = Content.objects.filter(
+    content_bytes = Content.objects.filter(
         module__course__tenant=tenant, file_size__isnull=False
     ).aggregate(total=models.Sum("file_size"))["total"] or 0
+    media_bytes = MediaAsset.objects.filter(
+        tenant=tenant, file_size__isnull=False
+    ).aggregate(total=models.Sum("file_size"))["total"] or 0
+    rich_text_bytes = RichTextImageAsset.all_objects.filter(
+        tenant=tenant, file_size__isnull=False
+    ).aggregate(total=models.Sum("file_size"))["total"] or 0
+
+    storage_bytes = content_bytes + media_bytes + rich_text_bytes
     storage_mb = round(storage_bytes / (1024 * 1024), 1)
 
     return {

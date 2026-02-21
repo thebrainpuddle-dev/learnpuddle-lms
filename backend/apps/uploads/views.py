@@ -5,12 +5,16 @@ from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework import status
 
-from utils.decorators import admin_only, tenant_required
+from utils.decorators import admin_only, tenant_required, teacher_or_admin
 from utils.storage_paths import (
     tenant_logo_path,
     course_thumbnail_path,
     course_document_path,
+    rich_text_image_path,
 )
+from utils.s3_utils import sign_url
+
+from apps.courses.models import RichTextImageAsset
 
 
 class UploadThrottle(ScopedRateThrottle):
@@ -44,6 +48,7 @@ ALLOWED_CONTENT_MIMES = {
     "text/plain", "text/markdown", "text/csv",
 }
 MAX_CONTENT_SIZE_MB = 50  # 50 MB
+MAX_EDITOR_IMAGE_SIZE_MB = 8  # 8 MB
 
 
 def _validate_upload(file_obj, allowed_exts, allowed_mimes, max_size_mb):
@@ -123,13 +128,22 @@ def upload_course_thumbnail(request):
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 @throttle_classes([UploadThrottle])
-@admin_only
+@teacher_or_admin
 @tenant_required
 def upload_content_file(request):
     """
     Upload a document/content file for course content.
     Requires content_id query param to organize files properly.
+    Available to admins and teacher-authoring roles.
     """
+    if request.user.role in ["TEACHER", "HOD", "IB_COORDINATOR"] and not getattr(
+        request.tenant, "feature_teacher_authoring", False
+    ):
+        return Response(
+            {"error": "Teacher course authoring is not available on your plan.", "upgrade_required": True},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
     f = request.FILES.get("file")
     if not f:
         return Response({"error": "file is required"}, status=status.HTTP_400_BAD_REQUEST)
@@ -145,3 +159,59 @@ def upload_content_file(request):
     saved = default_storage.save(path, f)
     url = default_storage.url(saved)
     return Response({"url": request.build_absolute_uri(url)}, status=status.HTTP_201_CREATED)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@throttle_classes([UploadThrottle])
+@teacher_or_admin
+@tenant_required
+def upload_editor_image(request):
+    """
+    Upload an inline image for the rich-text editor.
+
+    Stores file in tenant-scoped object storage and returns:
+    - `asset_ref`: stable canonical reference used inside stored HTML (`rtimg:<uuid>`)
+    - `preview_url`: signed/public URL for immediate editor display
+    """
+    if request.user.role in ["TEACHER", "HOD", "IB_COORDINATOR"] and not getattr(
+        request.tenant, "feature_teacher_authoring", False
+    ):
+        return Response(
+            {"error": "Teacher course authoring is not available on your plan.", "upgrade_required": True},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    f = request.FILES.get("file") or request.FILES.get("image")
+    if not f:
+        return Response({"error": "file is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+    ok, err = _validate_upload(f, ALLOWED_IMAGE_EXTENSIONS, ALLOWED_IMAGE_MIMES, MAX_EDITOR_IMAGE_SIZE_MB)
+    if not ok:
+        return Response({"error": err}, status=status.HTTP_400_BAD_REQUEST)
+
+    tenant_id = str(request.tenant.id)
+    filename = getattr(f, "name", "editor-image.png")
+    path = rich_text_image_path(tenant_id, filename)
+    saved = default_storage.save(path, f)
+
+    asset = RichTextImageAsset.objects.create(
+        tenant=request.tenant,
+        storage_key=saved,
+        file_size=getattr(f, "size", None),
+        uploaded_by=request.user,
+    )
+
+    preview_url = sign_url(saved, expires_in=3600)
+    if not preview_url.startswith("http"):
+        preview_url = request.build_absolute_uri(preview_url)
+
+    return Response(
+        {
+            "asset_id": str(asset.id),
+            "asset_ref": f"rtimg:{asset.id}",
+            "preview_url": preview_url,
+            "file_size": asset.file_size,
+        },
+        status=status.HTTP_201_CREATED,
+    )
