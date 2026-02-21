@@ -63,7 +63,7 @@ def tenant_signup(request):
     Request body:
     {
         "school_name": "Demo School",
-        "admin_email": "admin@demo.com",
+        "admin_email": "admin@example.test",
         "admin_first_name": "John",
         "admin_last_name": "Doe",
         "admin_password": "securepassword123",

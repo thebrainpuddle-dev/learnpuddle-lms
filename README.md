@@ -160,12 +160,9 @@ brain-lms/
 
 ### Demo Credentials
 
-After running `create_demo_tenant`, you can log in with:
-
-| Role | Email | Password |
-|------|-------|----------|
-| Admin | admin@demo.com | demo123 |
-| Teacher | teacher@demo.com | demo123 |
+After running `create_demo_tenant`, configure test login credentials via environment variables:
+- `DEMO_TENANT_ADMIN_EMAIL`
+- `DEMO_TENANT_ADMIN_PASSWORD`
 
 ## API Endpoints
 

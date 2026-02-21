@@ -143,7 +143,7 @@ describe('LoginPage', () => {
         data: {
           user: {
             id: 'user-123',
-            email: 'teacher@demo.com',
+            email: 'teacher@example.test',
             first_name: 'Test',
             last_name: 'Teacher',
             role: 'TEACHER',
@@ -158,14 +158,14 @@ describe('LoginPage', () => {
 
       renderLoginPage();
 
-      await userEvent.type(screen.getByLabelText(/email address/i), 'teacher@demo.com');
-      await userEvent.type(screen.getByLabelText(/password/i), 'demo123');
+      await userEvent.type(screen.getByLabelText(/email address/i), 'teacher@example.test');
+      await userEvent.type(screen.getByLabelText(/password/i), 'TestPass@123');
       await userEvent.click(screen.getByRole('button', { name: /sign in/i }));
 
       await waitFor(() => {
         expect(mockedApi.post).toHaveBeenCalledWith('/users/auth/login/', {
-          email: 'teacher@demo.com',
-          password: 'demo123',
+          email: 'teacher@example.test',
+          password: 'TestPass@123',
           portal: 'tenant',
         });
       });
@@ -184,7 +184,7 @@ describe('LoginPage', () => {
         data: {
           user: {
             id: 'admin-123',
-            email: 'admin@demo.com',
+            email: 'admin@example.test',
             first_name: 'Test',
             last_name: 'Admin',
             role: 'SCHOOL_ADMIN',
@@ -199,8 +199,8 @@ describe('LoginPage', () => {
 
       renderLoginPage();
 
-      await userEvent.type(screen.getByLabelText(/email address/i), 'admin@demo.com');
-      await userEvent.type(screen.getByLabelText(/password/i), 'demo123');
+      await userEvent.type(screen.getByLabelText(/email address/i), 'admin@example.test');
+      await userEvent.type(screen.getByLabelText(/password/i), 'TestPass@123');
       await userEvent.click(screen.getByRole('button', { name: /sign in/i }));
 
       await waitFor(() => {
@@ -213,7 +213,7 @@ describe('LoginPage', () => {
         data: {
           user: {
             id: 'user-123',
-            email: 'teacher@demo.com',
+            email: 'teacher@example.test',
             first_name: 'Test',
             last_name: 'Teacher',
             role: 'TEACHER',
@@ -228,8 +228,8 @@ describe('LoginPage', () => {
 
       renderLoginPage();
 
-      await userEvent.type(screen.getByLabelText(/email address/i), 'teacher@demo.com');
-      await userEvent.type(screen.getByLabelText(/password/i), 'demo123');
+      await userEvent.type(screen.getByLabelText(/email address/i), 'teacher@example.test');
+      await userEvent.type(screen.getByLabelText(/password/i), 'TestPass@123');
       await userEvent.click(screen.getByLabelText(/remember me/i));
       await userEvent.click(screen.getByRole('button', { name: /sign in/i }));
 
@@ -256,7 +256,7 @@ describe('LoginPage', () => {
 
       renderLoginPage();
 
-      await userEvent.type(screen.getByLabelText(/email address/i), 'test@demo.com');
+      await userEvent.type(screen.getByLabelText(/email address/i), 'test@example.test');
       await userEvent.type(screen.getByLabelText(/password/i), 'wrongpassword');
       await userEvent.click(screen.getByRole('button', { name: /sign in/i }));
 
@@ -275,8 +275,8 @@ describe('LoginPage', () => {
 
       renderLoginPage();
 
-      await userEvent.type(screen.getByLabelText(/email address/i), 'disabled@demo.com');
-      await userEvent.type(screen.getByLabelText(/password/i), 'demo123');
+      await userEvent.type(screen.getByLabelText(/email address/i), 'disabled@example.test');
+      await userEvent.type(screen.getByLabelText(/password/i), 'TestPass@123');
       await userEvent.click(screen.getByRole('button', { name: /sign in/i }));
 
       await waitFor(() => {
@@ -294,8 +294,8 @@ describe('LoginPage', () => {
 
       renderLoginPage();
 
-      await userEvent.type(screen.getByLabelText(/email address/i), 'test@demo.com');
-      await userEvent.type(screen.getByLabelText(/password/i), 'demo123');
+      await userEvent.type(screen.getByLabelText(/email address/i), 'test@example.test');
+      await userEvent.type(screen.getByLabelText(/password/i), 'TestPass@123');
       await userEvent.click(screen.getByRole('button', { name: /sign in/i }));
 
       await waitFor(() => {
@@ -311,8 +311,8 @@ describe('LoginPage', () => {
 
       renderLoginPage();
 
-      await userEvent.type(screen.getByLabelText(/email address/i), 'test@demo.com');
-      await userEvent.type(screen.getByLabelText(/password/i), 'demo123');
+      await userEvent.type(screen.getByLabelText(/email address/i), 'test@example.test');
+      await userEvent.type(screen.getByLabelText(/password/i), 'TestPass@123');
       await userEvent.click(screen.getByRole('button', { name: /sign in/i }));
 
       // The button should have a loading state (rendered differently by Button component)

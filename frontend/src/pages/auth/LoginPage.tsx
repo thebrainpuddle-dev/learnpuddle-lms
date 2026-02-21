@@ -181,14 +181,9 @@ export const LoginPage: React.FC = () => {
             </Button>
           </form>
 
-          {/* Demo Credentials -- only shown in development */}
-          {process.env.REACT_APP_ENVIRONMENT !== 'production' && (
-            <div className="mt-6 p-4 bg-gray-50 rounded-lg">
-              <p className="text-xs text-gray-600 font-medium mb-2">Demo Credentials:</p>
-              <p className="text-xs text-gray-500">School Admin: admin@demo.com / demo123</p>
-              <p className="text-xs text-gray-500">Teacher: teacher@demo.com / demo123</p>
-            </div>
-          )}
+          <p className="mt-6 text-xs text-gray-500">
+            Use your LearnPuddle account credentials to sign in.
+          </p>
         </div>
 
         {/* Footer */}

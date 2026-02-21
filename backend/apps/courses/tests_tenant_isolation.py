@@ -7,6 +7,8 @@ from apps.courses.models import Course
 
 
 class CourseTenantIsolationTestCase(TestCase):
+    DEMO_ADMIN_PASSWORD = "TenantPass@123"
+
     def setUp(self):
         self.client = APIClient()
         self.demo = Tenant.objects.create(
@@ -26,7 +28,7 @@ class CourseTenantIsolationTestCase(TestCase):
 
         self.demo_admin = User.objects.create_user(
             email="admin@demo.test",
-            password="demo123",
+            password=self.DEMO_ADMIN_PASSWORD,
             first_name="Demo",
             last_name="Admin",
             tenant=self.demo,
@@ -76,7 +78,7 @@ class CourseTenantIsolationTestCase(TestCase):
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
 
     def test_admin_course_list_is_tenant_scoped(self):
-        self._login_and_set_bearer("demo.lms.com", "admin@demo.test", "demo123")
+        self._login_and_set_bearer("demo.lms.com", "admin@demo.test", self.DEMO_ADMIN_PASSWORD)
 
         resp = self.client.get("/api/courses/")
         self.assertEqual(resp.status_code, 200)
@@ -86,9 +88,8 @@ class CourseTenantIsolationTestCase(TestCase):
         self.assertNotIn(str(self.abc_course.id), ids)
 
     def test_cross_tenant_course_detail_not_found(self):
-        self._login_and_set_bearer("demo.lms.com", "admin@demo.test", "demo123")
+        self._login_and_set_bearer("demo.lms.com", "admin@demo.test", self.DEMO_ADMIN_PASSWORD)
 
         resp = self.client.get(f"/api/courses/{self.abc_course.id}/")
         # get_object_or_404 with tenant filter -> 404
         self.assertEqual(resp.status_code, 404)
-

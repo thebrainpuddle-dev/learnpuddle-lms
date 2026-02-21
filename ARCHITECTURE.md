@@ -520,11 +520,9 @@ celery -A config beat -l info
 
 ### Demo credentials
 
-| Role | Email | Password |
-|------|-------|----------|
-| Super Admin | admin@lms.com | (set manually via Django shell) |
-| School Admin | admin@demo.com | demo123 |
-| Teacher | teacher@demo.com | demo123 |
+Demo credentials are environment-driven in local/dev workflows:
+- `DEMO_TENANT_ADMIN_EMAIL`
+- `DEMO_TENANT_ADMIN_PASSWORD`
 
 ### Creating a super admin
 
@@ -533,12 +531,12 @@ cd backend && source venv/bin/activate
 python manage.py shell -c "
 from apps.users.models import User
 User.objects.create_superuser(
-    email='admin@lms.com',
-    password='superadmin123',
+    email='platform-admin@example.test',
+    password='replace-with-strong-password',
     first_name='Platform',
     last_name='Admin'
 )
-print('Super admin created: admin@lms.com')
+print('Super admin created')
 "
 ```
 

@@ -2,9 +2,10 @@
 // Debug course creation with network monitoring
 
 import { test, expect } from '@playwright/test';
+import { credentials } from './helpers/auth';
 
-const ADMIN_EMAIL = 'admin@demo.learnpuddle.com';
-const ADMIN_PASSWORD = 'Admin123!';
+const ADMIN_EMAIL = credentials.admin.email;
+const ADMIN_PASSWORD = credentials.admin.password;
 
 test.describe.skip('Course Creation - Debug with Network Monitoring', () => {
   

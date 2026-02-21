@@ -2,6 +2,7 @@
 // Quick course creation test
 
 import { test, expect } from '@playwright/test';
+import { credentials } from './helpers/auth';
 
 test.skip('Quick course creation test', async ({ page, context }) => {
   console.log('\n=== QUICK COURSE CREATION TEST ===\n');
@@ -12,8 +13,8 @@ test.skip('Quick course creation test', async ({ page, context }) => {
   console.log('Step 1-2: Login...');
   await page.goto('http://localhost:3000/login');
   await page.waitForLoadState('networkidle');
-  await page.getByLabel(/email/i).fill('admin@demo.learnpuddle.com');
-  await page.getByLabel(/password/i).fill('Admin123!');
+  await page.getByLabel(/email/i).fill(credentials.admin.email);
+  await page.getByLabel(/password/i).fill(credentials.admin.password);
   await page.getByRole('button', { name: /sign in/i }).click();
   await page.waitForTimeout(2000);
   await page.waitForLoadState('networkidle');

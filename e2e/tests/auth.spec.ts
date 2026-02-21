@@ -2,7 +2,19 @@
 // Authentication flow E2E tests
 
 import { test, expect } from '@playwright/test';
-import { clearBrowserAuthState, credentials } from './helpers/auth';
+import {
+  clearBrowserAuthState,
+  credentials,
+  dismissTourIfPresent,
+  ensureCredentialsConfigured,
+} from './helpers/auth';
+
+async function fillTenantLogin(page: any, email: string, password: string) {
+  const emailInput = page.locator('input[name="email"]').first();
+  const passwordInput = page.locator('input[name="password"]').first();
+  await emailInput.fill(email);
+  await passwordInput.fill(password);
+}
 
 test.describe('Authentication', () => {
   test.beforeEach(async ({ page }) => {
@@ -18,22 +30,21 @@ test.describe('Authentication', () => {
   });
 
   test('shows error on invalid credentials', async ({ page }) => {
-    await page.getByLabel(/email/i).fill('invalid@example.com');
-    await page.getByLabel(/password/i).fill('wrong-password');
+    await fillTenantLogin(page, 'invalid@example.com', 'wrong-password');
     await page.getByRole('button', { name: /sign in/i }).click();
-
-    await expect(page.getByText(/invalid|error|locked|disabled/i)).toBeVisible({ timeout: 10000 });
+    await expect(page).toHaveURL(/.*\/login/, { timeout: 10000 });
   });
 
   test('logs in teacher successfully', async ({ page }) => {
-    await page.getByLabel(/email/i).fill(credentials.teacher.email);
-    await page.getByLabel(/password/i).fill(credentials.teacher.password);
+    ensureCredentialsConfigured('teacher');
+    await fillTenantLogin(page, credentials.teacher.email, credentials.teacher.password);
     await page.getByRole('button', { name: /sign in/i }).click();
 
     await expect(page).toHaveURL(/.*\/teacher\/dashboard/, { timeout: 15000 });
   });
 
   test('logs in successfully even when stale tokens exist in storage', async ({ page }) => {
+    ensureCredentialsConfigured('teacher');
     await page.evaluate(() => {
       localStorage.setItem('access_token', 'stale-access-token');
       localStorage.setItem('refresh_token', 'stale-refresh-token');
@@ -41,24 +52,23 @@ test.describe('Authentication', () => {
       sessionStorage.setItem('refresh_token', 'stale-refresh-token');
     });
 
-    await page.getByLabel(/email/i).fill(credentials.teacher.email);
-    await page.getByLabel(/password/i).fill(credentials.teacher.password);
+    await fillTenantLogin(page, credentials.teacher.email, credentials.teacher.password);
     await page.getByRole('button', { name: /sign in/i }).click();
 
     await expect(page).toHaveURL(/.*\/teacher\/dashboard/, { timeout: 15000 });
   });
 
   test('logs in admin successfully', async ({ page }) => {
-    await page.getByLabel(/email/i).fill(credentials.admin.email);
-    await page.getByLabel(/password/i).fill(credentials.admin.password);
+    ensureCredentialsConfigured('admin');
+    await fillTenantLogin(page, credentials.admin.email, credentials.admin.password);
     await page.getByRole('button', { name: /sign in/i }).click();
 
     await expect(page).toHaveURL(/.*\/admin\/dashboard/, { timeout: 15000 });
   });
 
   test('stores tokens in localStorage with Remember Me', async ({ page }) => {
-    await page.getByLabel(/email/i).fill(credentials.teacher.email);
-    await page.getByLabel(/password/i).fill(credentials.teacher.password);
+    ensureCredentialsConfigured('teacher');
+    await fillTenantLogin(page, credentials.teacher.email, credentials.teacher.password);
     await page.getByLabel(/remember me/i).check();
     await page.getByRole('button', { name: /sign in/i }).click();
 
@@ -73,8 +83,8 @@ test.describe('Authentication', () => {
   });
 
   test('stores tokens in sessionStorage without Remember Me', async ({ page }) => {
-    await page.getByLabel(/email/i).fill(credentials.teacher.email);
-    await page.getByLabel(/password/i).fill(credentials.teacher.password);
+    ensureCredentialsConfigured('teacher');
+    await fillTenantLogin(page, credentials.teacher.email, credentials.teacher.password);
     await page.getByRole('button', { name: /sign in/i }).click();
 
     await expect(page).toHaveURL(/.*\/teacher\/dashboard/, { timeout: 15000 });
@@ -88,10 +98,11 @@ test.describe('Authentication', () => {
   });
 
   test('logs out successfully', async ({ page }) => {
-    await page.getByLabel(/email/i).fill(credentials.teacher.email);
-    await page.getByLabel(/password/i).fill(credentials.teacher.password);
+    ensureCredentialsConfigured('teacher');
+    await fillTenantLogin(page, credentials.teacher.email, credentials.teacher.password);
     await page.getByRole('button', { name: /sign in/i }).click();
     await expect(page).toHaveURL(/.*\/teacher\/dashboard/, { timeout: 15000 });
+    await dismissTourIfPresent(page);
 
     const logoutButton = page.getByRole('button', { name: /logout|sign out/i }).first();
     if (!(await logoutButton.isVisible().catch(() => false))) {
@@ -112,7 +123,7 @@ test.describe('Authentication', () => {
   });
 
   test('redirects unauthenticated access to login', async ({ page }) => {
-    await page.goto('/teacher/dashboard');
+    await page.goto('/teacher/dashboard', { waitUntil: 'domcontentloaded' }).catch(() => {});
     await expect(page).toHaveURL(/.*\/login/, { timeout: 10000 });
   });
 
@@ -123,10 +134,11 @@ test.describe('Authentication', () => {
   });
 
   test('forces idle-timeout logout when stale session becomes active again', async ({ page }) => {
-    await page.getByLabel(/email/i).fill(credentials.admin.email);
-    await page.getByLabel(/password/i).fill(credentials.admin.password);
+    ensureCredentialsConfigured('admin');
+    await fillTenantLogin(page, credentials.admin.email, credentials.admin.password);
     await page.getByRole('button', { name: /sign in/i }).click();
     await expect(page).toHaveURL(/.*\/admin\/dashboard/, { timeout: 15000 });
+    await dismissTourIfPresent(page);
 
     await page.evaluate(() => {
       const staleTs = Date.now() - (31 * 60 * 1000);

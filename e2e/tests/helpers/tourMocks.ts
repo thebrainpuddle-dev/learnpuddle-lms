@@ -16,7 +16,7 @@ function userForRole(role: Role) {
   if (role === 'SUPER_ADMIN') {
     return {
       id: 'user-super-admin',
-      email: 'admin@learnpuddle.com',
+      email: 'admin@example.test',
       first_name: 'Platform',
       last_name: 'Admin',
       role: 'SUPER_ADMIN',
@@ -29,7 +29,7 @@ function userForRole(role: Role) {
   if (role === 'SCHOOL_ADMIN') {
     return {
       id: 'user-school-admin',
-      email: 'admin@demo.learnpuddle.com',
+      email: 'admin@example.test',
       first_name: 'School',
       last_name: 'Admin',
       role: 'SCHOOL_ADMIN',
@@ -41,7 +41,7 @@ function userForRole(role: Role) {
 
   return {
     id: 'user-teacher',
-    email: 'teacher@demo.learnpuddle.com',
+    email: 'teacher@example.test',
     first_name: 'Demo',
     last_name: 'Teacher',
     role: 'TEACHER',
@@ -59,7 +59,7 @@ const tenantListItem = {
   name: 'Demo International School',
   slug: 'demo-international-school',
   subdomain: 'demo',
-  email: 'principal@demo.learnpuddle.com',
+  email: 'principal@example.test',
   is_active: true,
   is_trial: false,
   trial_end_date: null,
@@ -95,7 +95,7 @@ const tenantDetail = {
   feature_certificates: true,
   internal_notes: 'Demo tenant notes.',
   published_course_count: 12,
-  admin_email: 'principal@demo.learnpuddle.com',
+  admin_email: 'principal@example.test',
   admin_name: 'Principal Demo',
 };
 
@@ -164,7 +164,7 @@ const teacherList = {
   results: [
     {
       id: 'teacher-1',
-      email: 'teacher1@demo.learnpuddle.com',
+      email: 'teacher1@example.test',
       first_name: 'Anita',
       last_name: 'Sharma',
       role: 'TEACHER',
@@ -175,7 +175,7 @@ const teacherList = {
     },
     {
       id: 'teacher-2',
-      email: 'teacher2@demo.learnpuddle.com',
+      email: 'teacher2@example.test',
       first_name: 'Rahul',
       last_name: 'Verma',
       role: 'TEACHER',

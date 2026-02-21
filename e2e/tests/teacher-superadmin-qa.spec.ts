@@ -2,11 +2,12 @@
 // Comprehensive QA test for Teacher and Super Admin sections
 
 import { test, expect } from '@playwright/test';
+import { credentials } from './helpers/auth';
 
-const TEACHER_EMAIL = 'teacher@demo.learnpuddle.com';
-const TEACHER_PASSWORD = 'Teacher123!';
-const SUPERADMIN_EMAIL = 'admin@learnpuddle.com';
-const SUPERADMIN_PASSWORD = 'Admin123!';
+const TEACHER_EMAIL = credentials.teacher.email;
+const TEACHER_PASSWORD = credentials.teacher.password;
+const SUPERADMIN_EMAIL = credentials.superAdmin.email;
+const SUPERADMIN_PASSWORD = credentials.superAdmin.password;
 
 test.describe.skip('Teacher and Super Admin QA Tests', () => {
   

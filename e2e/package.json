@@ -10,7 +10,7 @@
     "test:chromium": "playwright test --project=chromium",
     "test:firefox": "playwright test --project=firefox",
     "test:webkit": "playwright test --project=webkit",
-    "test:mobile": "playwright test --project='Mobile Chrome' --project='Mobile Safari'",
+    "test:mobile": "playwright test --workers=1 --project='Mobile Chrome' --project='Mobile Safari'",
     "report": "playwright show-report",
     "codegen": "playwright codegen"
   },
