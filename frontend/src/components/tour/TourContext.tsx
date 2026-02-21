@@ -23,6 +23,8 @@ const DEFAULT_SELECTOR_MISS_MESSAGE =
 const AUTO_NAV_COOLDOWN_MS = 700;
 const AUTO_NAV_BURST_WINDOW_MS = 10_000;
 const AUTO_NAV_BURST_LIMIT = 12;
+const AUTO_NAV_STEP_ATTEMPT_WINDOW_MS = 5_000;
+const AUTO_NAV_STEP_ATTEMPT_LIMIT = 2;
 
 function getTourRole(role?: string | null): TourRole | null {
   if (!role) return null;
@@ -72,6 +74,26 @@ function routeMatches(pathname: string, search: string, route: string, pathMatch
 function resolveRoute(step: TourStep): string | null {
   if (typeof step.path === 'function') return step.path();
   return step.path;
+}
+
+function normalizeRoute(route: string): string {
+  const [path, query = ''] = route.split('?');
+  if (!query) return path;
+
+  const sortedEntries = Array.from(new URLSearchParams(query).entries()).sort(([leftKey, leftValue], [rightKey, rightValue]) => {
+    if (leftKey === rightKey) {
+      return leftValue.localeCompare(rightValue);
+    }
+    return leftKey.localeCompare(rightKey);
+  });
+
+  const normalized = new URLSearchParams();
+  for (const [key, value] of sortedEntries) {
+    normalized.append(key, value);
+  }
+
+  const normalizedQuery = normalized.toString();
+  return normalizedQuery ? `${path}?${normalizedQuery}` : path;
 }
 
 function findVisibleElement(selector: string): HTMLElement | null {
@@ -140,6 +162,9 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const lastAutoNavigationRef = React.useRef<{ targetRoute: string; at: number } | null>(null);
   const autoNavigationBurstRef = React.useRef<number[]>([]);
+  const stepNavigationAttemptRef = React.useRef<
+    Record<string, { targetRoute: string; count: number; firstAttemptAt: number }>
+  >({});
 
   const markCurrentTourComplete = React.useCallback(() => {
     if (!user?.id || !activeRole) return;
@@ -161,6 +186,7 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setNavigationPausedReason(null);
       lastAutoNavigationRef.current = null;
       autoNavigationBurstRef.current = [];
+      stepNavigationAttemptRef.current = {};
     },
     [markCurrentTourComplete]
   );
@@ -174,6 +200,7 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setNavigationPausedReason(null);
     lastAutoNavigationRef.current = null;
     autoNavigationBurstRef.current = [];
+    stepNavigationAttemptRef.current = {};
   }, [isAuthenticated, user?.role]);
 
   const nextStep = React.useCallback(() => {
@@ -184,12 +211,14 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
     setBlockedReason(null);
     setNavigationPausedReason(null);
+    stepNavigationAttemptRef.current = {};
     setActiveStepIndex((prev) => prev + 1);
   }, [activeStepIndex, closeTour, currentStep, steps.length]);
 
   const prevStep = React.useCallback(() => {
     setBlockedReason(null);
     setNavigationPausedReason(null);
+    stepNavigationAttemptRef.current = {};
     setActiveStepIndex((prev) => Math.max(0, prev - 1));
   }, []);
 
@@ -224,20 +253,55 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
   );
 
   const canAutoNavigate = React.useCallback(
-    (targetRoute: string): boolean => {
+    (stepId: string, targetRoute: string): boolean => {
       if (navigationPausedReason) {
         setBlockedReason(navigationPausedReason);
         return false;
       }
 
       const now = Date.now();
+      const normalizedTargetRoute = normalizeRoute(targetRoute);
+      const normalizedCurrentRoute = normalizeRoute(`${location.pathname}${location.search}`);
+      if (normalizedCurrentRoute === normalizedTargetRoute) {
+        return false;
+      }
+
+      const existingStepAttempt = stepNavigationAttemptRef.current[stepId];
+      if (
+        existingStepAttempt &&
+        existingStepAttempt.targetRoute === normalizedTargetRoute &&
+        now - existingStepAttempt.firstAttemptAt <= AUTO_NAV_STEP_ATTEMPT_WINDOW_MS
+      ) {
+        if (existingStepAttempt.count >= AUTO_NAV_STEP_ATTEMPT_LIMIT) {
+          const reason =
+            'Automatic tour navigation paused on this step to avoid redirect loops. Use Next or Back to continue manually.';
+          setNavigationPausedReason(reason);
+          setBlockedReason(reason);
+          setIsResolving(false);
+          logTourDebug('route_step_paused', {
+            stepId,
+            targetRoute: normalizedTargetRoute,
+            count: existingStepAttempt.count,
+            windowMs: AUTO_NAV_STEP_ATTEMPT_WINDOW_MS,
+          });
+          return false;
+        }
+        existingStepAttempt.count += 1;
+      } else {
+        stepNavigationAttemptRef.current[stepId] = {
+          targetRoute: normalizedTargetRoute,
+          count: 1,
+          firstAttemptAt: now,
+        };
+      }
+
       const lastNavigation = lastAutoNavigationRef.current;
       if (
         lastNavigation &&
-        lastNavigation.targetRoute === targetRoute &&
+        lastNavigation.targetRoute === normalizedTargetRoute &&
         now - lastNavigation.at <= AUTO_NAV_COOLDOWN_MS
       ) {
-        logTourDebug('route_deduped', { targetRoute, deltaMs: now - lastNavigation.at });
+        logTourDebug('route_deduped', { targetRoute: normalizedTargetRoute, deltaMs: now - lastNavigation.at });
         return false;
       }
 
@@ -254,17 +318,17 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setBlockedReason(reason);
         setIsResolving(false);
         logTourDebug('route_burst_paused', {
-          targetRoute,
+          targetRoute: normalizedTargetRoute,
           countInWindow: recent.length,
           windowMs: AUTO_NAV_BURST_WINDOW_MS,
         });
         return false;
       }
 
-      lastAutoNavigationRef.current = { targetRoute, at: now };
+      lastAutoNavigationRef.current = { targetRoute: normalizedTargetRoute, at: now };
       return true;
     },
-    [navigationPausedReason]
+    [location.pathname, location.search, navigationPausedReason]
   );
 
   React.useEffect(() => {
@@ -286,7 +350,7 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       if (!routeMatches(location.pathname, location.search, targetRoute, currentStep.pathMatch)) {
-        if (!canAutoNavigate(targetRoute)) {
+        if (!canAutoNavigate(currentStep.id, targetRoute)) {
           setIsResolving(false);
           return;
         }
@@ -300,6 +364,8 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
         navigate(targetRoute, { replace: true });
         return;
       }
+
+      delete stepNavigationAttemptRef.current[currentStep.id];
 
       if (!currentStep.selector) {
         setIsResolving(false);
@@ -320,7 +386,7 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return;
       }
 
-      element.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+      element.scrollIntoView({ behavior: 'auto', block: 'center', inline: 'center' });
       await new Promise<void>((resolve) => {
         requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
       });

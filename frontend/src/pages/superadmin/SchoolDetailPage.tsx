@@ -1,5 +1,5 @@
 import React from 'react';
-import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { useLocation, useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { superAdminService, PLAN_OPTIONS, FEATURE_FLAGS } from '../../services/superAdminService';
 import { Button, useToast } from '../../components/common';
@@ -17,27 +17,28 @@ export const SchoolDetailPage: React.FC = () => {
   usePageTitle('School Details');
   const { tenantId } = useParams<{ tenantId: string }>();
   const navigate = useNavigate();
-  const [searchParams, setSearchParams] = useSearchParams();
+  const location = useLocation();
+  const [, setSearchParams] = useSearchParams();
   const toast = useToast();
   const qc = useQueryClient();
-  const rawTab = searchParams.get('tab');
+  const rawTab = React.useMemo(() => new URLSearchParams(location.search).get('tab'), [location.search]);
   const tab: Tab = rawTab === 'plan' || rawTab === 'features' || rawTab === 'overview' ? rawTab : 'overview';
 
   React.useEffect(() => {
     if (rawTab === tab) return;
-    const params = new URLSearchParams(searchParams);
+    const params = new URLSearchParams(location.search);
     params.set('tab', tab);
     setSearchParams(params, { replace: true });
-  }, [rawTab, searchParams, setSearchParams, tab]);
+  }, [location.search, rawTab, setSearchParams, tab]);
 
   const setTab = React.useCallback(
     (nextTab: Tab) => {
       if (nextTab === tab) return;
-      const params = new URLSearchParams(searchParams);
+      const params = new URLSearchParams(location.search);
       params.set('tab', nextTab);
       setSearchParams(params, { replace: true });
     },
-    [searchParams, setSearchParams, tab]
+    [location.search, setSearchParams, tab]
   );
 
   const { data: tenant, isLoading } = useQuery({

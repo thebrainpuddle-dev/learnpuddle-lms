@@ -6,23 +6,54 @@ import { useGuidedTour } from '../tour';
 
 export const SuperAdminLayout: React.FC = () => {
   const [sidebarOpen, setSidebarOpen] = React.useState(false);
+  const [isDesktop, setIsDesktop] = React.useState(() =>
+    typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      ? window.matchMedia('(min-width: 1024px)').matches
+      : true
+  );
   const { isActive: isTourActive } = useGuidedTour();
 
   React.useEffect(() => {
-    if (isTourActive) {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return;
+    }
+    const media = window.matchMedia('(min-width: 1024px)');
+    const onChange = (event: MediaQueryListEvent) => setIsDesktop(event.matches);
+    setIsDesktop(media.matches);
+
+    if (media.addEventListener) {
+      media.addEventListener('change', onChange);
+      return () => media.removeEventListener('change', onChange);
+    }
+
+    media.addListener(onChange);
+    return () => media.removeListener(onChange);
+  }, []);
+
+  React.useEffect(() => {
+    if (isDesktop && sidebarOpen) {
+      setSidebarOpen(false);
+    }
+  }, [isDesktop, sidebarOpen]);
+
+  React.useEffect(() => {
+    if (!isDesktop && isTourActive) {
       setSidebarOpen(true);
     }
-  }, [isTourActive]);
+    if (!isDesktop && !isTourActive) {
+      setSidebarOpen(false);
+    }
+  }, [isDesktop, isTourActive]);
 
   return (
-    <div className="min-h-screen bg-slate-50 lg:pl-64">
-      <SuperAdminSidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+    <div className="min-h-screen bg-slate-50">
+      {!isDesktop && <SuperAdminSidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />}
 
       <div className="hidden lg:fixed lg:inset-y-0 lg:flex lg:w-64 lg:flex-col">
         <SuperAdminSidebar open />
       </div>
 
-      <div className="flex min-h-screen min-w-0 flex-1 flex-col">
+      <div className="flex min-h-screen min-w-0 flex-1 flex-col lg:pl-64">
         <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-slate-200 bg-white/95 px-4 backdrop-blur lg:hidden">
           <button
             type="button"

@@ -1,20 +1,45 @@
 // src/components/layout/AdminLayout.tsx
 
-import React, { useState } from 'react';
+import React from 'react';
 import { Outlet } from 'react-router-dom';
 import { AdminSidebar } from './AdminSidebar';
 import { AdminHeader } from './AdminHeader';
 
 export const AdminLayout: React.FC = () => {
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  
+  const [sidebarOpen, setSidebarOpen] = React.useState(false);
+  const [isDesktop, setIsDesktop] = React.useState(() =>
+    typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      ? window.matchMedia('(min-width: 1024px)').matches
+      : true
+  );
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return;
+    }
+    const media = window.matchMedia('(min-width: 1024px)');
+    const onChange = (event: MediaQueryListEvent) => setIsDesktop(event.matches);
+    setIsDesktop(media.matches);
+
+    if (media.addEventListener) {
+      media.addEventListener('change', onChange);
+      return () => media.removeEventListener('change', onChange);
+    }
+
+    media.addListener(onChange);
+    return () => media.removeListener(onChange);
+  }, []);
+
+  React.useEffect(() => {
+    if (isDesktop && sidebarOpen) {
+      setSidebarOpen(false);
+    }
+  }, [isDesktop, sidebarOpen]);
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Mobile sidebar */}
-      <AdminSidebar
-        open={sidebarOpen}
-        onClose={() => setSidebarOpen(false)}
-      />
+      {!isDesktop && <AdminSidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />}
       
       {/* Desktop sidebar */}
       <div className="hidden lg:fixed lg:inset-y-0 lg:flex lg:w-64 lg:flex-col">

@@ -80,10 +80,16 @@ export const SchoolsPage: React.FC = () => {
 
       {/* Search */}
       <div className="relative w-full max-w-md">
+        <label htmlFor="superadmin-school-search" className="sr-only">
+          Search schools
+        </label>
         <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
         <input
+          id="superadmin-school-search"
+          name="school_search"
           data-tour="superadmin-schools-search"
-          type="text"
+          type="search"
+          autoComplete="off"
           placeholder="Search schools..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
@@ -178,13 +184,16 @@ export const SchoolsPage: React.FC = () => {
           <div className="max-h-[90vh] w-full max-w-lg space-y-4 overflow-y-auto rounded-xl bg-white p-4 sm:p-6">
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-bold text-gray-900">Onboard New School</h3>
-              <button onClick={() => setShowOnboard(false)} className="text-gray-400 hover:text-gray-600">
+              <button type="button" onClick={() => setShowOnboard(false)} className="text-gray-400 hover:text-gray-600">
                 <XMarkIcon className="h-6 w-6" />
               </button>
             </div>
 
             <Input
+              id="school-name"
+              name="school_name"
               label="School Name"
+              autoComplete="organization"
               value={onboardForm.school_name}
               onChange={(e) => setOnboardForm({ ...onboardForm, school_name: e.target.value })}
               placeholder="ABC International School"
@@ -192,36 +201,51 @@ export const SchoolsPage: React.FC = () => {
             />
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <Input
+                id="admin-first-name"
+                name="admin_first_name"
                 label="Admin First Name"
+                autoComplete="given-name"
                 value={onboardForm.admin_first_name}
                 onChange={(e) => setOnboardForm({ ...onboardForm, admin_first_name: e.target.value })}
                 required
               />
               <Input
+                id="admin-last-name"
+                name="admin_last_name"
                 label="Admin Last Name"
+                autoComplete="family-name"
                 value={onboardForm.admin_last_name}
                 onChange={(e) => setOnboardForm({ ...onboardForm, admin_last_name: e.target.value })}
                 required
               />
             </div>
             <Input
+              id="admin-email"
+              name="admin_email"
               label="Admin Email"
               type="email"
+              autoComplete="email"
               value={onboardForm.admin_email}
               onChange={(e) => setOnboardForm({ ...onboardForm, admin_email: e.target.value })}
               placeholder="principal@school.com"
               required
             />
             <Input
+              id="admin-password"
+              name="admin_password"
               label="Initial Password"
               type="password"
+              autoComplete="new-password"
               value={onboardForm.admin_password}
               onChange={(e) => setOnboardForm({ ...onboardForm, admin_password: e.target.value })}
               placeholder="Minimum 8 characters"
               required
             />
             <Input
+              id="school-subdomain"
+              name="subdomain"
               label="Subdomain (optional, auto-generated if blank)"
+              autoComplete="off"
               value={onboardForm.subdomain || ''}
               onChange={(e) => setOnboardForm({ ...onboardForm, subdomain: e.target.value })}
               placeholder="abcschool"

@@ -1,7 +1,7 @@
 // src/pages/admin/CourseEditorPage.tsx
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { useLocation, useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { usePageTitle } from '../../hooks/usePageTitle';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button, Input, Loading, useToast, HlsVideoPlayer, ConfirmDialog } from '../../components/common';
@@ -164,7 +164,8 @@ export const CourseEditorPage: React.FC = () => {
   const toast = useToast();
   const { courseId } = useParams<{ courseId: string }>();
   const navigate = useNavigate();
-  const [searchParams, setSearchParams] = useSearchParams();
+  const location = useLocation();
+  const [, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const thumbnailInputRef = useRef<HTMLInputElement>(null);
   const contentFileInputRef = useRef<HTMLInputElement>(null);
@@ -231,16 +232,19 @@ export const CourseEditorPage: React.FC = () => {
     },
     [isEditing]
   );
-  const activeTab = resolveTab(searchParams.get('tab'));
+  const activeTab = React.useMemo(
+    () => resolveTab(new URLSearchParams(location.search).get('tab')),
+    [location.search, resolveTab]
+  );
   const setActiveTab = React.useCallback(
     (nextTab: EditorTab) => {
       const sanitizedTab = !isEditing && nextTab === 'content' ? 'details' : nextTab;
       if (activeTab === sanitizedTab) return;
-      const params = new URLSearchParams(searchParams);
+      const params = new URLSearchParams(location.search);
       params.set('tab', sanitizedTab);
       setSearchParams(params, { replace: true });
     },
-    [activeTab, isEditing, searchParams, setSearchParams]
+    [activeTab, isEditing, location.search, setSearchParams]
   );
   const [thumbnailPreview, setThumbnailPreview] = useState<string | null>(null);
   const [thumbnailFile, setThumbnailFile] = useState<File | null>(null);
@@ -384,13 +388,13 @@ export const CourseEditorPage: React.FC = () => {
   const courseMutationPending = createCourseMutation.isPending || updateCourseMutation.isPending;
 
   React.useEffect(() => {
-    const rawTab = searchParams.get('tab');
+    const rawTab = new URLSearchParams(location.search).get('tab');
     const normalizedTab = resolveTab(rawTab);
     if (rawTab === normalizedTab) return;
-    const params = new URLSearchParams(searchParams);
+    const params = new URLSearchParams(location.search);
     params.set('tab', normalizedTab);
     setSearchParams(params, { replace: true });
-  }, [resolveTab, searchParams, setSearchParams]);
+  }, [location.search, resolveTab, setSearchParams]);
 
   const moduleMutation = useMutation({
     mutationFn: createModule,

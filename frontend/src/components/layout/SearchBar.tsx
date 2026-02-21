@@ -55,6 +55,7 @@ interface SearchBarProps {
 
 export const SearchBar: React.FC<SearchBarProps> = ({ className = '', isAdmin = false }) => {
   const navigate = useNavigate();
+  const inputId = React.useId();
   const [query, setQuery] = useState('');
   const [isOpen, setIsOpen] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(-1);
@@ -142,10 +143,17 @@ export const SearchBar: React.FC<SearchBarProps> = ({ className = '', isAdmin = 
     <div ref={containerRef} className={`relative ${className}`}>
       {/* Search Input */}
       <div className="relative">
+        <label htmlFor={inputId} className="sr-only">
+          Search courses and content
+        </label>
         <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
         <input
+          id={inputId}
+          name="global_search"
           ref={inputRef}
-          type="text"
+          type="search"
+          autoComplete="off"
+          aria-label="Search courses and content"
           value={query}
           onChange={(e) => {
             setQuery(e.target.value);
@@ -159,6 +167,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({ className = '', isAdmin = 
         />
         {query && (
           <button
+            type="button"
             onClick={clearSearch}
             className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
           >
