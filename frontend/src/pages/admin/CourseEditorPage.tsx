@@ -4,7 +4,8 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useLocation, useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { usePageTitle } from '../../hooks/usePageTitle';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Button, Input, Loading, useToast, HlsVideoPlayer, ConfirmDialog, RichTextEditor } from '../../components/common';
+import { Button, Input, Loading, useToast, HlsVideoPlayer, ConfirmDialog } from '../../components/common';
+import { RichTextEditor } from '../../components/common/RichTextEditor';
 import DOMPurify from 'dompurify';
 import { useTenantStore } from '../../stores/tenantStore';
 import { useAuthStore } from '../../stores/authStore';
@@ -192,7 +193,9 @@ export const CourseEditorPage: React.FC = () => {
   const { hasFeature } = useTenantStore();
   const canUploadVideo = hasFeature('video_upload');
   const isTeacherAuthoring = location.pathname.startsWith('/teacher/authoring');
-  const canManageAssignments = !isTeacherAuthoring && (user?.role === 'SCHOOL_ADMIN' || user?.role === 'SUPER_ADMIN');
+  const canManageAssignments = !isTeacherAuthoring && (
+    !user?.role || user.role === 'SCHOOL_ADMIN' || user.role === 'SUPER_ADMIN'
+  );
   const courseListPath = isTeacherAuthoring ? '/teacher/authoring' : '/admin/courses';
   usePageTitle(isTeacherAuthoring ? 'Course Authoring Editor' : 'Course Editor');
 
