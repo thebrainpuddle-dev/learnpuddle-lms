@@ -92,6 +92,7 @@ interface Course {
 
 type EditorTab = 'details' | 'content' | 'assignment';
 type TextEditorMode = 'WYSIWYG' | 'MARKDOWN';
+type LibraryMediaFilter = 'ALL' | MediaAsset['media_type'];
 
 const fetchCourse = async (id: string): Promise<Course> => {
   const response = await api.get(`/courses/${id}/`);
@@ -282,6 +283,8 @@ export const CourseEditorPage: React.FC = () => {
   const [editingTextContentId, setEditingTextContentId] = useState<string | null>(null);
   const [editingTextModuleId, setEditingTextModuleId] = useState<string | null>(null);
   const [textContentDraft, setTextContentDraft] = useState('');
+  const [showEditingTextPreview, setShowEditingTextPreview] = useState(false);
+  const [showNewTextPreview, setShowNewTextPreview] = useState(false);
   const [thumbnailPreview, setThumbnailPreview] = useState<string | null>(null);
   const [thumbnailFile, setThumbnailFile] = useState<File | null>(null);
   const [expandedModules, setExpandedModules] = useState<string[]>([]);
@@ -456,10 +459,30 @@ export const CourseEditorPage: React.FC = () => {
 
   const moduleMutation = useMutation({
     mutationFn: createModule,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['adminCourse', courseId] });
+    onSuccess: async (newModule) => {
+      if (!courseId) return;
       setNewModuleTitle('');
-      toast.success('Module added', 'Now add content to this module.');
+      setExpandedModules((prev) => (prev.includes(newModule.id) ? prev : [...prev, newModule.id]));
+      setEditingModule(newModule.id);
+
+      try {
+        const data = new FormData();
+        data.append('title', 'Module Text');
+        data.append('content_type', 'TEXT');
+        data.append('is_mandatory', 'true');
+        data.append('order', '1');
+        data.append('text_content', '<p>Start writing your module content here.</p>');
+        const defaultTextContent = await createContent({ courseId, moduleId: newModule.id, data });
+        setEditingTextModuleId(newModule.id);
+        setEditingTextContentId(defaultTextContent.id);
+        setTextContentDraft(defaultTextContent.text_content || '');
+        setShowEditingTextPreview(false);
+      } catch {
+        // Keep module creation successful even if default content bootstrap fails.
+      }
+
+      await queryClient.invalidateQueries({ queryKey: ['adminCourse', courseId] });
+      toast.success('Module added', 'Module is ready with a default text editor.');
     },
     onError: () => {
       toast.error('Failed to add module', 'Please try again.');
@@ -510,6 +533,7 @@ export const CourseEditorPage: React.FC = () => {
         is_mandatory: true,
       });
       setContentFile(null);
+      setShowNewTextPreview(false);
       toast.success('Content added', 'Content has been added to the module.');
     },
     onError: () => {
@@ -524,6 +548,7 @@ export const CourseEditorPage: React.FC = () => {
       setEditingTextContentId(null);
       setEditingTextModuleId(null);
       setTextContentDraft('');
+      setShowEditingTextPreview(false);
       toast.success('Content updated', 'Text lesson saved.');
     },
     onError: () => {
@@ -572,7 +597,20 @@ export const CourseEditorPage: React.FC = () => {
   // Media library picker
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [librarySearch, setLibrarySearch] = useState('');
+  const [libraryFilter, setLibraryFilter] = useState<LibraryMediaFilter>('ALL');
   const [libraryAssets, setLibraryAssets] = useState<MediaAsset[]>([]);
+
+  const fetchLibraryAssets = useCallback(async (search = '', filter: LibraryMediaFilter = 'ALL') => {
+    const params: { media_type?: string; search?: string; page_size: number } = { page_size: 50 };
+    if (filter !== 'ALL') params.media_type = filter;
+    if (search.trim()) params.search = search.trim();
+    try {
+      const res = await adminMediaService.listMedia(params);
+      setLibraryAssets(res.results);
+    } catch {
+      setLibraryAssets([]);
+    }
+  }, []);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
     const { name, value, type } = e.target;
@@ -649,6 +687,7 @@ export const CourseEditorPage: React.FC = () => {
     setEditingTextModuleId(moduleId);
     setEditingTextContentId(content.id);
     setTextContentDraft(content.text_content || '');
+    setShowEditingTextPreview(false);
   };
 
   const saveTextContent = () => {
@@ -670,6 +709,7 @@ export const CourseEditorPage: React.FC = () => {
     setEditingTextContentId(null);
     setEditingTextModuleId(null);
     setTextContentDraft('');
+    setShowEditingTextPreview(false);
   };
 
   const handleSaveCourse = async () => {
@@ -699,45 +739,25 @@ export const CourseEditorPage: React.FC = () => {
   };
 
   const handleAddModule = () => {
-    if (!newModuleTitle.trim() || !courseId) return;
+    if (!courseId) return;
+    const nextOrder = (course?.modules?.length || 0) + 1;
+    const nextTitle = newModuleTitle.trim() || `Untitled Module ${nextOrder}`;
     moduleMutation.mutate({
       courseId,
       data: {
-        title: newModuleTitle,
+        title: nextTitle,
         description: '',
-        order: (course?.modules?.length || 0) + 1,
+        order: nextOrder,
       },
     });
   };
 
-  const handleAddIntroText = (moduleId: string) => {
-    if (!courseId) return;
-    const module = course?.modules?.find((m) => m.id === moduleId);
-    if (!module) return;
-
-    const existingText = (module.contents || [])
-      .filter((c) => c.content_type === 'TEXT')
-      .sort((a, b) => (a.order || 0) - (b.order || 0))[0];
-
-    if (existingText) {
-      updateContentMutation.mutate({
-        courseId,
-        moduleId,
-        contentId: existingText.id,
-        data: { order: 0 },
-      });
-      toast.success('Intro moved to top', 'Existing text lesson was moved before videos.');
-      return;
-    }
-
-    const data = new FormData();
-    data.append('title', 'Module Introduction');
-    data.append('content_type', 'TEXT');
-    data.append('is_mandatory', 'true');
-    data.append('order', '0');
-    data.append('text_content', '<p>Add module overview, key links, or context before videos.</p>');
-    contentMutation.mutate({ courseId, moduleId, data });
-  };
+  const openLibraryPicker = useCallback(async (filter: LibraryMediaFilter) => {
+    setLibraryFilter(filter);
+    setLibrarySearch('');
+    await fetchLibraryAssets('', filter);
+    setLibraryOpen(true);
+  }, [fetchLibraryAssets]);
 
   const handleAddContent = async (moduleId: string) => {
     if (!newContentData.title.trim() || !courseId) return;
@@ -1156,14 +1176,13 @@ export const CourseEditorPage: React.FC = () => {
                 type="text"
                 value={newModuleTitle}
                 onChange={(e) => setNewModuleTitle(e.target.value)}
-                placeholder="New module title..."
+                placeholder="Optional module title (you can rename it anytime)"
                 className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
-                onKeyPress={(e) => e.key === 'Enter' && handleAddModule()}
+                onKeyDown={(e) => e.key === 'Enter' && handleAddModule()}
               />
               <Button
                 variant="primary"
                 onClick={handleAddModule}
-                disabled={!newModuleTitle.trim()}
                 loading={moduleMutation.isPending}
               >
                 <PlusIcon className="h-5 w-5 mr-1" />
@@ -1177,13 +1196,15 @@ export const CourseEditorPage: React.FC = () => {
             <div className="bg-white rounded-xl border border-gray-200 p-8 text-center">
               <Bars3Icon className="h-12 w-12 mx-auto text-gray-400 mb-4" />
               <h3 className="text-lg font-medium text-gray-900 mb-1">No modules yet</h3>
-              <p className="text-gray-500">Start by adding your first module above</p>
+              <p className="text-gray-500">Add your first module to start building lessons</p>
             </div>
           ) : (
             <div className="space-y-3">
-              {course?.modules?.map((module, moduleIndex) => (
-                <div key={module.id} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-                  {/* Module Header */}
+              {course?.modules?.map((module, moduleIndex) => {
+                const moduleLabel = module.title?.trim() || `Untitled Module ${moduleIndex + 1}`;
+                return (
+                  <div key={module.id} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+                    {/* Module Header */}
                   <div
                     className="flex items-center justify-between p-4 bg-gray-50 cursor-pointer"
                     onClick={() => toggleModule(module.id)}
@@ -1199,12 +1220,13 @@ export const CourseEditorPage: React.FC = () => {
                         <input
                           id={`module-title-${module.id}`}
                           name="module_title"
-                          aria-label={`Module title for ${module.title}`}
+                          aria-label={`Module title for ${moduleLabel}`}
                           type="text"
-                          defaultValue={module.title}
+                          defaultValue={module.title || ''}
+                          placeholder={`Untitled Module ${moduleIndex + 1}`}
                           className="px-2 py-1 border border-gray-300 rounded"
                           onClick={(e) => e.stopPropagation()}
-                          onKeyPress={(e) => {
+                          onKeyDown={(e) => {
                             if (e.key === 'Enter') {
                               updateModuleMutation.mutate({
                                 courseId: courseId!,
@@ -1217,7 +1239,7 @@ export const CourseEditorPage: React.FC = () => {
                         />
                       ) : (
                         <span className="font-medium text-gray-900">
-                          Module {moduleIndex + 1}: {module.title}
+                          {moduleLabel}
                         </span>
                       )}
                     </div>
@@ -1233,7 +1255,7 @@ export const CourseEditorPage: React.FC = () => {
                         <PencilIcon className="h-4 w-4" />
                       </button>
                       <button
-                        onClick={() => setConfirmDelete({ type: 'module', moduleId: module.id, label: module.title || 'this module' })}
+                        onClick={() => setConfirmDelete({ type: 'module', moduleId: module.id, label: moduleLabel })}
                         className="p-1 text-gray-400 hover:text-red-600 rounded"
                       >
                         <TrashIcon className="h-4 w-4" />
@@ -1248,13 +1270,6 @@ export const CourseEditorPage: React.FC = () => {
                         <div className="mb-3 flex items-center justify-between">
                           <h4 className="text-sm font-semibold text-gray-900">Module Description</h4>
                           <div className="flex items-center gap-2">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => handleAddIntroText(module.id)}
-                            >
-                              Add Intro Text Before Videos
-                            </Button>
                             {editingModuleDescriptionId === module.id ? (
                               <>
                                 <Button
@@ -1309,7 +1324,7 @@ export const CourseEditorPage: React.FC = () => {
                                 dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(module.description) }}
                               />
                             ) : (
-                              <p className="text-sm text-gray-500">No module description yet.</p>
+                              <p className="text-sm text-gray-500">Optional module summary (shown above lesson items).</p>
                             )}
                           </div>
                         )}
@@ -1324,6 +1339,14 @@ export const CourseEditorPage: React.FC = () => {
                               <div className="mb-2 flex items-center justify-between">
                                 <span className="text-sm font-medium text-blue-900">Editing text lesson: {content.title}</span>
                                 <div className="flex items-center gap-2">
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => setShowEditingTextPreview((prev) => !prev)}
+                                  >
+                                    <EyeIcon className="mr-1 h-4 w-4" />
+                                    {showEditingTextPreview ? 'Back to Editor' : 'Preview'}
+                                  </Button>
                                   <Button variant="outline" size="sm" onClick={cancelTextContentEdit}>
                                     <XMarkIcon className="mr-1 h-4 w-4" />
                                     Cancel
@@ -1339,16 +1362,32 @@ export const CourseEditorPage: React.FC = () => {
                                   </Button>
                                 </div>
                               </div>
-                              <RichTextEditor
-                                value={textContentDraft}
-                                onChange={setTextContentDraft}
-                                mode={editorMode}
-                                onModeChange={handleEditorModeChange}
-                                onImageUpload={uploadEditorImage}
-                                onModeWarning={handleModeWarning}
-                                placeholder="Write module intro, links, and supporting context..."
-                                minHeightClassName="min-h-[180px]"
-                              />
+                              <p className="mb-2 text-xs text-blue-700">
+                                Use the toolbar to add links, images, and indentation for clean lesson content.
+                              </p>
+                              {showEditingTextPreview ? (
+                                <div className="rounded-md border border-blue-100 bg-white p-3">
+                                  {textContentDraft ? (
+                                    <div
+                                      className="prose prose-sm max-w-none text-gray-700"
+                                      dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(textContentDraft) }}
+                                    />
+                                  ) : (
+                                    <p className="text-sm text-gray-500">Nothing to preview yet.</p>
+                                  )}
+                                </div>
+                              ) : (
+                                <RichTextEditor
+                                  value={textContentDraft}
+                                  onChange={setTextContentDraft}
+                                  mode={editorMode}
+                                  onModeChange={handleEditorModeChange}
+                                  onImageUpload={uploadEditorImage}
+                                  onModeWarning={handleModeWarning}
+                                  placeholder="Write module intro, links, and supporting context..."
+                                  minHeightClassName="min-h-[180px]"
+                                />
+                              )}
                             </div>
                           );
                         }
@@ -1446,6 +1485,7 @@ export const CourseEditorPage: React.FC = () => {
                                   text_content: newType === 'TEXT' ? prev.text_content : '',
                                 }));
                                 setContentFile(null);
+                                setShowNewTextPreview(false);
                               }}
                               className="px-3 py-2 border border-gray-300 rounded-lg"
                             >
@@ -1456,17 +1496,59 @@ export const CourseEditorPage: React.FC = () => {
                             </select>
                           </div>
 
+                          {!isTeacherAuthoring && (
+                            <div className="flex items-center justify-between rounded-lg border border-gray-200 bg-white px-3 py-2">
+                              <p className="text-xs text-gray-600">Need reusable assets across courses?</p>
+                              <a
+                                href="/admin/media"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-xs font-medium text-primary-700 hover:text-primary-800 underline underline-offset-2"
+                              >
+                                Open Media Library
+                              </a>
+                            </div>
+                          )}
+
                           {newContentData.content_type === 'TEXT' && (
-                            <RichTextEditor
-                              value={newContentData.text_content}
-                              onChange={(html) => setNewContentData((prev) => ({ ...prev, text_content: html }))}
-                              mode={editorMode}
-                              onModeChange={handleEditorModeChange}
-                              onImageUpload={uploadEditorImage}
-                              onModeWarning={handleModeWarning}
-                              placeholder="Start writing module intro, links, notes, or pasted code..."
-                              minHeightClassName="min-h-[160px]"
-                            />
+                            <>
+                              <div className="flex items-center justify-between">
+                                <p className="text-xs text-blue-700">
+                                  Add rich text with links, images, and formatting. Use preview before saving.
+                                </p>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => setShowNewTextPreview((prev) => !prev)}
+                                >
+                                  <EyeIcon className="mr-1 h-4 w-4" />
+                                  {showNewTextPreview ? 'Back to Editor' : 'Preview'}
+                                </Button>
+                              </div>
+                              {showNewTextPreview ? (
+                                <div className="rounded-md border border-gray-200 bg-white p-3">
+                                  {newContentData.text_content ? (
+                                    <div
+                                      className="prose prose-sm max-w-none text-gray-700"
+                                      dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(newContentData.text_content) }}
+                                    />
+                                  ) : (
+                                    <p className="text-sm text-gray-500">Nothing to preview yet.</p>
+                                  )}
+                                </div>
+                              ) : (
+                                <RichTextEditor
+                                  value={newContentData.text_content}
+                                  onChange={(html) => setNewContentData((prev) => ({ ...prev, text_content: html }))}
+                                  mode={editorMode}
+                                  onModeChange={handleEditorModeChange}
+                                  onImageUpload={uploadEditorImage}
+                                  onModeWarning={handleModeWarning}
+                                  placeholder="Start writing module intro, links, notes, or pasted code..."
+                                  minHeightClassName="min-h-[160px]"
+                                />
+                              )}
+                            </>
                           )}
 
                           {newContentData.content_type === 'LINK' && (
@@ -1507,14 +1589,7 @@ export const CourseEditorPage: React.FC = () => {
                               <Button
                                 variant="outline"
                                 size="sm"
-                                onClick={async () => {
-                                  const mediaType = newContentData.content_type === 'VIDEO' ? 'VIDEO' : 'DOCUMENT';
-                                  try {
-                                    const res = await adminMediaService.listMedia({ media_type: mediaType, page_size: 50 });
-                                    setLibraryAssets(res.results);
-                                  } catch { setLibraryAssets([]); }
-                                  setLibraryOpen(true);
-                                }}
+                                onClick={() => openLibraryPicker(newContentData.content_type === 'VIDEO' ? 'VIDEO' : 'DOCUMENT')}
                               >
                                 <FolderIcon className="h-4 w-4 mr-1" />
                                 From Library
@@ -1526,13 +1601,7 @@ export const CourseEditorPage: React.FC = () => {
                             <Button
                               variant="outline"
                               size="sm"
-                              onClick={async () => {
-                                try {
-                                  const res = await adminMediaService.listMedia({ media_type: 'LINK', page_size: 50 });
-                                  setLibraryAssets(res.results);
-                                } catch { setLibraryAssets([]); }
-                                setLibraryOpen(true);
-                              }}
+                              onClick={() => openLibraryPicker('LINK')}
                             >
                               <FolderIcon className="h-4 w-4 mr-1" />
                               From Library
@@ -1576,6 +1645,7 @@ export const CourseEditorPage: React.FC = () => {
                                 setAddingContentToModule(null);
                                 setContentFile(null);
                                 setUploadPhase('idle');
+                                setShowNewTextPreview(false);
                               }}
                               disabled={uploadPhase === 'uploading' || uploadPhase === 'processing'}
                             >
@@ -1596,7 +1666,10 @@ export const CourseEditorPage: React.FC = () => {
                         </div>
                       ) : (
                         <button
-                          onClick={() => setAddingContentToModule(module.id)}
+                          onClick={() => {
+                            setAddingContentToModule(module.id);
+                            setShowNewTextPreview(false);
+                          }}
                           className="flex items-center justify-center w-full p-3 border-2 border-dashed border-gray-300 rounded-lg text-gray-500 hover:border-primary-500 hover:text-primary-600 transition-colors"
                         >
                           <PlusIcon className="h-5 w-5 mr-2" />
@@ -1605,8 +1678,9 @@ export const CourseEditorPage: React.FC = () => {
                       )}
                     </div>
                   )}
-                </div>
-              ))}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
@@ -1923,15 +1997,34 @@ export const CourseEditorPage: React.FC = () => {
 
       {/* Media Library Picker Modal */}
       {libraryOpen && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => { setLibraryOpen(false); setLibrarySearch(''); }}>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => { setLibraryOpen(false); setLibrarySearch(''); setLibraryFilter('ALL'); }}>
           <div className="bg-white rounded-xl max-w-2xl w-full mx-4 max-h-[80vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between p-4 border-b border-gray-200">
               <h3 className="text-lg font-semibold text-gray-900">Choose from Media Library</h3>
-              <button onClick={() => { setLibraryOpen(false); setLibrarySearch(''); }} className="p-1 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100">
+              <button onClick={() => { setLibraryOpen(false); setLibrarySearch(''); setLibraryFilter('ALL'); }} className="p-1 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100">
                 <XMarkIcon className="h-5 w-5" />
               </button>
             </div>
-            <div className="p-4 border-b border-gray-200">
+            <div className="p-4 border-b border-gray-200 space-y-3">
+              <div className="flex items-center gap-2">
+                {(['ALL', 'VIDEO', 'DOCUMENT', 'LINK'] as const).map((filter) => (
+                  <button
+                    key={filter}
+                    type="button"
+                    onClick={() => {
+                      setLibraryFilter(filter);
+                      void fetchLibraryAssets(librarySearch, filter);
+                    }}
+                    className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                      libraryFilter === filter
+                        ? 'bg-primary-600 text-white'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    {filter}
+                  </button>
+                ))}
+              </div>
               <div className="relative">
                 <label htmlFor="library-search" className="sr-only">Search media library</label>
                 <MagnifyingGlassIcon className="h-5 w-5 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -1943,11 +2036,7 @@ export const CourseEditorPage: React.FC = () => {
                   onChange={async (e) => {
                     const v = e.target.value;
                     setLibrarySearch(v);
-                    const mediaType = newContentData.content_type === 'LINK' ? 'LINK' : newContentData.content_type === 'VIDEO' ? 'VIDEO' : 'DOCUMENT';
-                    try {
-                      const res = await adminMediaService.listMedia({ media_type: mediaType, search: v, page_size: 50 });
-                      setLibraryAssets(res.results);
-                    } catch { /* ignore */ }
+                    await fetchLibraryAssets(v, libraryFilter);
                   }}
                   placeholder="Search media..."
                   className="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg text-sm"
@@ -1969,12 +2058,15 @@ export const CourseEditorPage: React.FC = () => {
                         // Fill content form from library asset
                         setNewContentData(prev => ({
                           ...prev,
+                          content_type: asset.media_type,
                           title: prev.title || asset.title,
                           file_url: asset.file_url,
                         }));
                         setContentFile(null); // clear any uploaded file
+                        setShowNewTextPreview(false);
                         setLibraryOpen(false);
                         setLibrarySearch('');
+                        setLibraryFilter('ALL');
                         toast.success('Selected', `"${asset.title}" selected from library.`);
                       }}
                       className="flex flex-col items-center p-3 border border-gray-200 rounded-lg hover:border-primary-500 hover:bg-primary-50 transition-colors text-left"
