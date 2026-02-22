@@ -83,10 +83,21 @@ $COMPOSE run --rm web python manage.py migrate --noinput
 echo "Collecting static files (run as root to fix volume permissions)..."
 $COMPOSE run --rm -u root web python manage.py collectstatic --noinput
 
-# Step 6: Create superadmin (if not exists)
+# Step 6: Superadmin bootstrap (non-blocking)
 echo ""
-echo "Create superadmin user (email: admin@learnpuddle.com recommended):"
-$COMPOSE run --rm web python manage.py createsuperuser || true
+if [ -n "${DJANGO_SUPERUSER_EMAIL:-}" ] && [ -n "${DJANGO_SUPERUSER_PASSWORD:-}" ]; then
+  echo "Creating superadmin via env vars if missing..."
+  DJANGO_SUPERUSER_EMAIL="$DJANGO_SUPERUSER_EMAIL" \
+  DJANGO_SUPERUSER_PASSWORD="$DJANGO_SUPERUSER_PASSWORD" \
+  $COMPOSE run --rm web python manage.py createsuperuser --noinput || true
+else
+  if $COMPOSE run --rm web python manage.py shell -c "from django.contrib.auth import get_user_model; import sys; U=get_user_model(); sys.exit(0 if U.objects.filter(is_superuser=True).exists() else 1)"; then
+    echo "Superadmin already exists; skipping interactive createsuperuser step."
+  else
+    echo "No superadmin found. Create one manually when ready:"
+    echo "  $COMPOSE run --rm web python manage.py createsuperuser"
+  fi
+fi
 
 # Step 7: Start all services
 echo "Starting all services (force recreate to ensure new frontend bundle is served)..."
