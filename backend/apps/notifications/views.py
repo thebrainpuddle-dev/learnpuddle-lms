@@ -30,6 +30,9 @@ def notification_list(request):
     unread_only = request.GET.get('unread_only', '').lower() == 'true'
     if unread_only:
         qs = qs.filter(is_read=False)
+
+    if request.GET.get('actionable_only', '').lower() == 'true':
+        qs = qs.filter(is_actionable=True)
     
     notif_type = request.GET.get('type', '').upper()
     valid_types = {choice[0] for choice in Notification.NOTIFICATION_TYPES}
@@ -55,16 +58,19 @@ def notification_unread_count(request):
     Query params:
       - type: REMINDER|COURSE_ASSIGNED|ASSIGNMENT_DUE|ANNOUNCEMENT|SYSTEM (optional)
     """
-    qs = Notification.objects.filter(
+    base_qs = Notification.objects.filter(
         teacher=request.user,
         tenant=request.tenant,
         is_read=False
     )
     notif_type = request.GET.get('type', '').upper()
     valid_types = {choice[0] for choice in Notification.NOTIFICATION_TYPES}
-    if notif_type in valid_types:
-        qs = qs.filter(notification_type=notif_type)
-    return Response({'count': qs.count()}, status=status.HTTP_200_OK)
+    qs = base_qs.filter(notification_type=notif_type) if notif_type in valid_types else base_qs
+    actionable_count = base_qs.filter(is_actionable=True).count()
+    return Response({
+        'count': qs.count(),
+        'actionable_count': actionable_count,
+    }, status=status.HTTP_200_OK)
 
 
 @api_view(['POST'])

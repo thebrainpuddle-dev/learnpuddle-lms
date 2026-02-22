@@ -29,6 +29,7 @@ class Notification(models.Model):
     
     # Status
     is_read = models.BooleanField(default=False)
+    is_actionable = models.BooleanField(default=False)
     read_at = models.DateTimeField(null=True, blank=True)
     
     created_at = models.DateTimeField(auto_now_add=True)
@@ -39,6 +40,7 @@ class Notification(models.Model):
         indexes = [
             models.Index(fields=['teacher', 'is_read']),
             models.Index(fields=['teacher', '-created_at']),
+            models.Index(fields=['teacher', 'is_actionable', 'is_read']),
         ]
 
     def __str__(self):

@@ -10,6 +10,7 @@ export interface Notification {
   assignment?: string;
   assignment_title?: string;
   is_read: boolean;
+  is_actionable: boolean;
   read_at?: string;
   created_at: string;
 }
@@ -18,9 +19,10 @@ export const notificationService = {
   /**
    * Get notifications for current teacher
    */
-  getNotifications: async (params?: { unread_only?: boolean; limit?: number; type?: string }): Promise<Notification[]> => {
+  getNotifications: async (params?: { unread_only?: boolean; actionable_only?: boolean; limit?: number; type?: string }): Promise<Notification[]> => {
     const queryParams = new URLSearchParams();
     if (params?.unread_only) queryParams.append('unread_only', 'true');
+    if (params?.actionable_only) queryParams.append('actionable_only', 'true');
     if (params?.limit) queryParams.append('limit', params.limit.toString());
     if (params?.type) queryParams.append('type', params.type);
     

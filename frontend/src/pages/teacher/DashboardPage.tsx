@@ -77,22 +77,27 @@ export const DashboardPage: React.FC = () => {
     queryFn: () => notificationService.getNotifications({ unread_only: true, limit: 5 }),
   });
 
+  // Actionable to-do items (same data source, filtered)
+  const { data: todoItems = [] } = useQuery({
+    queryKey: ['dashboardTodos'],
+    queryFn: () => notificationService.getNotifications({ unread_only: true, actionable_only: true, limit: 10 }),
+  });
+
+  const invalidateNotifQueries = () => {
+    queryClient.invalidateQueries({ queryKey: ['dashboardNotifications'] });
+    queryClient.invalidateQueries({ queryKey: ['dashboardTodos'] });
+    queryClient.invalidateQueries({ queryKey: ['notificationUnreadCount'] });
+    queryClient.invalidateQueries({ queryKey: ['notifications'] });
+  };
+
   const markReadMutation = useMutation({
     mutationFn: notificationService.markAsRead,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['dashboardNotifications'] });
-      queryClient.invalidateQueries({ queryKey: ['notificationUnreadCount'] });
-      queryClient.invalidateQueries({ queryKey: ['notifications'] });
-    },
+    onSuccess: invalidateNotifQueries,
   });
 
   const markAllReadMutation = useMutation({
     mutationFn: notificationService.markAllAsRead,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['dashboardNotifications'] });
-      queryClient.invalidateQueries({ queryKey: ['notificationUnreadCount'] });
-      queryClient.invalidateQueries({ queryKey: ['notifications'] });
-    },
+    onSuccess: invalidateNotifQueries,
   });
 
   const claimQuestMutation = useMutation({
@@ -236,6 +241,72 @@ export const DashboardPage: React.FC = () => {
         />
       )}
       
+      {/* To-Do Items */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+        <div className="flex items-center justify-between px-5 py-3 border-b border-gray-100 bg-emerald-50/60">
+          <div className="flex items-center gap-2">
+            <CheckCircleIcon className="h-5 w-5 text-emerald-600" />
+            <h2 className="text-sm font-semibold text-gray-900">
+              To Do
+              {todoItems.length > 0 && (
+                <span className="ml-2 inline-flex items-center justify-center h-5 min-w-[20px] px-1.5 rounded-full bg-emerald-100 text-emerald-700 text-xs font-bold">
+                  {todoItems.length}
+                </span>
+              )}
+            </h2>
+          </div>
+          {todoItems.length > 0 && (
+            <button
+              type="button"
+              onClick={() => navigate('/teacher/reminders')}
+              className="text-xs text-emerald-600 hover:text-emerald-700 flex items-center gap-1"
+            >
+              View all
+              <ArrowRightIcon className="h-3 w-3" />
+            </button>
+          )}
+        </div>
+        {todoItems.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-8 text-gray-400">
+            <CheckCircleIcon className="h-10 w-10 mb-2 text-emerald-300" />
+            <p className="text-sm font-medium text-gray-500">All caught up</p>
+            <p className="text-xs text-gray-400 mt-0.5">No pending tasks right now</p>
+          </div>
+        ) : (
+          <div className="divide-y divide-gray-50">
+            {todoItems.map((item) => (
+              <div
+                key={item.id}
+                className="flex items-start gap-3 px-5 py-3 hover:bg-gray-50 transition-colors"
+              >
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); markReadMutation.mutate(item.id); }}
+                  className="flex-shrink-0 mt-0.5 h-5 w-5 rounded-md border-2 border-gray-300 hover:border-emerald-500 hover:bg-emerald-50 flex items-center justify-center transition-colors"
+                  title="Mark as done"
+                >
+                  <CheckIcon className="h-3 w-3 text-transparent hover:text-emerald-500" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleNotifClick(item)}
+                  className="flex-1 min-w-0 text-left"
+                >
+                  <div className="flex items-center gap-2">
+                    <NotifIcon type={item.notification_type} />
+                    <p className="text-sm font-medium text-gray-900 truncate">{item.title}</p>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-0.5 line-clamp-1 ml-7">{item.message}</p>
+                  <p className="text-xs text-gray-400 mt-1 ml-7">
+                    {formatDistanceToNow(new Date(item.created_at), { addSuffix: true })}
+                  </p>
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       {/* Unread Notifications / Reminders */}
       {unreadNotifications.length > 0 && (
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">

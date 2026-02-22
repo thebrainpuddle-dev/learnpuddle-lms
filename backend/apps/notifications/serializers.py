@@ -18,6 +18,7 @@ class NotificationSerializer(serializers.ModelSerializer):
             'assignment',
             'assignment_title',
             'is_read',
+            'is_actionable',
             'read_at',
             'created_at',
         ]
