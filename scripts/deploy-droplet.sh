@@ -5,10 +5,12 @@
 #
 # Example: ./scripts/deploy-droplet.sh https://github.com/thebrainpuddle-dev/learnpuddle-lms.git
 
-set -e
+set -euo pipefail
 
 REPO_URL="${1:-https://github.com/thebrainpuddle-dev/learnpuddle-lms.git}"
 APP_DIR="/opt/lms"
+BRANCH="${DEPLOY_BRANCH:-main}"
+COMPOSE="docker compose --env-file .env -f docker-compose.prod.yml"
 
 echo "=== LearnPuddle Droplet Deployment ==="
 
@@ -24,12 +26,16 @@ fi
 if [ -n "$REPO_URL" ]; then
     if [ -d "$APP_DIR/.git" ]; then
         echo "Updating existing repo..."
-        cd "$APP_DIR" && git pull
+        cd "$APP_DIR"
+        git fetch origin "$BRANCH"
+        git checkout "$BRANCH"
+        git pull --ff-only origin "$BRANCH"
     else
         echo "Cloning repo..."
         mkdir -p "$(dirname $APP_DIR)"
         git clone "$REPO_URL" "$APP_DIR"
         cd "$APP_DIR"
+        git checkout "$BRANCH"
     fi
 else
     if [ ! -d "$APP_DIR" ]; then
@@ -57,33 +63,41 @@ if [ ! -f .env ]; then
     fi
 fi
 
+echo "Deploying commit: $(git rev-parse --short HEAD)"
+
 # Step 4: Start DB + Redis
 echo "Starting database and Redis..."
-docker compose -f docker-compose.prod.yml up -d db redis
+$COMPOSE up -d db redis
 
 echo "Waiting 20s for DB to be ready..."
 sleep 20
 
+# Step 5: Build images that serve backend/frontend code
+echo "Building web and nginx images..."
+$COMPOSE build web nginx
+
 # Step 5: Migrations
 echo "Running migrations..."
-docker compose -f docker-compose.prod.yml run --rm web python manage.py migrate --noinput
+$COMPOSE run --rm web python manage.py migrate --noinput
 
 echo "Collecting static files (run as root to fix volume permissions)..."
-docker compose -f docker-compose.prod.yml run --rm -u root web python manage.py collectstatic --noinput
+$COMPOSE run --rm -u root web python manage.py collectstatic --noinput
 
 # Step 6: Create superadmin (if not exists)
 echo ""
 echo "Create superadmin user (email: admin@learnpuddle.com recommended):"
-docker compose -f docker-compose.prod.yml run --rm web python manage.py createsuperuser || true
+$COMPOSE run --rm web python manage.py createsuperuser || true
 
 # Step 7: Start all services
-echo "Starting all services..."
-docker compose -f docker-compose.prod.yml up -d
+echo "Starting all services (force recreate to ensure new frontend bundle is served)..."
+$COMPOSE up -d --force-recreate
 
 DOMAIN="$(awk -F= '/^PLATFORM_DOMAIN=/{print $2}' .env 2>/dev/null | tail -1 | tr -d '\r')"
 if [ -z "$DOMAIN" ]; then DOMAIN="localhost"; fi
 echo "Running origin health checks via domain: $DOMAIN"
 ./scripts/check-origin-health.sh docker-compose.prod.yml "$DOMAIN"
+echo "Frontend bundle at origin:"
+curl -sSL -H "Host: $DOMAIN" http://127.0.0.1/ | grep -oE '/static/js/main\.[a-z0-9]+\.js' | head -n1 || true
 
 echo ""
 echo "=== Deployment complete! ==="
