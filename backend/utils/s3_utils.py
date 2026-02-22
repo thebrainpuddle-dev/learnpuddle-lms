@@ -41,6 +41,12 @@ def _extract_s3_key(url_or_path: str, bucket_name: str) -> str:
     if bucket_name and key.startswith(f"{bucket_name}/"):
         key = key[len(bucket_name) + 1:]
 
+    # Legacy/local URL forms may include media path prefixes.
+    if key.startswith("media/"):
+        key = key[len("media/"):]
+    if key.startswith("protected-media/"):
+        key = key[len("protected-media/"):]
+
     return key
 
 

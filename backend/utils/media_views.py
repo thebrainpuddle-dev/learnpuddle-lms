@@ -8,9 +8,10 @@ nginx serve the file efficiently. In development, Django serves directly.
 
 import posixpath
 from django.conf import settings
-from django.http import HttpResponse, Http404, FileResponse
+from django.http import HttpResponse, Http404, FileResponse, HttpResponseRedirect
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
+from utils.s3_utils import sign_url
 
 
 def _path_is_safe(path: str) -> bool:
@@ -85,7 +86,6 @@ def protected_media_view(request, path):
 
 
 from django.views.decorators.csrf import csrf_exempt
-from django.http import JsonResponse
 
 
 @csrf_exempt
@@ -107,6 +107,12 @@ def public_media_view(request, path):
 
 def _serve_file(path):
     """Serve a media file via X-Accel-Redirect (prod) or directly (dev)."""
+    if getattr(settings, "STORAGE_BACKEND", "local").lower() == "s3":
+        signed = sign_url(path, expires_in=86400)
+        if not signed:
+            raise Http404("File not found")
+        return HttpResponseRedirect(signed)
+
     use_x_accel = getattr(settings, 'USE_X_ACCEL_REDIRECT', not settings.DEBUG)
     
     if use_x_accel:

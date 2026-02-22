@@ -4,6 +4,7 @@ from rest_framework import serializers
 from apps.tenants.models import Tenant
 from apps.users.models import User
 from apps.courses.models import Course
+from utils.s3_utils import sign_file_field
 
 
 class TenantListSerializer(serializers.ModelSerializer):
@@ -36,6 +37,9 @@ class TenantListSerializer(serializers.ModelSerializer):
     def get_logo(self, obj):
         if not obj.logo:
             return None
+        signed = sign_file_field(obj.logo, expires_in=86400)
+        if signed:
+            return signed
         try:
             return obj.logo.url
         except Exception:
