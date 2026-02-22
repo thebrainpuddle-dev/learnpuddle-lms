@@ -130,7 +130,9 @@ describe('App', () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText(/custom lms for schools, hospitality, corporate, and independent academies/i),
+        screen.getByRole('heading', {
+          name: /learning management infrastructure for schools and enterprises/i,
+        }),
       ).toBeInTheDocument();
     });
   });
@@ -143,7 +145,9 @@ describe('App', () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText(/custom lms for schools, hospitality, corporate, and independent academies/i),
+        screen.getByRole('heading', {
+          name: /learning management infrastructure for schools and enterprises/i,
+        }),
       ).toBeInTheDocument();
     });
   });
