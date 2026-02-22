@@ -10,6 +10,10 @@ from rest_framework.response import Response
 
 from apps.courses.models import Course, Content
 from apps.progress.calendar import build_teacher_calendar_window
+from apps.progress.completion_metrics import (
+    STATUS_COMPLETED,
+    build_teacher_course_snapshots,
+)
 from apps.progress.gamification import build_teacher_gamification_summary, claim_quest_reward
 from apps.progress.locking import get_content_lock_state
 
@@ -100,42 +104,32 @@ def teacher_dashboard(request):
     Teacher dashboard data: stats, continue-learning, deadlines.
     """
     user = request.user
-    courses = _teacher_assigned_courses_qs(request)
-    total_courses = courses.count()
+    courses = list(_teacher_assigned_courses_qs(request))
+    total_courses = len(courses)
+    course_ids = [course.id for course in courses]
+    completion_snapshots = build_teacher_course_snapshots(course_ids, [user.id])
+    course_snapshot_values = list(completion_snapshots.values())
 
-    # Overall progress: completed contents across assigned courses
-    total_contents = Content.objects.filter(
-        module__course__in=courses, is_active=True
-    ).count()
-    completed_contents = TeacherProgress.objects.filter(
-        teacher=user,
-        course__in=courses,
-        content__isnull=False,
-        status="COMPLETED",
-    ).count()
+    # Overall progress is content-based across all assigned courses.
+    total_contents = sum(snapshot.total_content_count for snapshot in course_snapshot_values)
+    completed_contents = sum(snapshot.completed_content_count for snapshot in course_snapshot_values)
     overall_progress = round((completed_contents / total_contents) * 100.0, 2) if total_contents else 0.0
-
-    # Completed courses: course where completed contents == total contents (and total>0)
-    completed_course_count = 0
-    if total_courses:
-        for course in courses:
-            c_total = Content.objects.filter(module__course=course, is_active=True).count()
-            if c_total == 0:
-                continue
-            c_completed = TeacherProgress.objects.filter(
-                teacher=user,
-                course=course,
-                content__isnull=False,
-                status="COMPLETED",
-            ).count()
-            if c_completed >= c_total:
-                completed_course_count += 1
+    completed_course_count = sum(1 for snapshot in course_snapshot_values if snapshot.status == STATUS_COMPLETED)
 
     # Assignments for assigned courses
     assignments = Assignment.objects.filter(course__in=courses, is_active=True)
     submissions = AssignmentSubmission.objects.filter(teacher=user, assignment__in=assignments)
-    submitted_or_graded_ids = submissions.filter(status__in=["SUBMITTED", "GRADED"]).values_list("assignment_id", flat=True)
-    pending_assignments = assignments.exclude(id__in=submitted_or_graded_ids).count()
+    submitted_regular_ids = set(
+        submissions.filter(status__in=["SUBMITTED", "GRADED"]).values_list("assignment_id", flat=True)
+    )
+    submitted_quiz_ids = set(
+        QuizSubmission.objects.filter(
+            teacher=user,
+            quiz__assignment__in=assignments,
+        ).values_list("quiz__assignment_id", flat=True)
+    )
+    submitted_assignment_ids = submitted_regular_ids | submitted_quiz_ids
+    pending_assignments = assignments.exclude(id__in=submitted_assignment_ids).count()
 
     # Continue learning: most recently accessed in-progress content
     last_progress = (
@@ -162,7 +156,7 @@ def teacher_dashboard(request):
     # Upcoming deadlines: course deadline (date) + assignment due_date (datetime)
     now = _utcnow()
     deadline_items = []
-    for course in courses.exclude(deadline__isnull=True).order_by("deadline")[:10]:
+    for course in sorted((c for c in courses if c.deadline is not None), key=lambda item: item.deadline)[:10]:
         days_left = (datetime.combine(course.deadline, datetime.min.time(), tzinfo=timezone.utc) - now).days
         deadline_items.append(
             {

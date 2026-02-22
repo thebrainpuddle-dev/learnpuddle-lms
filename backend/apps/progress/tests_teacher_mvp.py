@@ -5,7 +5,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.courses.models import Content, Course, Module
-from apps.progress.models import Assignment, TeacherProgress
+from apps.progress.models import Assignment, Quiz, QuizQuestion, QuizSubmission, TeacherProgress
 from apps.tenants.models import Tenant
 from apps.users.models import User
 
@@ -199,3 +199,45 @@ class TeacherMvpApiTestCase(TestCase):
 
         claim_again = self.client.post("/api/teacher/gamification/quests/streak_5_days/claim/")
         self.assertEqual(claim_again.status_code, 400, claim_again.content)
+
+    def test_teacher_dashboard_pending_assignments_counts_quiz_submissions(self):
+        self._login()
+
+        quiz_assignment = Assignment.objects.create(
+            course=self.course,
+            module=self.module_1,
+            title="Quiz Assignment",
+            description="Quiz due soon",
+            instructions="Answer all questions",
+            due_date=timezone.now() + timedelta(days=2),
+            generation_source="MANUAL",
+            generation_metadata={},
+            is_active=True,
+        )
+        quiz = Quiz.objects.create(assignment=quiz_assignment)
+        QuizQuestion.objects.create(
+            quiz=quiz,
+            order=1,
+            question_type="MCQ",
+            selection_mode="SINGLE",
+            prompt="What is 2+2?",
+            options=["3", "4"],
+            correct_answer={"option_index": 1},
+            points=1,
+        )
+
+        before = self.client.get("/api/teacher/dashboard/")
+        self.assertEqual(before.status_code, 200, before.content)
+        self.assertEqual(before.json()["stats"]["pending_assignments"], 2)
+
+        QuizSubmission.objects.create(
+            quiz=quiz,
+            teacher=self.teacher,
+            answers={str(quiz.questions.first().id): {"option_index": 1}},
+            score=1,
+            graded_at=timezone.now(),
+        )
+
+        after = self.client.get("/api/teacher/dashboard/")
+        self.assertEqual(after.status_code, 200, after.content)
+        self.assertEqual(after.json()["stats"]["pending_assignments"], 1)

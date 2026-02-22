@@ -3,9 +3,12 @@
 from unittest.mock import patch
 
 from django.test import TestCase, RequestFactory, override_settings
+from django.utils import timezone
 from rest_framework.test import APIClient
 from apps.tenants.models import Tenant
 from apps.users.models import User
+from apps.courses.models import Content, Course, Module
+from apps.progress.models import TeacherProgress
 from utils.tenant_utils import get_tenant_from_request
 from utils.tenant_middleware import TenantMiddleware, get_current_tenant, set_current_tenant, clear_current_tenant
 
@@ -206,7 +209,7 @@ class TenantServiceTestCase(TestCase):
             role='TEACHER'
         )
         
-        User.objects.create_user(
+        admin_user = User.objects.create_user(
             email='admin@stats.com',
             password='pass',
             first_name='Admin',
@@ -214,11 +217,50 @@ class TenantServiceTestCase(TestCase):
             tenant=tenant,
             role='SCHOOL_ADMIN'
         )
+
+        course = Course.objects.create(
+            tenant=tenant,
+            title='Stats Course',
+            slug='stats-course',
+            description='Stats',
+            created_by=admin_user,
+            is_published=True,
+            is_active=True,
+            assigned_to_all=True,
+        )
+        module = Module.objects.create(
+            course=course,
+            title='Module 1',
+            description='Module',
+            order=1,
+            is_active=True,
+        )
+        lesson = Content.objects.create(
+            module=module,
+            title='Lesson 1',
+            content_type='TEXT',
+            order=1,
+            text_content='<p>Hello</p>',
+            is_active=True,
+        )
+        teacher = User.objects.get(email='teacher1@stats.com')
+        TeacherProgress.objects.create(
+            teacher=teacher,
+            course=course,
+            content=lesson,
+            status='COMPLETED',
+            progress_percentage=100,
+            started_at=timezone.now(),
+            completed_at=timezone.now(),
+        )
         
         stats = TenantService.get_tenant_stats(tenant)
         
         self.assertEqual(stats['total_teachers'], 1)
         self.assertEqual(stats['total_admins'], 1)
+        self.assertEqual(stats['course_completions'], 1)
+        self.assertEqual(stats['courses_in_progress'], 0)
+        self.assertEqual(stats['avg_completion_pct'], 100.0)
 
 
 @override_settings(PLATFORM_DOMAIN='learnpuddle.com', ALLOWED_HOSTS=['*'])

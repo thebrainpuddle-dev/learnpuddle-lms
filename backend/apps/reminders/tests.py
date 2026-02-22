@@ -6,7 +6,7 @@ from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from apps.courses.models import Course
+from apps.courses.models import Content, Course, Module
 from apps.progress.models import TeacherProgress
 from apps.tenants.models import Tenant
 from apps.users.models import User
@@ -43,11 +43,29 @@ class ReminderViewTestCase(TestCase):
             deadline=timezone.localdate() + timedelta(days=3),
             created_by=self.admin,
         )
+        self.module = Module.objects.create(
+            course=self.course,
+            title="Module 1",
+            description="Test",
+            order=1,
+            is_active=True,
+        )
+        self.lesson = Content.objects.create(
+            module=self.module,
+            title="Lesson 1",
+            content_type="TEXT",
+            order=1,
+            text_content="<p>Welcome</p>",
+            is_active=True,
+        )
         TeacherProgress.objects.create(
             teacher=self.completed_teacher,
             course=self.course,
-            content=None,
+            content=self.lesson,
             status="COMPLETED",
+            progress_percentage=100,
+            started_at=timezone.now() - timedelta(days=1),
+            completed_at=timezone.now() - timedelta(days=1),
         )
         self._login()
 

@@ -13,7 +13,8 @@ from utils.decorators import admin_only, tenant_required, check_feature
 
 from apps.users.models import User
 from apps.courses.models import Course
-from apps.progress.models import TeacherProgress, Assignment, AssignmentSubmission, QuizSubmission
+from apps.progress.models import Assignment, AssignmentSubmission, QuizSubmission
+from apps.progress.completion_metrics import build_teacher_course_snapshots
 
 
 def _tenant_teachers_qs(tenant):
@@ -62,17 +63,14 @@ def course_progress_report(request):
             | models.Q(department__icontains=search)
         )
 
-    # Use course-level progress marker (content is NULL) when present
-    progress_map = {
-        p.teacher_id: p
-        for p in TeacherProgress.objects.filter(course=course, content__isnull=True, teacher__in=teachers)
-    }
+    teacher_ids = list(teachers.values_list("id", flat=True))
+    completion_snapshots = build_teacher_course_snapshots([course.id], teacher_ids)
 
     rows = []
     for t in teachers.order_by("last_name", "first_name"):
-        p = progress_map.get(t.id)
-        status_val = p.status if p else "NOT_STARTED"
-        completed_at = p.completed_at if p else None
+        snapshot = completion_snapshots.get((str(course.id), str(t.id)))
+        status_val = snapshot.status if snapshot else "NOT_STARTED"
+        completed_at = snapshot.last_completed_at if snapshot else None
         rows.append(
             {
                 "teacher_id": t.id,
@@ -203,16 +201,17 @@ def course_progress_export(request):
         return Response({"error": "course_id required"}, status=400)
     course = get_object_or_404(Course, id=course_id)
     teachers = _course_assigned_teachers(course)
-    progress_map = {p.teacher_id: p for p in TeacherProgress.objects.filter(course=course, content__isnull=True, teacher__in=teachers)}
+    teacher_ids = list(teachers.values_list("id", flat=True))
+    completion_snapshots = build_teacher_course_snapshots([course.id], teacher_ids)
     rows = []
     for t in teachers.order_by("last_name", "first_name"):
-        p = progress_map.get(t.id)
+        snapshot = completion_snapshots.get((str(course.id), str(t.id)))
         rows.append({
             "Teacher Name": t.get_full_name() or t.email,
             "Email": t.email,
             "Course": course.title,
-            "Status": p.status if p else "NOT_STARTED",
-            "Completed At": str(p.completed_at or "") if p else "",
+            "Status": snapshot.status if snapshot else "NOT_STARTED",
+            "Completed At": str(snapshot.last_completed_at or "") if snapshot else "",
         })
     return _rows_to_csv_response(rows, f"course_progress_{course.slug}.csv")
 
@@ -267,4 +266,3 @@ def assignment_status_export(request):
             "Submitted At": submitted_at,
         })
     return _rows_to_csv_response(rows, f"assignment_status_{assignment_id}.csv")
-

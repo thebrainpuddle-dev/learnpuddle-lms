@@ -1,10 +1,18 @@
 # apps/tenants/services.py
 
+from collections import Counter
+
 from django.db import models, transaction
 from django.utils.text import slugify
 
 from apps.tenants.models import Tenant
 from apps.users.models import User
+from apps.progress.completion_metrics import (
+    STATUS_COMPLETED,
+    STATUS_IN_PROGRESS,
+    STATUS_NOT_STARTED,
+    build_teacher_course_snapshots,
+)
 
 
 # ── Plan presets ─────────────────────────────────────────────────────────────
@@ -197,17 +205,39 @@ class TenantService:
         teachers = User.objects.filter(tenant=tenant, role__in=['TEACHER', 'HOD', 'IB_COORDINATOR'], is_active=True)
         teacher_count = teachers.count()
         courses = Course.objects.filter(tenant=tenant, is_active=True)
-        published = courses.filter(is_published=True)
+        published = courses.filter(is_published=True).order_by('title')
 
-        # Course-level completion (TeacherProgress with content=NULL is course-level)
-        course_completions = TeacherProgress.objects.filter(
-            course__tenant=tenant, content__isnull=True, status='COMPLETED'
-        ).count()
-        course_in_progress = TeacherProgress.objects.filter(
-            course__tenant=tenant, content__isnull=True, status='IN_PROGRESS'
-        ).count()
-        # Total possible = published courses * teachers assigned (simplified: assume all teachers)
-        total_course_slots = published.count() * max(teacher_count, 1)
+        teacher_ids = list(teachers.values_list('id', flat=True))
+        published_courses = list(published)
+        published_course_ids = [course.id for course in published_courses]
+        completion_snapshots = build_teacher_course_snapshots(published_course_ids, teacher_ids)
+
+        def _assigned_teacher_ids(course):
+            if course.assigned_to_all:
+                return teacher_ids
+            return list(
+                teachers.filter(
+                    models.Q(assigned_courses=course) | models.Q(teacher_groups__courses=course)
+                ).distinct().values_list('id', flat=True)
+            )
+
+        course_completions = 0
+        course_in_progress = 0
+        total_course_slots = 0
+        completed_by_teacher: Counter = Counter()
+        for course in published_courses:
+            assigned_ids = _assigned_teacher_ids(course)
+            total_course_slots += len(assigned_ids)
+            for teacher_id in assigned_ids:
+                snapshot = completion_snapshots.get((str(course.id), str(teacher_id)))
+                if not snapshot:
+                    continue
+                if snapshot.status == STATUS_COMPLETED:
+                    course_completions += 1
+                    completed_by_teacher[teacher_id] += 1
+                elif snapshot.status == STATUS_IN_PROGRESS:
+                    course_in_progress += 1
+
         avg_completion_pct = round((course_completions / total_course_slots * 100) if total_course_slots > 0 else 0, 1)
 
         # Content-level stats
@@ -284,23 +314,24 @@ class TenantService:
             })
         pending_review_detail.sort(key=lambda x: x['submitted_at'] or '', reverse=True)
 
-        # Top performing teachers (most course completions)
-        from django.db.models import Count
-        top_teachers_qs = (
-            TeacherProgress.objects.filter(
-                course__tenant=tenant, content__isnull=True, status='COMPLETED'
+        # Top performing teachers (most canonical course completions).
+        teacher_by_id = {teacher.id: teacher for teacher in teachers}
+        top_teacher_rows = sorted(
+            completed_by_teacher.items(),
+            key=lambda item: item[1],
+            reverse=True,
+        )[:5]
+        top_teachers = []
+        for teacher_id, completed_count in top_teacher_rows:
+            teacher = teacher_by_id.get(teacher_id)
+            if not teacher:
+                continue
+            top_teachers.append(
+                {
+                    'name': f"{teacher.first_name} {teacher.last_name}".strip() or teacher.email,
+                    'completed_courses': completed_count,
+                }
             )
-            .values('teacher__first_name', 'teacher__last_name', 'teacher__email', 'teacher_id')
-            .annotate(completed_courses=Count('id'))
-            .order_by('-completed_courses')[:5]
-        )
-        top_teachers = [
-            {
-                'name': f"{t['teacher__first_name']} {t['teacher__last_name']}".strip() or t['teacher__email'],
-                'completed_courses': t['completed_courses'],
-            }
-            for t in top_teachers_qs
-        ]
 
         # Recent activity: last 10 completions
         recent_activity_qs = TeacherProgress.objects.filter(
@@ -325,7 +356,7 @@ class TenantService:
             'inactive_teachers': inactive_teachers,
             'total_admins': User.objects.filter(tenant=tenant, role='SCHOOL_ADMIN').count(),
             'total_courses': courses.count(),
-            'published_courses': published.count(),
+            'published_courses': len(published_courses),
             'total_content_items': total_content,
             'avg_completion_pct': avg_completion_pct,
             'course_completions': course_completions,
@@ -350,10 +381,9 @@ class TenantService:
         """
         from apps.users.models import User
         from apps.courses.models import Course
-        from apps.progress.models import TeacherProgress, Assignment, AssignmentSubmission
+        from apps.progress.models import Assignment
         from django.db.models import Count, Q
         from django.utils import timezone
-        import datetime
 
         teachers = User.objects.filter(tenant=tenant, role__in=['TEACHER', 'HOD', 'IB_COORDINATOR'], is_active=True)
         published_courses = Course.objects.filter(tenant=tenant, is_active=True, is_published=True)
@@ -363,20 +393,46 @@ class TenantService:
             except (TypeError, ValueError):
                 pass
 
+        teacher_ids = list(teachers.values_list('id', flat=True))
+        published_course_list = list(published_courses.order_by('title'))
+        breakdown_courses = published_course_list[:20]
+        completion_snapshots = build_teacher_course_snapshots(
+            [course.id for course in published_course_list],
+            teacher_ids,
+        )
+
+        def _assigned_teacher_ids(course):
+            if course.assigned_to_all:
+                return teacher_ids
+            return list(
+                teachers.filter(
+                    Q(assigned_courses=course) | Q(teacher_groups__courses=course)
+                ).distinct().values_list('id', flat=True)
+            )
+
+        teacher_course_status_map: dict = {}
+        assigned_teacher_ids_by_course = {}
+        for c in published_course_list:
+            assigned_ids = _assigned_teacher_ids(c)
+            assigned_teacher_ids_by_course[str(c.id)] = assigned_ids
+            for teacher_id in assigned_ids:
+                snapshot = completion_snapshots.get((str(c.id), str(teacher_id)))
+                status = snapshot.status if snapshot else STATUS_NOT_STARTED
+                teacher_course_status_map[(str(teacher_id), str(c.id))] = status
+
         # --- Per-course completion breakdown ---
         course_breakdown = []
-        for c in published_courses.order_by('title')[:20]:
-            assigned_count = teachers.count() if c.assigned_to_all else (
-                teachers.filter(
-                    Q(assigned_courses=c) | Q(teacher_groups__courses=c)
-                ).distinct().count()
-            )
-            completed = TeacherProgress.objects.filter(
-                course=c, content__isnull=True, status='COMPLETED'
-            ).count()
-            in_progress = TeacherProgress.objects.filter(
-                course=c, content__isnull=True, status='IN_PROGRESS'
-            ).count()
+        for c in breakdown_courses:
+            assigned_ids = assigned_teacher_ids_by_course.get(str(c.id), [])
+            assigned_count = len(assigned_ids)
+            completed = 0
+            in_progress = 0
+            for teacher_id in assigned_ids:
+                status = teacher_course_status_map.get((str(teacher_id), str(c.id)), STATUS_NOT_STARTED)
+                if status == STATUS_COMPLETED:
+                    completed += 1
+                elif status == STATUS_IN_PROGRESS:
+                    in_progress += 1
             not_started = max(0, assigned_count - completed - in_progress)
             course_breakdown.append({
                 'course_id': str(c.id),
@@ -404,21 +460,21 @@ class TenantService:
         month_starts.reverse()  # oldest first
 
         monthly_trend = []
+        completed_snapshots = [
+            snapshot
+            for snapshot in completion_snapshots.values()
+            if snapshot.status == STATUS_COMPLETED and snapshot.last_completed_at is not None
+        ]
         for idx, month_start in enumerate(month_starts):
             if idx + 1 < len(month_starts):
                 month_end = month_starts[idx + 1]
             else:
                 month_end = now  # current (partial) month goes up to now
-            qs = TeacherProgress.objects.filter(
-                course__tenant=tenant,
-                content__isnull=True,
-                status='COMPLETED',
-                completed_at__gte=month_start,
-                completed_at__lt=month_end,
+            count = sum(
+                1
+                for snapshot in completed_snapshots
+                if month_start <= snapshot.last_completed_at < month_end
             )
-            if course_id:
-                qs = qs.filter(course_id=course_id)
-            count = qs.count()
             monthly_trend.append({
                 'month': month_start.strftime('%b %Y'),
                 'completions': count,
@@ -436,12 +492,13 @@ class TenantService:
         # --- Teacher engagement distribution ---
         engagement = {'highly_active': 0, 'active': 0, 'low_activity': 0, 'inactive': 0}
         for t in teachers:
-            completed = TeacherProgress.objects.filter(
-                teacher=t, course__tenant=tenant, content__isnull=True, status='COMPLETED'
-            ).count()
-            started = TeacherProgress.objects.filter(
-                teacher=t, course__tenant=tenant, content__isnull=True
-            ).count()
+            statuses = [
+                status
+                for (teacher_id, _course_id), status in teacher_course_status_map.items()
+                if teacher_id == str(t.id)
+            ]
+            completed = sum(1 for status in statuses if status == STATUS_COMPLETED)
+            started = sum(1 for status in statuses if status != STATUS_NOT_STARTED)
             if completed >= 3:
                 engagement['highly_active'] += 1
             elif completed >= 1:

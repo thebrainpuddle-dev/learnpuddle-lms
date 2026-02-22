@@ -1,11 +1,13 @@
 # apps/reports/tests.py
 
 from django.test import TestCase, override_settings
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.tenants.models import Tenant
 from apps.users.models import User
-from apps.courses.models import Course
+from apps.courses.models import Content, Course, Module
+from apps.progress.models import TeacherProgress
 
 
 @override_settings(ALLOWED_HOSTS=["test.lms.com", "testserver", "localhost"])
@@ -29,6 +31,30 @@ class ReportsViewTestCase(TestCase):
             description="Test", created_by=self.admin,
             is_published=True, is_active=True, assigned_to_all=True,
         )
+        self.module = Module.objects.create(
+            course=self.course,
+            title="Module 1",
+            description="Test module",
+            order=1,
+            is_active=True,
+        )
+        self.lesson = Content.objects.create(
+            module=self.module,
+            title="Lesson 1",
+            content_type="TEXT",
+            order=1,
+            text_content="<p>Lesson</p>",
+            is_active=True,
+        )
+        TeacherProgress.objects.create(
+            teacher=self.teacher,
+            course=self.course,
+            content=self.lesson,
+            status="COMPLETED",
+            progress_percentage=100,
+            started_at=timezone.now(),
+            completed_at=timezone.now(),
+        )
         self._login()
 
     def _login(self):
@@ -44,6 +70,10 @@ class ReportsViewTestCase(TestCase):
     def test_course_progress_report(self):
         resp = self._get(f"/api/reports/course-progress/?course_id={self.course.id}")
         self.assertEqual(resp.status_code, 200)
+        rows = resp.data["results"]
+        teacher_row = next((row for row in rows if str(row["teacher_id"]) == str(self.teacher.id)), None)
+        self.assertIsNotNone(teacher_row)
+        self.assertEqual(teacher_row["status"], "COMPLETED")
 
     def test_assignment_status_report_no_assignment(self):
         """Should handle no matching assignment gracefully."""

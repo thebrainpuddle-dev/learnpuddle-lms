@@ -11,7 +11,8 @@ from django.db import models
 from django.utils import timezone
 
 from apps.courses.models import Course
-from apps.progress.models import Assignment, AssignmentSubmission, TeacherProgress
+from apps.progress.models import Assignment, AssignmentSubmission
+from apps.progress.completion_metrics import get_completed_teacher_ids_for_course
 from apps.tenants.models import Tenant
 from apps.users.models import User
 
@@ -84,9 +85,8 @@ def course_assigned_teachers(course: Course):
 
 def recipients_for_course_deadline(course: Course):
     assigned = course_assigned_teachers(course)
-    completed_teacher_ids = TeacherProgress.objects.filter(
-        course=course, content__isnull=True, status="COMPLETED"
-    ).values_list("teacher_id", flat=True)
+    assigned_teacher_ids = list(assigned.values_list("id", flat=True))
+    completed_teacher_ids = get_completed_teacher_ids_for_course(course.id, assigned_teacher_ids)
     return assigned.exclude(id__in=completed_teacher_ids)
 
 
