@@ -20,6 +20,8 @@ class TeacherContentProgressSerializer(serializers.ModelSerializer):
     progress_percentage = serializers.SerializerMethodField()
     video_progress_seconds = serializers.SerializerMethodField()
     is_completed = serializers.SerializerMethodField()
+    is_locked = serializers.SerializerMethodField()
+    lock_reason = serializers.SerializerMethodField()
     hls_url = serializers.SerializerMethodField()
     thumbnail_url = serializers.SerializerMethodField()
     has_transcript = serializers.SerializerMethodField()
@@ -44,6 +46,8 @@ class TeacherContentProgressSerializer(serializers.ModelSerializer):
             "progress_percentage",
             "video_progress_seconds",
             "is_completed",
+            "is_locked",
+            "lock_reason",
             "has_transcript",
             "transcript_vtt_url",
         ]
@@ -54,6 +58,10 @@ class TeacherContentProgressSerializer(serializers.ModelSerializer):
     def _video_asset(self, obj):
         assets = self.context.get("video_assets_by_content_id", {}) or {}
         return assets.get(str(obj.id))
+
+    def _content_state(self, obj):
+        states = self.context.get("content_state_by_id", {}) or {}
+        return states.get(str(obj.id))
 
     def get_status(self, obj):
         p = self._progress_map().get(str(obj.id))
@@ -70,6 +78,14 @@ class TeacherContentProgressSerializer(serializers.ModelSerializer):
     def get_is_completed(self, obj):
         p = self._progress_map().get(str(obj.id))
         return bool(p and p.status == "COMPLETED")
+
+    def get_is_locked(self, obj):
+        state = self._content_state(obj)
+        return bool(getattr(state, "is_locked", False))
+
+    def get_lock_reason(self, obj):
+        state = self._content_state(obj)
+        return getattr(state, "lock_reason", "") if state else ""
 
     def _abs(self, url: str) -> str:
         if not url:
@@ -150,16 +166,63 @@ class TeacherContentProgressSerializer(serializers.ModelSerializer):
 
 class TeacherModuleSerializer(serializers.ModelSerializer):
     contents = serializers.SerializerMethodField()
+    completed_content_count = serializers.SerializerMethodField()
+    total_content_count = serializers.SerializerMethodField()
+    completion_percentage = serializers.SerializerMethodField()
+    is_completed = serializers.SerializerMethodField()
+    is_locked = serializers.SerializerMethodField()
+    lock_reason = serializers.SerializerMethodField()
 
     class Meta:
         model = Module
-        fields = ["id", "title", "description", "order", "is_active", "contents"]
+        fields = [
+            "id",
+            "title",
+            "description",
+            "order",
+            "is_active",
+            "completed_content_count",
+            "total_content_count",
+            "completion_percentage",
+            "is_completed",
+            "is_locked",
+            "lock_reason",
+            "contents",
+        ]
+
+    def _module_state(self, obj):
+        states = self.context.get("module_state_by_id", {}) or {}
+        return states.get(str(obj.id))
 
     def get_contents(self, obj):
         contents = obj.contents.filter(is_active=True).order_by("order")
         return TeacherContentProgressSerializer(
             contents, many=True, context=self.context
         ).data
+
+    def get_completed_content_count(self, obj):
+        state = self._module_state(obj)
+        return getattr(state, "completed_content_count", 0) if state else 0
+
+    def get_total_content_count(self, obj):
+        state = self._module_state(obj)
+        return getattr(state, "total_content_count", 0) if state else 0
+
+    def get_completion_percentage(self, obj):
+        state = self._module_state(obj)
+        return getattr(state, "completion_percentage", 0.0) if state else 0.0
+
+    def get_is_completed(self, obj):
+        state = self._module_state(obj)
+        return bool(getattr(state, "is_completed", False)) if state else False
+
+    def get_is_locked(self, obj):
+        state = self._module_state(obj)
+        return bool(getattr(state, "is_locked", False)) if state else False
+
+    def get_lock_reason(self, obj):
+        state = self._module_state(obj)
+        return getattr(state, "lock_reason", "") if state else ""
 
     def _rewrite_rich_text(self, raw_html: str) -> str:
         image_ids = collect_rich_text_image_ids(raw_html)

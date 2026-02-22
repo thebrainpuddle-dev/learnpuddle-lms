@@ -6,6 +6,9 @@ app_name = "teacher_progress"
 
 urlpatterns = [
     path("dashboard/", teacher_views.teacher_dashboard, name="teacher_dashboard"),
+    path("calendar/", teacher_views.teacher_calendar, name="teacher_calendar"),
+    path("gamification/summary/", teacher_views.teacher_gamification_summary, name="teacher_gamification_summary"),
+    path("gamification/quests/<str:quest_key>/claim/", teacher_views.teacher_claim_quest, name="teacher_claim_quest"),
     path("progress/content/<uuid:content_id>/start/", teacher_views.progress_start, name="progress_start"),
     path("progress/content/<uuid:content_id>/", teacher_views.progress_update, name="progress_update"),
     path("progress/content/<uuid:content_id>/complete/", teacher_views.progress_complete, name="progress_complete"),
@@ -21,4 +24,3 @@ urlpatterns = [
     path("search/", teacher_views.teacher_search, name="teacher_search"),
     path("courses/<uuid:course_id>/certificate/", teacher_views.course_certificate, name="course_certificate"),
 ]
-

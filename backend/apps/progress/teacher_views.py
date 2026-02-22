@@ -9,6 +9,9 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from apps.courses.models import Course, Content
+from apps.progress.calendar import build_teacher_calendar_window
+from apps.progress.gamification import build_teacher_gamification_summary, claim_quest_reward
+from apps.progress.locking import get_content_lock_state
 
 logger = logging.getLogger(__name__)
 from apps.progress.models import (
@@ -71,6 +74,21 @@ def _teacher_assigned_courses_qs(request, with_prefetch=False):
         )
     
     return qs
+
+
+def _ensure_content_unlocked(request, course: Course, content: Content):
+    if request.user.role in ["SCHOOL_ADMIN", "SUPER_ADMIN"]:
+        return None
+    lock_state = get_content_lock_state(course, str(content.id), request.user.id)
+    if lock_state.is_locked:
+        return Response(
+            {
+                "error": lock_state.lock_reason or "This lesson is locked.",
+                "code": "CONTENT_LOCKED",
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    return None
 
 
 @api_view(["GET"])
@@ -176,6 +194,54 @@ def teacher_dashboard(request):
     )
 
 
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+@teacher_or_admin
+@tenant_required
+def teacher_calendar(request):
+    """
+    Returns a 3-7 day teaching plan window (default 5 days) with timeline events.
+    """
+    courses = _teacher_assigned_courses_qs(request)
+    days_raw = request.GET.get("days") or 5
+    try:
+        days = int(days_raw)
+    except (TypeError, ValueError):
+        days = 5
+    payload = build_teacher_calendar_window(
+        request.user,
+        courses,
+        start_date_raw=request.GET.get("start_date"),
+        days=days,
+    )
+    return Response(payload, status=status.HTTP_200_OK)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+@teacher_or_admin
+@tenant_required
+def teacher_gamification_summary(request):
+    courses = _teacher_assigned_courses_qs(request)
+    summary = build_teacher_gamification_summary(request.user, courses)
+    return Response(summary, status=status.HTTP_200_OK)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@teacher_or_admin
+@tenant_required
+def teacher_claim_quest(request, quest_key: str):
+    courses = _teacher_assigned_courses_qs(request)
+    try:
+        summary = claim_quest_reward(request.user, courses, quest_key)
+    except ValueError as exc:
+        return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+    except PermissionError as exc:
+        return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+    return Response(summary, status=status.HTTP_200_OK)
+
+
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 @teacher_or_admin
@@ -192,6 +258,9 @@ def progress_start(request, content_id):
     course = content.module.course
     if not _teacher_assigned_to_course(request.user, course):
         return Response({"error": "Not assigned to this course"}, status=status.HTTP_403_FORBIDDEN)
+    lock_response = _ensure_content_unlocked(request, course, content)
+    if lock_response:
+        return lock_response
 
     obj, _created = TeacherProgress.objects.get_or_create(
         teacher=request.user,
@@ -223,6 +292,9 @@ def progress_update(request, content_id):
     course = content.module.course
     if not _teacher_assigned_to_course(request.user, course):
         return Response({"error": "Not assigned to this course"}, status=status.HTTP_403_FORBIDDEN)
+    lock_response = _ensure_content_unlocked(request, course, content)
+    if lock_response:
+        return lock_response
 
     obj, _created = TeacherProgress.objects.get_or_create(
         teacher=request.user,
@@ -293,6 +365,9 @@ def progress_complete(request, content_id):
     course = content.module.course
     if not _teacher_assigned_to_course(request.user, course):
         return Response({"error": "Not assigned to this course"}, status=status.HTTP_403_FORBIDDEN)
+    lock_response = _ensure_content_unlocked(request, course, content)
+    if lock_response:
+        return lock_response
 
     # Block completion if VIDEO content hasn't finished processing
     if content.content_type == "VIDEO":

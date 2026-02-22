@@ -8,6 +8,12 @@ import { ProgressCard, CourseCard } from '../../components/teacher';
 import { Button } from '../../components/common/Button';
 import { teacherService } from '../../services/teacherService';
 import { notificationService, Notification } from '../../services/notificationService';
+import { BadgeShowcase } from '../../components/teacher/dashboard/BadgeShowcase';
+import { CompletionRing } from '../../components/teacher/dashboard/CompletionRing';
+import { ConfettiBurst } from '../../components/teacher/dashboard/ConfettiBurst';
+import { DailyQuestCard } from '../../components/teacher/dashboard/DailyQuestCard';
+import { DeadlinePressureBar } from '../../components/teacher/dashboard/DeadlinePressureBar';
+import { TeacherCalendarFiveDay } from '../../components/teacher/dashboard/TeacherCalendarFiveDay';
 import {
   AcademicCapIcon,
   BookOpenIcon,
@@ -43,6 +49,7 @@ export const DashboardPage: React.FC = () => {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { user } = useAuthStore();
+  const [showConfetti, setShowConfetti] = React.useState(false);
   
   const { data: dashboard, isLoading: statsLoading } = useQuery({
     queryKey: ['teacherDashboard'],
@@ -52,6 +59,16 @@ export const DashboardPage: React.FC = () => {
   const { data: courses, isLoading: coursesLoading } = useQuery({
     queryKey: ['teacherCourses'],
     queryFn: teacherService.listCourses,
+  });
+
+  const { data: calendar, isLoading: calendarLoading } = useQuery({
+    queryKey: ['teacherCalendar', 5],
+    queryFn: () => teacherService.getCalendar(5),
+  });
+
+  const { data: gamification, isLoading: gamificationLoading } = useQuery({
+    queryKey: ['teacherGamification'],
+    queryFn: teacherService.getGamificationSummary,
   });
 
   // Unread notifications for the dashboard banner
@@ -78,6 +95,16 @@ export const DashboardPage: React.FC = () => {
     },
   });
 
+  const claimQuestMutation = useMutation({
+    mutationFn: (questKey: string) => teacherService.claimQuestReward(questKey),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['teacherGamification'] });
+      queryClient.invalidateQueries({ queryKey: ['teacherDashboard'] });
+      setShowConfetti(true);
+      window.setTimeout(() => setShowConfetti(false), 1500);
+    },
+  });
+
   const handleNotifClick = (n: Notification) => {
     if (!n.is_read) markReadMutation.mutate(n.id);
     if (n.course) navigate(`/teacher/courses/${n.course}`);
@@ -87,6 +114,11 @@ export const DashboardPage: React.FC = () => {
   
   const deadlines = dashboard?.deadlines ?? [];
   const continueCourse = dashboard?.continue_learning;
+  const overdueDeadlines = deadlines.filter((item) => item.days_left < 0).length;
+  const upcomingDeadlines = deadlines.filter((item) => item.days_left >= 0 && item.days_left <= 7).length;
+  const streakProgress = gamification
+    ? Math.round((gamification.streak.current_days / Math.max(1, gamification.streak.target_days)) * 100)
+    : 0;
 
   const toCourseCard = (c: any) => {
     const total = Number(c.total_content_count || 0);
@@ -110,6 +142,7 @@ export const DashboardPage: React.FC = () => {
   
   return (
     <div className="space-y-8">
+      <ConfettiBurst active={showConfetti} />
       {/* Welcome Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between">
         <div>
@@ -132,6 +165,76 @@ export const DashboardPage: React.FC = () => {
           </Button>
         )}
       </div>
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <p className="text-sm font-semibold text-slate-700">Learning Momentum</p>
+          <div className="mt-3 flex items-center gap-4">
+            <CompletionRing value={dashboard?.stats.overall_progress || 0} label={`${Math.round(dashboard?.stats.overall_progress || 0)}%`} tone="emerald" />
+            <div>
+              <p className="text-sm font-semibold text-slate-900">Overall completion</p>
+              <p className="text-xs text-slate-500">
+                {dashboard?.stats.completed_courses || 0} / {dashboard?.stats.total_courses || 0} courses finished
+              </p>
+            </div>
+          </div>
+        </div>
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <p className="text-sm font-semibold text-slate-700">Streak Power</p>
+          <div className="mt-3 flex items-center gap-4">
+            <CompletionRing value={streakProgress} label={`${gamification?.streak.current_days || 0}d`} tone="blue" />
+            <div>
+              <p className="text-sm font-semibold text-slate-900">
+                {gamification?.streak.current_days || 0} day streak
+              </p>
+              <p className="text-xs text-slate-500">
+                Target: {gamification?.streak.target_days || 5} consecutive days
+              </p>
+            </div>
+          </div>
+        </div>
+        <DeadlinePressureBar
+          overallProgress={dashboard?.stats.overall_progress || 0}
+          upcomingDeadlines={upcomingDeadlines}
+          overdueDeadlines={overdueDeadlines}
+        />
+      </div>
+
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
+        <div className="xl:col-span-2">
+          {calendarLoading ? (
+            <div className="h-[22rem] rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="h-full animate-pulse rounded-xl bg-slate-100" />
+            </div>
+          ) : (
+            <TeacherCalendarFiveDay
+              days={calendar?.days || []}
+              events={calendar?.events || []}
+              onOpenEvent={(event) => navigate(event.route)}
+            />
+          )}
+        </div>
+        <div>
+          {gamification ? (
+            <DailyQuestCard
+              quest={gamification.quest}
+              claiming={claimQuestMutation.isPending}
+              onClaim={() => claimQuestMutation.mutate(gamification.quest.key)}
+            />
+          ) : (
+            <div className="h-48 animate-pulse rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="h-full rounded-xl bg-slate-100" />
+            </div>
+          )}
+        </div>
+      </div>
+
+      {!gamificationLoading && gamification && (
+        <BadgeShowcase
+          badges={gamification.badges}
+          currentLevel={gamification.badge_current.level}
+        />
+      )}
       
       {/* Unread Notifications / Reminders */}
       {unreadNotifications.length > 0 && (

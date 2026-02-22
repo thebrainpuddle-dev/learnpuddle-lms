@@ -22,6 +22,91 @@ export interface TeacherDashboardResponse {
   }>;
 }
 
+export interface TeacherCalendarDay {
+  date: string;
+  weekday: string;
+  short_weekday: string;
+  day: number;
+  month: string;
+  is_today: boolean;
+  task_count: number;
+  total_minutes: number;
+}
+
+export interface TeacherCalendarEvent {
+  id: string;
+  type: 'course_deadline' | 'assignment_due' | 'reminder';
+  title: string;
+  subtitle: string;
+  date: string;
+  start_time: string;
+  end_time: string;
+  color: 'amber' | 'rose' | 'sky';
+  route: string;
+}
+
+export interface TeacherCalendarResponse {
+  window: {
+    start_date: string;
+    end_date: string;
+    days: number;
+  };
+  days: TeacherCalendarDay[];
+  events: TeacherCalendarEvent[];
+}
+
+export interface TeacherBadgeLevel {
+  level: number;
+  key: string;
+  name: string;
+  ripple_range: string;
+  min_points: number;
+  max_points: number | null;
+  color: string;
+  unlocked: boolean;
+  progress_percentage: number;
+  style: 'glass_3d';
+}
+
+export interface TeacherQuestSummary {
+  key: string;
+  title: string;
+  description: string;
+  reward_points: number;
+  progress_current: number;
+  progress_target: number;
+  completed: boolean;
+  claimable: boolean;
+  claimed_today: boolean;
+}
+
+export interface TeacherGamificationSummary {
+  points_total: number;
+  points_breakdown: {
+    content_completion: number;
+    course_completion: number;
+    assignment_submission: number;
+    streak_bonus: number;
+    quest_bonus: number;
+  };
+  streak: {
+    current_days: number;
+    target_days: number;
+  };
+  quest: TeacherQuestSummary;
+  badge_current: {
+    level: number;
+    key: string;
+    name: string;
+    ripple_range: string;
+    min_points: number;
+    max_points: number | null;
+    color: string;
+    style: 'glass_3d';
+  };
+  badges: TeacherBadgeLevel[];
+}
+
 export interface TeacherCourseListItem {
   id: string;
   title: string;
@@ -64,6 +149,12 @@ export interface TeacherCourseDetail {
     description: string;
     order: number;
     is_active: boolean;
+    completed_content_count: number;
+    total_content_count: number;
+    completion_percentage: number;
+    is_completed: boolean;
+    is_locked: boolean;
+    lock_reason: string;
     contents: Array<{
       id: string;
       title: string;
@@ -81,6 +172,8 @@ export interface TeacherCourseDetail {
       progress_percentage: number;
       video_progress_seconds: number;
       is_completed: boolean;
+      is_locked: boolean;
+      lock_reason: string;
       has_transcript?: boolean;
       transcript_vtt_url?: string;
     }>;
@@ -207,5 +300,22 @@ export const teacherService = {
       score: number | null;
       graded_at: string | null;
     };
+  },
+
+  async getCalendar(days = 5, startDate?: string) {
+    const params: Record<string, any> = { days };
+    if (startDate) params.start_date = startDate;
+    const res = await api.get('/teacher/calendar/', { params });
+    return res.data as TeacherCalendarResponse;
+  },
+
+  async getGamificationSummary() {
+    const res = await api.get('/teacher/gamification/summary/');
+    return res.data as TeacherGamificationSummary;
+  },
+
+  async claimQuestReward(questKey: string) {
+    const res = await api.post(`/teacher/gamification/quests/${questKey}/claim/`);
+    return res.data as TeacherGamificationSummary;
   },
 };

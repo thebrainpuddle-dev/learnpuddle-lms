@@ -5,6 +5,8 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import DOMPurify from 'dompurify';
 import { ContentPlayer } from '../../components/teacher';
+import { CompletionRing } from '../../components/teacher/dashboard/CompletionRing';
+import { ConfettiBurst } from '../../components/teacher/dashboard/ConfettiBurst';
 import { teacherService } from '../../services/teacherService';
 import type { TeacherCourseDetail } from '../../services/teacherService';
 // Types extended in ../../types/index.ts (ContentWithProgress, Assignment, etc.)
@@ -17,6 +19,7 @@ import {
   ChevronDownIcon,
   ChevronRightIcon,
   ClockIcon,
+  LockClosedIcon,
   TrophyIcon,
 } from '@heroicons/react/24/outline';
 import { useTenantStore } from '../../stores/tenantStore';
@@ -35,9 +38,11 @@ export const CourseViewPage: React.FC = () => {
   const [expandedModules, setExpandedModules] = useState<string[]>([]);
   const [selectedContent, setSelectedContent] = useState<ContentItem | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [showConfetti, setShowConfetti] = useState(false);
   
   // Throttle video progress updates (save every 5 seconds)
   const lastSavedRef = useRef<number>(0);
+  const completionCelebratedRef = useRef(false);
   
   const handleProgressUpdate = useCallback(async (seconds: number) => {
     if (!selectedContent || selectedContent.content_type !== 'VIDEO') return;
@@ -75,23 +80,38 @@ export const CourseViewPage: React.FC = () => {
   // Initialize expanded modules and selected content
   React.useEffect(() => {
     if (course?.modules) {
-      // Expand first incomplete module
-      const incompleteModule = course.modules.find(m => 
-        m.contents.some((c) => !c.is_completed)
-      );
-      if (incompleteModule) {
-        setExpandedModules([incompleteModule.id]);
-        // Select first incomplete content
-        const incompleteContent = incompleteModule.contents.find((c) => !c.is_completed);
-        if (incompleteContent) {
-          setSelectedContent(incompleteContent);
-        }
-      } else if (course.modules.length > 0) {
-        setExpandedModules([course.modules[0].id]);
-        setSelectedContent(course.modules[0].contents[0]);
+      const unlockedModules = course.modules.filter((module) => !module.is_locked);
+      const firstTargetModule =
+        unlockedModules.find((module) => !module.is_completed) ||
+        unlockedModules[0] ||
+        course.modules[0];
+
+      if (firstTargetModule) {
+        setExpandedModules([firstTargetModule.id]);
+        const firstIncompleteUnlockedContent = firstTargetModule.contents.find(
+          (item) => !item.is_locked && !item.is_completed,
+        );
+        const firstUnlockedContent = firstTargetModule.contents.find((item) => !item.is_locked);
+        setSelectedContent((current) => {
+          if (
+            current &&
+            !current.is_locked &&
+            course.modules.some((module) => module.contents.some((item) => item.id === current.id))
+          ) {
+            return current;
+          }
+          return firstIncompleteUnlockedContent || firstUnlockedContent || firstTargetModule.contents[0] || null;
+        });
       }
     }
   }, [course]);
+
+  React.useEffect(() => {
+    if ((course?.progress?.percentage || 0) < 100 || completionCelebratedRef.current) return;
+    completionCelebratedRef.current = true;
+    setShowConfetti(true);
+    window.setTimeout(() => setShowConfetti(false), 1700);
+  }, [course?.progress?.percentage]);
   
   const toggleModule = (moduleId: string) => {
     setExpandedModules(prev => 
@@ -101,7 +121,10 @@ export const CourseViewPage: React.FC = () => {
     );
   };
   
-  const getContentIcon = (type: string, isCompleted: boolean) => {
+  const getContentIcon = (type: string, isCompleted: boolean, isLocked: boolean) => {
+    if (isLocked) {
+      return <LockClosedIcon className="h-5 w-5 text-slate-400" />;
+    }
     if (isCompleted) {
       return <CheckCircleSolidIcon className="h-5 w-5 text-emerald-500" />;
     }
@@ -133,6 +156,7 @@ export const CourseViewPage: React.FC = () => {
   
   return (
     <div className="flex flex-col h-[calc(100vh-8rem)]">
+      <ConfettiBurst active={showConfetti} />
       {/* Header */}
       <div className="flex items-center justify-between pb-4 border-b border-gray-200">
         <div className="flex items-center">
@@ -149,6 +173,18 @@ export const CourseViewPage: React.FC = () => {
               <span className="mx-2">•</span>
               <span>{course?.progress?.percentage}% complete</span>
             </div>
+          </div>
+        </div>
+        <div className="hidden items-center gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2 lg:flex">
+          <CompletionRing
+            value={course?.progress?.percentage || 0}
+            size={46}
+            stroke={5}
+            tone="emerald"
+          />
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Course Completion</p>
+            <p className="text-sm font-semibold text-slate-900">{Math.round(course?.progress?.percentage || 0)}%</p>
           </div>
         </div>
         
@@ -230,10 +266,15 @@ export const CourseViewPage: React.FC = () => {
               isCompleted={selectedContent.is_completed}
               onProgressUpdate={handleProgressUpdate}
               onComplete={async () => {
-                await teacherService.completeContent(selectedContent.id);
-                await queryClient.invalidateQueries({ queryKey: ['course', courseId] });
-                await queryClient.invalidateQueries({ queryKey: ['teacherDashboard'] });
-                await queryClient.invalidateQueries({ queryKey: ['teacherCourses'] });
+                try {
+                  await teacherService.completeContent(selectedContent.id);
+                  await queryClient.invalidateQueries({ queryKey: ['course', courseId] });
+                  await queryClient.invalidateQueries({ queryKey: ['teacherDashboard'] });
+                  await queryClient.invalidateQueries({ queryKey: ['teacherCourses'] });
+                } catch (error: any) {
+                  const reason = error?.response?.data?.error || 'This lesson is locked.';
+                  alert(reason);
+                }
               }}
             />
           ) : (
@@ -268,16 +309,30 @@ export const CourseViewPage: React.FC = () => {
             <div className="space-y-2">
               {course?.modules.map((module) => {
                 const isExpanded = expandedModules.includes(module.id);
-                const completedCount = module.contents.filter((c) => c.is_completed).length;
-                const isModuleComplete = completedCount === module.contents.length;
+                const completedCount = module.completed_content_count;
+                const isModuleComplete = module.is_completed;
                 
                 return (
-                  <div key={module.id} className="border border-gray-200 rounded-lg overflow-hidden">
+                  <div
+                    key={module.id}
+                    className={`border rounded-lg overflow-hidden ${
+                      module.is_locked ? 'border-slate-200 bg-slate-50/70' : 'border-gray-200'
+                    }`}
+                  >
                     <button
                       onClick={() => toggleModule(module.id)}
-                      className="w-full flex items-center justify-between p-3 bg-gray-50 hover:bg-gray-100 transition-colors"
+                      className={`w-full flex items-center justify-between p-3 transition-colors ${
+                        module.is_locked ? 'bg-slate-100' : 'bg-gray-50 hover:bg-gray-100'
+                      }`}
                     >
-                      <div className="flex items-center">
+                      <div className="flex items-center gap-2">
+                        <CompletionRing
+                          value={module.completion_percentage}
+                          size={28}
+                          stroke={3}
+                          label={`${Math.round(module.completion_percentage)}%`}
+                          tone={module.is_locked ? 'slate' : 'emerald'}
+                        />
                         {isModuleComplete ? (
                           <CheckCircleSolidIcon className="h-5 w-5 text-emerald-500 mr-2" />
                         ) : (
@@ -285,9 +340,13 @@ export const CourseViewPage: React.FC = () => {
                             <span className="text-xs text-gray-500">{completedCount}</span>
                           </div>
                         )}
-                        <span className="font-medium text-sm text-gray-900 text-left">
-                          {module.title}
-                        </span>
+                        <div className="text-left">
+                          <p className="font-medium text-sm text-gray-900">{module.title}</p>
+                          {module.is_locked && (
+                            <p className="text-xs text-slate-500">{module.lock_reason}</p>
+                          )}
+                        </div>
+                        {module.is_locked && <LockClosedIcon className="h-4 w-4 text-slate-400" />}
                       </div>
                       {isExpanded ? (
                         <ChevronDownIcon className="h-4 w-4 text-gray-500" />
@@ -309,15 +368,26 @@ export const CourseViewPage: React.FC = () => {
                         {module.contents.map((content) => (
                           <button
                             key={content.id}
+                            type="button"
+                            disabled={content.is_locked}
                             onClick={() => setSelectedContent(content)}
-                            className={`w-full flex items-center p-3 text-left hover:bg-gray-50 transition-colors ${
-                              selectedContent?.id === content.id ? 'bg-emerald-50 border-l-2 border-emerald-500' : ''
+                            title={content.is_locked ? content.lock_reason : undefined}
+                            className={`w-full flex items-center p-3 text-left transition-colors ${
+                              selectedContent?.id === content.id
+                                ? 'bg-emerald-50 border-l-2 border-emerald-500'
+                                : content.is_locked
+                                  ? 'bg-slate-50 text-slate-400 cursor-not-allowed'
+                                  : 'hover:bg-gray-50'
                             }`}
                           >
-                            {getContentIcon(content.content_type, !!content.is_completed)}
+                            {getContentIcon(content.content_type, !!content.is_completed, !!content.is_locked)}
                             <div className="ml-3 flex-1 min-w-0">
                               <p className={`text-sm truncate ${
-                                selectedContent?.id === content.id ? 'text-emerald-700 font-medium' : 'text-gray-700'
+                                selectedContent?.id === content.id
+                                  ? 'text-emerald-700 font-medium'
+                                  : content.is_locked
+                                    ? 'text-slate-400'
+                                    : 'text-gray-700'
                               }`}>
                                 {content.title}
                               </p>
@@ -326,6 +396,9 @@ export const CourseViewPage: React.FC = () => {
                                   <ClockIcon className="h-3 w-3 mr-1" />
                                   {formatDuration(content.duration)}
                                 </p>
+                              )}
+                              {content.is_locked && (
+                                <p className="mt-0.5 text-xs text-slate-400">{content.lock_reason}</p>
                               )}
                             </div>
                           </button>

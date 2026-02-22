@@ -7,6 +7,7 @@ from rest_framework import status
 
 from utils.decorators import tenant_required, teacher_or_admin
 from apps.progress.models import TeacherProgress
+from apps.progress.locking import compute_course_sequence_state
 from apps.courses.video_models import VideoAsset, VideoTranscript
 from .models import Course, Content
 from .teacher_serializers import TeacherCourseListSerializer, TeacherCourseDetailSerializer
@@ -92,6 +93,7 @@ def teacher_course_detail(request, course_id):
         content__content_type="VIDEO",
     ).select_related("transcript")
     video_assets_by_content_id = {str(a.content_id): a for a in video_assets_qs}
+    module_state_by_id, content_state_by_id = compute_course_sequence_state(course, user.id)
 
     serializer = TeacherCourseDetailSerializer(
         course,
@@ -99,6 +101,8 @@ def teacher_course_detail(request, course_id):
             "request": request,
             "progress_by_content_id": progress_by_content_id,
             "video_assets_by_content_id": video_assets_by_content_id,
+            "module_state_by_id": module_state_by_id,
+            "content_state_by_id": content_state_by_id,
         },
     )
     return Response(serializer.data, status=status.HTTP_200_OK)
@@ -197,4 +201,3 @@ def course_certificate(request, course_id):
         "completed_at": last_completion.completed_at.isoformat() if last_completion and last_completion.completed_at else None,
         "certificate_id": f"{user.id}-{course.id}",
     })
-

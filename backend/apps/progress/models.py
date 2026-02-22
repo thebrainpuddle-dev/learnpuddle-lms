@@ -253,3 +253,28 @@ class AssignmentSubmission(models.Model):
     
     def __str__(self):
         return f"{self.teacher.email} - {self.assignment.title}"
+
+
+class TeacherQuestClaim(models.Model):
+    """
+    Stores per-day quest reward claims to prevent duplicate rewards.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    teacher = models.ForeignKey('users.User', on_delete=models.CASCADE, related_name='quest_claims')
+    quest_key = models.CharField(max_length=100)
+    claim_date = models.DateField()
+    points_awarded = models.PositiveIntegerField(default=0)
+    claimed_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'teacher_quest_claims'
+        unique_together = [('teacher', 'quest_key', 'claim_date')]
+        ordering = ['-claimed_at']
+        indexes = [
+            models.Index(fields=['teacher', 'claim_date']),
+            models.Index(fields=['teacher', 'quest_key']),
+        ]
+
+    def __str__(self):
+        return f"{self.teacher_id}::{self.quest_key}::{self.claim_date}"
