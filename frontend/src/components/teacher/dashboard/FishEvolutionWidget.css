@@ -1,0 +1,285 @@
+.lp-fish-widget {
+  border: 1px solid #1f2a44;
+  border-radius: 1rem;
+  background: linear-gradient(180deg, #0f172a 0%, #101c35 100%);
+  color: #e2e8f0;
+  padding: 1rem;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.25);
+}
+
+.lp-fish-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.lp-fish-header h3 {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+
+.lp-fish-header p {
+  margin: 0.2rem 0 0;
+  color: rgba(226, 232, 240, 0.72);
+  font-size: 0.82rem;
+}
+
+.lp-fish-live-pill {
+  border: 1px solid;
+  border-radius: 999px;
+  padding: 0.2rem 0.6rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.lp-fish-stage {
+  margin-top: 1rem;
+  border-radius: 0.85rem;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  padding: 0.85rem;
+  height: 11.5rem;
+  position: relative;
+  overflow: hidden;
+  background: radial-gradient(circle at 28% 24%, rgba(125, 211, 200, 0.25), transparent 56%),
+    linear-gradient(180deg, #122240 0%, #0d1730 100%);
+}
+
+.lp-fish-stage::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 70% 0%, rgba(255, 255, 255, 0.06), transparent 42%);
+  pointer-events: none;
+}
+
+.lp-fish-stage-puddle {
+  background: radial-gradient(circle at 30% 25%, rgba(125, 211, 200, 0.28), transparent 56%),
+    linear-gradient(180deg, #18314d 0%, #0f1d38 100%);
+}
+
+.lp-fish-stage-pond {
+  background: radial-gradient(circle at 30% 25%, rgba(78, 205, 196, 0.28), transparent 56%),
+    linear-gradient(180deg, #14344f 0%, #0f1d38 100%);
+}
+
+.lp-fish-stage-lake {
+  background: radial-gradient(circle at 30% 25%, rgba(59, 164, 212, 0.3), transparent 56%),
+    linear-gradient(180deg, #102f57 0%, #0f1d38 100%);
+}
+
+.lp-fish-stage-river {
+  background: radial-gradient(circle at 30% 25%, rgba(123, 108, 255, 0.28), transparent 56%),
+    linear-gradient(180deg, #1c2860 0%, #101939 100%);
+}
+
+.lp-fish-stage-ocean {
+  background: radial-gradient(circle at 30% 25%, rgba(43, 111, 232, 0.28), transparent 56%),
+    linear-gradient(180deg, #102a62 0%, #0d1630 100%);
+}
+
+.lp-fish-level-copy {
+  position: relative;
+  z-index: 2;
+}
+
+.lp-fish-level-name {
+  margin: 0;
+  font-size: 1.45rem;
+  font-weight: 800;
+}
+
+.lp-fish-level-subtitle,
+.lp-fish-level-range {
+  margin: 0.1rem 0;
+  font-size: 0.8rem;
+}
+
+.lp-fish-level-subtitle {
+  color: rgba(226, 232, 240, 0.9);
+}
+
+.lp-fish-level-range {
+  color: rgba(226, 232, 240, 0.65);
+}
+
+.lp-fish-waterline {
+  position: absolute;
+  left: -1rem;
+  right: -1rem;
+  bottom: 2.4rem;
+  height: 2.1rem;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02));
+  border-top: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.lp-fish-avatar {
+  position: absolute;
+  bottom: 2.2rem;
+  font-size: 2.2rem;
+  line-height: 1;
+  animation: lp-fish-swim 2.5s ease-in-out infinite;
+  z-index: 3;
+}
+
+.lp-fish-avatar.lp-fish-static {
+  animation: none;
+}
+
+.lp-fish-bubbles {
+  position: absolute;
+  right: 1rem;
+  bottom: 3rem;
+  display: flex;
+  gap: 0.5rem;
+}
+
+.lp-fish-bubbles span {
+  width: 0.52rem;
+  height: 0.52rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.5);
+  animation: lp-fish-bubble 2s ease-in-out infinite;
+}
+
+.lp-fish-bubbles span:nth-child(2) {
+  animation-delay: 0.25s;
+}
+
+.lp-fish-bubbles span:nth-child(3) {
+  animation-delay: 0.5s;
+}
+
+.lp-fish-controls {
+  margin-top: 0.95rem;
+}
+
+.lp-fish-slider-label {
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: rgba(226, 232, 240, 0.85);
+  margin-bottom: 0.3rem;
+}
+
+.lp-fish-controls input[type='range'] {
+  width: 100%;
+  accent-color: #4ecdc4;
+}
+
+.lp-fish-stage-labels {
+  margin-top: 0.42rem;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.2rem;
+}
+
+.lp-fish-stage-labels button {
+  background: transparent;
+  border: 0;
+  color: rgba(226, 232, 240, 0.75);
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 0.1rem;
+}
+
+.lp-fish-stage-labels button.active {
+  text-decoration: underline;
+  text-underline-offset: 0.18rem;
+}
+
+.lp-fish-footer {
+  margin-top: 0.85rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+
+.lp-fish-points {
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.lp-fish-progress {
+  margin: 0.15rem 0 0;
+  font-size: 0.75rem;
+  color: rgba(226, 232, 240, 0.68);
+}
+
+.lp-fish-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.lp-fish-actions button {
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  background: rgba(15, 23, 42, 0.5);
+  color: #e2e8f0;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 0.4rem 0.75rem;
+  cursor: pointer;
+}
+
+.lp-fish-actions button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+@keyframes lp-fish-swim {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
+}
+
+@keyframes lp-fish-bubble {
+  0% {
+    transform: translateY(0);
+    opacity: 0.25;
+  }
+  50% {
+    transform: translateY(-10px);
+    opacity: 0.8;
+  }
+  100% {
+    transform: translateY(-15px);
+    opacity: 0;
+  }
+}
+
+@media (max-width: 680px) {
+  .lp-fish-header {
+    flex-direction: column;
+  }
+
+  .lp-fish-footer {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .lp-fish-actions {
+    width: 100%;
+  }
+
+  .lp-fish-actions button {
+    flex: 1;
+    text-align: center;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lp-fish-avatar,
+  .lp-fish-bubbles span {
+    animation: none;
+  }
+}

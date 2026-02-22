@@ -12,17 +12,14 @@ jest.mock('../../stores/authStore');
 jest.mock('../../services/teacherService', () => ({
   teacherService: {
     getDashboard: jest.fn(),
-    listCourses: jest.fn(),
     getCalendar: jest.fn(),
     getGamificationSummary: jest.fn(),
-    claimQuestReward: jest.fn(),
   },
 }));
 jest.mock('../../services/notificationService', () => ({
   notificationService: {
     getNotifications: jest.fn(),
     markAsRead: jest.fn(),
-    markAllAsRead: jest.fn(),
   },
 }));
 
@@ -30,7 +27,7 @@ const mockedUseAuthStore = useAuthStore as unknown as jest.Mock;
 const mockedTeacherService = teacherService as jest.Mocked<typeof teacherService>;
 const mockedNotificationService = notificationService as jest.Mocked<typeof notificationService>;
 
-describe('DashboardPage gamification and planner', () => {
+describe('DashboardPage essentials layout', () => {
   beforeEach(() => {
     jest.clearAllMocks();
 
@@ -45,22 +42,15 @@ describe('DashboardPage gamification and planner', () => {
         completed_courses: 1,
         pending_assignments: 2,
       },
-      continue_learning: null,
+      continue_learning: {
+        course_id: 'course-1',
+        course_title: 'Course A',
+        content_id: 'content-1',
+        content_title: 'Lesson A',
+        progress_percentage: 25,
+      },
       deadlines: [{ id: 'course-1', type: 'course', title: 'Course A', days_left: 2 }],
     } as any);
-
-    mockedTeacherService.listCourses.mockResolvedValue([
-      {
-        id: 'course-1',
-        title: 'Course A',
-        description: 'A',
-        progress_percentage: 25,
-        total_content_count: 4,
-        completed_content_count: 1,
-        estimated_hours: 5,
-        deadline: null,
-      },
-    ] as any);
 
     mockedTeacherService.getCalendar.mockResolvedValue({
       window: { start_date: '2026-02-22', end_date: '2026-02-26', days: 5 },
@@ -145,10 +135,18 @@ describe('DashboardPage gamification and planner', () => {
       ],
     } as any);
 
-    mockedTeacherService.claimQuestReward.mockResolvedValue({} as any);
-    mockedNotificationService.getNotifications.mockResolvedValue([]);
+    mockedNotificationService.getNotifications.mockResolvedValue([
+      {
+        id: 'notif-1',
+        notification_type: 'ASSIGNMENT_DUE',
+        title: 'Assignment due',
+        message: 'Submit by tonight',
+        is_read: false,
+        is_actionable: true,
+        created_at: '2026-02-22T10:00:00Z',
+      },
+    ] as any);
     mockedNotificationService.markAsRead.mockResolvedValue(undefined as any);
-    mockedNotificationService.markAllAsRead.mockResolvedValue(undefined as any);
   });
 
   const renderPage = () => {
@@ -169,19 +167,28 @@ describe('DashboardPage gamification and planner', () => {
     );
   };
 
-  it('renders planner + quest + badges and claims quest reward', async () => {
+  it('renders lean essentials and removes legacy clutter', async () => {
     renderPage();
 
     expect(await screen.findByText(/welcome back, rakesh/i)).toBeInTheDocument();
+    expect(await screen.findByText('Current Level')).toBeInTheDocument();
     expect(await screen.findByText('5-Day Planner')).toBeInTheDocument();
-    expect(await screen.findByText('Daily Quest')).toBeInTheDocument();
-    expect(await screen.findByText('Ripple Badges')).toBeInTheDocument();
-    expect(await screen.findByText('Associate Educator')).toBeInTheDocument();
+    expect(await screen.findByText('To Do')).toBeInTheDocument();
+    expect((await screen.findAllByText('Continue Learning')).length).toBeGreaterThan(0);
 
-    await userEvent.click(screen.getByRole('button', { name: /claim reward/i }));
+    expect(screen.queryByText('Daily Quest')).not.toBeInTheDocument();
+    expect(screen.queryByText('Ripple Badges')).not.toBeInTheDocument();
+    expect(screen.queryByText(/calm/i)).not.toBeInTheDocument();
+  });
+
+  it('marks actionable item as read from to-do list', async () => {
+    renderPage();
+
+    const markDoneButtons = await screen.findAllByTitle('Mark as done');
+    await userEvent.click(markDoneButtons[0]);
 
     await waitFor(() => {
-      expect(mockedTeacherService.claimQuestReward).toHaveBeenCalledWith('streak_5_days');
+      expect(mockedNotificationService.markAsRead).toHaveBeenCalledWith('notif-1', expect.anything());
     });
   });
 });

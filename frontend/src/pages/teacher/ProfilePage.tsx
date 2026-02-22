@@ -1,12 +1,17 @@
 // src/pages/teacher/ProfilePage.tsx
 
-import React, { useState, useRef } from 'react';
+import React, { useRef, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuthStore } from '../../stores/authStore';
 import { Button } from '../../components/common/Button';
 import { Input } from '../../components/common/Input';
 import { useToast } from '../../components/common';
 import api from '../../config/api';
 import { useGuidedTour } from '../../components/tour';
+import { teacherService } from '../../services/teacherService';
+import { BadgeShowcase } from '../../components/teacher/dashboard/BadgeShowcase';
+import { DailyQuestCard } from '../../components/teacher/dashboard/DailyQuestCard';
+import { FishEvolutionWidget } from '../../components/teacher/dashboard/FishEvolutionWidget';
 import {
   UserCircleIcon,
   EnvelopeIcon,
@@ -17,6 +22,7 @@ import {
   CameraIcon,
   BookOpenIcon,
   IdentificationIcon,
+  SparklesIcon,
 } from '@heroicons/react/24/outline';
 import { usePageTitle } from '../../hooks/usePageTitle';
 
@@ -44,12 +50,15 @@ const DESIGNATIONS = [
 
 const backendOrigin = (process.env.REACT_APP_API_URL || 'http://localhost:8000/api').replace(/\/api\/?$/, '');
 
+type ProfileSection = 'profile' | 'password' | 'notifications' | 'achievements';
+
 export const ProfilePage: React.FC = () => {
   usePageTitle('Profile');
   const toast = useToast();
+  const queryClient = useQueryClient();
   const { startTour } = useGuidedTour();
   const { user, setUser } = useAuthStore();
-  const [activeSection, setActiveSection] = useState<'profile' | 'password' | 'notifications'>('profile');
+  const [activeSection, setActiveSection] = useState<ProfileSection>('profile');
   const [isSaving, setIsSaving] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -66,7 +75,7 @@ export const ProfilePage: React.FC = () => {
   });
 
   const [profilePicPreview, setProfilePicPreview] = useState<string | null>(
-    user?.profile_picture_url || user?.profile_picture || null
+    user?.profile_picture_url || user?.profile_picture || null,
   );
   const [profilePicFile, setProfilePicFile] = useState<File | null>(null);
 
@@ -81,6 +90,24 @@ export const ProfilePage: React.FC = () => {
     browser_notifications: false,
   });
 
+  const { data: gamification, isLoading: achievementsLoading } = useQuery({
+    queryKey: ['teacherGamification'],
+    queryFn: teacherService.getGamificationSummary,
+    enabled: activeSection === 'achievements',
+  });
+
+  const claimQuestMutation = useMutation({
+    mutationFn: (questKey: string) => teacherService.claimQuestReward(questKey),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['teacherGamification'] });
+      queryClient.invalidateQueries({ queryKey: ['teacherDashboard'] });
+      toast.success('Reward claimed', 'Your daily quest points were added.');
+    },
+    onError: () => {
+      toast.error('Unable to claim', 'The reward is not claimable right now.');
+    },
+  });
+
   const handlePicChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -91,17 +118,21 @@ export const ProfilePage: React.FC = () => {
     }
   };
 
-  const toggleSubject = (s: string) => {
-    setProfileForm(prev => ({
+  const toggleSubject = (subject: string) => {
+    setProfileForm((prev) => ({
       ...prev,
-      subjects: prev.subjects.includes(s) ? prev.subjects.filter((x: string) => x !== s) : [...prev.subjects, s],
+      subjects: prev.subjects.includes(subject)
+        ? prev.subjects.filter((value: string) => value !== subject)
+        : [...prev.subjects, subject],
     }));
   };
 
-  const toggleGrade = (g: string) => {
-    setProfileForm(prev => ({
+  const toggleGrade = (grade: string) => {
+    setProfileForm((prev) => ({
       ...prev,
-      grades: prev.grades.includes(g) ? prev.grades.filter((x: string) => x !== g) : [...prev.grades, g],
+      grades: prev.grades.includes(grade)
+        ? prev.grades.filter((value: string) => value !== grade)
+        : [...prev.grades, grade],
     }));
   };
 
@@ -120,7 +151,6 @@ export const ProfilePage: React.FC = () => {
       if (profilePicFile) {
         fd.append('profile_picture', profilePicFile);
       }
-      // Axios automatically sets Content-Type with boundary for FormData
       const res = await api.patch('/users/auth/me/', fd);
       setUser(res.data);
       toast.success('Profile updated', 'Your profile has been saved successfully.');
@@ -176,14 +206,15 @@ export const ProfilePage: React.FC = () => {
     { id: 'profile', label: 'Profile', icon: UserCircleIcon },
     { id: 'password', label: 'Password', icon: KeyIcon },
     { id: 'notifications', label: 'Notifications', icon: BellIcon },
+    { id: 'achievements', label: 'Achievements', icon: SparklesIcon },
   ];
 
   return (
     <div className="space-y-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-        <h1 className="text-2xl font-bold text-gray-900">Profile Settings</h1>
-        <p className="mt-1 text-gray-500">Manage your account settings and preferences</p>
+          <h1 className="text-2xl font-bold text-gray-900">Profile Settings</h1>
+          <p className="mt-1 text-gray-500">Manage your account settings, preferences, and growth milestones</p>
         </div>
         <Button
           type="button"
@@ -196,7 +227,6 @@ export const ProfilePage: React.FC = () => {
       </div>
 
       <div className="flex flex-col lg:flex-row gap-6">
-        {/* Sidebar */}
         <div className="lg:w-72 flex-shrink-0">
           <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
             <div className="p-6 text-center border-b border-gray-100 relative">
@@ -230,7 +260,7 @@ export const ProfilePage: React.FC = () => {
               {sections.map((section) => (
                 <button
                   key={section.id}
-                  onClick={() => setActiveSection(section.id as typeof activeSection)}
+                  onClick={() => setActiveSection(section.id as ProfileSection)}
                   className={`w-full flex items-center px-4 py-3 rounded-lg text-sm font-medium transition-colors ${
                     activeSection === section.id
                       ? 'bg-emerald-50 text-emerald-700'
@@ -245,11 +275,8 @@ export const ProfilePage: React.FC = () => {
           </div>
         </div>
 
-        {/* Content */}
         <div className="flex-1">
           <div className="bg-white rounded-xl border border-gray-100 p-6">
-
-            {/* ── Profile Section ── */}
             {activeSection === 'profile' && (
               <form data-tour="teacher-profile-form" onSubmit={handleProfileSubmit}>
                 <h2 className="text-lg font-semibold text-gray-900 mb-6">Profile Information</h2>
@@ -291,7 +318,7 @@ export const ProfilePage: React.FC = () => {
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
                     >
                       <option value="">Select designation...</option>
-                      {DESIGNATIONS.map(d => <option key={d} value={d}>{d}</option>)}
+                      {DESIGNATIONS.map((designation) => <option key={designation} value={designation}>{designation}</option>)}
                       <option value="Other">Other</option>
                     </select>
                   </div>
@@ -316,45 +343,45 @@ export const ProfilePage: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Subjects */}
                 <div className="mt-6">
                   <label className="flex items-center gap-2 text-sm font-medium text-gray-700 mb-2">
                     <BookOpenIcon className="h-4 w-4" /> Subjects I Teach
                   </label>
                   <div className="flex flex-wrap gap-2">
-                    {COMMON_SUBJECTS.map(s => (
+                    {COMMON_SUBJECTS.map((subject) => (
                       <button
-                        key={s} type="button"
-                        onClick={() => toggleSubject(s)}
+                        key={subject}
+                        type="button"
+                        onClick={() => toggleSubject(subject)}
                         className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
-                          profileForm.subjects.includes(s)
+                          profileForm.subjects.includes(subject)
                             ? 'bg-emerald-100 border-emerald-300 text-emerald-800'
                             : 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100'
                         }`}
                       >
-                        {s}
+                        {subject}
                       </button>
                     ))}
                   </div>
                 </div>
 
-                {/* Grades */}
                 <div className="mt-5">
                   <label className="flex items-center gap-2 text-sm font-medium text-gray-700 mb-2">
                     <AcademicCapIcon className="h-4 w-4" /> Classes / Grades
                   </label>
                   <div className="flex flex-wrap gap-2">
-                    {COMMON_GRADES.map(g => (
+                    {COMMON_GRADES.map((grade) => (
                       <button
-                        key={g} type="button"
-                        onClick={() => toggleGrade(g)}
+                        key={grade}
+                        type="button"
+                        onClick={() => toggleGrade(grade)}
                         className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
-                          profileForm.grades.includes(g)
+                          profileForm.grades.includes(grade)
                             ? 'bg-blue-100 border-blue-300 text-blue-800'
                             : 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100'
                         }`}
                       >
-                        {g}
+                        {grade}
                       </button>
                     ))}
                   </div>
@@ -368,7 +395,6 @@ export const ProfilePage: React.FC = () => {
               </form>
             )}
 
-            {/* ── Password Section ── */}
             {activeSection === 'password' && (
               <form onSubmit={handlePasswordSubmit}>
                 <h2 className="text-lg font-semibold text-gray-900 mb-6">Change Password</h2>
@@ -383,7 +409,6 @@ export const ProfilePage: React.FC = () => {
               </form>
             )}
 
-            {/* ── Notifications Section ── */}
             {activeSection === 'notifications' && (
               <div>
                 <h2 className="text-lg font-semibold text-gray-900 mb-6">Notification Preferences</h2>
@@ -393,7 +418,7 @@ export const ProfilePage: React.FC = () => {
                     { key: 'email_assignment_reminders', title: 'Assignment Reminders', desc: 'Receive reminders for pending assignments' },
                     { key: 'email_deadline_alerts', title: 'Deadline Alerts', desc: 'Get alerts before deadlines approach' },
                     { key: 'browser_notifications', title: 'Browser Notifications', desc: 'Enable desktop push notifications' },
-                  ].map(item => (
+                  ].map((item) => (
                     <div key={item.key} className="flex items-center justify-between py-3 border-b border-gray-100 last:border-0">
                       <div>
                         <p className="font-medium text-gray-900">{item.title}</p>
@@ -416,6 +441,43 @@ export const ProfilePage: React.FC = () => {
                     Save Preferences
                   </Button>
                 </div>
+              </div>
+            )}
+
+            {activeSection === 'achievements' && (
+              <div className="space-y-5">
+                {achievementsLoading ? (
+                  <div className="space-y-3">
+                    <div className="h-28 animate-pulse rounded-xl bg-slate-100" />
+                    <div className="h-72 animate-pulse rounded-xl bg-slate-100" />
+                    <div className="h-40 animate-pulse rounded-xl bg-slate-100" />
+                  </div>
+                ) : gamification ? (
+                  <>
+                    <section className="rounded-xl border border-violet-100 bg-gradient-to-r from-violet-50 to-indigo-50 p-5">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-violet-600">Current Level</p>
+                      <h2 className="mt-1 text-2xl font-bold text-slate-900">
+                        Level {gamification.badge_current.level}: {gamification.badge_current.name}
+                      </h2>
+                      <p className="text-sm text-slate-600">{gamification.badge_current.ripple_range}</p>
+                      <p className="mt-3 text-sm font-semibold text-violet-700">Total Ripples: {gamification.points_total}</p>
+                    </section>
+
+                    <FishEvolutionWidget pointsTotal={gamification.points_total} />
+
+                    <DailyQuestCard
+                      quest={gamification.quest}
+                      claiming={claimQuestMutation.isPending}
+                      onClaim={() => claimQuestMutation.mutate(gamification.quest.key)}
+                    />
+
+                    <BadgeShowcase badges={gamification.badges} currentLevel={gamification.badge_current.level} />
+                  </>
+                ) : (
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-600">
+                    Could not load achievements right now.
+                  </div>
+                )}
               </div>
             )}
           </div>
