@@ -8,14 +8,110 @@ import {
 import './ProductLandingPage.css';
 
 declare global {
+  interface CalApi {
+    (...args: any[]): any;
+    loaded?: boolean;
+    ns?: Record<string, (...args: any[]) => any>;
+    q?: any[];
+  }
+
   interface Window {
-    Cal?: ((...args: any[]) => any) & { ns?: Record<string, (...args: any[]) => any>; loaded?: boolean };
+    Cal?: CalApi;
   }
 }
 
 const CAL_SCRIPT_SRC = 'https://app.cal.com/embed/embed.js';
 const CAL_NAMESPACE = 'learnpuddle30min';
 const CAL_CONTAINER_ID = 'lp-cal-inline-30min';
+
+type CalQueueTarget = ((...args: any[]) => any) & { q?: any[] };
+
+const queueCal = (target: CalQueueTarget | CalApi, args: any[]) => {
+  target.q = target.q || [];
+  target.q.push(args);
+};
+
+const ensureCalBootstrap = () => {
+  if (window.Cal) return;
+
+  const cal = ((...args: any[]) => {
+    const allArgs = [...args];
+    if (!cal.loaded) {
+      cal.ns = cal.ns || {};
+      const script = document.createElement('script');
+      script.src = CAL_SCRIPT_SRC;
+      script.async = true;
+      script.setAttribute('data-cal-embed', 'learnpuddle');
+      document.head.appendChild(script);
+      cal.loaded = true;
+    }
+
+    if (allArgs[0] === 'init') {
+      const namespace = allArgs[1];
+      if (typeof namespace === 'string') {
+        let nsApi = cal.ns?.[namespace] as CalQueueTarget | undefined;
+        if (!nsApi) {
+          nsApi = ((...nsArgs: any[]) => {
+            queueCal(nsApi as CalQueueTarget, [...nsArgs]);
+          }) as CalQueueTarget;
+          nsApi.q = [];
+        }
+        cal.ns = cal.ns || {};
+        cal.ns[namespace] = nsApi;
+        queueCal(nsApi, allArgs);
+        queueCal(cal, ['initNamespace', namespace]);
+        return;
+      }
+    }
+
+    queueCal(cal, allArgs);
+  }) as CalApi;
+
+  cal.ns = {};
+  cal.q = [];
+  window.Cal = cal;
+};
+
+const ensureCalScriptLoaded = async () => {
+  ensureCalBootstrap();
+  if (window.Cal?.loaded && document.querySelector('script[data-cal-embed="learnpuddle"][data-loaded="true"]')) {
+    return;
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    let timeoutId: number | undefined;
+    const onLoad = (script: HTMLScriptElement) => {
+      script.setAttribute('data-loaded', 'true');
+      if (timeoutId) window.clearTimeout(timeoutId);
+      resolve();
+    };
+    const onError = () => {
+      if (timeoutId) window.clearTimeout(timeoutId);
+      reject(new Error('Failed to load Cal embed script'));
+    };
+
+    const existing = document.querySelector<HTMLScriptElement>('script[data-cal-embed="learnpuddle"]');
+    if (existing) {
+      if (existing.getAttribute('data-loaded') === 'true') {
+        resolve();
+        return;
+      }
+      existing.addEventListener('load', () => onLoad(existing), { once: true });
+      existing.addEventListener('error', onError, { once: true });
+      timeoutId = window.setTimeout(() => onError(), 8000);
+      return;
+    }
+
+    const script = document.createElement('script');
+    script.src = CAL_SCRIPT_SRC;
+    script.async = true;
+    script.setAttribute('data-cal-embed', 'learnpuddle');
+    script.onload = () => onLoad(script);
+    script.onerror = onError;
+    timeoutId = window.setTimeout(() => onError(), 8000);
+    document.head.appendChild(script);
+  });
+};
 
 const heroOutcomes = [
   'Launch multi-tenant learning programs in days, not quarters.',
@@ -267,31 +363,13 @@ export const ProductLandingPage: React.FC = () => {
     if (!showCalModal || !inlineDemoEnabled) return;
 
     let cancelled = false;
-    const loadScript = async () => {
-      if (window.Cal?.loaded) return;
-      await new Promise<void>((resolve, reject) => {
-        const existing = document.querySelector<HTMLScriptElement>('script[data-cal-embed="learnpuddle"]');
-        if (existing) {
-          existing.addEventListener('load', () => resolve(), { once: true });
-          existing.addEventListener('error', () => reject(new Error('Failed to load Cal embed script')), {
-            once: true,
-          });
-          return;
-        }
-        const script = document.createElement('script');
-        script.src = CAL_SCRIPT_SRC;
-        script.async = true;
-        script.setAttribute('data-cal-embed', 'learnpuddle');
-        script.onload = () => resolve();
-        script.onerror = () => reject(new Error('Failed to load Cal embed script'));
-        document.head.appendChild(script);
-      });
-    };
+    let modalCheckTimeout: number | undefined;
 
     const initCal = async () => {
       try {
-        await loadScript();
+        await ensureCalScriptLoaded();
         if (cancelled || !window.Cal) return;
+
         window.Cal('init', CAL_NAMESPACE, { origin: 'https://app.cal.com' });
         window.Cal.ns?.[CAL_NAMESPACE]?.('inline', {
           elementOrSelector: `#${CAL_CONTAINER_ID}`,
@@ -303,9 +381,22 @@ export const ProductLandingPage: React.FC = () => {
           layout: 'month_view',
         });
         setCalLoadError('');
+        modalCheckTimeout = window.setTimeout(() => {
+          if (cancelled) return;
+          const hasInlineFrame = !!document
+            .getElementById(CAL_CONTAINER_ID)
+            ?.querySelector('iframe');
+          if (!hasInlineFrame) {
+            setCalLoadError(
+              'Inline scheduler was blocked by your browser or extension. Open the booking page instead.',
+            );
+          }
+        }, 2200);
       } catch {
         if (!cancelled) {
-          setCalLoadError('Unable to load inline scheduler right now.');
+          setCalLoadError(
+            'Unable to load the inline scheduler right now. Open the booking page instead.',
+          );
         }
       }
     };
@@ -313,6 +404,9 @@ export const ProductLandingPage: React.FC = () => {
     void initCal();
     return () => {
       cancelled = true;
+      if (modalCheckTimeout) {
+        window.clearTimeout(modalCheckTimeout);
+      }
     };
   }, [bookDemoCalLink, inlineDemoEnabled, showCalModal]);
 
@@ -321,6 +415,7 @@ export const ProductLandingPage: React.FC = () => {
       window.open(bookDemoUrl, '_blank', 'noopener,noreferrer');
       return;
     }
+    setCalLoadError('');
     setShowCalModal(true);
   }, [bookDemoUrl, inlineDemoEnabled]);
 

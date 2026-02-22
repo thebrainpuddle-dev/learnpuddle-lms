@@ -215,17 +215,36 @@ if STORAGE_BACKEND.lower() == "s3":
     AWS_QUERYSTRING_AUTH = config("STORAGE_QUERYSTRING_AUTH", default=False, cast=bool)
     AWS_DEFAULT_ACL = None
 
+    s3_options = {
+        "access_key": AWS_ACCESS_KEY_ID,
+        "secret_key": AWS_SECRET_ACCESS_KEY,
+        "bucket_name": AWS_STORAGE_BUCKET_NAME,
+        "region_name": AWS_S3_REGION_NAME or None,
+        "endpoint_url": AWS_S3_ENDPOINT_URL or None,
+        "use_ssl": AWS_S3_USE_SSL,
+        "querystring_auth": AWS_QUERYSTRING_AUTH,
+    }
+
+    # Faster object upload throughput for larger files (server -> S3/Spaces).
+    multipart_threshold_mb = max(config("S3_MULTIPART_THRESHOLD_MB", default=16, cast=int), 5)
+    multipart_chunk_mb = max(config("S3_MULTIPART_CHUNK_SIZE_MB", default=8, cast=int), 5)
+    max_concurrency = max(config("S3_MAX_CONCURRENCY", default=12, cast=int), 1)
+    use_threads = config("S3_USE_THREADS", default=True, cast=bool)
+    try:
+        from boto3.s3.transfer import TransferConfig
+
+        s3_options["transfer_config"] = TransferConfig(
+            multipart_threshold=multipart_threshold_mb * 1024 * 1024,
+            multipart_chunksize=multipart_chunk_mb * 1024 * 1024,
+            max_concurrency=max_concurrency,
+            use_threads=use_threads,
+        )
+    except Exception:
+        pass
+
     STORAGES["default"] = {
         "BACKEND": "storages.backends.s3boto3.S3Boto3Storage",
-        "OPTIONS": {
-            "access_key": AWS_ACCESS_KEY_ID,
-            "secret_key": AWS_SECRET_ACCESS_KEY,
-            "bucket_name": AWS_STORAGE_BUCKET_NAME,
-            "region_name": AWS_S3_REGION_NAME or None,
-            "endpoint_url": AWS_S3_ENDPOINT_URL or None,
-            "use_ssl": AWS_S3_USE_SSL,
-            "querystring_auth": AWS_QUERYSTRING_AUTH,
-        },
+        "OPTIONS": s3_options,
     }
 
 # -----------------------------------------------------------------------------
@@ -254,6 +273,8 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10MB before streaming to temp
 FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024
 MAX_VIDEO_UPLOAD_SIZE_MB = config("MAX_VIDEO_UPLOAD_SIZE_MB", default=500, cast=int)
+# Shorter HLS segments improve startup latency and recovery on weak networks.
+HLS_SEGMENT_DURATION_SECONDS = max(config("HLS_SEGMENT_DURATION_SECONDS", default=4, cast=int), 2)
 FILE_UPLOAD_HANDLERS = [
     "django.core.files.uploadhandler.TemporaryFileUploadHandler",
 ]
