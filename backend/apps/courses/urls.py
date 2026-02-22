@@ -4,6 +4,7 @@ from django.urls import path
 from . import views
 from . import video_views
 from . import learning_path_views
+from . import assignment_views
 
 app_name = 'courses'
 
@@ -21,6 +22,23 @@ urlpatterns = [
     # Module CRUD
     path('<uuid:course_id>/modules/', views.module_list_create, name='module_list_create'),
     path('<uuid:course_id>/modules/<uuid:module_id>/', views.module_detail, name='module_detail'),
+
+    # Course assignment builder (admin)
+    path(
+        '<uuid:course_id>/assignments/',
+        assignment_views.assignment_list_create,
+        name='assignment_list_create',
+    ),
+    path(
+        '<uuid:course_id>/assignments/<uuid:assignment_id>/',
+        assignment_views.assignment_detail,
+        name='assignment_detail',
+    ),
+    path(
+        '<uuid:course_id>/assignments/ai-generate/',
+        assignment_views.assignment_ai_generate,
+        name='assignment_ai_generate',
+    ),
     
     # Content CRUD
     path('<uuid:course_id>/modules/<uuid:module_id>/contents/', views.content_list_create, name='content_list_create'),

@@ -9,7 +9,13 @@ import { RichTextEditor } from '../../components/common/RichTextEditor';
 import DOMPurify from 'dompurify';
 import { useTenantStore } from '../../stores/tenantStore';
 import { useAuthStore } from '../../stores/authStore';
-import { adminService } from '../../services/adminService';
+import {
+  adminService,
+  type AdminAssignment,
+  type AdminAssignmentPayload,
+  type AdminAssignmentType,
+  type AdminQuizQuestion,
+} from '../../services/adminService';
 import { adminMediaService, type MediaAsset } from '../../services/adminMediaService';
 import api from '../../config/api';
 import {
@@ -35,6 +41,7 @@ import {
   GlobeAltIcon,
   FolderIcon,
   MagnifyingGlassIcon,
+  SparklesIcon,
 } from '@heroicons/react/24/outline';
 
 interface Teacher {
@@ -90,9 +97,10 @@ interface Course {
   modules: Module[];
 }
 
-type EditorTab = 'details' | 'content' | 'assignment';
+type EditorTab = 'details' | 'content' | 'assignments' | 'audience';
 type TextEditorMode = 'WYSIWYG' | 'MARKDOWN';
 type LibraryMediaFilter = 'ALL' | MediaAsset['media_type'];
+type AssignmentScopeFilter = 'ALL' | 'COURSE' | 'MODULE';
 
 const fetchCourse = async (id: string): Promise<Course> => {
   const response = await api.get(`/courses/${id}/`);
@@ -181,6 +189,32 @@ const uploadEditorImage = async (file: File): Promise<{ src: string; imageId: st
   };
 };
 
+const buildEmptyQuestion = (order: number): AdminQuizQuestion => ({
+  order,
+  question_type: 'MCQ',
+  selection_mode: 'SINGLE',
+  prompt: '',
+  options: ['Option 1', 'Option 2'],
+  correct_answer: { option_index: 0 },
+  explanation: '',
+  points: 1,
+});
+
+const buildEmptyAssignmentForm = (): AdminAssignmentPayload => ({
+  title: '',
+  description: '',
+  instructions: '',
+  due_date: null,
+  max_score: 100,
+  passing_score: 70,
+  is_mandatory: true,
+  is_active: true,
+  scope_type: 'COURSE',
+  module_id: null,
+  assignment_type: 'QUIZ',
+  questions: [buildEmptyQuestion(1)],
+});
+
 export const CourseEditorPage: React.FC = () => {
   const toast = useToast();
   const { courseId } = useParams<{ courseId: string }>();
@@ -254,7 +288,8 @@ export const CourseEditorPage: React.FC = () => {
 
   const resolveTab = React.useCallback(
     (raw: string | null): EditorTab => {
-      if (raw === 'assignment' && canManageAssignments) return 'assignment';
+      if ((raw === 'assignment' || raw === 'audience') && canManageAssignments) return 'audience';
+      if (raw === 'assignments' && canManageAssignments && isEditing) return 'assignments';
       if (raw === 'content' && isEditing) return 'content';
       return 'details';
     },
@@ -266,8 +301,12 @@ export const CourseEditorPage: React.FC = () => {
   );
   const setActiveTab = React.useCallback(
     (nextTab: EditorTab) => {
-      const assignmentSafeTab = !canManageAssignments && nextTab === 'assignment' ? 'details' : nextTab;
-      const sanitizedTab = !isEditing && assignmentSafeTab === 'content' ? 'details' : assignmentSafeTab;
+      const assignmentSafeTab = !canManageAssignments && (nextTab === 'assignments' || nextTab === 'audience')
+        ? 'details'
+        : nextTab;
+      const sanitizedTab = !isEditing && (assignmentSafeTab === 'content' || assignmentSafeTab === 'assignments' || assignmentSafeTab === 'audience')
+        ? 'details'
+        : assignmentSafeTab;
       if (activeTab === sanitizedTab) return;
       const params = new URLSearchParams(location.search);
       params.set('tab', sanitizedTab);
@@ -319,6 +358,13 @@ export const CourseEditorPage: React.FC = () => {
     assigned_groups: [] as string[],
     assigned_teachers: [] as string[],
   });
+  const [assignmentScopeFilter, setAssignmentScopeFilter] = useState<AssignmentScopeFilter>('ALL');
+  const [selectedAssignmentId, setSelectedAssignmentId] = useState<string | null>(null);
+  const [isCreatingNewAssignment, setIsCreatingNewAssignment] = useState(false);
+  const [assignmentForm, setAssignmentForm] = useState<AdminAssignmentPayload>(buildEmptyAssignmentForm());
+  const [aiQuestionCount, setAiQuestionCount] = useState(6);
+  const [aiIncludeShortAnswer, setAiIncludeShortAnswer] = useState(true);
+  const [aiTitleHint, setAiTitleHint] = useState('');
 
   useEffect(() => {
     let isMounted = true;
@@ -376,6 +422,120 @@ export const CourseEditorPage: React.FC = () => {
     queryFn: fetchGroups,
     enabled: canManageAssignments,
   });
+
+  const { data: assignmentList = [], isLoading: assignmentListLoading } = useQuery({
+    queryKey: ['courseAssignments', courseId, assignmentScopeFilter],
+    queryFn: () => adminService.listCourseAssignments(courseId!, {
+      scope: assignmentScopeFilter,
+    }),
+    enabled: Boolean(courseId) && isEditing && canManageAssignments,
+  });
+
+  const { data: selectedAssignment, isLoading: selectedAssignmentLoading } = useQuery({
+    queryKey: ['courseAssignment', courseId, selectedAssignmentId],
+    queryFn: () => adminService.getCourseAssignment(courseId!, selectedAssignmentId!),
+    enabled: Boolean(courseId && selectedAssignmentId),
+  });
+
+  const createAssignmentMutation = useMutation({
+    mutationFn: (payload: AdminAssignmentPayload) => adminService.createCourseAssignment(courseId!, payload),
+    onSuccess: async (created) => {
+      await queryClient.invalidateQueries({ queryKey: ['courseAssignments', courseId] });
+      setIsCreatingNewAssignment(false);
+      setSelectedAssignmentId(created.id);
+      toast.success('Assignment created', 'Assignment builder item is ready to edit.');
+    },
+    onError: (error: any) => {
+      const msg = error?.response?.data?.error || 'Please review inputs and try again.';
+      toast.error('Failed to create assignment', msg);
+    },
+  });
+
+  const updateAssignmentMutation = useMutation({
+    mutationFn: ({ assignmentId, payload }: { assignmentId: string; payload: Partial<AdminAssignmentPayload> }) =>
+      adminService.updateCourseAssignment(courseId!, assignmentId, payload),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['courseAssignments', courseId] });
+      await queryClient.invalidateQueries({ queryKey: ['courseAssignment', courseId, selectedAssignmentId] });
+      toast.success('Assignment saved', 'Builder changes have been saved.');
+    },
+    onError: (error: any) => {
+      const msg = error?.response?.data?.error || 'Please review inputs and try again.';
+      toast.error('Failed to save assignment', msg);
+    },
+  });
+
+  const deleteAssignmentMutation = useMutation({
+    mutationFn: (assignmentId: string) => adminService.deleteCourseAssignment(courseId!, assignmentId),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['courseAssignments', courseId] });
+      setSelectedAssignmentId(null);
+      setIsCreatingNewAssignment(false);
+      setAssignmentForm(buildEmptyAssignmentForm());
+      toast.success('Assignment deleted', 'The assignment was removed from this course.');
+    },
+    onError: (error: any) => {
+      const msg = error?.response?.data?.error || 'Please try again.';
+      toast.error('Failed to delete assignment', msg);
+    },
+  });
+
+  const aiGenerateMutation = useMutation({
+    mutationFn: () =>
+      adminService.aiGenerateCourseAssignment(courseId!, {
+        scope_type: assignmentForm.scope_type,
+        module_id: assignmentForm.scope_type === 'MODULE' ? assignmentForm.module_id : null,
+        question_count: aiQuestionCount,
+        include_short_answer: aiIncludeShortAnswer,
+        title_hint: aiTitleHint || assignmentForm.title || undefined,
+      }),
+    onSuccess: async (assignment) => {
+      await queryClient.invalidateQueries({ queryKey: ['courseAssignments', courseId] });
+      setIsCreatingNewAssignment(false);
+      setSelectedAssignmentId(assignment.id);
+      toast.success('AI assignment generated', 'Review and save the generated questions.');
+    },
+    onError: (error: any) => {
+      const msg = error?.response?.data?.error || 'Please try again.';
+      toast.error('AI generation failed', msg);
+    },
+  });
+
+  useEffect(() => {
+    if (!assignmentList.length) return;
+    if (!selectedAssignmentId && !isCreatingNewAssignment) {
+      setSelectedAssignmentId(assignmentList[0].id);
+      return;
+    }
+    if (!assignmentList.find((item) => item.id === selectedAssignmentId)) {
+      setSelectedAssignmentId(assignmentList[0].id);
+    }
+  }, [assignmentList, selectedAssignmentId, isCreatingNewAssignment]);
+
+  useEffect(() => {
+    if (!selectedAssignment) return;
+    setAssignmentForm({
+      title: selectedAssignment.title,
+      description: selectedAssignment.description || '',
+      instructions: selectedAssignment.instructions || '',
+      due_date: selectedAssignment.due_date || null,
+      max_score: Number(selectedAssignment.max_score || 100),
+      passing_score: Number(selectedAssignment.passing_score || 70),
+      is_mandatory: selectedAssignment.is_mandatory,
+      is_active: selectedAssignment.is_active,
+      scope_type: selectedAssignment.scope_type,
+      module_id: selectedAssignment.module_id,
+      assignment_type: selectedAssignment.assignment_type,
+      questions: selectedAssignment.questions?.length
+        ? selectedAssignment.questions.map((q) => ({
+            ...q,
+            selection_mode: q.selection_mode || 'SINGLE',
+            options: q.options || [],
+            correct_answer: q.correct_answer || {},
+          }))
+        : [],
+    });
+  }, [selectedAssignment]);
 
   const createGroupMutation = useMutation({
     mutationFn: (payload: { name: string; description?: string; group_type?: string }) =>
@@ -883,6 +1043,120 @@ export const CourseEditorPage: React.FC = () => {
     }
   };
 
+  const updateAssignmentQuestion = (questionIndex: number, updater: (question: AdminQuizQuestion) => AdminQuizQuestion) => {
+    setAssignmentForm((prev) => {
+      const questions = [...(prev.questions || [])];
+      questions[questionIndex] = updater(questions[questionIndex]);
+      return { ...prev, questions };
+    });
+  };
+
+  const addAssignmentQuestion = () => {
+    setAssignmentForm((prev) => {
+      const questions = [...(prev.questions || [])];
+      questions.push(buildEmptyQuestion(questions.length + 1));
+      return { ...prev, questions };
+    });
+  };
+
+  const removeAssignmentQuestion = (questionIndex: number) => {
+    setAssignmentForm((prev) => {
+      const questions = [...(prev.questions || [])];
+      questions.splice(questionIndex, 1);
+      const reordered = questions.map((q, idx) => ({ ...q, order: idx + 1 }));
+      return { ...prev, questions: reordered };
+    });
+  };
+
+  const resetAssignmentBuilder = () => {
+    setIsCreatingNewAssignment(true);
+    setSelectedAssignmentId(null);
+    setAssignmentForm(buildEmptyAssignmentForm());
+    setAiTitleHint('');
+    setAiQuestionCount(6);
+    setAiIncludeShortAnswer(true);
+  };
+
+  const validateAssignmentForm = (): string | null => {
+    if (!assignmentForm.title.trim()) return 'Assignment title is required.';
+    if (assignmentForm.scope_type === 'MODULE' && !assignmentForm.module_id) return 'Select a module for module-scoped assignments.';
+    if (assignmentForm.assignment_type === 'QUIZ') {
+      if (!assignmentForm.questions || assignmentForm.questions.length === 0) return 'At least one question is required for quiz assignments.';
+      for (let i = 0; i < assignmentForm.questions.length; i += 1) {
+        const q = assignmentForm.questions[i];
+        if (!q.prompt.trim()) return `Question ${i + 1} prompt is required.`;
+        if (q.question_type === 'MCQ') {
+          const options = (q.options || []).map((opt) => opt.trim()).filter(Boolean);
+          if (options.length < 2) return `Question ${i + 1} needs at least 2 options.`;
+          if (q.selection_mode === 'SINGLE') {
+            const idx = Number(q.correct_answer?.option_index);
+            if (!Number.isInteger(idx) || idx < 0 || idx >= options.length) return `Question ${i + 1} has an invalid correct option.`;
+          } else {
+            const indices = Array.isArray(q.correct_answer?.option_indices) ? q.correct_answer.option_indices : [];
+            if (indices.length < 2) return `Question ${i + 1} needs at least 2 correct options for multi-select.`;
+          }
+        }
+        if (q.question_type === 'TRUE_FALSE' && typeof q.correct_answer?.value !== 'boolean') {
+          return `Question ${i + 1} must set True or False as the correct answer.`;
+        }
+      }
+    }
+    return null;
+  };
+
+  const sanitizeAssignmentQuestions = (questions: AdminQuizQuestion[]) =>
+    questions.map((question, index) => ({
+      ...question,
+      order: index + 1,
+      prompt: question.prompt.trim(),
+      options: (question.options || []).map((opt) => opt.trim()).filter(Boolean),
+      points: Number(question.points || (question.question_type === 'SHORT_ANSWER' ? 2 : 1)),
+      correct_answer:
+        question.question_type === 'MCQ'
+          ? question.selection_mode === 'MULTIPLE'
+            ? {
+                option_indices: (Array.isArray(question.correct_answer?.option_indices)
+                  ? question.correct_answer.option_indices
+                  : []
+                )
+                  .map((value: number) => Number(value))
+                  .filter((value: number) => Number.isInteger(value)),
+              }
+            : { option_index: Number(question.correct_answer?.option_index ?? 0) }
+          : question.question_type === 'TRUE_FALSE'
+          ? { value: Boolean(question.correct_answer?.value) }
+          : {},
+    }));
+
+  const handleSaveAssignmentBuilder = () => {
+    if (!courseId) return;
+    const validationError = validateAssignmentForm();
+    if (validationError) {
+      toast.error('Assignment validation failed', validationError);
+      return;
+    }
+
+    const payload: AdminAssignmentPayload = {
+      ...assignmentForm,
+      title: assignmentForm.title.trim(),
+      description: assignmentForm.description || '',
+      instructions: assignmentForm.instructions || '',
+      module_id: assignmentForm.scope_type === 'MODULE' ? assignmentForm.module_id : null,
+      questions: assignmentForm.assignment_type === 'QUIZ'
+        ? sanitizeAssignmentQuestions(assignmentForm.questions || [])
+        : [],
+    };
+    if (!payload.due_date) {
+      delete payload.due_date;
+    }
+
+    if (selectedAssignmentId) {
+      updateAssignmentMutation.mutate({ assignmentId: selectedAssignmentId, payload });
+    } else {
+      createAssignmentMutation.mutate(payload);
+    }
+  };
+
   if (courseLoading && isEditing) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
@@ -1029,7 +1303,10 @@ export const CourseEditorPage: React.FC = () => {
           {[
             { key: 'details', label: 'Details' },
             { key: 'content', label: 'Content', disabled: !isEditing },
-            ...(canManageAssignments ? [{ key: 'assignment', label: 'Assignment' }] : []),
+            ...(canManageAssignments ? [
+              { key: 'assignments', label: 'Assignment Builder', disabled: !isEditing },
+              { key: 'audience', label: 'Course Audience', disabled: !isEditing },
+            ] : []),
           ].map((tab) => (
             <button
               type="button"
@@ -1039,6 +1316,8 @@ export const CourseEditorPage: React.FC = () => {
                   ? 'admin-course-editor-tab-details'
                   : tab.key === 'content'
                   ? 'admin-course-editor-tab-content'
+                  : tab.key === 'assignments'
+                  ? 'admin-course-editor-tab-assignment-builder'
                   : 'admin-course-editor-tab-assignment'
               }
               onClick={() => !tab.disabled && setActiveTab(tab.key as EditorTab)}
@@ -1496,20 +1775,6 @@ export const CourseEditorPage: React.FC = () => {
                             </select>
                           </div>
 
-                          {!isTeacherAuthoring && (
-                            <div className="flex items-center justify-between rounded-lg border border-gray-200 bg-white px-3 py-2">
-                              <p className="text-xs text-gray-600">Need reusable assets across courses?</p>
-                              <a
-                                href="/admin/media"
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-xs font-medium text-primary-700 hover:text-primary-800 underline underline-offset-2"
-                              >
-                                Open Media Library
-                              </a>
-                            </div>
-                          )}
-
                           {newContentData.content_type === 'TEXT' && (
                             <>
                               <div className="flex items-center justify-between">
@@ -1686,10 +1951,437 @@ export const CourseEditorPage: React.FC = () => {
         </div>
       )}
 
-      {/* Assignment Tab */}
-      {activeTab === 'assignment' && canManageAssignments && (
+      {/* Assignment Builder Tab */}
+      {activeTab === 'assignments' && canManageAssignments && isEditing && (
+        <div data-tour="admin-course-assignment-builder-panel" className="grid grid-cols-1 gap-6 xl:grid-cols-5">
+          <div className="xl:col-span-2 bg-white rounded-xl border border-gray-200 p-4 space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-gray-900">Assignment Builder</h2>
+              <Button variant="outline" size="sm" onClick={resetAssignmentBuilder}>
+                + New
+              </Button>
+            </div>
+            <div className="flex items-center gap-2">
+              {(['ALL', 'COURSE', 'MODULE'] as const).map((scope) => (
+                <button
+                  key={scope}
+                  type="button"
+                  onClick={() => setAssignmentScopeFilter(scope)}
+                  className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                    assignmentScopeFilter === scope
+                      ? 'bg-primary-600 text-white'
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  }`}
+                >
+                  {scope}
+                </button>
+              ))}
+            </div>
+            <div className="max-h-[560px] overflow-y-auto space-y-2">
+              {assignmentListLoading ? (
+                <div className="py-8 text-center text-sm text-gray-500">Loading assignments…</div>
+              ) : assignmentList.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-gray-300 p-6 text-center text-sm text-gray-500">
+                  No assignments yet. Create your first one.
+                </div>
+              ) : (
+                assignmentList.map((assignment: AdminAssignment) => (
+                  <button
+                    key={assignment.id}
+                    type="button"
+                    onClick={() => {
+                      setIsCreatingNewAssignment(false);
+                      setSelectedAssignmentId(assignment.id);
+                    }}
+                    className={`w-full rounded-lg border p-3 text-left transition-colors ${
+                      selectedAssignmentId === assignment.id
+                        ? 'border-primary-500 bg-primary-50'
+                        : 'border-gray-200 hover:border-gray-300'
+                    }`}
+                  >
+                    <p className="text-sm font-semibold text-gray-900 truncate">{assignment.title}</p>
+                    <p className="mt-1 text-xs text-gray-500">
+                      {assignment.assignment_type === 'QUIZ' ? 'Quiz' : 'Written'} • {assignment.scope_type === 'MODULE' ? assignment.module_title || 'Module' : 'Course'}
+                    </p>
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+
+          <div className="xl:col-span-3 bg-white rounded-xl border border-gray-200 p-6 space-y-5">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-gray-900">
+                {selectedAssignmentId ? 'Edit Assignment' : 'Create Assignment'}
+              </h3>
+              {selectedAssignmentId && (
+                <Button
+                  variant="danger"
+                  size="sm"
+                  onClick={() => deleteAssignmentMutation.mutate(selectedAssignmentId)}
+                  loading={deleteAssignmentMutation.isPending}
+                >
+                  Delete
+                </Button>
+              )}
+            </div>
+
+            {selectedAssignmentLoading ? (
+              <div className="py-8 text-center text-sm text-gray-500">Loading assignment details…</div>
+            ) : (
+              <>
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <Input
+                    label="Assignment Title"
+                    name="assignment_title"
+                    value={assignmentForm.title}
+                    onChange={(e) => setAssignmentForm((prev) => ({ ...prev, title: e.target.value }))}
+                    placeholder="Assignment title"
+                    required
+                  />
+                  <div>
+                    <label htmlFor="assignment-type" className="block text-sm font-medium text-gray-700 mb-1">Type</label>
+                    <select
+                      id="assignment-type"
+                      name="assignment_type"
+                      value={assignmentForm.assignment_type}
+                      onChange={(e) => {
+                        const nextType = e.target.value as AdminAssignmentType;
+                        setAssignmentForm((prev) => ({
+                          ...prev,
+                          assignment_type: nextType,
+                          questions: nextType === 'QUIZ' ? (prev.questions?.length ? prev.questions : [buildEmptyQuestion(1)]) : [],
+                        }));
+                      }}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                    >
+                      <option value="QUIZ">Quiz (Objective)</option>
+                      <option value="WRITTEN">Written Assignment</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label htmlFor="assignment-scope" className="block text-sm font-medium text-gray-700 mb-1">Scope</label>
+                    <select
+                      id="assignment-scope"
+                      name="assignment_scope"
+                      value={assignmentForm.scope_type}
+                      onChange={(e) => {
+                        const scope = e.target.value as 'COURSE' | 'MODULE';
+                        setAssignmentForm((prev) => ({
+                          ...prev,
+                          scope_type: scope,
+                          module_id: scope === 'MODULE' ? prev.module_id || course?.modules?.[0]?.id || null : null,
+                        }));
+                      }}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                    >
+                      <option value="COURSE">Course level</option>
+                      <option value="MODULE">Module level</option>
+                    </select>
+                  </div>
+                  {assignmentForm.scope_type === 'MODULE' && (
+                    <div>
+                      <label htmlFor="assignment-module" className="block text-sm font-medium text-gray-700 mb-1">Module</label>
+                      <select
+                        id="assignment-module"
+                        name="assignment_module"
+                        value={assignmentForm.module_id || ''}
+                        onChange={(e) => setAssignmentForm((prev) => ({ ...prev, module_id: e.target.value || null }))}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                      >
+                        <option value="">Select module</option>
+                        {course?.modules?.map((module) => (
+                          <option key={module.id} value={module.id}>{module.title}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <label htmlFor="assignment-description" className="block text-sm font-medium text-gray-700 mb-1">Description</label>
+                  <textarea
+                    id="assignment-description"
+                    value={assignmentForm.description}
+                    onChange={(e) => setAssignmentForm((prev) => ({ ...prev, description: e.target.value }))}
+                    rows={3}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                    placeholder="Assignment description"
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="assignment-instructions" className="block text-sm font-medium text-gray-700 mb-1">Instructions</label>
+                  <textarea
+                    id="assignment-instructions"
+                    value={assignmentForm.instructions}
+                    onChange={(e) => setAssignmentForm((prev) => ({ ...prev, instructions: e.target.value }))}
+                    rows={3}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                    placeholder="What should teachers submit?"
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+                  <Input
+                    label="Due Date"
+                    name="assignment_due_date"
+                    type="datetime-local"
+                    value={assignmentForm.due_date ? assignmentForm.due_date.slice(0, 16) : ''}
+                    onChange={(e) => setAssignmentForm((prev) => ({ ...prev, due_date: e.target.value || null }))}
+                  />
+                  <Input
+                    label="Max Score"
+                    name="assignment_max_score"
+                    type="number"
+                    min="0"
+                    value={assignmentForm.max_score}
+                    onChange={(e) => setAssignmentForm((prev) => ({ ...prev, max_score: Number(e.target.value || 0) }))}
+                  />
+                  <Input
+                    label="Passing Score"
+                    name="assignment_passing_score"
+                    type="number"
+                    min="0"
+                    value={assignmentForm.passing_score}
+                    onChange={(e) => setAssignmentForm((prev) => ({ ...prev, passing_score: Number(e.target.value || 0) }))}
+                  />
+                  <div className="flex items-end pb-2">
+                    <label className="inline-flex items-center text-sm text-gray-700">
+                      <input
+                        type="checkbox"
+                        checked={assignmentForm.is_mandatory}
+                        onChange={(e) => setAssignmentForm((prev) => ({ ...prev, is_mandatory: e.target.checked }))}
+                        className="mr-2 h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                      />
+                      Mandatory
+                    </label>
+                  </div>
+                </div>
+
+                {assignmentForm.assignment_type === 'QUIZ' && (
+                  <div className="space-y-4 rounded-xl border border-gray-200 p-4">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-sm font-semibold text-gray-900">Quiz Questions</h4>
+                      <Button variant="outline" size="sm" onClick={addAssignmentQuestion}>+ Add Question</Button>
+                    </div>
+                    {(assignmentForm.questions || []).map((question, questionIndex) => (
+                      <div key={`${question.order}-${questionIndex}`} className="rounded-lg border border-gray-200 p-4 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <p className="text-sm font-medium text-gray-700">Question {questionIndex + 1}</p>
+                          {(assignmentForm.questions || []).length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => removeAssignmentQuestion(questionIndex)}
+                              className="text-xs font-medium text-red-600 hover:text-red-700"
+                            >
+                              Remove
+                            </button>
+                          )}
+                        </div>
+                        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                          <div className="md:col-span-2">
+                            <label className="block text-xs font-medium text-gray-600 mb-1">Prompt</label>
+                            <textarea
+                              value={question.prompt}
+                              onChange={(e) => updateAssignmentQuestion(questionIndex, (q) => ({ ...q, prompt: e.target.value }))}
+                              rows={2}
+                              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-gray-600 mb-1">Type</label>
+                            <select
+                              value={question.question_type}
+                              onChange={(e) => {
+                                const qType = e.target.value as AdminQuizQuestion['question_type'];
+                                updateAssignmentQuestion(questionIndex, (q) => ({
+                                  ...q,
+                                  question_type: qType,
+                                  selection_mode: qType === 'MCQ' ? q.selection_mode : 'SINGLE',
+                                  options: qType === 'MCQ' ? (q.options.length ? q.options : ['Option 1', 'Option 2']) : qType === 'TRUE_FALSE' ? ['True', 'False'] : [],
+                                  correct_answer:
+                                    qType === 'MCQ'
+                                      ? { option_index: 0 }
+                                      : qType === 'TRUE_FALSE'
+                                      ? { value: true }
+                                      : {},
+                                  points: qType === 'SHORT_ANSWER' ? 2 : 1,
+                                }));
+                              }}
+                              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                            >
+                              <option value="MCQ">MCQ</option>
+                              <option value="TRUE_FALSE">True / False</option>
+                              <option value="SHORT_ANSWER">Short Answer</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        {question.question_type === 'MCQ' && (
+                          <div className="space-y-3">
+                            <div className="flex items-center gap-3">
+                              <label className="text-xs font-medium text-gray-600">Mode</label>
+                              <select
+                                value={question.selection_mode}
+                                onChange={(e) => {
+                                  const mode = e.target.value as 'SINGLE' | 'MULTIPLE';
+                                  updateAssignmentQuestion(questionIndex, (q) => ({
+                                    ...q,
+                                    selection_mode: mode,
+                                    correct_answer: mode === 'MULTIPLE' ? { option_indices: [0, 1] } : { option_index: 0 },
+                                  }));
+                                }}
+                                className="px-2 py-1 border border-gray-300 rounded text-xs"
+                              >
+                                <option value="SINGLE">Single Choice</option>
+                                <option value="MULTIPLE">Multiple Choice</option>
+                              </select>
+                            </div>
+                            {(question.options || []).map((option, optionIndex) => (
+                              <div key={optionIndex} className="flex items-center gap-2">
+                                {question.selection_mode === 'SINGLE' ? (
+                                  <input
+                                    type="radio"
+                                    name={`q-${questionIndex}-single`}
+                                    checked={question.correct_answer?.option_index === optionIndex}
+                                    onChange={() => updateAssignmentQuestion(questionIndex, (q) => ({ ...q, correct_answer: { option_index: optionIndex } }))}
+                                    className="h-4 w-4 text-primary-600"
+                                  />
+                                ) : (
+                                  <input
+                                    type="checkbox"
+                                    checked={Array.isArray(question.correct_answer?.option_indices) && question.correct_answer.option_indices.includes(optionIndex)}
+                                    onChange={(e) => {
+                                      const current = Array.isArray(question.correct_answer?.option_indices)
+                                        ? question.correct_answer.option_indices
+                                        : [];
+                                      const next = e.target.checked
+                                        ? [...current, optionIndex]
+                                        : current.filter((value: number) => value !== optionIndex);
+                                      updateAssignmentQuestion(questionIndex, (q) => ({ ...q, correct_answer: { option_indices: next } }));
+                                    }}
+                                    className="h-4 w-4 text-primary-600 rounded"
+                                  />
+                                )}
+                                <input
+                                  type="text"
+                                  value={option}
+                                  onChange={(e) => updateAssignmentQuestion(questionIndex, (q) => {
+                                    const options = [...(q.options || [])];
+                                    options[optionIndex] = e.target.value;
+                                    return { ...q, options };
+                                  })}
+                                  className="flex-1 px-2 py-1 border border-gray-300 rounded text-sm"
+                                />
+                              </div>
+                            ))}
+                            <button
+                              type="button"
+                              onClick={() => updateAssignmentQuestion(questionIndex, (q) => ({ ...q, options: [...(q.options || []), `Option ${(q.options?.length || 0) + 1}`] }))}
+                              className="text-xs font-medium text-primary-700 hover:text-primary-800"
+                            >
+                              + Add option
+                            </button>
+                          </div>
+                        )}
+
+                        {question.question_type === 'TRUE_FALSE' && (
+                          <div className="flex items-center gap-4">
+                            {[true, false].map((value) => (
+                              <label key={String(value)} className="inline-flex items-center gap-2 text-sm text-gray-700">
+                                <input
+                                  type="radio"
+                                  name={`q-${questionIndex}-bool`}
+                                  checked={question.correct_answer?.value === value}
+                                  onChange={() => updateAssignmentQuestion(questionIndex, (q) => ({ ...q, correct_answer: { value } }))}
+                                  className="h-4 w-4 text-primary-600"
+                                />
+                                {value ? 'True' : 'False'}
+                              </label>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50 p-4 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <SparklesIcon className="h-5 w-5 text-primary-600" />
+                    <h4 className="text-sm font-semibold text-gray-900">AI Assignment Generation</h4>
+                  </div>
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                    <Input
+                      label="Question Count"
+                      name="ai_question_count"
+                      type="number"
+                      min="2"
+                      max="20"
+                      value={aiQuestionCount}
+                      onChange={(e) => setAiQuestionCount(Number(e.target.value || 6))}
+                    />
+                    <Input
+                      label="Title Hint (Optional)"
+                      name="ai_title_hint"
+                      value={aiTitleHint}
+                      onChange={(e) => setAiTitleHint(e.target.value)}
+                      placeholder="e.g., Module Assessment"
+                    />
+                    <div className="flex items-end pb-2">
+                      <label className="inline-flex items-center text-sm text-gray-700">
+                        <input
+                          type="checkbox"
+                          checked={aiIncludeShortAnswer}
+                          onChange={(e) => setAiIncludeShortAnswer(e.target.checked)}
+                          className="mr-2 h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                        />
+                        Include short-answer
+                      </label>
+                    </div>
+                  </div>
+                  <div className="flex justify-end">
+                    <Button
+                      variant="outline"
+                      onClick={() => aiGenerateMutation.mutate()}
+                      loading={aiGenerateMutation.isPending}
+                    >
+                      Generate with AI
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="rounded-lg border border-gray-200 p-3">
+                  <p className="text-xs font-semibold text-gray-600 mb-2">Coming next</p>
+                  <div className="flex flex-wrap gap-2">
+                    <span className="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600">Drag-and-drop</span>
+                    <span className="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600">Match-the-pairs</span>
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-3">
+                  <Button variant="outline" onClick={resetAssignmentBuilder}>
+                    Reset
+                  </Button>
+                  <Button
+                    variant="primary"
+                    onClick={handleSaveAssignmentBuilder}
+                    loading={createAssignmentMutation.isPending || updateAssignmentMutation.isPending}
+                  >
+                    {selectedAssignmentId ? 'Save Assignment' : 'Create Assignment'}
+                  </Button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Course Audience Tab */}
+      {activeTab === 'audience' && canManageAssignments && (
         <div data-tour="admin-course-assignment-panel" className="bg-white rounded-xl border border-gray-200 p-6 space-y-6">
-          <h2 className="text-lg font-semibold text-gray-900">Course Assignment</h2>
+          <h2 className="text-lg font-semibold text-gray-900">Course Audience</h2>
           
           {/* Assign to All */}
           <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
@@ -1714,7 +2406,7 @@ export const CourseEditorPage: React.FC = () => {
             </label>
           </div>
 
-          {/* Specific Assignment */}
+          {/* Specific Audience */}
           {!formData.assigned_to_all && (
             <>
               {/* Groups */}
@@ -1810,7 +2502,7 @@ export const CourseEditorPage: React.FC = () => {
           {/* Summary */}
           <div className="p-4 bg-blue-50 rounded-lg">
             <p className="text-sm text-blue-800">
-              <strong>Assignment Summary:</strong>{' '}
+              <strong>Audience Summary:</strong>{' '}
               {formData.assigned_to_all
                 ? 'All teachers in your school will have access to this course.'
                 : `${formData.assigned_groups.length} group(s) and ${formData.assigned_teachers.length} individual teacher(s) selected.`}

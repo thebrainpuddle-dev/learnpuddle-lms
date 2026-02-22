@@ -45,6 +45,53 @@ describe('CourseEditorPage tab URL stability', () => {
     });
 
     mockedApi.get.mockImplementation(async (url: string) => {
+      if (url === '/courses/abc/') {
+        return {
+          data: {
+            id: 'abc',
+            title: 'Demo Course',
+            slug: 'demo-course',
+            description: 'Demo',
+            thumbnail: null,
+            thumbnail_url: null,
+            is_mandatory: false,
+            deadline: null,
+            estimated_hours: 0,
+            assigned_to_all: true,
+            assigned_groups: [],
+            assigned_teachers: [],
+            is_published: false,
+            modules: [],
+          },
+        } as any;
+      }
+      if (url === '/courses/abc/assignments/') {
+        return { data: [] } as any;
+      }
+      if (url.startsWith('/courses/abc/assignments/')) {
+        return {
+          data: {
+            id: 'assignment-1',
+            title: 'Generated Assignment',
+            description: '',
+            instructions: '',
+            due_date: null,
+            max_score: '100',
+            passing_score: '70',
+            is_mandatory: true,
+            is_active: true,
+            scope_type: 'COURSE',
+            module_id: null,
+            module_title: null,
+            assignment_type: 'QUIZ',
+            generation_source: 'MANUAL',
+            generation_metadata: {},
+            questions: [],
+            created_at: '2026-01-01T00:00:00Z',
+            updated_at: '2026-01-01T00:00:00Z',
+          },
+        } as any;
+      }
       if (url === '/teachers/') {
         return { data: { results: [] } } as any;
       }
@@ -53,7 +100,33 @@ describe('CourseEditorPage tab URL stability', () => {
       }
       return { data: {} } as any;
     });
-    mockedApi.post.mockResolvedValue({ data: {} } as any);
+    mockedApi.post.mockImplementation(async (url: string) => {
+      if (url === '/courses/abc/assignments/') {
+        return {
+          data: {
+            id: 'assignment-1',
+            title: 'Generated Assignment',
+            description: '',
+            instructions: '',
+            due_date: null,
+            max_score: '100',
+            passing_score: '70',
+            is_mandatory: true,
+            is_active: true,
+            scope_type: 'COURSE',
+            module_id: null,
+            module_title: null,
+            assignment_type: 'QUIZ',
+            generation_source: 'MANUAL',
+            generation_metadata: {},
+            questions: [],
+            created_at: '2026-01-01T00:00:00Z',
+            updated_at: '2026-01-01T00:00:00Z',
+          },
+        } as any;
+      }
+      return { data: {} } as any;
+    });
     mockedApi.patch.mockResolvedValue({ data: {} } as any);
     mockedApi.delete.mockResolvedValue({ data: {} } as any);
   });
@@ -94,19 +167,61 @@ describe('CourseEditorPage tab URL stability', () => {
     });
   });
 
-  it('changes only URL tab param when selecting assignment tab', async () => {
-    renderPage('/admin/courses/new?tab=details');
+  it('maps legacy assignment tab param to audience tab on edit routes', async () => {
+    renderPage('/admin/courses/abc?tab=assignment');
 
-    expect(await screen.findByRole('button', { name: 'Create Course' })).toBeInTheDocument();
-
-    await userEvent.click(screen.getByRole('button', { name: 'Assignment' }));
+    expect(await screen.findByRole('button', { name: 'Save Changes' })).toBeInTheDocument();
 
     await waitFor(() => {
-      expect(screen.getByTestId('search')).toHaveTextContent('?tab=assignment');
+      expect(screen.getByTestId('search')).toHaveTextContent('?tab=audience');
     });
+  });
+
+  it('changes URL tab param when selecting assignment builder tab', async () => {
+    renderPage('/admin/courses/abc?tab=details');
+
+    expect(await screen.findByRole('button', { name: 'Save Changes' })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Assignment Builder' }));
 
     await waitFor(() => {
-      expect(screen.getByTestId('search')).toHaveTextContent('?tab=assignment');
+      expect(screen.getByTestId('search')).toHaveTextContent('?tab=assignments');
+    });
+  });
+
+  it('removes the reusable-assets helper text in content form', async () => {
+    renderPage('/admin/courses/abc?tab=content');
+
+    expect(await screen.findByRole('button', { name: 'Save Changes' })).toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(
+        screen.queryByText(/Need reusable assets across courses/i),
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  it('submits assignment builder payload for manual written assignment', async () => {
+    renderPage('/admin/courses/abc?tab=assignments');
+
+    expect(await screen.findByRole('button', { name: 'Save Changes' })).toBeInTheDocument();
+
+    const titleInput = await screen.findByLabelText('Assignment Title');
+    await userEvent.clear(titleInput);
+    await userEvent.type(titleInput, 'Written Reflection');
+
+    await userEvent.selectOptions(screen.getByLabelText('Type'), 'WRITTEN');
+    await userEvent.click(screen.getByRole('button', { name: 'Create Assignment' }));
+
+    await waitFor(() => {
+      expect(mockedApi.post).toHaveBeenCalledWith(
+        '/courses/abc/assignments/',
+        expect.objectContaining({
+          title: 'Written Reflection',
+          assignment_type: 'WRITTEN',
+          scope_type: 'COURSE',
+        }),
+      );
     });
   });
 });

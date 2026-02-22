@@ -131,7 +131,7 @@ describe('App', () => {
     await waitFor(() => {
       expect(
         screen.getByRole('heading', {
-          name: /learning management infrastructure for schools and enterprises/i,
+          name: /run every learning program from one operational system/i,
         }),
       ).toBeInTheDocument();
     });
@@ -146,7 +146,7 @@ describe('App', () => {
     await waitFor(() => {
       expect(
         screen.getByRole('heading', {
-          name: /learning management infrastructure for schools and enterprises/i,
+          name: /run every learning program from one operational system/i,
         }),
       ).toBeInTheDocument();
     });

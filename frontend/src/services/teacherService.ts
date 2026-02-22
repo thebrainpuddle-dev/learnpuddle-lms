@@ -184,7 +184,8 @@ export const teacherService = {
       questions: Array<{
         id: string;
         order: number;
-        question_type: 'MCQ' | 'SHORT_ANSWER';
+        question_type: 'MCQ' | 'SHORT_ANSWER' | 'TRUE_FALSE';
+        selection_mode: 'SINGLE' | 'MULTIPLE';
         prompt: string;
         options: string[];
         points: number;
@@ -208,4 +209,3 @@ export const teacherService = {
     };
   },
 };
-

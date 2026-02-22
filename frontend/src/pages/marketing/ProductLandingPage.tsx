@@ -2,171 +2,181 @@ import React from 'react';
 import { getBookDemoUrl, isExternalHttpUrl } from '../../config/platform';
 import './ProductLandingPage.css';
 
-const capabilities = [
+const heroOutcomes = [
+  'Launch multi-tenant learning programs in days, not quarters.',
+  'Track completion, deadlines, certifications, and audit-ready evidence.',
+  'Run one platform across schools, enterprises, and distributed teams.',
+];
+
+const platformPillars = [
   {
-    icon: (
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <rect x="3" y="3" width="7" height="7" rx="1.5" fill="currentColor" opacity="0.9" />
-        <rect x="14" y="3" width="7" height="7" rx="1.5" fill="currentColor" opacity="0.55" />
-        <rect x="3" y="14" width="7" height="7" rx="1.5" fill="currentColor" opacity="0.55" />
-        <rect x="14" y="14" width="7" height="7" rx="1.5" fill="currentColor" opacity="0.25" />
-      </svg>
-    ),
-    title: 'Course Builder',
+    title: 'Build Programs Fast',
     description:
-      'Structured courses with modules, videos, documents, and assessments. Mandatory content flags. Deadline enforcement.',
+      'Create role-based learning paths with video, documents, quizzes, assignments, and completion logic.',
+    bullets: ['Reusable templates', 'Deadline + reminder automation', 'Mandatory milestone enforcement'],
   },
   {
-    icon: (
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <path
-          d="M9 11l3 3L22 4"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-        <path
-          d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
-    ),
-    title: 'Compliance Tracking',
+    title: 'Deliver At Scale',
     description:
-      'CBSE 50-hour CPD requirements. IB educator certifications. Custom training mandates. Exportable compliance reports.',
+      'Roll out training by team, branch, campus, or region with tenant-safe data boundaries and delegated admin.',
+    bullets: ['Tenant branding controls', 'Bulk enrollment and imports', 'Groups and cohort targeting'],
   },
   {
-    icon: (
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" />
-        <path d="M12 7v5l3 3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-      </svg>
-    ),
-    title: 'Assessment Engine',
+    title: 'Prove Outcomes',
     description:
-      'Quiz generation from video transcripts. Multiple choice and short answer formats. Auto-grading for objective questions.',
+      'Move from activity metrics to business impact with completion, proficiency, and compliance visibility.',
+    bullets: ['Executive dashboards', 'Department and manager views', 'Exportable evidence reports'],
   },
   {
-    icon: (
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <path
-          d="M18 20V10M12 20V4M6 20v-6"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
-    ),
-    title: 'Progress Dashboards',
+    title: 'Secure By Design',
     description:
-      'Completion rates by course, group, or learner. Video watch time. Assignment scores. Department-wise breakdowns.',
-  },
-  {
-    icon: (
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <rect x="2" y="3" width="20" height="14" rx="2" stroke="currentColor" strokeWidth="2" />
-        <path d="M8 21h8M12 17v4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-      </svg>
-    ),
-    title: 'White-Label Tenants',
-    description:
-      'Subdomain per organization. Custom logo and colors. Isolated data. Central command center for platform admins.',
-  },
-  {
-    icon: (
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <polygon
-          points="23 7 16 12 23 17 23 7"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-        <rect x="1" y="5" width="15" height="14" rx="2" stroke="currentColor" strokeWidth="2" />
-      </svg>
-    ),
-    title: 'Video Infrastructure',
-    description:
-      'Any upload format. Automatic transcoding. Thumbnail generation. Captions. Adaptive streaming.',
+      'Role-based permissions, strong auth controls, auditability, and operational readiness for enterprise buyers.',
+    bullets: ['SSO and 2FA support', 'Centralized audit events', 'Environment and backup controls'],
   },
 ];
 
-const industries = [
+const solutionTracks = [
   {
-    title: 'Schools & Universities',
-    bullets: [
-      'CBSE/ICSE/IB compliance tracking',
-      '50-hour CPD mandate monitoring',
-      'Department-wise progress reports',
-      'HOD and principal dashboards',
-    ],
+    title: 'School Systems',
+    subtitle: 'K-12, university, and academic groups',
+    description:
+      'Coordinate teacher development, curriculum enablement, and policy compliance across campuses from one command center.',
+    outcomes: ['CPD and policy completion tracking', 'Principal/HOD visibility', 'Multi-school governance'],
   },
   {
-    title: 'Corporate Training',
-    bullets: [
-      'Employee onboarding workflows',
-      'SOP certifications',
-      'Role-based course assignments',
-      'Completion audit trails',
-    ],
+    title: 'Corporate L&D',
+    subtitle: 'People, operations, and compliance teams',
+    description:
+      'Standardize onboarding, SOP enablement, and recurring certifications with clear ownership and reminders.',
+    outcomes: ['Faster onboarding ramp', 'Reduced compliance drift', 'Manager-level completion control'],
   },
   {
-    title: 'Fitness & Wellness',
-    bullets: [
-      'Trainer certification modules',
-      'Video-based skill assessments',
-      'Progress verification for accreditation',
-    ],
+    title: 'Franchise Operations',
+    subtitle: 'Retail, hospitality, and distributed teams',
+    description:
+      'Ship the same operational playbooks to every location while preserving local manager accountability.',
+    outcomes: ['Consistent SOP adoption', 'Location comparison analytics', 'Branch-level training health'],
   },
   {
-    title: 'Hospitality & F&B',
-    bullets: [
-      'Frontline staff training',
-      'Compliance checklists',
-      'Multi-location deployment',
-      'Standardized SOP delivery',
-    ],
+    title: 'Academies & Coaching',
+    subtitle: 'Program-led learning businesses',
+    description:
+      'Monetize and operationalize blended learning with branded portals, structured milestones, and learner progression.',
+    outcomes: ['Branded learner journey', 'Instructor workload reduction', 'Clear completion evidence'],
+  },
+];
+
+const industryPrograms = [
+  {
+    title: 'Education',
+    programs: ['Faculty development', 'Classroom technology enablement', 'Assessment moderation workflows'],
   },
   {
-    title: 'Independent Academies',
-    bullets: ['Branded learner portals', 'Course catalog management', 'Learner progress analytics'],
+    title: 'Healthcare',
+    programs: ['Clinical protocol updates', 'Mandatory recertification cycles', 'Multi-role competency checks'],
+  },
+  {
+    title: 'BFSI',
+    programs: ['Regulatory policy rollout', 'Branch onboarding', 'Periodic compliance attestations'],
+  },
+  {
+    title: 'Manufacturing',
+    programs: ['Plant safety training', 'Machine SOP rollout', 'Supervisor readiness pathways'],
+  },
+  {
+    title: 'Hospitality',
+    programs: ['Guest experience standards', 'Frontline service drills', 'New outlet launch onboarding'],
+  },
+  {
+    title: 'Technology',
+    programs: ['Sales enablement', 'Partner training', 'Release certification tracks'],
+  },
+];
+
+const rolloutSteps = [
+  {
+    step: '01',
+    title: 'Discovery Blueprint',
+    description:
+      'Map learner personas, compliance obligations, and success metrics. Align program owners and rollout phases.',
+  },
+  {
+    step: '02',
+    title: 'Tenant + Program Setup',
+    description:
+      'Configure domains, branding, permissions, cohorts, and baseline course architecture for each audience.',
+  },
+  {
+    step: '03',
+    title: 'Launch + Adoption',
+    description:
+      'Run pilot cohorts, tune reminder cadence, and finalize production workflows before broader rollout.',
+  },
+  {
+    step: '04',
+    title: 'Measure + Improve',
+    description:
+      'Use dashboard and completion evidence to continuously optimize pathways and tighten operational outcomes.',
+  },
+];
+
+const trustControls = [
+  'Role-based access controls across platform, tenant admin, and learner roles',
+  'Authentication controls including session lifecycle handling and optional 2FA',
+  'Tenant data isolation with domain-aware routing and scoped authorization',
+  'Operational health checks and deployment verification workflow',
+  'Audit-friendly reporting surfaces for progress, assignments, and completion events',
+  'Security hardening baseline across headers, CSP, and environment-driven config',
+];
+
+const complianceRoadmap = [
+  {
+    standard: 'SOC 2 (Type I → Type II)',
+    status: 'In Planning',
+    detail: 'Control inventory, evidence automation, and policy program sequencing.',
+  },
+  {
+    standard: 'ISO/IEC 27001',
+    status: 'Gap Assessment',
+    detail: 'ISMS scope definition, control mapping, risk register, and treatment plan.',
+  },
+  {
+    standard: 'WCAG 2.2 AA',
+    status: 'Active Improvements',
+    detail: 'Form semantics, keyboard flows, contrast, and responsive usability hardening.',
+  },
+  {
+    standard: 'LTI / SCORM Compatibility',
+    status: 'Roadmap',
+    detail: 'Interoperability expansion for third-party content and ecosystem integration.',
   },
 ];
 
 const faqs = [
   {
-    question: 'What is LearnPuddle?',
+    question: 'Who is LearnPuddle designed for?',
     answer:
-      'A learning management platform for organizations that need course delivery, progress tracking, and compliance reporting.',
+      'Teams running structured learning programs across schools, enterprises, and distributed operations that need outcomes and auditability.',
   },
   {
-    question: 'Does it support CBSE and IB compliance tracking?',
+    question: 'Can one platform support multiple organizations?',
     answer:
-      'Yes. Configure mandatory training hours and generate compliance reports per teacher, department, or organization.',
+      'Yes. LearnPuddle supports tenant-level isolation with per-organization branding, user management, and domain-aware access.',
   },
   {
-    question: 'Can each organization have its own branding?',
+    question: 'How do reminders and deadlines work?',
     answer:
-      'Yes. Every tenant gets a custom subdomain, logo, and color scheme. Data is fully isolated.',
+      'Programs can enforce due dates with automated reminders and targeted follow-ups by role, cohort, or selected users.',
   },
   {
-    question: 'How does assessment generation work?',
+    question: 'What does the demo include?',
     answer:
-      'Upload a video. The system transcribes it and generates quiz questions. You review and publish.',
+      'A role-specific walkthrough of admin workflows, learner experience, analytics, and rollout plan recommendations for your use case.',
   },
   {
-    question: 'Is the platform secure?',
-    answer: 'Role-based access. Audit logs. SSO support. Two-factor authentication. Tenant-isolated data.',
-  },
-  {
-    question: 'How long does setup take?',
+    question: 'Can we use this on mobile devices?',
     answer:
-      'Most organizations go live within a day. Course creation and learner onboarding can start immediately.',
+      'Yes. The product and marketing experience are optimized for modern desktop and mobile browsers with responsive layouts.',
   },
 ];
 
@@ -192,6 +202,26 @@ function CTAButton({
   );
 }
 
+function SectionHeader({
+  id,
+  kicker,
+  title,
+  description,
+}: {
+  id?: string;
+  kicker: string;
+  title: string;
+  description?: string;
+}) {
+  return (
+    <div className="lp-section-head" id={id}>
+      <p className="lp-kicker">{kicker}</p>
+      <h2>{title}</h2>
+      {description ? <p className="lp-section-description">{description}</p> : null}
+    </div>
+  );
+}
+
 export const ProductLandingPage: React.FC = () => {
   const bookDemoUrl = getBookDemoUrl();
 
@@ -200,7 +230,6 @@ export const ProductLandingPage: React.FC = () => {
       <div className="lp-bg-shape lp-bg-shape-a" />
       <div className="lp-bg-shape lp-bg-shape-b" />
 
-      {/* ── Header ── */}
       <header className="lp-header">
         <div className="lp-container lp-header-inner">
           <a href="/" className="lp-logo" aria-label="LearnPuddle Home">
@@ -208,118 +237,105 @@ export const ProductLandingPage: React.FC = () => {
           </a>
           <nav className="lp-nav" aria-label="Primary">
             <a href="#platform">Platform</a>
+            <a href="#solutions">Solutions</a>
             <a href="#industries">Industries</a>
-            <a href="#how-it-works">How It Works</a>
+            <a href="#security">Security</a>
+            <a href="#demo">Demo</a>
             <a href="#faq">FAQ</a>
           </nav>
           <div className="lp-header-actions">
             <CTAButton href={bookDemoUrl} className="lp-btn lp-btn-primary">
-              Book a Demo
+              Book Demo
             </CTAButton>
           </div>
         </div>
       </header>
 
       <main>
-        {/* ── Hero ── */}
         <section className="lp-hero">
           <div className="lp-container lp-hero-grid">
             <div className="lp-hero-copy">
-              <p className="lp-pill">Learning Management Platform</p>
-              <h1>Learning management infrastructure for schools and enterprises.</h1>
+              <p className="lp-pill">Enterprise Learning Platform</p>
+              <h1>Run every learning program from one operational system.</h1>
               <p>
-                Course building. Progress tracking. Compliance reporting. White-label portals for
-                every organization you manage.
+                LearnPuddle helps you launch, manage, and prove learning outcomes across schools,
+                teams, and distributed operations without platform sprawl.
               </p>
+              <ul className="lp-hero-outcomes">
+                {heroOutcomes.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
               <div className="lp-cta-row">
                 <CTAButton href={bookDemoUrl} className="lp-btn lp-btn-primary">
                   Book a Demo
                 </CTAButton>
-                <a href="/signup" className="lp-btn lp-btn-secondary">
-                  Get Started
+                <a href="#platform" className="lp-btn lp-btn-secondary">
+                  Explore Platform
                 </a>
               </div>
             </div>
-            <div className="lp-hero-panel">
-              <div className="lp-dashboard-placeholder" aria-label="Platform dashboard preview">
-                <div className="lp-dashboard-placeholder-inner">
-                  <div className="lp-dp-topbar">
-                    <span className="lp-dp-dot" />
-                    <span className="lp-dp-dot" />
-                    <span className="lp-dp-dot" />
+
+            <div className="lp-hero-panel" aria-label="Learning operations snapshot">
+              <div className="lp-insight-card lp-insight-card-main">
+                <h3>Program Health</h3>
+                <div className="lp-insight-metrics">
+                  <div>
+                    <span>Completion</span>
+                    <strong>91%</strong>
                   </div>
-                  <div className="lp-dp-body">
-                    <div className="lp-dp-sidebar">
-                      <div className="lp-dp-sidebar-item lp-dp-active" />
-                      <div className="lp-dp-sidebar-item" />
-                      <div className="lp-dp-sidebar-item" />
-                      <div className="lp-dp-sidebar-item" />
-                    </div>
-                    <div className="lp-dp-content">
-                      <div className="lp-dp-stat-row">
-                        <div className="lp-dp-stat" />
-                        <div className="lp-dp-stat" />
-                        <div className="lp-dp-stat" />
-                      </div>
-                      <div className="lp-dp-row lp-dp-row-wide" />
-                      <div className="lp-dp-row" />
-                      <div className="lp-dp-row lp-dp-row-narrow" />
-                      <div className="lp-dp-row" />
-                    </div>
+                  <div>
+                    <span>At Risk</span>
+                    <strong>7%</strong>
+                  </div>
+                  <div>
+                    <span>Overdue</span>
+                    <strong>2%</strong>
                   </div>
                 </div>
-                <p className="lp-dp-label">Platform Preview</p>
+                <p>Track organization-wide readiness in real-time with drill-down by cohort and manager.</p>
+              </div>
+              <div className="lp-insight-row">
+                <div className="lp-insight-card">
+                  <h4>Active Portals</h4>
+                  <strong>24</strong>
+                  <span>Multi-tenant rollout</span>
+                </div>
+                <div className="lp-insight-card">
+                  <h4>Evidence Ready</h4>
+                  <strong>100%</strong>
+                  <span>Audit export coverage</span>
+                </div>
               </div>
             </div>
           </div>
         </section>
 
-        {/* ── Capabilities Bar ── */}
-        <section className="lp-capabilities-bar">
-          <div className="lp-container lp-capabilities-bar-inner">
-            <span>Course Management</span>
-            <span className="lp-cap-sep" aria-hidden="true" />
-            <span>Progress Tracking</span>
-            <span className="lp-cap-sep" aria-hidden="true" />
-            <span>Compliance Reports</span>
-            <span className="lp-cap-sep" aria-hidden="true" />
-            <span>White-Label Portals</span>
+        <section className="lp-proof-strip" aria-label="Common programs">
+          <div className="lp-container lp-proof-items">
+            <span>Onboarding Programs</span>
+            <span>Compliance Training</span>
+            <span>Sales Enablement</span>
+            <span>Faculty Development</span>
+            <span>SOP Certification</span>
           </div>
         </section>
 
-        {/* ── Platform ── */}
         <section id="platform" className="lp-section">
           <div className="lp-container">
-            <div className="lp-section-head">
-              <p className="lp-kicker">Platform</p>
-              <h2>Everything needed to run training operations at scale.</h2>
-            </div>
-            <div className="lp-card-grid lp-card-grid-6">
-              {capabilities.map((cap) => (
-                <article key={cap.title} className="lp-card lp-card-cap">
-                  <div className="lp-cap-icon">{cap.icon}</div>
-                  <h3>{cap.title}</h3>
-                  <p>{cap.description}</p>
-                </article>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        {/* ── Industries ── */}
-        <section id="industries" className="lp-section lp-section-alt">
-          <div className="lp-container">
-            <div className="lp-section-head">
-              <p className="lp-kicker">Industries</p>
-              <h2>Built for the organizations that run structured training programs.</h2>
-            </div>
-            <div className="lp-card-grid">
-              {industries.map((item) => (
-                <article key={item.title} className="lp-card lp-card-industry">
-                  <h3>{item.title}</h3>
+            <SectionHeader
+              kicker="Platform"
+              title="Everything needed to design, deliver, and optimize learning operations."
+              description="A modular platform for structured learning paths, operational governance, and measurable outcomes."
+            />
+            <div className="lp-card-grid lp-card-grid-2">
+              {platformPillars.map((pillar) => (
+                <article key={pillar.title} className="lp-card lp-card-feature">
+                  <h3>{pillar.title}</h3>
+                  <p>{pillar.description}</p>
                   <ul className="lp-card-bullets">
-                    {item.bullets.map((b) => (
-                      <li key={b}>{b}</li>
+                    {pillar.bullets.map((bullet) => (
+                      <li key={bullet}>{bullet}</li>
                     ))}
                   </ul>
                 </article>
@@ -328,61 +344,138 @@ export const ProductLandingPage: React.FC = () => {
           </div>
         </section>
 
-        {/* ── How It Works ── */}
-        <section id="how-it-works" className="lp-section">
+        <section id="solutions" className="lp-section lp-section-alt">
           <div className="lp-container">
-            <div className="lp-section-head">
-              <p className="lp-kicker">How It Works</p>
-              <h2>Three steps to a fully operational LMS.</h2>
+            <SectionHeader
+              kicker="Solutions"
+              title="Purpose-built tracks for different learning operating models."
+              description="Use the same core platform with playbooks tuned to your delivery model and governance needs."
+            />
+            <div className="lp-card-grid lp-card-grid-2">
+              {solutionTracks.map((track) => (
+                <article key={track.title} className="lp-card lp-card-solution">
+                  <p className="lp-card-eyebrow">{track.subtitle}</p>
+                  <h3>{track.title}</h3>
+                  <p>{track.description}</p>
+                  <div className="lp-chip-row">
+                    {track.outcomes.map((outcome) => (
+                      <span key={outcome} className="lp-chip">
+                        {outcome}
+                      </span>
+                    ))}
+                  </div>
+                </article>
+              ))}
             </div>
-            <ol className="lp-timeline">
-              <li>
-                <span className="lp-step-num">01</span>
-                <h3>Configure</h3>
-                <p>Set up your subdomain. Upload your logo. Define admin roles and permissions.</p>
-              </li>
-              <li>
-                <span className="lp-step-num">02</span>
-                <h3>Build</h3>
-                <p>Add courses with videos, documents, and assessments. Set deadlines and mandatory flags.</p>
-              </li>
-              <li>
-                <span className="lp-step-num">03</span>
-                <h3>Track</h3>
-                <p>Monitor completion across all learners. Export compliance reports. Meet regulatory requirements.</p>
-              </li>
+          </div>
+        </section>
+
+        <section id="industries" className="lp-section">
+          <div className="lp-container">
+            <SectionHeader
+              kicker="Industries"
+              title="Learning programs mapped to real-world business and academic workflows."
+              description="Start from proven patterns and adapt each program to your teams, timelines, and evidence requirements."
+            />
+            <div className="lp-card-grid lp-card-grid-3">
+              {industryPrograms.map((item) => (
+                <article key={item.title} className="lp-card lp-card-industry">
+                  <h3>{item.title}</h3>
+                  <ul className="lp-card-bullets">
+                    {item.programs.map((program) => (
+                      <li key={program}>{program}</li>
+                    ))}
+                  </ul>
+                </article>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section className="lp-section lp-section-alt" id="rollout">
+          <div className="lp-container">
+            <SectionHeader
+              kicker="Execution"
+              title="A practical rollout model from pilot to scale."
+              description="Use this sequence to reduce rollout risk and improve adoption speed across stakeholders."
+            />
+            <ol className="lp-timeline lp-timeline-4">
+              {rolloutSteps.map((step) => (
+                <li key={step.step}>
+                  <span className="lp-step-num">{step.step}</span>
+                  <h3>{step.title}</h3>
+                  <p>{step.description}</p>
+                </li>
+              ))}
             </ol>
           </div>
         </section>
 
-        {/* ── Trust Statement ── */}
-        <section className="lp-trust-band">
-          <div className="lp-container">
-            <p className="lp-trust-text">
-              LearnPuddle handles the infrastructure.
-              <br />
-              You handle the training.
-            </p>
-          </div>
-        </section>
-
-        {/* ── CTA Band ── */}
-        <section className="lp-cta-band">
-          <div className="lp-container lp-cta-band-inner">
-            <h2>Centralize your training operations.</h2>
-            <CTAButton href={bookDemoUrl} className="lp-btn lp-btn-primary">
-              Book a Demo
-            </CTAButton>
-          </div>
-        </section>
-
-        {/* ── FAQ ── */}
-        <section id="faq" className="lp-section lp-section-alt">
-          <div className="lp-container">
-            <div className="lp-section-head">
-              <p className="lp-kicker">FAQ</p>
-              <h2>Frequently asked questions.</h2>
+        <section id="demo" className="lp-section lp-section-demo">
+          <div className="lp-container lp-demo-grid">
+            <div>
+              <SectionHeader
+                kicker="Demo"
+                title="See your exact use case mapped in a live walkthrough."
+                description="We tailor the session to your program type, operating model, and rollout constraints."
+              />
+              <ul className="lp-demo-list">
+                <li>Role-based walkthrough: super admin, tenant admin, and learner experience.</li>
+                <li>Program design review: courses, assessments, reminders, and reporting.</li>
+                <li>Implementation blueprint: migration phases, owners, and success KPIs.</li>
+                <li>Security and compliance readiness discussion with your IT stakeholders.</li>
+              </ul>
             </div>
+            <aside className="lp-demo-card" aria-label="Book demo panel">
+              <h3>Book your LearnPuddle demo</h3>
+              <p>Pick a time and we will run a focused session for your team.</p>
+              <CTAButton href={bookDemoUrl} className="lp-btn lp-btn-primary lp-btn-block">
+                Schedule Demo
+              </CTAButton>
+              <a href="mailto:hello@learnpuddle.com" className="lp-btn lp-btn-secondary lp-btn-block">
+                Contact Sales Team
+              </a>
+            </aside>
+          </div>
+        </section>
+
+        <section id="security" className="lp-section lp-section-alt">
+          <div className="lp-container">
+            <SectionHeader
+              kicker="Trust Center"
+              title="Security controls now, compliance validations on a defined path."
+              description="Build buyer confidence with transparent control posture and a clear certification roadmap."
+            />
+            <div className="lp-trust-grid">
+              <article className="lp-card lp-trust-card">
+                <h3>Security Foundations</h3>
+                <ul className="lp-card-bullets">
+                  {trustControls.map((control) => (
+                    <li key={control}>{control}</li>
+                  ))}
+                </ul>
+              </article>
+              <article className="lp-card lp-trust-card">
+                <h3>Validation Roadmap</h3>
+                <div className="lp-roadmap-list">
+                  {complianceRoadmap.map((item) => (
+                    <div key={item.standard} className="lp-roadmap-item">
+                      <div className="lp-roadmap-title-row">
+                        <h4>{item.standard}</h4>
+                        <span className="lp-status-chip">{item.status}</span>
+                      </div>
+                      <p>{item.detail}</p>
+                    </div>
+                  ))}
+                </div>
+              </article>
+            </div>
+          </div>
+        </section>
+
+        <section id="faq" className="lp-section">
+          <div className="lp-container">
+            <SectionHeader kicker="FAQ" title="Questions teams ask before rollout." />
             <div className="lp-faq-list">
               {faqs.map((faq) => (
                 <details key={faq.question} className="lp-faq-item">
@@ -395,7 +488,6 @@ export const ProductLandingPage: React.FC = () => {
         </section>
       </main>
 
-      {/* ── Footer ── */}
       <footer className="lp-footer">
         <div className="lp-container lp-footer-inner">
           <a href="/" className="lp-footer-logo" aria-label="LearnPuddle Home">
@@ -403,16 +495,15 @@ export const ProductLandingPage: React.FC = () => {
           </a>
           <nav className="lp-footer-nav" aria-label="Footer">
             <a href="#platform">Platform</a>
+            <a href="#solutions">Solutions</a>
             <a href="#industries">Industries</a>
-            <a href="#faq">FAQ</a>
+            <a href="#security">Trust Center</a>
+            <a href="#demo">Demo</a>
           </nav>
           <div className="lp-footer-actions">
             <CTAButton href={bookDemoUrl} className="lp-footer-link">
-              Book a Demo
+              Book Demo
             </CTAButton>
-            <a href="/signup" className="lp-footer-link">
-              Get Started
-            </a>
           </div>
         </div>
         <div className="lp-container lp-footer-bottom">

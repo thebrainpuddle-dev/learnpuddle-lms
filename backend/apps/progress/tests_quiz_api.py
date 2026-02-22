@@ -1,4 +1,4 @@
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
 from apps.courses.models import Course, Module, Content
@@ -7,6 +7,7 @@ from apps.tenants.models import Tenant
 from apps.users.models import User
 
 
+@override_settings(ALLOWED_HOSTS=["*"])
 class QuizApiTestCase(TestCase):
     def setUp(self):
         self.client = APIClient()
@@ -73,10 +74,41 @@ class QuizApiTestCase(TestCase):
             quiz=self.quiz,
             order=1,
             question_type="MCQ",
+            selection_mode="SINGLE",
             prompt="Pick",
             options=["A", "B", "C", "D"],
             correct_answer={"option_index": 2},
             points=1,
+        )
+        self.q2 = QuizQuestion.objects.create(
+            quiz=self.quiz,
+            order=2,
+            question_type="MCQ",
+            selection_mode="MULTIPLE",
+            prompt="Pick many",
+            options=["A", "B", "C", "D"],
+            correct_answer={"option_indices": [0, 2]},
+            points=2,
+        )
+        self.q3 = QuizQuestion.objects.create(
+            quiz=self.quiz,
+            order=3,
+            question_type="TRUE_FALSE",
+            selection_mode="SINGLE",
+            prompt="Always true?",
+            options=["True", "False"],
+            correct_answer={"value": False},
+            points=1,
+        )
+        self.q4 = QuizQuestion.objects.create(
+            quiz=self.quiz,
+            order=4,
+            question_type="SHORT_ANSWER",
+            selection_mode="SINGLE",
+            prompt="Explain",
+            options=[],
+            correct_answer={},
+            points=2,
         )
 
     def _login(self):
@@ -94,13 +126,21 @@ class QuizApiTestCase(TestCase):
         self._login()
         detail = self.client.get(f"/api/teacher/quizzes/{self.assignment.id}/")
         self.assertEqual(detail.status_code, 200, detail.content)
-        self.assertEqual(len(detail.json()["questions"]), 1)
+        self.assertEqual(len(detail.json()["questions"]), 4)
+        self.assertEqual(detail.json()["questions"][0]["selection_mode"], "SINGLE")
 
         submit = self.client.post(
             f"/api/teacher/quizzes/{self.assignment.id}/submit/",
-            data={"answers": {str(self.q1.id): {"option_index": 2}}},
+            data={
+                "answers": {
+                    str(self.q1.id): {"option_index": 2},
+                    str(self.q2.id): {"option_indices": [0, 2]},
+                    str(self.q3.id): {"value": False},
+                    str(self.q4.id): {"text": "Manual review required."},
+                }
+            },
             format="json",
         )
         self.assertEqual(submit.status_code, 200, submit.content)
-        self.assertEqual(submit.json()["score"], 1.0)
-
+        self.assertEqual(submit.json()["score"], 4.0)
+        self.assertIsNone(submit.json()["graded_at"])

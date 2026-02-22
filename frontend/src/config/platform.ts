@@ -1,7 +1,8 @@
 export function getBookDemoUrl(): string {
   const configured = (process.env.REACT_APP_BOOK_DEMO_URL || '').trim();
   if (configured) return configured;
-  return 'mailto:support@learnpuddle.com?subject=Book%20a%20LearnPuddle%20Demo';
+  // Cal.com is an open-source scheduling platform (Calendly-style).
+  return 'https://cal.com/';
 }
 
 export function isExternalHttpUrl(url: string): boolean {

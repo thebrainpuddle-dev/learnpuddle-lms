@@ -141,7 +141,8 @@ logger = logging.getLogger(__name__)
 
 def _generate_quiz_via_ollama(transcript_text: str, question_count: int = 6) -> list[dict[str, Any]] | None:
     """
-    Call local Ollama LLM to generate contextual quiz questions from transcript.
+    Generate Coursera-grade quiz questions from transcript using Ollama LLM.
+    Uses Bloom's taxonomy for cognitive diversity and scenario-based questions.
     Returns parsed question list or None if Ollama is unavailable/fails.
     """
     from django.conf import settings as conf
@@ -151,37 +152,60 @@ def _generate_quiz_via_ollama(transcript_text: str, question_count: int = 6) -> 
     mcq_count = max(1, question_count - 2)
     sa_count = min(2, question_count)
 
-    prompt = f"""You are an educational quiz generator for a teacher training platform.
-Based on the following lesson transcript, generate exactly {question_count} quiz questions as a JSON array.
+    prompt = f"""You are an expert instructional designer creating assessment questions for a professional development course. Your questions should match the quality of Coursera, edX, or LinkedIn Learning courses.
 
-Requirements:
-- {mcq_count} questions must be "MCQ" (multiple choice) with exactly 4 options each
-- {sa_count} questions must be "SHORT_ANSWER" (open-ended)
-- Questions should test understanding, not just recall
-- Each MCQ must have one clearly correct answer
+## Your Task
+Analyze the lesson transcript and create {question_count} high-quality assessment questions.
 
-For each question, use this exact JSON structure:
+## Question Distribution (Bloom's Taxonomy)
+Create questions at different cognitive levels:
+- 1-2 questions: REMEMBER/UNDERSTAND - Define, identify, or explain key concepts
+- 2-3 questions: APPLY/ANALYZE - Apply concepts to real scenarios, compare approaches
+- 1 question: EVALUATE/CREATE - Judge effectiveness or propose solutions
+
+## Question Types Required
+- {mcq_count} Multiple Choice Questions (MCQ):
+  * Exactly 4 options each
+  * Create plausible distractors (wrong answers that someone might reasonably choose)
+  * One clearly correct answer
+  * Frame as scenarios when possible: "A teacher wants to... Which approach would be most effective?"
+  
+- {sa_count} Short Answer Questions:
+  * Scenario-based or reflection prompts
+  * Require critical thinking: "How would you apply X in situation Y?" or "Why is X important for Z?"
+  * Should be answerable in 2-4 sentences
+
+## Quality Standards
+1. Questions must be answerable from the lesson content
+2. NO "all of the above" or "none of the above" options
+3. Explanations should TEACH - explain why the correct answer is right AND why others are wrong
+4. Use clear, professional language
+5. Make questions specific, not generic
+
+## JSON Output Format
+Return ONLY a valid JSON array. Each question object:
 {{
   "question_type": "MCQ" or "SHORT_ANSWER",
-  "prompt": "the question text",
-  "options": ["A", "B", "C", "D"] (for MCQ only, empty [] for SHORT_ANSWER),
-  "correct_answer": {{"option_index": 0}} (for MCQ, index of correct option) or {{}} (for SHORT_ANSWER),
-  "explanation": "brief explanation of the correct answer",
-  "points": 1 (for MCQ) or 2 (for SHORT_ANSWER)
+  "bloom_level": "REMEMBER" | "UNDERSTAND" | "APPLY" | "ANALYZE" | "EVALUATE",
+  "prompt": "Specific, scenario-based question text",
+  "options": ["Option A", "Option B", "Option C", "Option D"] (MCQ only, [] for SHORT_ANSWER),
+  "correct_answer": {{"option_index": 0}} (MCQ, 0-3) or {{}} (SHORT_ANSWER),
+  "explanation": "Educational explanation: why this is correct and why alternatives are not",
+  "points": 1 (MCQ) or 2 (SHORT_ANSWER)
 }}
 
-Transcript (first 4000 chars):
+## Lesson Transcript
 ---
-{transcript_text[:4000]}
+{transcript_text[:6000]}
 ---
 
-Respond with ONLY a valid JSON array. No markdown, no explanation, just the array."""
+Generate exactly {question_count} questions as a JSON array. No markdown, no commentary."""
 
     try:
         resp = http_requests.post(
             f"{base_url}/api/generate",
             json={"model": model, "prompt": prompt, "stream": False, "options": {"temperature": 0.7}},
-            timeout=120,
+            timeout=180,
         )
         resp.raise_for_status()
         raw = resp.json().get("response", "")
@@ -199,15 +223,16 @@ Respond with ONLY a valid JSON array. No markdown, no explanation, just the arra
                     q.setdefault("options", [])
                     q.setdefault("correct_answer", {})
                     q.setdefault("explanation", "")
+                    q.setdefault("bloom_level", "UNDERSTAND")
                     q.setdefault("points", 1 if q["question_type"] == "MCQ" else 2)
                     valid.append(q)
             if len(valid) >= 2:
-                logger.info(f"Ollama generated {len(valid)} quiz questions via {model}")
+                logger.info(f"Ollama generated {len(valid)} Coursera-grade quiz questions via {model}")
                 return valid[:question_count]
     except http_requests.ConnectionError:
         logger.info("Ollama not available (connection refused), falling back to deterministic generator")
     except http_requests.Timeout:
-        logger.warning("Ollama timed out after 120s")
+        logger.warning("Ollama timed out after 180s")
     except Exception as e:
         logger.warning(f"Ollama quiz generation failed: {e}")
     return None
@@ -215,8 +240,8 @@ Respond with ONLY a valid JSON array. No markdown, no explanation, just the arra
 
 def _generate_quiz_deterministic(transcript_text: str, question_count: int = 6) -> list[dict[str, Any]]:
     """
-    Deterministic fallback quiz generator when Ollama is not available.
-    Produces term-based MCQs + generic short-answer prompts.
+    Improved deterministic fallback when Ollama is unavailable.
+    Uses Bloom's taxonomy-aligned template questions that work for any content.
     """
     terms = _basic_terms(transcript_text, limit=60)
     rng = random.Random(1337)
@@ -224,34 +249,76 @@ def _generate_quiz_deterministic(transcript_text: str, question_count: int = 6) 
 
     questions: list[dict[str, Any]] = []
 
+    # High-quality short answer questions (Bloom's taxonomy aligned)
+    sa_templates = [
+        {
+            "question_type": "SHORT_ANSWER",
+            "bloom_level": "UNDERSTAND",
+            "prompt": "In your own words, explain the main concept covered in this lesson and why it is important in practice.",
+            "options": [],
+            "correct_answer": {},
+            "explanation": "This question assesses your ability to comprehend and articulate the core material in a meaningful way.",
+            "points": 2,
+        },
+        {
+            "question_type": "SHORT_ANSWER",
+            "bloom_level": "APPLY",
+            "prompt": "Describe a specific real-world situation where you could apply what you learned in this lesson. What steps would you take?",
+            "options": [],
+            "correct_answer": {},
+            "explanation": "This question tests your ability to transfer theoretical knowledge to practical, real-world contexts.",
+            "points": 2,
+        },
+        {
+            "question_type": "SHORT_ANSWER",
+            "bloom_level": "ANALYZE",
+            "prompt": "What are the key differences or trade-offs between the approaches or concepts discussed in this lesson? When would you choose one over another?",
+            "options": [],
+            "correct_answer": {},
+            "explanation": "This question assesses your analytical thinking and ability to compare and contrast different concepts.",
+            "points": 2,
+        },
+        {
+            "question_type": "SHORT_ANSWER",
+            "bloom_level": "EVALUATE",
+            "prompt": "Based on what you learned, what potential challenges might arise when implementing these concepts? How would you address them?",
+            "options": [],
+            "correct_answer": {},
+            "explanation": "This question tests your ability to critically evaluate concepts and anticipate practical challenges.",
+            "points": 2,
+        },
+    ]
+
+    # Add term-based MCQs with better prompts
     mcq_terms = terms[: max(0, min(4, len(terms)))]
-    for term in mcq_terms:
+    for i, term in enumerate(mcq_terms):
         pool = [t for t in terms if t != term][:20]
         distractors = rng.sample(pool, k=min(3, len(pool))) if pool else []
         options = [term] + distractors
         rng.shuffle(options)
         correct_idx = options.index(term)
+        
+        # Vary the MCQ prompts
+        mcq_prompts = [
+            f"Which of the following is a key concept covered in this lesson?",
+            f"Based on the lesson content, which term best relates to the main topic discussed?",
+            f"Which concept from this lesson would be most relevant when applying what you learned?",
+            f"Which of these terms represents an important idea from this lesson?",
+        ]
+        
         questions.append({
             "question_type": "MCQ",
-            "prompt": f"Which of the following concepts is discussed in this lesson?",
+            "bloom_level": "REMEMBER",
+            "prompt": mcq_prompts[i % len(mcq_prompts)],
             "options": [o.title() for o in options],
             "correct_answer": {"option_index": correct_idx},
-            "explanation": f"The term '{term.title()}' appears in the transcript.",
+            "explanation": f"'{term.title()}' is a key concept discussed in this lesson. The other options, while potentially related, are not the focus of this particular content.",
             "points": 1,
         })
 
-    questions.extend([
-        {
-            "question_type": "SHORT_ANSWER",
-            "prompt": "Summarize the key takeaway of this video in 2-3 sentences.",
-            "options": [], "correct_answer": {}, "explanation": "", "points": 2,
-        },
-        {
-            "question_type": "SHORT_ANSWER",
-            "prompt": "List 3 important concepts mentioned in the video and explain why they matter.",
-            "options": [], "correct_answer": {}, "explanation": "", "points": 2,
-        },
-    ])
+    # Add short answer questions
+    questions.extend(sa_templates[:max(2, question_count - len(questions))])
+    
     return questions[:question_count]
 
 
@@ -267,6 +334,54 @@ def _generate_quiz_questions(transcript_text: str, question_count: int = 6) -> l
 
     # Fall back to deterministic generator
     return _generate_quiz_deterministic(transcript_text, question_count)
+
+
+def _strip_html(raw: str) -> str:
+    text = re.sub(r"<[^>]+>", " ", raw or "")
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def compile_assignment_source_text(course, module=None, max_chars: int = 8000) -> str:
+    """
+    Compile source text for AI assignment generation from course/module material.
+
+    Sources:
+    1) Video transcripts (if available)
+    2) TEXT content blocks
+    3) Fallback metadata (course/module/content titles + descriptions)
+    """
+    contents = Content.objects.filter(module__course=course, is_active=True)
+    if module is not None:
+        contents = contents.filter(module=module)
+
+    chunks: list[str] = []
+
+    video_content_ids = list(contents.filter(content_type="VIDEO").values_list("id", flat=True))
+    if video_content_ids:
+        transcripts = VideoTranscript.objects.filter(video_asset__content_id__in=video_content_ids).values_list("full_text", flat=True)
+        for full_text in transcripts:
+            cleaned = (full_text or "").strip()
+            if cleaned:
+                chunks.append(cleaned)
+
+    text_blocks = contents.filter(content_type="TEXT").values_list("text_content", flat=True)
+    for text_content in text_blocks:
+        cleaned = _strip_html(text_content or "")
+        if cleaned:
+            chunks.append(cleaned)
+
+    if not chunks:
+        scope_label = module.title if module is not None else course.title
+        chunks.append(f"Course: {course.title}")
+        chunks.append(f"Scope: {scope_label}")
+        if getattr(course, "description", ""):
+            chunks.append(_strip_html(course.description))
+        for c in contents.order_by("module__order", "order")[:30]:
+            chunks.append(f"{c.module.title}: {c.title}")
+
+    compiled = "\n".join([c for c in chunks if c]).strip()
+    return compiled[:max_chars]
 
 
 def _mark_failed(asset: VideoAsset, message: str):
@@ -627,6 +742,7 @@ def generate_assignments(self, video_asset_id: str) -> str:
                     quiz=quiz_obj,
                     order=idx,
                     question_type=q["question_type"],
+                    selection_mode="SINGLE",
                     prompt=q["prompt"],
                     options=q.get("options") or [],
                     correct_answer=q.get("correct_answer") or {},
@@ -691,4 +807,3 @@ def finalize_video_asset(self, video_asset_id: str) -> str:
         if not asset.thumbnail_url:
             logger.warning("finalize_video_asset: asset %s is READY but missing thumbnail", video_asset_id)
     return video_asset_id
-

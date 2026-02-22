@@ -145,7 +145,10 @@ function AppContent() {
       <Route path="/auth/sso-callback" element={<SSOCallbackPage />} />
 
       {/* Public Routes — Tenant Self-Service Signup */}
-      <Route path="/signup" element={<SignupPage />} />
+      <Route
+        path="/signup"
+        element={onPlatformHost ? <Navigate to="/" replace /> : <SignupPage />}
+      />
 
       {/* Public Routes — Super Admin login (platform admin) */}
       <Route

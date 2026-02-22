@@ -458,6 +458,7 @@ def quiz_detail(request, assignment_id):
                 "id": str(q.id),
                 "order": q.order,
                 "question_type": q.question_type,
+                "selection_mode": q.selection_mode,
                 "prompt": q.prompt,
                 "options": q.options or [],
                 "points": q.points,
@@ -491,10 +492,17 @@ def quiz_detail(request, assignment_id):
 @tenant_required
 def quiz_submit(request, assignment_id):
     """
-    Submit quiz answers. MCQs are auto-graded; short answers are stored for review.
+    Submit quiz answers. Objective questions are auto-graded; short answers are stored for review.
 
     Payload:
-      { "answers": { "<question_uuid>": { "option_index": 1 } | { "text": "..." } } }
+      {
+        "answers": {
+          "<question_uuid>": { "option_index": 1 }
+            | { "option_indices": [0, 2] }
+            | { "value": true }
+            | { "text": "..." }
+        }
+      }
     """
     assignment = get_object_or_404(
         Assignment,
@@ -522,30 +530,67 @@ def quiz_submit(request, assignment_id):
     for key, val in answers.items():
         if not isinstance(val, dict):
             return Response({"error": f"Each answer must be an object, got {type(val).__name__} for '{key}'"}, status=status.HTTP_400_BAD_REQUEST)
-        # Reject nested objects — values must be scalar (str, int, float, bool, None)
+        # Reject nested objects. Allow option_indices as a flat list for multi-select MCQ.
         for inner_key, inner_val in val.items():
-            if isinstance(inner_val, (dict, list)):
-                return Response({"error": "Answer values must be scalar (no nested objects or arrays)"}, status=status.HTTP_400_BAD_REQUEST)
+            if isinstance(inner_val, dict):
+                return Response({"error": "Answer values cannot contain nested objects"}, status=status.HTTP_400_BAD_REQUEST)
+            if isinstance(inner_val, list):
+                if inner_key != "option_indices":
+                    return Response({"error": "Only option_indices may be an array value"}, status=status.HTTP_400_BAD_REQUEST)
+                if any(isinstance(v, (dict, list)) for v in inner_val):
+                    return Response({"error": "option_indices must be a flat array"}, status=status.HTTP_400_BAD_REQUEST)
 
-    # Auto-grade MCQs; track whether manual review is needed for short-answer
+    # Auto-grade objective questions; track whether manual review is needed for short-answer
     all_questions = list(quiz.questions.all())
     has_short_answer = any(q.question_type == "SHORT_ANSWER" for q in all_questions)
     mcq_score = 0.0
     for q in all_questions:
-        if q.question_type != "MCQ":
+        if q.question_type == "SHORT_ANSWER":
             continue
-        try:
-            expected = int((q.correct_answer or {}).get("option_index"))
-        except Exception:
-            continue
+
         got = answers.get(str(q.id)) or {}
-        if isinstance(got, dict):
+        if not isinstance(got, dict):
+            continue
+
+        if q.question_type == "MCQ":
+            mode = (q.selection_mode or "SINGLE").upper()
+            if mode == "MULTIPLE":
+                expected_raw = (q.correct_answer or {}).get("option_indices") or []
+                if not isinstance(expected_raw, list):
+                    continue
+                try:
+                    expected = {int(v) for v in expected_raw}
+                except Exception:
+                    continue
+                selected_raw = got.get("option_indices") or []
+                if not isinstance(selected_raw, list):
+                    continue
+                try:
+                    selected = {int(v) for v in selected_raw}
+                except Exception:
+                    continue
+                if selected and selected == expected:
+                    mcq_score += float(q.points or 1)
+                continue
+
+            try:
+                expected = int((q.correct_answer or {}).get("option_index"))
+            except Exception:
+                continue
             try:
                 selected = int(got.get("option_index"))
             except Exception:
                 selected = None
             if selected is not None and selected == expected:
                 mcq_score += float(q.points or 1)
+            continue
+
+        if q.question_type == "TRUE_FALSE":
+            expected = (q.correct_answer or {}).get("value")
+            selected = got.get("value")
+            if isinstance(expected, bool) and isinstance(selected, bool) and selected == expected:
+                mcq_score += float(q.points or 1)
+            continue
 
     obj, _created = QuizSubmission.objects.get_or_create(
         quiz=quiz,
@@ -732,4 +777,3 @@ def course_certificate(request, course_id):
     )
     
     return response
-

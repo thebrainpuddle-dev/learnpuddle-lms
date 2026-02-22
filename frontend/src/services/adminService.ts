@@ -85,6 +85,69 @@ export interface VideoStatusResponse {
   assignments: Array<{ id: string; title: string }>;
 }
 
+export type AdminAssignmentScopeType = 'COURSE' | 'MODULE';
+export type AdminAssignmentType = 'QUIZ' | 'WRITTEN';
+export type AdminQuizQuestionType = 'MCQ' | 'SHORT_ANSWER' | 'TRUE_FALSE';
+export type AdminQuizSelectionMode = 'SINGLE' | 'MULTIPLE';
+
+export interface AdminQuizQuestion {
+  id?: string;
+  order: number;
+  question_type: AdminQuizQuestionType;
+  selection_mode: AdminQuizSelectionMode;
+  prompt: string;
+  options: string[];
+  correct_answer: Record<string, any>;
+  explanation: string;
+  points: number;
+}
+
+export interface AdminAssignment {
+  id: string;
+  title: string;
+  description: string;
+  instructions: string;
+  due_date: string | null;
+  max_score: string;
+  passing_score: string;
+  is_mandatory: boolean;
+  is_active: boolean;
+  scope_type: AdminAssignmentScopeType;
+  module_id: string | null;
+  module_title: string | null;
+  assignment_type: AdminAssignmentType;
+  generation_source: 'MANUAL' | 'VIDEO_AUTO';
+  generation_metadata: Record<string, any>;
+  questions: AdminQuizQuestion[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AdminAssignmentPayload {
+  title: string;
+  description: string;
+  instructions: string;
+  due_date?: string | null;
+  max_score: number | string;
+  passing_score: number | string;
+  is_mandatory: boolean;
+  is_active: boolean;
+  scope_type: AdminAssignmentScopeType;
+  module_id?: string | null;
+  assignment_type: AdminAssignmentType;
+  questions?: AdminQuizQuestion[];
+}
+
+export interface AiGenerateRequest {
+  scope_type: AdminAssignmentScopeType;
+  module_id?: string | null;
+  question_count?: number;
+  include_short_answer?: boolean;
+  title_hint?: string;
+}
+
+export interface AiGenerateResponse extends AdminAssignment {}
+
 // Skip-request types (course skip by teacher, reviewed by admin)
 export interface SkipRequestItem {
   id: string;
@@ -112,6 +175,35 @@ export const adminService = {
   async getVideoStatus(courseId: string, moduleId: string, contentId: string): Promise<VideoStatusResponse> {
     const res = await api.get(`/courses/${courseId}/modules/${moduleId}/contents/${contentId}/video-status/`);
     return res.data;
+  },
+
+  async listCourseAssignments(courseId: string, params?: { scope?: 'ALL' | 'COURSE' | 'MODULE'; module_id?: string }) {
+    const res = await api.get(`/courses/${courseId}/assignments/`, { params });
+    return res.data as AdminAssignment[];
+  },
+
+  async getCourseAssignment(courseId: string, assignmentId: string) {
+    const res = await api.get(`/courses/${courseId}/assignments/${assignmentId}/`);
+    return res.data as AdminAssignment;
+  },
+
+  async createCourseAssignment(courseId: string, payload: AdminAssignmentPayload) {
+    const res = await api.post(`/courses/${courseId}/assignments/`, payload);
+    return res.data as AdminAssignment;
+  },
+
+  async updateCourseAssignment(courseId: string, assignmentId: string, payload: Partial<AdminAssignmentPayload>) {
+    const res = await api.patch(`/courses/${courseId}/assignments/${assignmentId}/`, payload);
+    return res.data as AdminAssignment;
+  },
+
+  async deleteCourseAssignment(courseId: string, assignmentId: string) {
+    await api.delete(`/courses/${courseId}/assignments/${assignmentId}/`);
+  },
+
+  async aiGenerateCourseAssignment(courseId: string, payload: AiGenerateRequest) {
+    const res = await api.post(`/courses/${courseId}/assignments/ai-generate/`, payload);
+    return res.data as AiGenerateResponse;
   },
 
   async listSkipRequests(params?: { status?: string; search?: string; page?: number }) {

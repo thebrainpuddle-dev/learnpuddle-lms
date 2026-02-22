@@ -145,6 +145,12 @@ class QuizQuestion(models.Model):
     QUESTION_TYPE_CHOICES = [
         ("MCQ", "Multiple Choice"),
         ("SHORT_ANSWER", "Short Answer"),
+        ("TRUE_FALSE", "True/False"),
+    ]
+
+    SELECTION_MODE_CHOICES = [
+        ("SINGLE", "Single Select"),
+        ("MULTIPLE", "Multiple Select"),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -152,6 +158,7 @@ class QuizQuestion(models.Model):
 
     order = models.PositiveIntegerField(default=0)
     question_type = models.CharField(max_length=20, choices=QUESTION_TYPE_CHOICES)
+    selection_mode = models.CharField(max_length=20, choices=SELECTION_MODE_CHOICES, default="SINGLE")
     prompt = models.TextField()
 
     # For MCQ: options is a list of strings. For SHORT_ANSWER: typically empty.

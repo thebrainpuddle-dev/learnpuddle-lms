@@ -256,10 +256,19 @@ const adminSteps: TourStep[] = [
   {
     id: 'admin-course-editor-tabs',
     title: 'Course Editor Tabs',
-    description: 'Build courses in order: details first, then content, then assignment targeting.',
+    description: 'Build courses in order: details first, then content, then assignment builder and audience.',
     path: '/admin/courses/new?tab=details',
     selector: '[data-tour="admin-course-editor-tabs"]',
     placement: 'bottom',
+    waitMs: 7000,
+  },
+  {
+    id: 'admin-course-editor-assignment-builder',
+    title: 'Assignment Builder',
+    description: 'Create manual or AI-generated assessments at course or module scope.',
+    path: '/admin/courses/new?tab=assignments',
+    selector: '[data-tour="admin-course-assignment-builder-panel"]',
+    placement: 'top',
     waitMs: 7000,
   },
   {
@@ -282,9 +291,9 @@ const adminSteps: TourStep[] = [
   },
   {
     id: 'admin-course-editor-assignment',
-    title: 'Assignment Targeting',
+    title: 'Course Audience',
     description: 'Control whether a course goes to all teachers, groups, or specific people.',
-    path: '/admin/courses/new?tab=assignment',
+    path: '/admin/courses/new?tab=audience',
     selector: '[data-tour="admin-course-assignment-panel"]',
     placement: 'top',
     waitMs: 7000,
