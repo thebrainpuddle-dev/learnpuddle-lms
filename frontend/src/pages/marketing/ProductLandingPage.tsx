@@ -1,6 +1,21 @@
 import React from 'react';
-import { getBookDemoUrl, isExternalHttpUrl } from '../../config/platform';
+import {
+  getBookDemoCalLink,
+  getBookDemoUrl,
+  isExternalHttpUrl,
+  useInlineBookDemo,
+} from '../../config/platform';
 import './ProductLandingPage.css';
+
+declare global {
+  interface Window {
+    Cal?: ((...args: any[]) => any) & { ns?: Record<string, (...args: any[]) => any>; loaded?: boolean };
+  }
+}
+
+const CAL_SCRIPT_SRC = 'https://app.cal.com/embed/embed.js';
+const CAL_NAMESPACE = 'learnpuddle30min';
+const CAL_CONTAINER_ID = 'lp-cal-inline-30min';
 
 const heroOutcomes = [
   'Launch multi-tenant learning programs in days, not quarters.',
@@ -182,17 +197,27 @@ const faqs = [
 
 function CTAButton({
   href,
+  onClick,
   children,
   className,
 }: {
-  href: string;
+  href?: string;
+  onClick?: () => void;
   children: React.ReactNode;
   className?: string;
 }) {
-  const isExternal = isExternalHttpUrl(href);
+  if (onClick) {
+    return (
+      <button type="button" className={className} onClick={onClick}>
+        {children}
+      </button>
+    );
+  }
+  const safeHref = href || '#';
+  const isExternal = isExternalHttpUrl(safeHref);
   return (
     <a
-      href={href}
+      href={safeHref}
       className={className}
       target={isExternal ? '_blank' : undefined}
       rel={isExternal ? 'noreferrer' : undefined}
@@ -224,6 +249,80 @@ function SectionHeader({
 
 export const ProductLandingPage: React.FC = () => {
   const bookDemoUrl = getBookDemoUrl();
+  const bookDemoCalLink = getBookDemoCalLink();
+  const inlineDemoEnabled = useInlineBookDemo();
+  const [showCalModal, setShowCalModal] = React.useState(false);
+  const [calLoadError, setCalLoadError] = React.useState('');
+
+  React.useEffect(() => {
+    if (!showCalModal) return;
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = originalOverflow;
+    };
+  }, [showCalModal]);
+
+  React.useEffect(() => {
+    if (!showCalModal || !inlineDemoEnabled) return;
+
+    let cancelled = false;
+    const loadScript = async () => {
+      if (window.Cal?.loaded) return;
+      await new Promise<void>((resolve, reject) => {
+        const existing = document.querySelector<HTMLScriptElement>('script[data-cal-embed="learnpuddle"]');
+        if (existing) {
+          existing.addEventListener('load', () => resolve(), { once: true });
+          existing.addEventListener('error', () => reject(new Error('Failed to load Cal embed script')), {
+            once: true,
+          });
+          return;
+        }
+        const script = document.createElement('script');
+        script.src = CAL_SCRIPT_SRC;
+        script.async = true;
+        script.setAttribute('data-cal-embed', 'learnpuddle');
+        script.onload = () => resolve();
+        script.onerror = () => reject(new Error('Failed to load Cal embed script'));
+        document.head.appendChild(script);
+      });
+    };
+
+    const initCal = async () => {
+      try {
+        await loadScript();
+        if (cancelled || !window.Cal) return;
+        window.Cal('init', CAL_NAMESPACE, { origin: 'https://app.cal.com' });
+        window.Cal.ns?.[CAL_NAMESPACE]?.('inline', {
+          elementOrSelector: `#${CAL_CONTAINER_ID}`,
+          config: { layout: 'month_view', useSlotsViewOnSmallScreen: true },
+          calLink: bookDemoCalLink,
+        });
+        window.Cal.ns?.[CAL_NAMESPACE]?.('ui', {
+          hideEventTypeDetails: false,
+          layout: 'month_view',
+        });
+        setCalLoadError('');
+      } catch {
+        if (!cancelled) {
+          setCalLoadError('Unable to load inline scheduler right now.');
+        }
+      }
+    };
+
+    void initCal();
+    return () => {
+      cancelled = true;
+    };
+  }, [bookDemoCalLink, inlineDemoEnabled, showCalModal]);
+
+  const openBookDemo = React.useCallback(() => {
+    if (!inlineDemoEnabled) {
+      window.open(bookDemoUrl, '_blank', 'noopener,noreferrer');
+      return;
+    }
+    setShowCalModal(true);
+  }, [bookDemoUrl, inlineDemoEnabled]);
 
   return (
     <div className="lp-page">
@@ -244,7 +343,7 @@ export const ProductLandingPage: React.FC = () => {
             <a href="#faq">FAQ</a>
           </nav>
           <div className="lp-header-actions">
-            <CTAButton href={bookDemoUrl} className="lp-btn lp-btn-primary">
+            <CTAButton onClick={openBookDemo} className="lp-btn lp-btn-primary">
               Book Demo
             </CTAButton>
           </div>
@@ -267,7 +366,7 @@ export const ProductLandingPage: React.FC = () => {
                 ))}
               </ul>
               <div className="lp-cta-row">
-                <CTAButton href={bookDemoUrl} className="lp-btn lp-btn-primary">
+                <CTAButton onClick={openBookDemo} className="lp-btn lp-btn-primary">
                   Book a Demo
                 </CTAButton>
                 <a href="#platform" className="lp-btn lp-btn-secondary">
@@ -429,7 +528,7 @@ export const ProductLandingPage: React.FC = () => {
             <aside className="lp-demo-card" aria-label="Book demo panel">
               <h3>Book your LearnPuddle demo</h3>
               <p>Pick a time and we will run a focused session for your team.</p>
-              <CTAButton href={bookDemoUrl} className="lp-btn lp-btn-primary lp-btn-block">
+              <CTAButton onClick={openBookDemo} className="lp-btn lp-btn-primary lp-btn-block">
                 Schedule Demo
               </CTAButton>
               <a href="mailto:hello@learnpuddle.com" className="lp-btn lp-btn-secondary lp-btn-block">
@@ -488,6 +587,43 @@ export const ProductLandingPage: React.FC = () => {
         </section>
       </main>
 
+      {showCalModal && (
+        <div
+          className="lp-cal-modal-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Book a demo"
+          onClick={() => setShowCalModal(false)}
+        >
+          <div className="lp-cal-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="lp-cal-modal-head">
+              <div>
+                <p className="lp-kicker">Book Demo</p>
+                <h3>Pick a time for your LearnPuddle walkthrough</h3>
+              </div>
+              <button
+                type="button"
+                className="lp-cal-close"
+                onClick={() => setShowCalModal(false)}
+                aria-label="Close demo scheduler"
+              >
+                ×
+              </button>
+            </div>
+            {calLoadError ? (
+              <div className="lp-cal-fallback">
+                <p>{calLoadError}</p>
+                <a href={bookDemoUrl} target="_blank" rel="noreferrer" className="lp-btn lp-btn-primary">
+                  Open booking page
+                </a>
+              </div>
+            ) : (
+              <div id={CAL_CONTAINER_ID} className="lp-cal-embed" />
+            )}
+          </div>
+        </div>
+      )}
+
       <footer className="lp-footer">
         <div className="lp-container lp-footer-inner">
           <a href="/" className="lp-footer-logo" aria-label="LearnPuddle Home">
@@ -501,7 +637,7 @@ export const ProductLandingPage: React.FC = () => {
             <a href="#demo">Demo</a>
           </nav>
           <div className="lp-footer-actions">
-            <CTAButton href={bookDemoUrl} className="lp-footer-link">
+            <CTAButton onClick={openBookDemo} className="lp-footer-link">
               Book Demo
             </CTAButton>
           </div>

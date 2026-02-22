@@ -6,15 +6,20 @@ import re
 import shutil
 import subprocess
 import tempfile
+import zipfile
+from io import BytesIO
 from typing import Any
+from urllib.parse import urlparse
 
 import requests as http_requests
+from bs4 import BeautifulSoup
 
 from celery import shared_task
+from django.conf import settings as conf
+from django.core.files.storage import default_storage
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
-from django.core.files.storage import default_storage
 
 from apps.courses.models import Content
 from apps.courses.video_models import VideoAsset, VideoTranscript
@@ -29,6 +34,8 @@ from utils.storage_paths import (
 
 
 MAX_VIDEO_DURATION_SECONDS = 60 * 60  # 1 hour
+MAX_ASSIGNMENT_SOURCE_CHARS = 8000
+MAX_DOCUMENT_READ_BYTES = 1_500_000
 
 
 def _safe_storage_url(path: str) -> str:
@@ -139,72 +146,177 @@ def _basic_terms(text: str, limit: int = 40) -> list[str]:
 logger = logging.getLogger(__name__)
 
 
+def _configured_ollama() -> tuple[str, str]:
+    base_url = getattr(conf, "OLLAMA_BASE_URL", "http://localhost:11434")
+    model = getattr(conf, "OLLAMA_MODEL", "mistral")
+    return base_url, model
+
+
+def _storage_key_from_url_or_path(url_or_path: str) -> str:
+    if not url_or_path:
+        return ""
+
+    if url_or_path.startswith("http"):
+        parsed = urlparse(url_or_path)
+        key = parsed.path.lstrip("/")
+    elif url_or_path.startswith("/"):
+        key = url_or_path.lstrip("/")
+    else:
+        key = url_or_path
+
+    bucket_name = (getattr(conf, "STORAGE_BUCKET", "") or "").strip()
+    if bucket_name and key.startswith(f"{bucket_name}/"):
+        key = key[len(bucket_name) + 1 :]
+
+    if key.startswith("media/"):
+        key = key[len("media/") :]
+    if key.startswith("protected-media/"):
+        key = key[len("protected-media/") :]
+    return key
+
+
+def _extract_docx_text(blob: bytes) -> str:
+    try:
+        with zipfile.ZipFile(BytesIO(blob)) as archive:
+            xml = archive.read("word/document.xml").decode("utf-8", errors="ignore")
+    except Exception:
+        return ""
+
+    cleaned = re.sub(r"</w:p>", "\n", xml)
+    cleaned = re.sub(r"<[^>]+>", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned.strip()
+
+
+def _extract_pdf_text(blob: bytes) -> str:
+    try:
+        from pypdf import PdfReader  # type: ignore
+    except Exception:
+        return ""
+
+    try:
+        reader = PdfReader(BytesIO(blob))
+    except Exception:
+        return ""
+
+    chunks: list[str] = []
+    for page in reader.pages[:10]:
+        try:
+            text = (page.extract_text() or "").strip()
+        except Exception:
+            text = ""
+        if text:
+            chunks.append(text)
+    return "\n".join(chunks).strip()
+
+
+def _extract_document_text(content: Content, max_chars: int = 1600) -> str:
+    """
+    Best-effort document extraction for AI assignment prompts.
+    Supports txt/md/csv/json/html + docx natively and pdf when pypdf is available.
+    """
+    file_url = (content.file_url or "").strip()
+    key = _storage_key_from_url_or_path(file_url)
+    if not key:
+        return ""
+
+    try:
+        if not default_storage.exists(key):
+            return ""
+        with default_storage.open(key, "rb") as fh:
+            blob = fh.read(MAX_DOCUMENT_READ_BYTES)
+    except Exception:
+        return ""
+
+    ext = os.path.splitext(key.lower())[1]
+    text = ""
+
+    if ext in {".txt", ".md", ".csv", ".json"}:
+        text = blob.decode("utf-8", errors="ignore")
+    elif ext in {".htm", ".html"}:
+        text = BeautifulSoup(blob.decode("utf-8", errors="ignore"), "html.parser").get_text(" ")
+    elif ext == ".docx":
+        text = _extract_docx_text(blob)
+    elif ext == ".pdf":
+        text = _extract_pdf_text(blob)
+
+    cleaned = re.sub(r"\s+", " ", text or "").strip()
+    return cleaned[:max_chars]
+
+
 def _generate_quiz_via_ollama(transcript_text: str, question_count: int = 6) -> list[dict[str, Any]] | None:
     """
     Generate Coursera-grade quiz questions from transcript using Ollama LLM.
     Uses Bloom's taxonomy for cognitive diversity and scenario-based questions.
     Returns parsed question list or None if Ollama is unavailable/fails.
     """
-    from django.conf import settings as conf
-    base_url = getattr(conf, "OLLAMA_BASE_URL", "http://localhost:11434")
-    model = getattr(conf, "OLLAMA_MODEL", "mistral")
+    base_url, model = _configured_ollama()
 
-    mcq_count = max(1, question_count - 2)
-    sa_count = min(2, question_count)
+    mcq_count = max(2, int(question_count * 0.6))
+    tf_count = 1 if question_count >= 4 else 0
+    sa_count = max(1, question_count - mcq_count - tf_count)
 
-    prompt = f"""You are an expert instructional designer creating assessment questions for a professional development course. Your questions should match the quality of Coursera, edX, or LinkedIn Learning courses.
+    prompt = f"""You are LearnPuddle's senior assessment architect.
+Create rigorous quiz questions grounded ONLY in the provided source material.
 
-## Your Task
-Analyze the lesson transcript and create {question_count} high-quality assessment questions.
+## Source Grounding Rules (mandatory)
+1) Use only facts present in the source text below.
+2) Do not invent policies, steps, or numbers.
+3) If evidence is weak for a concept, skip it.
+4) Each explanation must reference the source in plain language.
 
-## Question Distribution (Bloom's Taxonomy)
-Create questions at different cognitive levels:
-- 1-2 questions: REMEMBER/UNDERSTAND - Define, identify, or explain key concepts
-- 2-3 questions: APPLY/ANALYZE - Apply concepts to real scenarios, compare approaches
-- 1 question: EVALUATE/CREATE - Judge effectiveness or propose solutions
+## Required mix
+- MCQ: {mcq_count}
+- TRUE_FALSE: {tf_count}
+- SHORT_ANSWER: {sa_count}
+- Total: exactly {question_count}
 
-## Question Types Required
-- {mcq_count} Multiple Choice Questions (MCQ):
-  * Exactly 4 options each
-  * Create plausible distractors (wrong answers that someone might reasonably choose)
-  * One clearly correct answer
-  * Frame as scenarios when possible: "A teacher wants to... Which approach would be most effective?"
-  
-- {sa_count} Short Answer Questions:
-  * Scenario-based or reflection prompts
-  * Require critical thinking: "How would you apply X in situation Y?" or "Why is X important for Z?"
-  * Should be answerable in 2-4 sentences
+## Quality bar
+- Use realistic job/classroom scenarios.
+- Avoid generic prompts.
+- Avoid trick phrasing.
+- No "all of the above" or "none of the above".
+- MCQ must include 4 options.
 
-## Quality Standards
-1. Questions must be answerable from the lesson content
-2. NO "all of the above" or "none of the above" options
-3. Explanations should TEACH - explain why the correct answer is right AND why others are wrong
-4. Use clear, professional language
-5. Make questions specific, not generic
-
-## JSON Output Format
-Return ONLY a valid JSON array. Each question object:
+## JSON schema (return only JSON array)
+For MCQ:
 {{
-  "question_type": "MCQ" or "SHORT_ANSWER",
-  "bloom_level": "REMEMBER" | "UNDERSTAND" | "APPLY" | "ANALYZE" | "EVALUATE",
-  "prompt": "Specific, scenario-based question text",
-  "options": ["Option A", "Option B", "Option C", "Option D"] (MCQ only, [] for SHORT_ANSWER),
-  "correct_answer": {{"option_index": 0}} (MCQ, 0-3) or {{}} (SHORT_ANSWER),
-  "explanation": "Educational explanation: why this is correct and why alternatives are not",
-  "points": 1 (MCQ) or 2 (SHORT_ANSWER)
+  "question_type": "MCQ",
+  "selection_mode": "SINGLE",
+  "prompt": "...",
+  "options": ["A", "B", "C", "D"],
+  "correct_answer": {{"option_index": 0}},
+  "explanation": "...",
+  "points": 1
 }}
 
-## Lesson Transcript
----
-{transcript_text[:6000]}
----
+For TRUE_FALSE:
+{{
+  "question_type": "TRUE_FALSE",
+  "prompt": "...",
+  "correct_answer": {{"value": true}},
+  "explanation": "...",
+  "points": 1
+}}
 
-Generate exactly {question_count} questions as a JSON array. No markdown, no commentary."""
+For SHORT_ANSWER:
+{{
+  "question_type": "SHORT_ANSWER",
+  "prompt": "...",
+  "correct_answer": {{}},
+  "explanation": "...",
+  "points": 2
+}}
+
+## Source material
+{transcript_text[:6000]}
+
+Return exactly {question_count} items. No markdown. No extra keys."""
 
     try:
         resp = http_requests.post(
             f"{base_url}/api/generate",
-            json={"model": model, "prompt": prompt, "stream": False, "options": {"temperature": 0.7}},
+            json={"model": model, "prompt": prompt, "stream": False, "options": {"temperature": 0.35}},
             timeout=180,
         )
         resp.raise_for_status()
@@ -223,11 +335,11 @@ Generate exactly {question_count} questions as a JSON array. No markdown, no com
                     q.setdefault("options", [])
                     q.setdefault("correct_answer", {})
                     q.setdefault("explanation", "")
-                    q.setdefault("bloom_level", "UNDERSTAND")
-                    q.setdefault("points", 1 if q["question_type"] == "MCQ" else 2)
+                    q.setdefault("selection_mode", "SINGLE")
+                    q.setdefault("points", 2 if q["question_type"] == "SHORT_ANSWER" else 1)
                     valid.append(q)
             if len(valid) >= 2:
-                logger.info(f"Ollama generated {len(valid)} Coursera-grade quiz questions via {model}")
+                logger.info("Ollama generated %s quiz questions via %s", len(valid), model)
                 return valid[:question_count]
     except http_requests.ConnectionError:
         logger.info("Ollama not available (connection refused), falling back to deterministic generator")
@@ -322,18 +434,29 @@ def _generate_quiz_deterministic(transcript_text: str, question_count: int = 6) 
     return questions[:question_count]
 
 
+def _generate_quiz_questions_with_meta(
+    transcript_text: str, question_count: int = 6
+) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    """
+    Generate quiz questions and return metadata about which generator produced the output.
+    """
+    ollama_result = _generate_quiz_via_ollama(transcript_text, question_count)
+    if ollama_result:
+        _base_url, model = _configured_ollama()
+        return ollama_result, {"provider": "OLLAMA", "model": model}
+    return _generate_quiz_deterministic(transcript_text, question_count), {
+        "provider": "DETERMINISTIC",
+        "model": "heuristic-v2",
+    }
+
+
 def _generate_quiz_questions(transcript_text: str, question_count: int = 6) -> list[dict[str, Any]]:
     """
     Generate quiz questions from transcript.
     Tries Ollama LLM first (like NotebookLM), falls back to deterministic generator.
     """
-    # Try Ollama LLM first
-    ollama_result = _generate_quiz_via_ollama(transcript_text, question_count)
-    if ollama_result:
-        return ollama_result
-
-    # Fall back to deterministic generator
-    return _generate_quiz_deterministic(transcript_text, question_count)
+    questions, _meta = _generate_quiz_questions_with_meta(transcript_text, question_count)
+    return questions
 
 
 def _strip_html(raw: str) -> str:
@@ -342,14 +465,20 @@ def _strip_html(raw: str) -> str:
     return text.strip()
 
 
-def compile_assignment_source_text(course, module=None, max_chars: int = 8000) -> str:
+def compile_assignment_source_text(
+    course,
+    module=None,
+    max_chars: int = MAX_ASSIGNMENT_SOURCE_CHARS,
+    include_fallback: bool = True,
+) -> str:
     """
     Compile source text for AI assignment generation from course/module material.
 
     Sources:
-    1) Video transcripts (if available)
-    2) TEXT content blocks
-    3) Fallback metadata (course/module/content titles + descriptions)
+    1) Video transcripts
+    2) Document excerpts (best effort)
+    3) TEXT content blocks
+    4) Optional fallback metadata
     """
     contents = Content.objects.filter(module__course=course, is_active=True)
     if module is not None:
@@ -357,21 +486,27 @@ def compile_assignment_source_text(course, module=None, max_chars: int = 8000) -
 
     chunks: list[str] = []
 
-    video_content_ids = list(contents.filter(content_type="VIDEO").values_list("id", flat=True))
-    if video_content_ids:
-        transcripts = VideoTranscript.objects.filter(video_asset__content_id__in=video_content_ids).values_list("full_text", flat=True)
-        for full_text in transcripts:
-            cleaned = (full_text or "").strip()
-            if cleaned:
-                chunks.append(cleaned)
-
-    text_blocks = contents.filter(content_type="TEXT").values_list("text_content", flat=True)
-    for text_content in text_blocks:
-        cleaned = _strip_html(text_content or "")
+    for item in contents.filter(content_type="VIDEO").select_related("module").order_by("module__order", "order"):
+        transcript = VideoTranscript.objects.filter(video_asset__content_id=item.id).first()
+        cleaned = (transcript.full_text if transcript else "").strip()
         if cleaned:
-            chunks.append(cleaned)
+            chunks.append(f"[VIDEO_TRANSCRIPT] {item.module.title} / {item.title}\n{cleaned}")
 
-    if not chunks:
+    for item in contents.filter(content_type="DOCUMENT").select_related("module").order_by("module__order", "order"):
+        excerpt = _extract_document_text(item)
+        if excerpt:
+            chunks.append(f"[DOCUMENT_EXCERPT] {item.module.title} / {item.title}\n{excerpt}")
+        elif item.file_url:
+            # Keep a minimal signal so prompts stay context-aware even when binary extraction is unavailable.
+            chunks.append(f"[DOCUMENT_REFERENCE] {item.module.title} / {item.title}")
+
+    text_blocks = contents.filter(content_type="TEXT").select_related("module").order_by("module__order", "order")
+    for item in text_blocks:
+        cleaned = _strip_html(item.text_content or "")
+        if cleaned:
+            chunks.append(f"[TEXT_CONTENT] {item.module.title} / {item.title}\n{cleaned}")
+
+    if not chunks and include_fallback:
         scope_label = module.title if module is not None else course.title
         chunks.append(f"Course: {course.title}")
         chunks.append(f"Scope: {scope_label}")
@@ -380,7 +515,7 @@ def compile_assignment_source_text(course, module=None, max_chars: int = 8000) -
         for c in contents.order_by("module__order", "order")[:30]:
             chunks.append(f"{c.module.title}: {c.title}")
 
-    compiled = "\n".join([c for c in chunks if c]).strip()
+    compiled = "\n\n".join([c for c in chunks if c]).strip()
     return compiled[:max_chars]
 
 

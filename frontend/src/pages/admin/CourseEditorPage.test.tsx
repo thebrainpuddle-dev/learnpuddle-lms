@@ -224,4 +224,13 @@ describe('CourseEditorPage tab URL stability', () => {
       );
     });
   });
+
+  it('disables AI generation when source content is not available', async () => {
+    renderPage('/admin/courses/abc?tab=assignments');
+
+    expect(await screen.findByRole('button', { name: 'Save Changes' })).toBeInTheDocument();
+
+    const aiButton = await screen.findByRole('button', { name: 'Generate with AI' });
+    expect(aiButton).toBeDisabled();
+  });
 });

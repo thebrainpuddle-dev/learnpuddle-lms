@@ -225,6 +225,38 @@ class AssignmentAdminApiTestCase(TestCase):
         self.assertEqual(body["generation_source"], "MANUAL")
         self.assertEqual(body["generation_metadata"]["origin"], "AI_ON_DEMAND")
         self.assertGreaterEqual(len(body["questions"]), 2)
+        self.assertIn("generator_provider", body["generation_metadata"])
+
+    def test_ai_generate_requires_uploaded_source_material(self):
+        self._login("assignment.lms.com", "admin@assignment.test", "pass123")
+        empty_course = Course.objects.create(
+            tenant=self.tenant,
+            title="Course Without Sources",
+            slug="course-without-sources",
+            description="No content",
+            created_by=self.admin,
+            is_published=True,
+            is_active=True,
+        )
+        empty_module = Module.objects.create(
+            course=empty_course,
+            title="Empty Module",
+            description="No content yet",
+            order=1,
+            is_active=True,
+        )
+
+        resp = self.client.post(
+            f"/api/courses/{empty_course.id}/assignments/ai-generate/",
+            data={
+                "scope_type": "MODULE",
+                "module_id": str(empty_module.id),
+                "question_count": 4,
+            },
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 400, resp.content)
+        self.assertIn("Upload source content first", resp.json()["error"])
 
     def test_cross_tenant_assignment_api_isolation(self):
         self._login("assignment.lms.com", "admin@assignment.test", "pass123")

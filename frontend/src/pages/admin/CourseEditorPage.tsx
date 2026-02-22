@@ -365,6 +365,7 @@ export const CourseEditorPage: React.FC = () => {
   const [aiQuestionCount, setAiQuestionCount] = useState(6);
   const [aiIncludeShortAnswer, setAiIncludeShortAnswer] = useState(true);
   const [aiTitleHint, setAiTitleHint] = useState('');
+  const aiModelLabel = 'Ollama (backend-configured, default: mistral) with deterministic fallback';
 
   useEffect(() => {
     let isMounted = true;
@@ -578,6 +579,76 @@ export const CourseEditorPage: React.FC = () => {
       }
     }
   }, [course]);
+
+  const aiSourceState = React.useMemo(() => {
+    const selectedModule =
+      assignmentForm.scope_type === 'MODULE'
+        ? (course?.modules || []).find((module) => module.id === assignmentForm.module_id) || null
+        : null;
+
+    if (assignmentForm.scope_type === 'MODULE' && !selectedModule) {
+      return {
+        enabled: false,
+        reason: 'Select a module first.',
+        summary: 'No module selected',
+      };
+    }
+
+    const scopedContents =
+      assignmentForm.scope_type === 'MODULE'
+        ? selectedModule?.contents || []
+        : (course?.modules || []).flatMap((module) => module.contents || []);
+
+    if (!scopedContents.length) {
+      return {
+        enabled: false,
+        reason: 'Add content first. AI needs text, documents, or a processed video transcript.',
+        summary: 'No content available in selected scope',
+      };
+    }
+
+    const textCount = scopedContents.filter(
+      (content) => content.content_type === 'TEXT' && Boolean(content.text_content?.replace(/<[^>]+>/g, '').trim())
+    ).length;
+    const documentCount = scopedContents.filter(
+      (content) => content.content_type === 'DOCUMENT' && Boolean(content.file_url)
+    ).length;
+    const readyVideoCount = scopedContents.filter(
+      (content) =>
+        content.content_type === 'VIDEO' &&
+        (content.video_status === 'READY' || (!content.video_status && Boolean(content.file_url)))
+    ).length;
+    const processingVideoCount = scopedContents.filter(
+      (content) => content.content_type === 'VIDEO' && content.video_status === 'PROCESSING'
+    ).length;
+
+    const enabled = textCount > 0 || documentCount > 0 || readyVideoCount > 0;
+    if (!enabled && processingVideoCount > 0) {
+      return {
+        enabled: false,
+        reason: 'Video processing is in progress. AI generation unlocks once transcript is ready.',
+        summary: `${processingVideoCount} video(s) processing`,
+      };
+    }
+    if (!enabled) {
+      return {
+        enabled: false,
+        reason: 'Upload text, document, or a processed video to generate AI assignments.',
+        summary: 'No eligible source material found',
+      };
+    }
+
+    const summaryParts: string[] = [];
+    if (readyVideoCount) summaryParts.push(`${readyVideoCount} transcript-ready video`);
+    if (documentCount) summaryParts.push(`${documentCount} document`);
+    if (textCount) summaryParts.push(`${textCount} text block`);
+
+    return {
+      enabled: true,
+      reason: '',
+      summary: `Using ${summaryParts.join(', ')}`,
+    };
+  }, [assignmentForm.module_id, assignmentForm.scope_type, course]);
 
   // Mutations
   const createCourseMutation = useMutation({
@@ -2312,6 +2383,13 @@ export const CourseEditorPage: React.FC = () => {
                     <SparklesIcon className="h-5 w-5 text-primary-600" />
                     <h4 className="text-sm font-semibold text-gray-900">AI Assignment Generation</h4>
                   </div>
+                  <p className="text-xs text-gray-600">
+                    {aiSourceState.summary}. Uses video transcripts for video lessons and text extraction for document/text content.
+                  </p>
+                  <p className="text-xs text-gray-500">Model: {aiModelLabel}</p>
+                  {!aiSourceState.enabled && (
+                    <p className="text-xs font-medium text-amber-700">{aiSourceState.reason}</p>
+                  )}
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
                     <Input
                       label="Question Count"
@@ -2320,7 +2398,11 @@ export const CourseEditorPage: React.FC = () => {
                       min="2"
                       max="20"
                       value={aiQuestionCount}
-                      onChange={(e) => setAiQuestionCount(Number(e.target.value || 6))}
+                      onChange={(e) => {
+                        const parsed = Number(e.target.value || 6);
+                        const normalized = Number.isFinite(parsed) ? Math.max(2, Math.min(20, parsed)) : 6;
+                        setAiQuestionCount(normalized);
+                      }}
                     />
                     <Input
                       label="Title Hint (Optional)"
@@ -2346,6 +2428,7 @@ export const CourseEditorPage: React.FC = () => {
                       variant="outline"
                       onClick={() => aiGenerateMutation.mutate()}
                       loading={aiGenerateMutation.isPending}
+                      disabled={!aiSourceState.enabled}
                     >
                       Generate with AI
                     </Button>

@@ -13,8 +13,9 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from apps.courses.models import Course, Module
-from apps.courses.tasks import compile_assignment_source_text, _generate_quiz_questions
+from apps.courses.models import Content, Course, Module
+from apps.courses.tasks import compile_assignment_source_text, _generate_quiz_questions_with_meta
+from apps.courses.video_models import VideoTranscript
 from apps.progress.models import Assignment, Quiz, QuizQuestion
 from utils.decorators import admin_only, tenant_required
 
@@ -198,6 +199,30 @@ def _normalize_questions(raw_questions: Any) -> list[dict[str, Any]]:
         )
 
     return normalized
+
+
+def _source_material_summary(course: Course, module: Module | None) -> dict[str, int]:
+    contents = Content.objects.filter(module__course=course, is_active=True)
+    if module is not None:
+        contents = contents.filter(module=module)
+
+    text_blocks = contents.filter(content_type="TEXT").exclude(text_content__isnull=True).exclude(text_content__exact="")
+    documents = contents.filter(content_type="DOCUMENT").exclude(file_url__isnull=True).exclude(file_url__exact="")
+    video_ids = list(contents.filter(content_type="VIDEO").values_list("id", flat=True))
+    transcript_count = 0
+    if video_ids:
+        transcript_count = (
+            VideoTranscript.objects.filter(video_asset__content_id__in=video_ids)
+            .exclude(full_text__isnull=True)
+            .exclude(full_text__exact="")
+            .count()
+        )
+
+    return {
+        "text_blocks": text_blocks.count(),
+        "documents": documents.count(),
+        "video_transcripts": transcript_count,
+    }
 
 
 def _serialize_assignment(assignment: Assignment, include_questions: bool = True) -> dict[str, Any]:
@@ -432,8 +457,20 @@ def assignment_ai_generate(request, course_id):
         include_short_answer = _as_bool(request.data.get("include_short_answer"), True)
         title_hint = str(request.data.get("title_hint") or "").strip()
 
-        source_text = compile_assignment_source_text(course=course, module=module)
-        generated = _generate_quiz_questions(source_text or course.title, question_count=question_count)
+        source_summary = _source_material_summary(course, module)
+        if (
+            source_summary["video_transcripts"] == 0
+            and source_summary["documents"] == 0
+            and source_summary["text_blocks"] == 0
+        ):
+            raise ValueError(
+                "Upload source content first. AI generation requires a video transcript, document, or text content."
+            )
+
+        source_text = compile_assignment_source_text(course=course, module=module, include_fallback=False)
+        generated, generation_meta = _generate_quiz_questions_with_meta(
+            source_text or course.title, question_count=question_count
+        )
 
         question_payloads: list[dict[str, Any]] = []
         for idx, item in enumerate(generated, start=1):
@@ -442,14 +479,50 @@ def assignment_ai_generate(request, course_id):
                 continue
             if q_type not in _ALLOWED_QUESTION_TYPES:
                 q_type = "MCQ"
+            selection_mode = "SINGLE"
+            options = list(item.get("options") or [])
+            correct_answer = dict(item.get("correct_answer") or {})
+
+            if q_type == "MCQ":
+                maybe_mode = str(item.get("selection_mode") or "SINGLE").upper()
+                if maybe_mode == "MULTIPLE":
+                    raw_indices = correct_answer.get("option_indices")
+                    if isinstance(raw_indices, list):
+                        normalized_indices = []
+                        for raw_index in raw_indices:
+                            try:
+                                option_index = int(raw_index)
+                            except (TypeError, ValueError):
+                                continue
+                            if option_index not in normalized_indices:
+                                normalized_indices.append(option_index)
+                        if len(normalized_indices) >= 2:
+                            selection_mode = "MULTIPLE"
+                            correct_answer = {"option_indices": normalized_indices}
+                        else:
+                            selection_mode = "SINGLE"
+                            correct_answer = {"option_index": int(correct_answer.get("option_index") or 0)}
+                    else:
+                        correct_answer = {"option_index": int(correct_answer.get("option_index") or 0)}
+                else:
+                    correct_answer = {"option_index": int(correct_answer.get("option_index") or 0)}
+            elif q_type == "TRUE_FALSE":
+                selection_mode = "SINGLE"
+                correct_answer = {"value": bool(correct_answer.get("value", True))}
+                options = ["True", "False"]
+            else:
+                selection_mode = "SINGLE"
+                correct_answer = {}
+                options = []
+
             question_payloads.append(
                 {
                     "order": len(question_payloads) + 1,
                     "question_type": q_type,
-                    "selection_mode": "SINGLE",
+                    "selection_mode": selection_mode,
                     "prompt": str(item.get("prompt") or f"Question {idx}"),
-                    "options": list(item.get("options") or []) if q_type == "MCQ" else (["True", "False"] if q_type == "TRUE_FALSE" else []),
-                    "correct_answer": dict(item.get("correct_answer") or {}),
+                    "options": options,
+                    "correct_answer": correct_answer,
                     "explanation": str(item.get("explanation") or ""),
                     "points": int(item.get("points") or (1 if q_type in {"MCQ", "TRUE_FALSE"} else 2)),
                 }
@@ -489,6 +562,9 @@ def assignment_ai_generate(request, course_id):
                     "scope_type": scope_type,
                     "module_id": str(module.id) if module else None,
                     "question_count": len(question_payloads),
+                    "source_material": source_summary,
+                    "generator_provider": generation_meta.get("provider", ""),
+                    "generator_model": generation_meta.get("model", ""),
                 },
             )
             _replace_quiz_questions(assignment, question_payloads, is_auto_generated=True)
