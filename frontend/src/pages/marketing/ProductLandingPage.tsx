@@ -2,68 +2,171 @@ import React from 'react';
 import { getBookDemoUrl, isExternalHttpUrl } from '../../config/platform';
 import './ProductLandingPage.css';
 
-const industries = [
+const capabilities = [
   {
-    title: 'Schools and Colleges',
-    description: 'Launch branded academies for institutions with admin controls, cohorts, and reporting.',
+    icon: (
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <rect x="3" y="3" width="7" height="7" rx="1.5" fill="currentColor" opacity="0.9" />
+        <rect x="14" y="3" width="7" height="7" rx="1.5" fill="currentColor" opacity="0.55" />
+        <rect x="3" y="14" width="7" height="7" rx="1.5" fill="currentColor" opacity="0.55" />
+        <rect x="14" y="14" width="7" height="7" rx="1.5" fill="currentColor" opacity="0.25" />
+      </svg>
+    ),
+    title: 'Course Builder',
+    description:
+      'Structured courses with modules, videos, documents, and assessments. Mandatory content flags. Deadline enforcement.',
   },
   {
-    title: 'K12 Programs',
-    description: 'Deliver grade-wise pathways, assignments, and progress tracking for K12 learners.',
+    icon: (
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path
+          d="M9 11l3 3L22 4"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        <path
+          d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    ),
+    title: 'Compliance Tracking',
+    description:
+      'CBSE 50-hour CPD requirements. IB educator certifications. Custom training mandates. Exportable compliance reports.',
   },
   {
-    title: 'Hotel Management',
-    description: 'Train frontline teams with SOP modules, practical assessments, and compliance checklists.',
+    icon: (
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" />
+        <path d="M12 7v5l3 3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      </svg>
+    ),
+    title: 'Assessment Engine',
+    description:
+      'Quiz generation from video transcripts. Multiple choice and short answer formats. Auto-grading for objective questions.',
   },
   {
-    title: 'Corporate Training',
-    description: 'Enable role-based onboarding, certification tracks, and department analytics at scale.',
+    icon: (
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path
+          d="M18 20V10M12 20V4M6 20v-6"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    ),
+    title: 'Progress Dashboards',
+    description:
+      'Completion rates by course, group, or learner. Video watch time. Assignment scores. Department-wise breakdowns.',
   },
   {
-    title: 'Independent Academies',
-    description: 'Run your own academy with custom branding, content workflows, and learner insights.',
+    icon: (
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <rect x="2" y="3" width="20" height="14" rx="2" stroke="currentColor" strokeWidth="2" />
+        <path d="M8 21h8M12 17v4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      </svg>
+    ),
+    title: 'White-Label Tenants',
+    description:
+      'Subdomain per organization. Custom logo and colors. Isolated data. Central command center for platform admins.',
+  },
+  {
+    icon: (
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <polygon
+          points="23 7 16 12 23 17 23 7"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        <rect x="1" y="5" width="15" height="14" rx="2" stroke="currentColor" strokeWidth="2" />
+      </svg>
+    ),
+    title: 'Video Infrastructure',
+    description:
+      'Any upload format. Automatic transcoding. Thumbnail generation. Captions. Adaptive streaming.',
   },
 ];
 
-const highlights = [
+const industries = [
   {
-    title: 'Custom LMS per Brand',
-    description: 'We tailor UX, roles, workflows, and branding for each training business model.',
+    title: 'Schools & Universities',
+    bullets: [
+      'CBSE/ICSE/IB compliance tracking',
+      '50-hour CPD mandate monitoring',
+      'Department-wise progress reports',
+      'HOD and principal dashboards',
+    ],
   },
   {
-    title: 'Automation Workflows',
-    description: 'Reduce manual operations using reminders, enrollments, and reporting automations.',
+    title: 'Corporate Training',
+    bullets: [
+      'Employee onboarding workflows',
+      'SOP certifications',
+      'Role-based course assignments',
+      'Completion audit trails',
+    ],
   },
   {
-    title: 'AI Assignment Builder',
-    description: 'Generate assignments quickly from lessons with configurable difficulty and outcomes.',
+    title: 'Fitness & Wellness',
+    bullets: [
+      'Trainer certification modules',
+      'Video-based skill assessments',
+      'Progress verification for accreditation',
+    ],
   },
   {
-    title: 'Multi-Tenant Ready',
-    description: 'Run platform-level control with tenant-specific domains and isolated data access.',
+    title: 'Hospitality & F&B',
+    bullets: [
+      'Frontline staff training',
+      'Compliance checklists',
+      'Multi-location deployment',
+      'Standardized SOP delivery',
+    ],
+  },
+  {
+    title: 'Independent Academies',
+    bullets: ['Branded learner portals', 'Course catalog management', 'Learner progress analytics'],
   },
 ];
 
 const faqs = [
   {
-    question: 'Can LearnPuddle work for different industries?',
+    question: 'What is LearnPuddle?',
     answer:
-      'Yes. We design LMS experiences for schools, corporates, hospitality, and independent training businesses with domain-specific workflows.',
+      'A learning management platform for organizations that need course delivery, progress tracking, and compliance reporting.',
   },
   {
-    question: 'Do you support custom domains and tenant branding?',
+    question: 'Does it support CBSE and IB compliance tracking?',
     answer:
-      'Yes. Each tenant can run under its own domain with dedicated branding while you manage everything from a central command center.',
+      'Yes. Configure mandatory training hours and generate compliance reports per teacher, department, or organization.',
   },
   {
-    question: 'How does AI-generated assignments work?',
+    question: 'Can each organization have its own branding?',
     answer:
-      'Admins can create assignments from learning content using AI assistance and then review, edit, and publish according to policy.',
+      'Yes. Every tenant gets a custom subdomain, logo, and color scheme. Data is fully isolated.',
   },
   {
-    question: 'How quickly can we launch?',
+    question: 'How does assessment generation work?',
     answer:
-      'Most teams can launch in phased milestones, starting with core workflows and expanding into advanced automations and analytics.',
+      'Upload a video. The system transcribes it and generates quiz questions. You review and publish.',
+  },
+  {
+    question: 'Is the platform secure?',
+    answer: 'Role-based access. Audit logs. SSO support. Two-factor authentication. Tenant-isolated data.',
+  },
+  {
+    question: 'How long does setup take?',
+    answer:
+      'Most organizations go live within a day. Course creation and learner onboarding can start immediately.',
   },
 ];
 
@@ -97,158 +200,188 @@ export const ProductLandingPage: React.FC = () => {
       <div className="lp-bg-shape lp-bg-shape-a" />
       <div className="lp-bg-shape lp-bg-shape-b" />
 
+      {/* ── Header ── */}
       <header className="lp-header">
         <div className="lp-container lp-header-inner">
           <a href="/" className="lp-logo" aria-label="LearnPuddle Home">
             LearnPuddle
           </a>
           <nav className="lp-nav" aria-label="Primary">
+            <a href="#platform">Platform</a>
             <a href="#industries">Industries</a>
-            <a href="#solutions">Solutions</a>
             <a href="#how-it-works">How It Works</a>
             <a href="#faq">FAQ</a>
           </nav>
           <div className="lp-header-actions">
-            <a href="/super-admin/login" className="lp-link-muted">
-              Super Admin
-            </a>
             <CTAButton href={bookDemoUrl} className="lp-btn lp-btn-primary">
-              Book Demo
+              Book a Demo
             </CTAButton>
           </div>
         </div>
       </header>
 
       <main>
+        {/* ── Hero ── */}
         <section className="lp-hero">
           <div className="lp-container lp-hero-grid">
             <div className="lp-hero-copy">
-              <p className="lp-pill">Custom LMS Solutions</p>
-              <h1>Custom LMS for Schools, Hospitality, Corporate, and Independent Academies</h1>
+              <p className="lp-pill">Learning Management Platform</p>
+              <h1>Learning management infrastructure for schools and enterprises.</h1>
               <p>
-                LearnPuddle helps organizations launch modern LMS platforms with automation and AI-generated
-                assignments, tailored for real operational workflows.
+                Course building. Progress tracking. Compliance reporting. White-label portals for
+                every organization you manage.
               </p>
               <div className="lp-cta-row">
                 <CTAButton href={bookDemoUrl} className="lp-btn lp-btn-primary">
-                  Book Demo
+                  Book a Demo
                 </CTAButton>
                 <a href="/signup" className="lp-btn lp-btn-secondary">
                   Get Started
                 </a>
               </div>
-              <div className="lp-proof-inline">
-                <span>Tenant-specific domains</span>
-                <span>Automation-first operations</span>
-                <span>AI assignment generation</span>
-              </div>
             </div>
             <div className="lp-hero-panel">
-              <div className="lp-panel-card">
-                <h3>Built for Multi-Domain Learning</h3>
-                <ul>
-                  <li>Platform command center and tenant-level controls</li>
-                  <li>Branded learning portals per organization</li>
-                  <li>Role-aware dashboards for admins and teachers</li>
-                  <li>Outcome tracking with analytics-ready workflows</li>
-                </ul>
+              <div className="lp-dashboard-placeholder" aria-label="Platform dashboard preview">
+                <div className="lp-dashboard-placeholder-inner">
+                  <div className="lp-dp-topbar">
+                    <span className="lp-dp-dot" />
+                    <span className="lp-dp-dot" />
+                    <span className="lp-dp-dot" />
+                  </div>
+                  <div className="lp-dp-body">
+                    <div className="lp-dp-sidebar">
+                      <div className="lp-dp-sidebar-item lp-dp-active" />
+                      <div className="lp-dp-sidebar-item" />
+                      <div className="lp-dp-sidebar-item" />
+                      <div className="lp-dp-sidebar-item" />
+                    </div>
+                    <div className="lp-dp-content">
+                      <div className="lp-dp-stat-row">
+                        <div className="lp-dp-stat" />
+                        <div className="lp-dp-stat" />
+                        <div className="lp-dp-stat" />
+                      </div>
+                      <div className="lp-dp-row lp-dp-row-wide" />
+                      <div className="lp-dp-row" />
+                      <div className="lp-dp-row lp-dp-row-narrow" />
+                      <div className="lp-dp-row" />
+                    </div>
+                  </div>
+                </div>
+                <p className="lp-dp-label">Platform Preview</p>
               </div>
             </div>
           </div>
         </section>
 
-        <section className="lp-stats">
-          <div className="lp-container lp-stats-grid">
-            <div>
-              <strong>Customizable</strong>
-              <span>Workflows per industry</span>
+        {/* ── Capabilities Bar ── */}
+        <section className="lp-capabilities-bar">
+          <div className="lp-container lp-capabilities-bar-inner">
+            <span>Course Management</span>
+            <span className="lp-cap-sep" aria-hidden="true" />
+            <span>Progress Tracking</span>
+            <span className="lp-cap-sep" aria-hidden="true" />
+            <span>Compliance Reports</span>
+            <span className="lp-cap-sep" aria-hidden="true" />
+            <span>White-Label Portals</span>
+          </div>
+        </section>
+
+        {/* ── Platform ── */}
+        <section id="platform" className="lp-section">
+          <div className="lp-container">
+            <div className="lp-section-head">
+              <p className="lp-kicker">Platform</p>
+              <h2>Everything needed to run training operations at scale.</h2>
             </div>
-            <div>
-              <strong>Automation-Ready</strong>
-              <span>Ops and reminders built in</span>
-            </div>
-            <div>
-              <strong>AI-Enhanced</strong>
-              <span>Assignment generation support</span>
-            </div>
-            <div>
-              <strong>Multi-Tenant</strong>
-              <span>Domain and data separation</span>
+            <div className="lp-card-grid lp-card-grid-6">
+              {capabilities.map((cap) => (
+                <article key={cap.title} className="lp-card lp-card-cap">
+                  <div className="lp-cap-icon">{cap.icon}</div>
+                  <h3>{cap.title}</h3>
+                  <p>{cap.description}</p>
+                </article>
+              ))}
             </div>
           </div>
         </section>
 
-        <section id="industries" className="lp-section">
+        {/* ── Industries ── */}
+        <section id="industries" className="lp-section lp-section-alt">
           <div className="lp-container">
             <div className="lp-section-head">
               <p className="lp-kicker">Industries</p>
-              <h2>One product foundation, tailored for each training domain</h2>
+              <h2>Built for the organizations that run structured training programs.</h2>
             </div>
             <div className="lp-card-grid">
               {industries.map((item) => (
-                <article key={item.title} className="lp-card">
+                <article key={item.title} className="lp-card lp-card-industry">
                   <h3>{item.title}</h3>
-                  <p>{item.description}</p>
+                  <ul className="lp-card-bullets">
+                    {item.bullets.map((b) => (
+                      <li key={b}>{b}</li>
+                    ))}
+                  </ul>
                 </article>
               ))}
             </div>
           </div>
         </section>
 
-        <section id="solutions" className="lp-section lp-section-alt">
-          <div className="lp-container">
-            <div className="lp-section-head">
-              <p className="lp-kicker">Why LearnPuddle</p>
-              <h2>Deliver a neat, modern LMS experience without generic templates</h2>
-            </div>
-            <div className="lp-highlight-grid">
-              {highlights.map((item) => (
-                <article key={item.title} className="lp-highlight">
-                  <h3>{item.title}</h3>
-                  <p>{item.description}</p>
-                </article>
-              ))}
-            </div>
-          </div>
-        </section>
-
+        {/* ── How It Works ── */}
         <section id="how-it-works" className="lp-section">
           <div className="lp-container">
             <div className="lp-section-head">
               <p className="lp-kicker">How It Works</p>
-              <h2>From discovery to launch in three clean phases</h2>
+              <h2>Three steps to a fully operational LMS.</h2>
             </div>
             <ol className="lp-timeline">
               <li>
-                <h3>1. Discovery and Design</h3>
-                <p>We map your learners, admin roles, compliance needs, and reporting requirements.</p>
+                <span className="lp-step-num">01</span>
+                <h3>Configure</h3>
+                <p>Set up your subdomain. Upload your logo. Define admin roles and permissions.</p>
               </li>
               <li>
-                <h3>2. Configuration and Automation</h3>
-                <p>We shape tenant setup, domain routing, assignment workflows, and automation logic.</p>
+                <span className="lp-step-num">02</span>
+                <h3>Build</h3>
+                <p>Add courses with videos, documents, and assessments. Set deadlines and mandatory flags.</p>
               </li>
               <li>
-                <h3>3. Go-Live and Scale</h3>
-                <p>Launch your LMS, onboard teams, and expand with analytics and AI-driven workflows.</p>
+                <span className="lp-step-num">03</span>
+                <h3>Track</h3>
+                <p>Monitor completion across all learners. Export compliance reports. Meet regulatory requirements.</p>
               </li>
             </ol>
           </div>
         </section>
 
+        {/* ── Trust Statement ── */}
+        <section className="lp-trust-band">
+          <div className="lp-container">
+            <p className="lp-trust-text">
+              LearnPuddle handles the infrastructure.
+              <br />
+              You handle the training.
+            </p>
+          </div>
+        </section>
+
+        {/* ── CTA Band ── */}
         <section className="lp-cta-band">
           <div className="lp-container lp-cta-band-inner">
-            <h2>Need an LMS that fits your domain and operations?</h2>
+            <h2>Centralize your training operations.</h2>
             <CTAButton href={bookDemoUrl} className="lp-btn lp-btn-primary">
-              Book Demo
+              Book a Demo
             </CTAButton>
           </div>
         </section>
 
+        {/* ── FAQ ── */}
         <section id="faq" className="lp-section lp-section-alt">
           <div className="lp-container">
             <div className="lp-section-head">
               <p className="lp-kicker">FAQ</p>
-              <h2>Common questions from teams adopting LearnPuddle</h2>
+              <h2>Frequently asked questions.</h2>
             </div>
             <div className="lp-faq-list">
               {faqs.map((faq) => (
@@ -262,13 +395,28 @@ export const ProductLandingPage: React.FC = () => {
         </section>
       </main>
 
+      {/* ── Footer ── */}
       <footer className="lp-footer">
         <div className="lp-container lp-footer-inner">
-          <p>LearnPuddle</p>
-          <div>
-            <a href="/signup">Start Setup</a>
-            <a href="/super-admin/login">Super Admin</a>
+          <a href="/" className="lp-footer-logo" aria-label="LearnPuddle Home">
+            LearnPuddle
+          </a>
+          <nav className="lp-footer-nav" aria-label="Footer">
+            <a href="#platform">Platform</a>
+            <a href="#industries">Industries</a>
+            <a href="#faq">FAQ</a>
+          </nav>
+          <div className="lp-footer-actions">
+            <CTAButton href={bookDemoUrl} className="lp-footer-link">
+              Book a Demo
+            </CTAButton>
+            <a href="/signup" className="lp-footer-link">
+              Get Started
+            </a>
           </div>
+        </div>
+        <div className="lp-container lp-footer-bottom">
+          <span>© {new Date().getFullYear()} LearnPuddle. All rights reserved.</span>
         </div>
       </footer>
     </div>
