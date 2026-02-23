@@ -350,12 +350,12 @@ export const CoursesPage: React.FC = () => {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">{isTeacherAuthoring ? 'Course Authoring' : 'Courses'}</h1>
           <p className="mt-1 text-gray-500">{isTeacherAuthoring ? 'Create and manage your authored courses' : 'Manage your training courses'}</p>
         </div>
-        <Button data-tour="admin-courses-create" variant="primary" onClick={() => navigate(`${routeBase}/new`)}>
+        <Button className="w-full sm:w-auto" data-tour="admin-courses-create" variant="primary" onClick={() => navigate(`${routeBase}/new`)}>
           <PlusIcon className="h-5 w-5 mr-2" />
           Create Course
         </Button>
@@ -407,7 +407,7 @@ export const CoursesPage: React.FC = () => {
             </select>
 
             {/* View toggle */}
-            <div className="flex bg-gray-100 rounded-lg p-0.5 ml-2">
+            <div className="ml-0 flex rounded-lg bg-gray-100 p-0.5 sm:ml-2">
               <button
                 type="button"
                 onClick={() => setViewMode('table')}

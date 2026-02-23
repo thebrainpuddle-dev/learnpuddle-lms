@@ -65,7 +65,7 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({ open, onClose }) => 
   };
   
   const SidebarContent = () => (
-    <div data-tour="admin-sidebar" className="flex flex-col h-full bg-white border-r border-gray-200">
+    <div data-tour="admin-sidebar" className="flex h-full flex-col bg-white border-r border-gray-200">
       {/* Logo */}
       <div className="flex items-center justify-between h-16 px-6 border-b border-gray-200">
         <div className="flex items-center">
@@ -82,7 +82,7 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({ open, onClose }) => 
               </span>
             </div>
           )}
-          <span className="ml-3 text-lg font-semibold text-gray-900">
+          <span className="ml-3 line-clamp-1 text-lg font-semibold text-gray-900">
             {theme.name}
           </span>
         </div>
@@ -106,11 +106,11 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({ open, onClose }) => 
               </span>
             </div>
           </div>
-          <div className="ml-3">
-            <p className="text-sm font-medium text-gray-900">
+          <div className="ml-3 min-w-0">
+            <p className="truncate text-sm font-medium text-gray-900">
               {user?.first_name} {user?.last_name}
             </p>
-            <p className="text-xs text-gray-500">{user?.role}</p>
+            <p className="truncate text-xs text-gray-500">{user?.role}</p>
           </div>
         </div>
       </div>
@@ -183,7 +183,7 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({ open, onClose }) => 
               leaveFrom="translate-x-0"
               leaveTo="-translate-x-full"
             >
-              <Dialog.Panel className="relative mr-16 flex w-full max-w-xs flex-1">
+              <Dialog.Panel className="relative mr-10 flex w-[85vw] max-w-xs flex-1 sm:mr-16">
                 <SidebarContent />
               </Dialog.Panel>
             </Transition.Child>

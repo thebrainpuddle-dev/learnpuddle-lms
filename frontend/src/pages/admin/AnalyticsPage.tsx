@@ -276,7 +276,7 @@ export const AnalyticsPage: React.FC = () => {
       </div>
 
       {/* Summary Cards - clickable */}
-      <div data-tour="admin-analytics-summary" className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+      <div data-tour="admin-analytics-summary" className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {summaryCards.map(card => (
           <button
             key={card.label}
@@ -299,12 +299,12 @@ export const AnalyticsPage: React.FC = () => {
 
       {/* Filters */}
       <div data-tour="admin-analytics-filters" className="bg-white rounded-xl border border-gray-200 p-4">
-        <div className="flex flex-wrap items-center gap-4">
+        <div className="flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-end">
           <div className="flex items-center gap-2 text-sm font-medium text-gray-700">
             <FunnelIcon className="h-4 w-4" />
             Filters
           </div>
-          <div className="flex items-end gap-2">
+          <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-end">
             <div>
               <label className="block text-xs text-gray-500 mb-0.5">Course</label>
               <select
@@ -389,7 +389,7 @@ export const AnalyticsPage: React.FC = () => {
               <EmptyChart message="No teacher activity data yet" />
             )}
           </div>
-          <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
+          <div className="mt-4 grid grid-cols-1 gap-2 text-xs sm:grid-cols-2">
             <div className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-emerald-500" />Highly Active: {te.highly_active}</div>
             <div className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-blue-500" />Active: {te.active}</div>
             <div className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-amber-500" />Low Activity: {te.low_activity}</div>
@@ -465,8 +465,8 @@ export const AnalyticsPage: React.FC = () => {
           </button>
           {attentionExpanded && stats.inactive_teachers_detail && stats.inactive_teachers_detail.length > 0 && (
             <div className="border-t border-amber-200 px-6 pb-6 pt-4">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-medium text-amber-900 flex items-center gap-2">
+              <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <h3 className="flex items-center gap-2 text-sm font-medium text-amber-900">
                   <UserGroupIcon className="h-4 w-4" />
                   Teachers not started ({stats.inactive_teachers_detail.length})
                 </h3>
@@ -480,7 +480,7 @@ export const AnalyticsPage: React.FC = () => {
                   {reminderMutation.isPending ? 'Sending...' : 'Send Reminder to All'}
                 </button>
               </div>
-              <div className="bg-white rounded-lg border border-amber-100 overflow-hidden">
+              <div className="overflow-x-auto rounded-lg border border-amber-100 bg-white">
                 <table className="min-w-full text-sm">
                   <thead className="bg-amber-50/50">
                     <tr>

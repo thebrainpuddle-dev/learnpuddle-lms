@@ -115,7 +115,7 @@ export const ReportsPage: React.FC = () => {
       </div>
 
       <div className="border-b border-gray-200">
-        <nav className="-mb-px flex space-x-8">
+        <nav className="-mb-px flex gap-4 overflow-x-auto whitespace-nowrap">
           <button
             className={`py-4 px-1 border-b-2 font-medium text-sm ${tab === 'COURSE' ? 'border-primary-500 text-primary-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}`}
             onClick={() => setTab('COURSE')}
@@ -181,7 +181,7 @@ export const ReportsPage: React.FC = () => {
             </div>
           </div>
 
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="text-sm text-gray-600">
               Selected: <span className="font-medium">{courseSelectedCount}</span>
             </div>
@@ -199,26 +199,23 @@ export const ReportsPage: React.FC = () => {
             ) : courseRows.length === 0 ? (
               <div className="p-8 text-sm text-gray-500">No assigned teachers found for this course.</div>
             ) : (
-              <table className="min-w-full text-sm">
-                <thead className="text-left text-gray-500">
-                  <tr>
-                    <th className="py-3 pr-6">
-                      <input
-                        type="checkbox"
-                        checked={courseAllSelected}
-                        onChange={(e) => setSelectedTeacherIds(e.target.checked ? courseRows.map((r) => r.teacher_id) : [])}
-                      />
-                    </th>
-                    <th className="py-3 pr-6">Teacher</th>
-                    <th className="py-3 pr-6">Email</th>
-                    <th className="py-3 pr-6">Status</th>
-                    <th className="py-3 pr-6">Completed</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
+              <>
+                <div className="space-y-3 md:hidden">
+                  <label className="flex items-center gap-2 text-xs font-medium text-gray-600">
+                    <input
+                      type="checkbox"
+                      checked={courseAllSelected}
+                      onChange={(e) => setSelectedTeacherIds(e.target.checked ? courseRows.map((r) => r.teacher_id) : [])}
+                    />
+                    Select all
+                  </label>
                   {courseRows.map((r) => (
-                    <tr key={r.teacher_id} className="text-gray-800">
-                      <td className="py-3 pr-6">
+                    <div key={r.teacher_id} className="rounded-lg border border-gray-200 p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-gray-900">{r.teacher_name}</p>
+                          <p className="break-all text-xs text-gray-500">{r.teacher_email}</p>
+                        </div>
                         <input
                           type="checkbox"
                           checked={selectedTeacherIds.includes(r.teacher_id)}
@@ -228,15 +225,54 @@ export const ReportsPage: React.FC = () => {
                             )
                           }
                         />
-                      </td>
-                      <td className="py-3 pr-6 font-medium">{r.teacher_name}</td>
-                      <td className="py-3 pr-6">{r.teacher_email}</td>
-                      <td className="py-3 pr-6">{r.status}</td>
-                      <td className="py-3 pr-6">{r.completed_at ? new Date(r.completed_at).toLocaleString() : '-'}</td>
-                    </tr>
+                      </div>
+                      <div className="mt-2 grid grid-cols-1 gap-1 text-xs text-gray-600">
+                        <p>Status: <span className="font-medium text-gray-900">{r.status}</span></p>
+                        <p>Completed: <span className="font-medium text-gray-900">{r.completed_at ? new Date(r.completed_at).toLocaleString() : '-'}</span></p>
+                      </div>
+                    </div>
                   ))}
-                </tbody>
-              </table>
+                </div>
+
+                <table className="hidden min-w-full text-sm md:table">
+                  <thead className="text-left text-gray-500">
+                    <tr>
+                      <th className="py-3 pr-6">
+                        <input
+                          type="checkbox"
+                          checked={courseAllSelected}
+                          onChange={(e) => setSelectedTeacherIds(e.target.checked ? courseRows.map((r) => r.teacher_id) : [])}
+                        />
+                      </th>
+                      <th className="py-3 pr-6">Teacher</th>
+                      <th className="py-3 pr-6">Email</th>
+                      <th className="py-3 pr-6">Status</th>
+                      <th className="py-3 pr-6">Completed</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {courseRows.map((r) => (
+                      <tr key={r.teacher_id} className="text-gray-800">
+                        <td className="py-3 pr-6">
+                          <input
+                            type="checkbox"
+                            checked={selectedTeacherIds.includes(r.teacher_id)}
+                            onChange={(e) =>
+                              setSelectedTeacherIds((prev) =>
+                                e.target.checked ? [...prev, r.teacher_id] : prev.filter((id) => id !== r.teacher_id)
+                              )
+                            }
+                          />
+                        </td>
+                        <td className="py-3 pr-6 font-medium">{r.teacher_name}</td>
+                        <td className="py-3 pr-6">{r.teacher_email}</td>
+                        <td className="py-3 pr-6">{r.status}</td>
+                        <td className="py-3 pr-6">{r.completed_at ? new Date(r.completed_at).toLocaleString() : '-'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </>
             )}
           </div>
         </div>
@@ -292,7 +328,7 @@ export const ReportsPage: React.FC = () => {
             </div>
           </div>
 
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="text-sm text-gray-600">
               Selected: <span className="font-medium">{assignmentSelectedCount}</span>
             </div>
@@ -321,26 +357,23 @@ export const ReportsPage: React.FC = () => {
             ) : assignmentRows.length === 0 ? (
               <div className="p-8 text-sm text-gray-500">No records found for this assignment.</div>
             ) : (
-              <table className="min-w-full text-sm">
-                <thead className="text-left text-gray-500">
-                  <tr>
-                    <th className="py-3 pr-6">
-                      <input
-                        type="checkbox"
-                        checked={assignmentAllSelected}
-                        onChange={(e) => setSelectedAssignmentTeacherIds(e.target.checked ? assignmentRows.map((r) => r.teacher_id) : [])}
-                      />
-                    </th>
-                    <th className="py-3 pr-6">Teacher</th>
-                    <th className="py-3 pr-6">Email</th>
-                    <th className="py-3 pr-6">Status</th>
-                    <th className="py-3 pr-6">Submitted</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
+              <>
+                <div className="space-y-3 md:hidden">
+                  <label className="flex items-center gap-2 text-xs font-medium text-gray-600">
+                    <input
+                      type="checkbox"
+                      checked={assignmentAllSelected}
+                      onChange={(e) => setSelectedAssignmentTeacherIds(e.target.checked ? assignmentRows.map((r) => r.teacher_id) : [])}
+                    />
+                    Select all
+                  </label>
                   {assignmentRows.map((r) => (
-                    <tr key={r.teacher_id} className="text-gray-800">
-                      <td className="py-3 pr-6">
+                    <div key={r.teacher_id} className="rounded-lg border border-gray-200 p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-gray-900">{r.teacher_name}</p>
+                          <p className="break-all text-xs text-gray-500">{r.teacher_email}</p>
+                        </div>
                         <input
                           type="checkbox"
                           checked={selectedAssignmentTeacherIds.includes(r.teacher_id)}
@@ -350,15 +383,53 @@ export const ReportsPage: React.FC = () => {
                             )
                           }
                         />
-                      </td>
-                      <td className="py-3 pr-6 font-medium">{r.teacher_name}</td>
-                      <td className="py-3 pr-6">{r.teacher_email}</td>
-                      <td className="py-3 pr-6">{r.status}</td>
-                      <td className="py-3 pr-6">{r.submitted_at ? new Date(r.submitted_at).toLocaleString() : '-'}</td>
-                    </tr>
+                      </div>
+                      <div className="mt-2 grid grid-cols-1 gap-1 text-xs text-gray-600">
+                        <p>Status: <span className="font-medium text-gray-900">{r.status}</span></p>
+                        <p>Submitted: <span className="font-medium text-gray-900">{r.submitted_at ? new Date(r.submitted_at).toLocaleString() : '-'}</span></p>
+                      </div>
+                    </div>
                   ))}
-                </tbody>
-              </table>
+                </div>
+                <table className="hidden min-w-full text-sm md:table">
+                  <thead className="text-left text-gray-500">
+                    <tr>
+                      <th className="py-3 pr-6">
+                        <input
+                          type="checkbox"
+                          checked={assignmentAllSelected}
+                          onChange={(e) => setSelectedAssignmentTeacherIds(e.target.checked ? assignmentRows.map((r) => r.teacher_id) : [])}
+                        />
+                      </th>
+                      <th className="py-3 pr-6">Teacher</th>
+                      <th className="py-3 pr-6">Email</th>
+                      <th className="py-3 pr-6">Status</th>
+                      <th className="py-3 pr-6">Submitted</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {assignmentRows.map((r) => (
+                      <tr key={r.teacher_id} className="text-gray-800">
+                        <td className="py-3 pr-6">
+                          <input
+                            type="checkbox"
+                            checked={selectedAssignmentTeacherIds.includes(r.teacher_id)}
+                            onChange={(e) =>
+                              setSelectedAssignmentTeacherIds((prev) =>
+                                e.target.checked ? [...prev, r.teacher_id] : prev.filter((id) => id !== r.teacher_id)
+                              )
+                            }
+                          />
+                        </td>
+                        <td className="py-3 pr-6 font-medium">{r.teacher_name}</td>
+                        <td className="py-3 pr-6">{r.teacher_email}</td>
+                        <td className="py-3 pr-6">{r.status}</td>
+                        <td className="py-3 pr-6">{r.submitted_at ? new Date(r.submitted_at).toLocaleString() : '-'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </>
             )}
           </div>
 

@@ -371,7 +371,7 @@ export const RemindersPage: React.FC = () => {
               <div className="space-y-3">
                 {historyQuery.data?.results.slice(0, 10).map((c) => (
                   <div key={c.id} className="border border-gray-200 rounded-lg p-3">
-                    <div className="flex items-center justify-between">
+                    <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
                       <div className="font-medium text-gray-900">{c.subject}</div>
                       <div className="text-xs text-gray-500">{new Date(c.created_at).toLocaleString()}</div>
                     </div>

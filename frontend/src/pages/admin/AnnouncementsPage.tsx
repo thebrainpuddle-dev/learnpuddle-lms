@@ -117,9 +117,9 @@ export const AnnouncementsPage: React.FC = () => {
         </p>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         {/* Create Announcement Form */}
-        <div data-tour="admin-announcements-compose" className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+        <div data-tour="admin-announcements-compose" className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 sm:p-6">
           <div className="flex items-center gap-2 mb-6">
             <MegaphoneIcon className="h-6 w-6 text-emerald-600" />
             <h2 className="text-lg font-semibold text-gray-900">New Announcement</h2>
@@ -154,7 +154,7 @@ export const AnnouncementsPage: React.FC = () => {
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 Send To
               </label>
-              <div className="flex gap-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:gap-4">
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input
                     type="radio"
@@ -229,7 +229,7 @@ export const AnnouncementsPage: React.FC = () => {
         </div>
 
         {/* Announcement History */}
-        <div data-tour="admin-announcements-history" className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+        <div data-tour="admin-announcements-history" className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 sm:p-6">
           <h2 className="text-lg font-semibold text-gray-900 mb-4">Recent Announcements</h2>
 
           {loadingAnnouncements ? (

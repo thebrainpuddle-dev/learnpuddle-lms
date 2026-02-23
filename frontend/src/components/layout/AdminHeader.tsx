@@ -10,19 +10,19 @@ interface AdminHeaderProps {
 
 export const AdminHeader: React.FC<AdminHeaderProps> = ({ onMenuClick }) => {
   return (
-    <div className="sticky top-0 z-10 flex h-16 flex-shrink-0 bg-white border-b border-gray-200">
+    <div className="sticky top-0 z-10 flex h-14 flex-shrink-0 border-b border-gray-200 bg-white sm:h-16">
       {/* Mobile menu button */}
       <button
         type="button"
-        className="px-4 text-gray-500 focus:outline-none lg:hidden"
+        className="px-3 text-gray-500 focus:outline-none sm:px-4 lg:hidden"
         onClick={onMenuClick}
       >
         <Bars3Icon className="h-6 w-6" />
       </button>
       
-      <div className="flex flex-1 justify-between px-4 sm:px-6 lg:px-8">
+      <div className="flex flex-1 justify-between gap-2 px-3 sm:px-6 lg:px-8">
         {/* Search */}
-        <div className="flex flex-1 items-center max-w-lg">
+        <div className="flex max-w-lg flex-1 items-center min-w-0">
           <SearchBar className="w-full" isAdmin={true} />
         </div>
         

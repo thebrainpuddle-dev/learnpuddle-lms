@@ -68,9 +68,9 @@ export const DashboardPage: React.FC = () => {
   };
 
   return (
-    <div className="space-y-8 max-w-7xl mx-auto pb-12">
+    <div className="mx-auto max-w-7xl space-y-6 pb-12 sm:space-y-8">
       {/* ─── Hero Header ──────────────────────────────────────────────── */}
-      <div data-tour="admin-dashboard-hero" className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-indigo-600 via-purple-600 to-indigo-800 text-white p-8 shadow-xl shadow-indigo-200/50">
+      <div data-tour="admin-dashboard-hero" className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-indigo-600 via-purple-600 to-indigo-800 p-5 text-white shadow-xl shadow-indigo-200/50 sm:rounded-3xl sm:p-8">
         <div className="absolute top-0 right-0 p-12 opacity-10 transform translate-x-1/4 -translate-y-1/4">
           <SparklesIcon className="w-64 h-64" />
         </div>
@@ -83,7 +83,7 @@ export const DashboardPage: React.FC = () => {
             <h1 className="text-3xl md:text-4xl font-bold tracking-tight mb-2">
               Hello, Admin! 👋
             </h1>
-            <p className="text-indigo-100 text-lg max-w-xl leading-relaxed">
+            <p className="max-w-xl text-base leading-relaxed text-indigo-100 sm:text-lg">
               Here's what's happening at <span className="font-semibold text-white">{theme.name}</span> today. 
               You have <span className="font-bold text-white underline decoration-amber-400 decoration-2 underline-offset-2">{stats?.pending_review || 0} items</span> pending review.
             </p>
@@ -137,7 +137,7 @@ export const DashboardPage: React.FC = () => {
       </div>
 
       {/* ─── Secondary "Sticker" Stats ────────────────────────────────── */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         {[
           { label: 'Active', value: stats?.active_teachers, icon: '👩‍🏫', color: 'bg-blue-50 border-blue-100 text-blue-700' },
           { label: 'Inactive', value: stats?.inactive_teachers, icon: '😴', color: 'bg-slate-50 border-slate-100 text-slate-600' },
@@ -214,26 +214,26 @@ export const DashboardPage: React.FC = () => {
           </div>
 
           {/* Quick Actions Grid */}
-          <div data-tour="admin-dashboard-quick-actions" className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-            <button onClick={() => navigate('/admin/courses/new')} className="flex flex-col items-center justify-center p-6 bg-white border border-gray-200 rounded-2xl hover:border-indigo-300 hover:shadow-md hover:-translate-y-1 transition-all group">
+          <div data-tour="admin-dashboard-quick-actions" className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-4">
+            <button onClick={() => navigate('/admin/courses/new')} className="group flex flex-col items-center justify-center rounded-2xl border border-gray-200 bg-white p-5 transition-all hover:-translate-y-1 hover:border-indigo-300 hover:shadow-md sm:p-6">
               <div className="w-12 h-12 bg-indigo-50 rounded-2xl flex items-center justify-center mb-3 group-hover:bg-indigo-100 transition-colors">
                 <BookOpenIcon className="w-6 h-6 text-indigo-600" />
               </div>
               <span className="font-bold text-slate-700 group-hover:text-indigo-700">New Course</span>
             </button>
-            <button onClick={() => navigate('/admin/teachers/new')} className="flex flex-col items-center justify-center p-6 bg-white border border-gray-200 rounded-2xl hover:border-emerald-300 hover:shadow-md hover:-translate-y-1 transition-all group">
+            <button onClick={() => navigate('/admin/teachers/new')} className="group flex flex-col items-center justify-center rounded-2xl border border-gray-200 bg-white p-5 transition-all hover:-translate-y-1 hover:border-emerald-300 hover:shadow-md sm:p-6">
               <div className="w-12 h-12 bg-emerald-50 rounded-2xl flex items-center justify-center mb-3 group-hover:bg-emerald-100 transition-colors">
                 <UserGroupIcon className="w-6 h-6 text-emerald-600" />
               </div>
               <span className="font-bold text-slate-700 group-hover:text-emerald-700">Add Teacher</span>
             </button>
-            <button onClick={() => navigate('/admin/analytics')} className="flex flex-col items-center justify-center p-6 bg-white border border-gray-200 rounded-2xl hover:border-amber-300 hover:shadow-md hover:-translate-y-1 transition-all group">
+            <button onClick={() => navigate('/admin/analytics')} className="group flex flex-col items-center justify-center rounded-2xl border border-gray-200 bg-white p-5 transition-all hover:-translate-y-1 hover:border-amber-300 hover:shadow-md sm:p-6">
               <div className="w-12 h-12 bg-amber-50 rounded-2xl flex items-center justify-center mb-3 group-hover:bg-amber-100 transition-colors">
                 <ChartBarIcon className="w-6 h-6 text-amber-600" />
               </div>
               <span className="font-bold text-slate-700 group-hover:text-amber-700">Analytics</span>
             </button>
-            <button onClick={() => navigate('/admin/reminders')} className="flex flex-col items-center justify-center p-6 bg-white border border-gray-200 rounded-2xl hover:border-rose-300 hover:shadow-md hover:-translate-y-1 transition-all group">
+            <button onClick={() => navigate('/admin/reminders')} className="group flex flex-col items-center justify-center rounded-2xl border border-gray-200 bg-white p-5 transition-all hover:-translate-y-1 hover:border-rose-300 hover:shadow-md sm:p-6">
               <div className="w-12 h-12 bg-rose-50 rounded-2xl flex items-center justify-center mb-3 group-hover:bg-rose-100 transition-colors">
                 <DocumentCheckIcon className="w-6 h-6 text-rose-600" />
               </div>

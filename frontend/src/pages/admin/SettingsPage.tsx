@@ -190,7 +190,7 @@ export const SettingsPage: React.FC = () => {
 
       <form onSubmit={handleSubmit} className="space-y-8">
         {/* General Settings */}
-        <div data-tour="admin-settings-general" className="bg-white rounded-xl border border-gray-200 p-6">
+        <div data-tour="admin-settings-general" className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6">
           <h2 className="text-lg font-semibold text-gray-900 mb-4">General</h2>
           
           <div className="space-y-4">
@@ -206,17 +206,17 @@ export const SettingsPage: React.FC = () => {
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Subdomain
               </label>
-              <div className="flex items-center">
-                <span className="inline-flex items-center px-3 rounded-l-md border border-r-0 border-gray-300 bg-gray-50 text-gray-500 text-sm h-10">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <span className="inline-flex h-10 items-center rounded-md border border-gray-300 bg-gray-50 px-3 text-sm text-gray-500 sm:rounded-l-md sm:rounded-r-none sm:border-r-0">
                   https://
                 </span>
                 <input
                   type="text"
                   value={settings?.subdomain || ''}
                   disabled
-                  className="flex-1 min-w-0 block w-full px-3 py-2 rounded-none border border-gray-300 bg-gray-100 text-gray-500 text-sm cursor-not-allowed"
+                  className="block w-full min-w-0 flex-1 rounded-md border border-gray-300 bg-gray-100 px-3 py-2 text-sm text-gray-500 cursor-not-allowed sm:rounded-none"
                 />
-                <span className="inline-flex items-center px-3 rounded-r-md border border-l-0 border-gray-300 bg-gray-50 text-gray-500 text-sm h-10">
+                <span className="inline-flex h-10 items-center rounded-md border border-gray-300 bg-gray-50 px-3 text-sm text-gray-500 sm:rounded-l-none sm:rounded-r-md sm:border-l-0">
                   .{(process.env.REACT_APP_PLATFORM_DOMAIN || 'learnpuddle.com').replace(':3000', '')}
                 </span>
               </div>
@@ -226,7 +226,7 @@ export const SettingsPage: React.FC = () => {
         </div>
 
         {/* Branding Settings */}
-        <div data-tour="admin-settings-branding" className="bg-white rounded-xl border border-gray-200 p-6">
+        <div data-tour="admin-settings-branding" className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6">
           <h2 className="text-lg font-semibold text-gray-900 mb-4">Branding</h2>
           
           <div className="space-y-6">
@@ -235,7 +235,7 @@ export const SettingsPage: React.FC = () => {
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 School Logo
               </label>
-              <div className="flex items-center space-x-4">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:space-x-4">
                 <div
                   className="w-24 h-24 border-2 border-dashed border-gray-300 rounded-lg flex items-center justify-center overflow-hidden bg-gray-50 cursor-pointer hover:border-primary-500 transition-colors"
                   onClick={() => fileInputRef.current?.click()}
@@ -359,7 +359,7 @@ export const SettingsPage: React.FC = () => {
                     {formData.name || 'School Name'}
                   </span>
                 </div>
-                <div className="flex space-x-2">
+                <div className="flex flex-col gap-2 sm:flex-row sm:space-x-2">
                   <button
                     type="button"
                     className="px-4 py-2 rounded-lg text-white text-sm font-medium"
@@ -381,7 +381,7 @@ export const SettingsPage: React.FC = () => {
         </div>
 
         {/* Account Info (read-only) */}
-        <div className="bg-white rounded-xl border border-gray-200 p-6">
+        <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6">
           <h2 className="text-lg font-semibold text-gray-900 mb-4">Account</h2>
           
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -427,6 +427,7 @@ export const SettingsPage: React.FC = () => {
           <Button
             type="submit"
             variant="primary"
+            className="w-full sm:w-auto"
             loading={mutation.isPending}
           >
             Save Changes

@@ -108,13 +108,13 @@ export const SkipRequestsPage: React.FC = () => {
       </div>
 
       {/* Tabs + Search */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div className="flex gap-1 bg-gray-100 p-1 rounded-lg">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex gap-1 overflow-x-auto rounded-lg bg-gray-100 p-1">
           {STATUS_TABS.map((tab) => (
             <button
               key={tab.key}
               onClick={() => { setActiveTab(tab.key); setPage(1); }}
-              className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${
+              className={`whitespace-nowrap px-4 py-2 text-sm font-medium rounded-md transition-colors ${
                 activeTab === tab.key
                   ? 'bg-white text-gray-900 shadow-sm'
                   : 'text-gray-600 hover:text-gray-900'
@@ -130,14 +130,14 @@ export const SkipRequestsPage: React.FC = () => {
           ))}
         </div>
 
-        <div className="relative">
+        <div className="relative w-full sm:w-auto">
           <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
           <input
             type="text"
             placeholder="Search by teacher name..."
             value={search}
             onChange={(e) => { setSearch(e.target.value); setPage(1); }}
-            className="pl-9 pr-4 py-2 border border-gray-300 rounded-lg text-sm w-64 focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+            className="w-full rounded-lg border border-gray-300 py-2 pl-9 pr-4 text-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-500 sm:w-64"
           />
         </div>
       </div>
@@ -153,8 +153,62 @@ export const SkipRequestsPage: React.FC = () => {
           <p className="text-gray-500">No skip requests found.</p>
         </div>
       ) : (
-        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-          <div className="overflow-x-auto">
+        <div className="overflow-hidden rounded-xl border border-gray-200 bg-white">
+          <div className="space-y-3 p-3 md:hidden">
+            {data.results.map((item) => (
+              <div key={item.id} className="rounded-lg border border-gray-200 p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-gray-900">{item.teacher_name}</p>
+                    <p className="break-all text-xs text-gray-500">{item.teacher_email}</p>
+                  </div>
+                  {statusBadge(item.status)}
+                </div>
+                <p className="mt-2 text-sm text-gray-700">{item.course_title}</p>
+                {item.comments && <p className="mt-1 text-xs text-gray-500">{item.comments}</p>}
+                <div className="mt-2 text-xs text-gray-500">
+                  {new Date(item.created_at).toLocaleDateString()}
+                </div>
+                <div className="mt-3 flex flex-col gap-2">
+                  {item.certificate_url && (
+                    <a
+                      href={item.certificate_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-sm text-primary-600 hover:underline"
+                    >
+                      <DocumentArrowDownIcon className="h-4 w-4" />
+                      View certificate
+                    </a>
+                  )}
+                  {item.status === 'PENDING' ? (
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      <button
+                        onClick={() => openReview(item, 'approve')}
+                        className="inline-flex items-center justify-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
+                      >
+                        <CheckCircleIcon className="h-3.5 w-3.5" />
+                        Approve
+                      </button>
+                      <button
+                        onClick={() => openReview(item, 'reject')}
+                        className="inline-flex items-center justify-center gap-1 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-700 hover:bg-red-100"
+                      >
+                        <XCircleIcon className="h-3.5 w-3.5" />
+                        Reject
+                      </button>
+                    </div>
+                  ) : (
+                    <span className="text-xs text-gray-400">
+                      {item.reviewed_by_name && `reviewed by ${item.reviewed_by_name}`}
+                    </span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="hidden overflow-x-auto md:block">
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
                 <tr>
@@ -231,7 +285,7 @@ export const SkipRequestsPage: React.FC = () => {
 
           {/* Pagination */}
           {(data.next || data.previous) && (
-            <div className="flex items-center justify-between px-6 py-3 border-t border-gray-200 bg-gray-50">
+            <div className="flex flex-col gap-3 border-t border-gray-200 bg-gray-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-6">
               <span className="text-sm text-gray-500">{data.count} total request{data.count !== 1 ? 's' : ''}</span>
               <div className="flex gap-2">
                 <button
@@ -256,8 +310,8 @@ export const SkipRequestsPage: React.FC = () => {
 
       {/* Review Modal */}
       {reviewItem && reviewAction && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setReviewItem(null)}>
-          <div className="bg-white rounded-xl shadow-xl max-w-lg w-full mx-4 p-6" onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-0 sm:items-center sm:p-4" onClick={() => setReviewItem(null)}>
+          <div className="max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-t-2xl bg-white p-5 pb-6 shadow-xl sm:rounded-xl sm:p-6" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold text-gray-900">
                 {reviewAction === 'approve' ? 'Approve' : 'Reject'} Skip Request
@@ -303,17 +357,17 @@ export const SkipRequestsPage: React.FC = () => {
               />
             </div>
 
-            <div className="flex justify-end gap-3">
+            <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
               <button
                 onClick={() => setReviewItem(null)}
-                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
+                className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 sm:w-auto"
               >
                 Cancel
               </button>
               <button
                 disabled={submitting}
                 onClick={handleReview}
-                className={`px-4 py-2 text-sm font-medium text-white rounded-lg disabled:opacity-50 ${
+                className={`w-full rounded-lg px-4 py-2 text-sm font-medium text-white disabled:opacity-50 sm:w-auto ${
                   reviewAction === 'approve'
                     ? 'bg-emerald-600 hover:bg-emerald-700'
                     : 'bg-red-600 hover:bg-red-700'

@@ -159,7 +159,7 @@ export const MediaLibraryPage: React.FC = () => {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Media Library</h1>
           <p className="mt-1 text-sm text-gray-500">
@@ -171,14 +171,14 @@ export const MediaLibraryPage: React.FC = () => {
             )}
           </p>
         </div>
-        <Button data-tour="admin-media-upload" variant="primary" onClick={() => setUploadOpen(true)}>
+        <Button className="w-full sm:w-auto" data-tour="admin-media-upload" variant="primary" onClick={() => setUploadOpen(true)}>
           <ArrowUpTrayIcon className="h-4 w-4 mr-2" />
           Upload
         </Button>
       </div>
 
       {/* Tabs */}
-      <div data-tour="admin-media-tabs" className="flex items-center gap-1 bg-gray-100 p-1 rounded-lg w-fit">
+      <div data-tour="admin-media-tabs" className="flex w-full items-center gap-1 overflow-x-auto rounded-lg bg-gray-100 p-1 sm:w-fit">
         {TABS.map((tab) => {
             const count =
               tab.key === 'ALL'
@@ -207,7 +207,7 @@ export const MediaLibraryPage: React.FC = () => {
       </div>
 
       {/* Search */}
-      <div className="max-w-md">
+      <div className="w-full max-w-md">
         <Input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
@@ -269,7 +269,7 @@ export const MediaLibraryPage: React.FC = () => {
                   getMediaIcon(asset.media_type)
                 )}
                 {/* Overlay actions */}
-                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100">
+                <div className="absolute inset-0 flex items-center justify-center gap-2 bg-black/20 opacity-100 transition-colors sm:bg-black/0 sm:opacity-0 sm:group-hover:bg-black/30 sm:group-hover:opacity-100">
                   <button
                     onClick={() => setPreviewAsset(asset)}
                     className="p-2 bg-white rounded-full shadow hover:bg-gray-100"
@@ -350,9 +350,9 @@ export const MediaLibraryPage: React.FC = () => {
 
       {/* Upload Modal */}
       {uploadOpen && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-0 sm:items-center sm:p-4">
           <div
-            className="bg-white rounded-xl p-6 max-w-lg w-full mx-4 space-y-5"
+            className="max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-t-2xl bg-white p-5 pb-6 sm:rounded-xl sm:p-6"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between">
@@ -370,7 +370,7 @@ export const MediaLibraryPage: React.FC = () => {
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 Media Type
               </label>
-              <div className="flex gap-2">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                 {(['DOCUMENT', 'VIDEO', 'LINK'] as const).map((t) => (
                   <button
                     key={t}
@@ -450,11 +450,12 @@ export const MediaLibraryPage: React.FC = () => {
               </div>
             )}
 
-            <div className="flex justify-end gap-3 pt-2">
-              <Button variant="outline" onClick={resetUploadForm}>
+            <div className="flex flex-col-reverse gap-3 pt-2 sm:flex-row sm:justify-end">
+              <Button className="w-full sm:w-auto" variant="outline" onClick={resetUploadForm}>
                 Cancel
               </Button>
               <Button
+                className="w-full sm:w-auto"
                 variant="primary"
                 onClick={handleUpload}
                 loading={uploadMut.isPending}
@@ -476,11 +477,11 @@ export const MediaLibraryPage: React.FC = () => {
         const a = previewAsset;
         return (
           <div
-            className="fixed inset-0 bg-black/60 flex items-center justify-center z-50"
+            className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-0 sm:items-center sm:p-4"
             onClick={() => setPreviewAsset(null)}
           >
             <div
-              className="bg-white rounded-xl max-w-3xl w-full mx-4 max-h-[85vh] overflow-hidden flex flex-col"
+              className="flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden rounded-t-2xl bg-white sm:rounded-xl"
               onClick={(e) => e.stopPropagation()}
             >
               {/* Header */}
@@ -501,7 +502,7 @@ export const MediaLibraryPage: React.FC = () => {
               </div>
 
               {/* Body */}
-              <div className="p-6 overflow-y-auto flex-1">
+              <div className="flex-1 overflow-y-auto p-4 sm:p-6">
                 {a.media_type === 'VIDEO' ? (
                   a.file_url ? (
                     <HlsVideoPlayer

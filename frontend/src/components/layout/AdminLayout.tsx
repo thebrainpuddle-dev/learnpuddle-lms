@@ -1,12 +1,13 @@
 // src/components/layout/AdminLayout.tsx
 
 import React from 'react';
-import { Outlet } from 'react-router-dom';
+import { Outlet, useLocation } from 'react-router-dom';
 import { AdminSidebar } from './AdminSidebar';
 import { AdminHeader } from './AdminHeader';
 
 export const AdminLayout: React.FC = () => {
   const [sidebarOpen, setSidebarOpen] = React.useState(false);
+  const location = useLocation();
   const [isDesktop, setIsDesktop] = React.useState(() =>
     typeof window !== 'undefined' && typeof window.matchMedia === 'function'
       ? window.matchMedia('(min-width: 1024px)').matches
@@ -36,8 +37,15 @@ export const AdminLayout: React.FC = () => {
     }
   }, [isDesktop, sidebarOpen]);
 
+  React.useEffect(() => {
+    if (!isDesktop && sidebarOpen) {
+      setSidebarOpen(false);
+    }
+    // close mobile drawer whenever route changes
+  }, [isDesktop, location.pathname, sidebarOpen]);
+
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen overflow-x-hidden bg-gray-50">
       {/* Mobile sidebar */}
       {!isDesktop && <AdminSidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />}
       
@@ -47,12 +55,12 @@ export const AdminLayout: React.FC = () => {
       </div>
       
       {/* Main content */}
-      <div className="lg:pl-64 flex min-w-0 flex-1 flex-col">
+      <div className="flex min-w-0 flex-1 flex-col lg:pl-64">
         <AdminHeader onMenuClick={() => setSidebarOpen(true)} />
         
         <main className="flex-1 min-w-0">
-          <div className="py-6">
-            <div className="mx-auto max-w-7xl px-4 sm:px-6 md:px-8">
+          <div className="py-4 sm:py-6">
+            <div className="mx-auto max-w-7xl px-3 sm:px-6 md:px-8">
               <Outlet />
             </div>
           </div>

@@ -128,12 +128,12 @@ export const GroupsPage: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Groups</h1>
           <p className="mt-1 text-sm text-gray-500">Create teacher groups and manage memberships.</p>
         </div>
-        <Button variant="primary" onClick={() => setCreateOpen(true)}>
+        <Button className="w-full sm:w-auto" variant="primary" onClick={() => setCreateOpen(true)}>
           <PlusIcon className="h-5 w-5 mr-2" />
           Create Group
         </Button>
@@ -186,14 +186,14 @@ export const GroupsPage: React.FC = () => {
             </div>
           ) : (
             <div className="space-y-4">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <h2 className="text-lg font-semibold text-gray-900">{selectedGroup.name}</h2>
                   <p className="text-sm text-gray-500">{selectedGroup.description || 'No description'}</p>
                 </div>
                 <Button
                   variant="outline"
-                  className="text-red-600 border-red-200 hover:bg-red-50"
+                  className="w-full sm:w-auto text-red-600 border-red-200 hover:bg-red-50"
                   onClick={() => setShowDeleteConfirm(true)}
                   loading={deleteMutation.isPending}
                 >
@@ -204,14 +204,15 @@ export const GroupsPage: React.FC = () => {
 
               {/* Add members */}
               <div className="bg-gray-50 rounded-lg p-4 border border-gray-100">
-                <div className="flex items-center justify-between mb-3">
-                  <div className="font-medium text-gray-900 flex items-center">
+                <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex items-center font-medium text-gray-900">
                     <UserPlusIcon className="h-5 w-5 mr-2 text-gray-500" />
                     Add teachers
                   </div>
                   <Button
                     variant="primary"
                     size="sm"
+                    className="w-full sm:w-auto"
                     onClick={() => addMembersMutation.mutate(selectedTeacherIds)}
                     disabled={selectedTeacherIds.length === 0}
                     loading={addMembersMutation.isPending}
@@ -267,7 +268,7 @@ export const GroupsPage: React.FC = () => {
                 ) : (
                   <div className="divide-y divide-gray-100">
                     {members?.map((m) => (
-                      <div key={m.id} className="flex items-center justify-between p-4 bg-white">
+                      <div key={m.id} className="flex flex-col gap-3 bg-white p-4 sm:flex-row sm:items-center sm:justify-between">
                         <div className="min-w-0">
                           <div className="text-sm font-medium text-gray-900 truncate">
                             {m.first_name} {m.last_name}
@@ -277,6 +278,7 @@ export const GroupsPage: React.FC = () => {
                         <Button
                           variant="outline"
                           size="sm"
+                          className="w-full sm:w-auto"
                           onClick={() => removeMemberMutation.mutate(m.id)}
                           loading={removeMemberMutation.isPending}
                         >
@@ -294,8 +296,8 @@ export const GroupsPage: React.FC = () => {
 
       {/* Create group modal */}
       {createOpen && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl p-6 max-w-lg w-full mx-4">
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-0 sm:items-center sm:p-4">
+          <div className="max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-t-2xl bg-white p-5 pb-6 sm:rounded-xl sm:p-6">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold text-gray-900">Create Group</h3>
               <button onClick={() => setCreateOpen(false)} className="text-gray-400 hover:text-gray-600">
@@ -331,11 +333,12 @@ export const GroupsPage: React.FC = () => {
               </div>
             </div>
 
-            <div className="flex items-center justify-end gap-3 mt-6">
-              <Button variant="outline" onClick={() => setCreateOpen(false)}>
+            <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-end">
+              <Button className="w-full sm:w-auto" variant="outline" onClick={() => setCreateOpen(false)}>
                 Cancel
               </Button>
               <Button
+                className="w-full sm:w-auto"
                 variant="primary"
                 onClick={() => createMutation.mutate()}
                 disabled={!createForm.name.trim()}
