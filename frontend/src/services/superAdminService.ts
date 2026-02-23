@@ -143,6 +143,87 @@ export interface OpsIncidentsResponse extends OpsReadMeta {
   results: OpsIncident[];
 }
 
+export interface OpsReplayCase {
+  case_id: string;
+  label: string;
+  portal: 'TENANT_ADMIN' | 'TEACHER';
+  tab: string;
+  method: string;
+  endpoint: string;
+  supports_params: boolean;
+  payload_defaults?: Record<string, any>;
+  query_defaults?: Record<string, any>;
+}
+
+export interface OpsReplayRun {
+  id: string;
+  tenant_id: string;
+  tenant_name: string;
+  portal: 'TENANT_ADMIN' | 'TEACHER';
+  status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+  priority: 'NORMAL' | 'HIGH';
+  dry_run: boolean;
+  requested_cases: Array<string | { case_id: string; params?: Record<string, any> }>;
+  summary: Record<string, any>;
+  incident_links: string[];
+  started_at: string | null;
+  ended_at: string | null;
+  created_at: string;
+  actor_email: string | null;
+  queued?: boolean;
+}
+
+export interface OpsReplayStep {
+  id: string;
+  run_id: string;
+  case_id: string;
+  case_label: string;
+  endpoint: string;
+  method: string;
+  request_payload: Record<string, any>;
+  response_status: number | null;
+  response_excerpt: string;
+  latency_ms: number | null;
+  pass_fail: boolean;
+  error_group_id: string | null;
+  created_at: string;
+}
+
+export interface OpsRouteError {
+  id: string;
+  tenant_id: string | null;
+  tenant_name: string | null;
+  portal: 'SUPER_ADMIN' | 'TENANT_ADMIN' | 'TEACHER' | 'UNKNOWN';
+  tab_key: string;
+  route_path: string;
+  component_name: string;
+  endpoint: string;
+  method: string;
+  status_code: number;
+  fingerprint: string;
+  first_seen_at: string;
+  last_seen_at: string;
+  last_request_id: string;
+  total_count: number;
+  count_1h: number;
+  count_24h: number;
+  sample_payload: Record<string, any>;
+  sample_response_excerpt: string;
+  sample_error_message: string;
+  is_locked: boolean;
+  locked_at: string | null;
+  locked_by: string | null;
+}
+
+export interface OpsActionCatalogItem {
+  key: string;
+  label: string;
+  description: string;
+  risk: 'low' | 'medium' | 'high';
+  requires_approval: boolean;
+  required_target_keys: string[];
+}
+
 export interface OnboardPayload {
   school_name: string;
   admin_email: string;
@@ -207,6 +288,11 @@ export const superAdminService = {
     return res.data as { tenant: TenantListItem; admin_email: string; subdomain: string };
   },
 
+  async sendEmail(tenantId: string, data: { to?: string; subject: string; body: string }) {
+    const res = await api.post(`/super-admin/tenants/${tenantId}/send-email/`, data);
+    return res.data as { sent: boolean; to: string; subject: string };
+  },
+
   async impersonate(tenantId: string) {
     const res = await api.post(`/super-admin/tenants/${tenantId}/impersonate/`);
     return res.data as { tokens: { access: string; refresh: string }; user_email: string; tenant_subdomain: string };
@@ -222,6 +308,23 @@ export const superAdminService = {
     return res.data as OpsTenantsResponse;
   },
 
+  async getOpsTenantTimeline(tenantId: string, params?: { from?: string; to?: string }) {
+    const res = await api.get(`/super-admin/ops/tenants/${tenantId}/timeline/`, { params });
+    return res.data as OpsReadMeta & {
+      tenant_id: string;
+      status_series: Array<{ ts: string; status: string; latency_ms?: number }>;
+      category_counts: Array<Record<string, any>>;
+      events: Array<{
+        ts: string;
+        category: string;
+        severity: string;
+        status: string;
+        message: string;
+        payload: Record<string, any>;
+      }>;
+    };
+  },
+
   async listOpsIncidents(params?: { status?: string; severity?: string }) {
     const res = await api.get('/super-admin/ops/incidents/', { params });
     return res.data as OpsIncidentsResponse;
@@ -235,5 +338,102 @@ export const superAdminService = {
   async resolveIncident(id: string) {
     const res = await api.post(`/super-admin/ops/incidents/${id}/resolve/`);
     return res.data as { ok: boolean };
+  },
+
+  async getReplayCases(params?: { portal?: 'TENANT_ADMIN' | 'TEACHER' }) {
+    const res = await api.get('/super-admin/ops/replay-cases/', { params });
+    return res.data as OpsReadMeta & { results: OpsReplayCase[] };
+  },
+
+  async createReplayRun(data: {
+    tenant_id: string;
+    portal: 'TENANT_ADMIN' | 'TEACHER';
+    cases: Array<string | { case_id: string; params?: Record<string, any> }>;
+    dry_run: boolean;
+    priority?: 'NORMAL' | 'HIGH';
+    async?: boolean;
+  }) {
+    const normalizedCases = data.cases.map((entry) => (typeof entry === 'string' ? { case_id: entry } : entry));
+    const res = await api.post('/super-admin/ops/replay-runs/', { ...data, cases: normalizedCases });
+    return res.data as OpsReplayRun;
+  },
+
+  async getReplayRun(runId: string) {
+    const res = await api.get(`/super-admin/ops/replay-runs/${runId}/`);
+    return res.data as OpsReplayRun;
+  },
+
+  async getReplayRunSteps(runId: string) {
+    const res = await api.get(`/super-admin/ops/replay-runs/${runId}/steps/`);
+    return res.data as { run_id: string; results: OpsReplayStep[] };
+  },
+
+  async cancelReplayRun(runId: string) {
+    const res = await api.post(`/super-admin/ops/replay-runs/${runId}/cancel/`);
+    return res.data as { ok: boolean; status: string };
+  },
+
+  async getOpsErrors(params?: {
+    tenant_id?: string;
+    status_codes?: string;
+    portal?: string;
+    tab?: string;
+    since?: string;
+    until?: string;
+    is_locked?: boolean;
+  }) {
+    const res = await api.get('/super-admin/ops/errors/', { params });
+    return res.data as OpsReadMeta & { results: OpsRouteError[] };
+  },
+
+  async getOpsErrorDetail(errorGroupId: string) {
+    const res = await api.get(`/super-admin/ops/errors/${errorGroupId}/`);
+    return res.data as {
+      error_group: OpsRouteError;
+      recent_replay_steps: Array<{
+        id: string;
+        run_id: string;
+        run_status: string;
+        case_id: string;
+        response_status: number | null;
+        created_at: string;
+      }>;
+    };
+  },
+
+  async lockOpsError(errorGroupId: string, note?: string) {
+    const res = await api.post(`/super-admin/ops/errors/${errorGroupId}/lock/`, { note });
+    return res.data as { ok: boolean; error_group_id: string; incident_id: string; incident_status: string };
+  },
+
+  async getOpsActionsCatalog() {
+    const res = await api.get('/super-admin/ops/actions/catalog/');
+    return res.data as { results: OpsActionCatalogItem[] };
+  },
+
+  async executeOpsAction(data: {
+    tenant_id: string;
+    action_key: string;
+    target?: Record<string, any>;
+    reason?: string;
+    dry_run?: boolean;
+  }) {
+    const res = await api.post('/super-admin/ops/actions/execute/', {
+      ...data,
+      target: data.target || {},
+      dry_run: data.dry_run ?? true,
+    });
+    return res.data as {
+      requires_approval: boolean;
+      action_log_id: string;
+      approval_id?: string;
+      status: string;
+      result?: Record<string, any>;
+    };
+  },
+
+  async approveOpsAction(actionId: string, approval_note?: string) {
+    const res = await api.post(`/super-admin/ops/actions/${actionId}/approve/`, { approval_note });
+    return res.data as { action_log_id: string; status: string; result: Record<string, any> };
   },
 };

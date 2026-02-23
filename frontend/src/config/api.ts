@@ -2,6 +2,7 @@
 
 import axios, { AxiosInstance } from 'axios';
 import { useAuthStore } from '../stores/authStore';
+import { getOpsClientContext } from './opsRouteMap';
 import {
   broadcastLogout,
   buildLoginRedirectUrl,
@@ -146,12 +147,108 @@ function isTenantAccessDenied(error: any): boolean {
   );
 }
 
+function safeJson(value: any): any {
+  if (value === null || value === undefined) return {};
+  if (typeof value === 'string') {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return { raw: value.slice(0, 1000) };
+    }
+  }
+  if (typeof value === 'object') return value;
+  return { value: String(value) };
+}
+
+function shouldEmitOpsBeacon(error: any): boolean {
+  const path = normalizeRequestPath(String(error?.config?.url || ''));
+  if (path.endsWith('/ops/client-errors/ingest/')) {
+    return false;
+  }
+  const status = Number(error?.response?.status || 0);
+  if (status === 429 || status === 500) {
+    return true;
+  }
+  // Network/gateway failures often have no response status.
+  return !status;
+}
+
+function emitOpsErrorBeacon(error: any): void {
+  if (typeof window === 'undefined' || !shouldEmitOpsBeacon(error)) {
+    return;
+  }
+
+  const status = Number(error?.response?.status || 0);
+  const requestPath = normalizeRequestPath(String(error?.config?.url || ''));
+  const method = String(error?.config?.method || 'GET').toUpperCase();
+  const context = getOpsClientContext(window.location.pathname, window.location.search);
+  const requestId = String(error?.response?.headers?.['x-request-id'] || '');
+  const responseExcerpt = (() => {
+    const data = error?.response?.data;
+    if (typeof data === 'string') return data.slice(0, 2000);
+    if (data && typeof data === 'object') {
+      try {
+        return JSON.stringify(data).slice(0, 2000);
+      } catch {
+        return String(data).slice(0, 2000);
+      }
+    }
+    return String(error?.message || '').slice(0, 2000);
+  })();
+
+  const payload = {
+    status_code: status,
+    endpoint: requestPath,
+    method,
+    portal: context.portal,
+    tab_key: context.tabKey,
+    route_path: context.routePath,
+    component_name: context.componentName,
+    request_id: requestId,
+    payload: safeJson(error?.config?.data),
+    response_excerpt: responseExcerpt,
+    error_message: String(error?.message || ''),
+    observed_at: new Date().toISOString(),
+  };
+
+  const beaconUrl = `${API_BASE_URL}/ops/client-errors/ingest/`;
+  try {
+    const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+    if (navigator.sendBeacon) {
+      navigator.sendBeacon(beaconUrl, blob);
+      return;
+    }
+  } catch {
+    // Fall through to fetch fallback.
+  }
+
+  try {
+    window.fetch(beaconUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      keepalive: true,
+      credentials: 'include',
+    }).catch(() => undefined);
+  } catch {
+    // Ignore beacon failures.
+  }
+}
+
 /**
  * Request interceptor to add auth token and set Content-Type.
  * Checks both sessionStorage and localStorage so "Remember Me" users are handled correctly.
  */
 api.interceptors.request.use(
   (config) => {
+    if (typeof window !== 'undefined') {
+      const opsContext = getOpsClientContext(window.location.pathname, window.location.search);
+      config.headers['X-LP-Portal'] = opsContext.portal;
+      config.headers['X-LP-Tab'] = opsContext.tabKey;
+      config.headers['X-LP-Route'] = opsContext.routePath;
+      config.headers['X-LP-Component'] = opsContext.componentName;
+    }
+
     if (shouldBypassAuthHeader(String(config.url || ''))) {
       if (config.headers && 'Authorization' in config.headers) {
         delete (config.headers as any).Authorization;
@@ -209,6 +306,8 @@ function onRefreshFailed(error: unknown) {
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
+    emitOpsErrorBeacon(error);
+
     const retriedResponse = await maybeRetryGatewayFailure(error);
     if (retriedResponse) {
       return retriedResponse;

@@ -2,6 +2,8 @@ import logging
 
 from celery import shared_task
 
+from .models import OpsReplayRun
+from .replay import execute_replay_run
 from .services import (
     cleanup_ops_data,
     evaluate_incidents,
@@ -46,3 +48,13 @@ def ops_cleanup_data():
     result = cleanup_ops_data()
     logger.info("ops_cleanup_data result=%s", result)
     return result
+
+
+@shared_task
+def ops_execute_replay_run(run_id: str):
+    run = OpsReplayRun.objects.filter(id=run_id).select_related("tenant", "actor").first()
+    if not run:
+        logger.warning("ops_execute_replay_run missing run id=%s", run_id)
+        return {"ok": False, "error": "run_not_found"}
+    run = execute_replay_run(run)
+    return {"ok": True, "run_id": str(run.id), "status": run.status}

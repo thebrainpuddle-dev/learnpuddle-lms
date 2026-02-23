@@ -14,14 +14,29 @@ from rest_framework.response import Response
 from apps.tenants.models import Tenant
 from utils.decorators import super_admin_only
 
-from .models import MaintenanceSchedule, OpsEvent, OpsHealthSnapshot, OpsIncident
+from .models import (
+    MaintenanceSchedule,
+    OpsActionLog,
+    OpsEvent,
+    OpsHealthSnapshot,
+    OpsIncident,
+    OpsReplayRun,
+    OpsReplayStep,
+    OpsRouteError,
+)
+from .replay import execute_replay_run, get_replay_case_catalog
 from .services import (
     P1_MTTR_TARGET_MINUTES,
     P2_MTTR_TARGET_MINUTES,
+    approve_guarded_action,
     apply_bulk_action,
     apply_tenant_maintenance,
+    execute_guarded_action,
+    get_ops_actions_catalog,
     get_pipeline_health,
     ingest_harness_event,
+    lock_route_error_group,
+    record_route_error,
     run_maintenance_scheduler,
     verify_harness_signature,
     weekly_report_csv,
@@ -44,6 +59,79 @@ def _parse_iso_dt(value: str | None, default: datetime) -> datetime:
     if timezone.is_naive(dt):
         return timezone.make_aware(dt)
     return dt
+
+
+def _parse_bool(value, default=False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _serialize_route_error(error: OpsRouteError) -> dict:
+    return {
+        "id": str(error.id),
+        "tenant_id": str(error.tenant_id) if error.tenant_id else None,
+        "tenant_name": error.tenant.name if error.tenant_id else None,
+        "portal": error.portal,
+        "tab_key": error.tab_key,
+        "route_path": error.route_path,
+        "component_name": error.component_name,
+        "endpoint": error.endpoint,
+        "method": error.method,
+        "status_code": error.status_code,
+        "fingerprint": error.fingerprint,
+        "first_seen_at": error.first_seen_at.isoformat(),
+        "last_seen_at": error.last_seen_at.isoformat(),
+        "last_request_id": error.last_request_id,
+        "total_count": error.total_count,
+        "count_1h": error.count_1h,
+        "count_24h": error.count_24h,
+        "sample_payload": error.sample_payload_json,
+        "sample_response_excerpt": error.sample_response_excerpt,
+        "sample_error_message": error.sample_error_message,
+        "is_locked": error.is_locked,
+        "locked_at": error.locked_at.isoformat() if error.locked_at else None,
+        "locked_by": error.locked_by.email if error.locked_by_id else None,
+    }
+
+
+def _serialize_replay_run(run: OpsReplayRun) -> dict:
+    return {
+        "id": str(run.id),
+        "tenant_id": str(run.tenant_id),
+        "tenant_name": run.tenant.name,
+        "portal": run.portal,
+        "status": run.status,
+        "priority": run.priority,
+        "dry_run": run.dry_run,
+        "requested_cases": run.requested_cases_json,
+        "summary": run.summary_json,
+        "incident_links": run.incident_links_json,
+        "started_at": run.started_at.isoformat() if run.started_at else None,
+        "ended_at": run.ended_at.isoformat() if run.ended_at else None,
+        "created_at": run.created_at.isoformat(),
+        "actor_email": run.actor.email if run.actor_id else None,
+    }
+
+
+def _serialize_replay_step(step: OpsReplayStep) -> dict:
+    return {
+        "id": str(step.id),
+        "run_id": str(step.run_id),
+        "case_id": step.case_id,
+        "case_label": step.case_label,
+        "endpoint": step.endpoint,
+        "method": step.method,
+        "request_payload": step.request_payload_json,
+        "response_status": step.response_status,
+        "response_excerpt": step.response_excerpt,
+        "latency_ms": step.latency_ms,
+        "pass_fail": step.pass_fail,
+        "error_group_id": str(step.error_group_id) if step.error_group_id else None,
+        "created_at": step.created_at.isoformat(),
+    }
 
 
 @api_view(["GET"])
@@ -335,6 +423,291 @@ def ops_incident_resolve(request, incident_id):
     incident.mttr_seconds = int((incident.resolved_at - incident.started_at).total_seconds())
     incident.save(update_fields=["status", "owner", "resolved_at", "mttr_seconds", "updated_at"])
     return Response({"ok": True})
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+@super_admin_only
+def ops_replay_cases(request):
+    health = get_pipeline_health()
+    portal = request.GET.get("portal")
+    return Response({**health, "results": get_replay_case_catalog(portal=portal)})
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@super_admin_only
+def ops_replay_runs_create(request):
+    tenant_id = request.data.get("tenant_id")
+    portal = str(request.data.get("portal", "")).upper().strip()
+    requested_cases = request.data.get("cases") or []
+    dry_run = _parse_bool(request.data.get("dry_run"), True)
+    priority = str(request.data.get("priority", "NORMAL")).upper()
+    async_mode = _parse_bool(request.data.get("async"), False)
+
+    if not tenant_id:
+        return Response({"error": "tenant_id is required"}, status=400)
+    tenant = Tenant.objects.filter(id=tenant_id, is_active=True).first()
+    if not tenant:
+        return Response({"error": "Tenant not found"}, status=404)
+    if portal not in {"TENANT_ADMIN", "TEACHER"}:
+        return Response({"error": "portal must be TENANT_ADMIN or TEACHER"}, status=400)
+    if not isinstance(requested_cases, list) or not requested_cases:
+        return Response({"error": "cases must be a non-empty list"}, status=400)
+    if priority not in {"NORMAL", "HIGH"}:
+        priority = "NORMAL"
+
+    run = OpsReplayRun.objects.create(
+        tenant=tenant,
+        portal=portal,
+        status="PENDING",
+        priority=priority,
+        dry_run=dry_run,
+        actor=request.user,
+        requested_cases_json=requested_cases,
+    )
+    if async_mode:
+        from .tasks import ops_execute_replay_run
+
+        ops_execute_replay_run.delay(str(run.id))
+        return Response({**_serialize_replay_run(run), "queued": True}, status=202)
+
+    run = execute_replay_run(run)
+    return Response(_serialize_replay_run(run), status=201)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+@super_admin_only
+def ops_replay_run_detail(request, run_id):
+    run = get_object_or_404(OpsReplayRun.objects.select_related("tenant", "actor"), id=run_id)
+    return Response(_serialize_replay_run(run))
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+@super_admin_only
+def ops_replay_run_steps(request, run_id):
+    run = get_object_or_404(OpsReplayRun, id=run_id)
+    steps = OpsReplayStep.objects.filter(run=run).select_related("error_group").order_by("created_at")
+    return Response({"run_id": str(run.id), "results": [_serialize_replay_step(step) for step in steps]})
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@super_admin_only
+def ops_replay_run_cancel(request, run_id):
+    run = get_object_or_404(OpsReplayRun, id=run_id)
+    if run.status in {"COMPLETED", "FAILED", "CANCELLED"}:
+        return Response({"ok": True, "status": run.status})
+    run.status = "CANCELLED"
+    run.ended_at = timezone.now()
+    run.save(update_fields=["status", "ended_at", "updated_at"])
+    return Response({"ok": True, "status": run.status})
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+@super_admin_only
+def ops_errors(request):
+    health = get_pipeline_health()
+    qs = OpsRouteError.objects.select_related("tenant", "locked_by").order_by("-last_seen_at")
+
+    tenant_id = request.GET.get("tenant_id")
+    portal = request.GET.get("portal")
+    tab = request.GET.get("tab")
+    is_locked = request.GET.get("is_locked")
+    since = request.GET.get("since")
+    until = request.GET.get("until")
+    codes = request.GET.get("status_codes")
+
+    if tenant_id:
+        qs = qs.filter(tenant_id=tenant_id)
+    if portal:
+        qs = qs.filter(portal=str(portal).upper())
+    if tab:
+        qs = qs.filter(tab_key=str(tab).lower())
+    if is_locked is not None:
+        qs = qs.filter(is_locked=_parse_bool(is_locked, False))
+    if since:
+        qs = qs.filter(last_seen_at__gte=_parse_iso_dt(since, timezone.now() - timedelta(days=7)))
+    if until:
+        qs = qs.filter(last_seen_at__lte=_parse_iso_dt(until, timezone.now()))
+    if codes:
+        try:
+            parsed_codes = [int(part.strip()) for part in str(codes).split(",") if part.strip()]
+            qs = qs.filter(status_code__in=parsed_codes)
+        except Exception:
+            qs = qs.filter(status_code__in=[429, 500])
+    else:
+        qs = qs.filter(status_code__in=[429, 500])
+
+    return Response({**health, "results": [_serialize_route_error(row) for row in qs[:200]]})
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+@super_admin_only
+def ops_error_detail(request, error_group_id):
+    row = get_object_or_404(OpsRouteError.objects.select_related("tenant", "locked_by"), id=error_group_id)
+    recent_steps = OpsReplayStep.objects.filter(error_group=row).select_related("run").order_by("-created_at")[:20]
+    return Response(
+        {
+            "error_group": _serialize_route_error(row),
+            "recent_replay_steps": [
+                {
+                    "id": str(step.id),
+                    "run_id": str(step.run_id),
+                    "run_status": step.run.status,
+                    "case_id": step.case_id,
+                    "response_status": step.response_status,
+                    "created_at": step.created_at.isoformat(),
+                }
+                for step in recent_steps
+            ],
+        }
+    )
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@super_admin_only
+def ops_error_lock(request, error_group_id):
+    row = get_object_or_404(OpsRouteError, id=error_group_id)
+    note = str(request.data.get("note", "")).strip()
+    incident = lock_route_error_group(error_group=row, actor=request.user, note=note)
+    return Response(
+        {
+            "ok": True,
+            "error_group_id": str(row.id),
+            "incident_id": str(incident.id),
+            "incident_status": incident.status,
+        }
+    )
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+@super_admin_only
+def ops_actions_catalog(request):
+    return Response({"results": get_ops_actions_catalog()})
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@super_admin_only
+def ops_actions_execute(request):
+    tenant_id = request.data.get("tenant_id")
+    action_key = str(request.data.get("action_key", "")).strip()
+    target = request.data.get("target") or {}
+    reason = str(request.data.get("reason", "")).strip()
+    dry_run = _parse_bool(request.data.get("dry_run"), True)
+
+    if not tenant_id:
+        return Response({"error": "tenant_id is required"}, status=400)
+    tenant = Tenant.objects.filter(id=tenant_id, is_active=True).first()
+    if not tenant:
+        return Response({"error": "Tenant not found"}, status=404)
+    if not isinstance(target, dict):
+        return Response({"error": "target must be an object"}, status=400)
+
+    try:
+        result = execute_guarded_action(
+            tenant=tenant,
+            action_key=action_key,
+            target=target,
+            reason=reason,
+            dry_run=dry_run,
+            actor=request.user,
+        )
+    except ValueError as exc:
+        return Response({"error": str(exc)}, status=400)
+    return Response(result, status=202 if result.get("requires_approval") else 200)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@super_admin_only
+def ops_action_approve(request, action_id):
+    action_log = get_object_or_404(OpsActionLog, id=action_id)
+    approval_note = str(request.data.get("approval_note", "")).strip()
+    try:
+        result = approve_guarded_action(action_log=action_log, approved_by=request.user, approval_note=approval_note)
+    except ValueError as exc:
+        return Response({"error": str(exc)}, status=400)
+    return Response(result)
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def ops_client_error_ingest(request):
+    payload = request.data if isinstance(request.data, dict) else {}
+    status_code = int(payload.get("status_code") or 0)
+    if status_code not in {429, 500}:
+        return Response({"accepted": False, "reason": "status_not_tracked"}, status=202)
+
+    observed_at = _parse_iso_dt(payload.get("observed_at"), timezone.now())
+    row = record_route_error(
+        tenant=getattr(request, "tenant", None),
+        portal=str(payload.get("portal", "")).upper() or "UNKNOWN",
+        tab_key=str(payload.get("tab_key") or payload.get("tab") or "").lower(),
+        route_path=str(payload.get("route_path", "")),
+        component_name=str(payload.get("component_name", "")),
+        endpoint=str(payload.get("endpoint", "")),
+        method=str(payload.get("method", "GET")).upper(),
+        status_code=status_code,
+        request_id=str(payload.get("request_id", "")),
+        payload=payload.get("payload") if isinstance(payload.get("payload"), dict) else {},
+        response_excerpt=str(payload.get("response_excerpt", "")),
+        error_message=str(payload.get("error_message", "")),
+        observed_at=observed_at,
+    )
+    return Response({"accepted": True, "error_group_id": str(row.id) if row else None})
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def ops_proxy_errors_ingest(request):
+    signature = request.headers.get("X-Harness-Signature", "")
+    if not verify_harness_signature(request.body, signature):
+        return Response({"error": "Invalid signature"}, status=status.HTTP_401_UNAUTHORIZED)
+
+    payload = request.data if isinstance(request.data, dict) else {}
+    rows = payload.get("rows") if isinstance(payload.get("rows"), list) else []
+    ingested = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        status_code = int(row.get("status_code") or 0)
+        if status_code not in {429, 500}:
+            continue
+
+        tenant = None
+        tenant_id = row.get("tenant_id")
+        subdomain = row.get("tenant_subdomain")
+        if tenant_id:
+            tenant = Tenant.objects.filter(id=tenant_id).first()
+        if not tenant and subdomain:
+            tenant = Tenant.objects.filter(subdomain=subdomain).first()
+
+        recorded = record_route_error(
+            tenant=tenant,
+            portal=str(row.get("portal") or "UNKNOWN"),
+            tab_key=str(row.get("tab_key") or ""),
+            route_path=str(row.get("route_path") or ""),
+            component_name=str(row.get("component_name") or "proxy"),
+            endpoint=str(row.get("endpoint") or "/"),
+            method=str(row.get("method") or "GET"),
+            status_code=status_code,
+            request_id=str(row.get("request_id") or ""),
+            payload=row if isinstance(row, dict) else {},
+            response_excerpt=str(row.get("response_excerpt") or ""),
+            error_message=str(row.get("error_message") or ""),
+            observed_at=_parse_iso_dt(row.get("observed_at"), timezone.now()),
+        )
+        if recorded:
+            ingested += 1
+    return Response({"accepted": True, "ingested": ingested})
 
 
 @api_view(["POST"])

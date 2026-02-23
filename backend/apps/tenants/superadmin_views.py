@@ -186,12 +186,15 @@ def tenant_list_create(request):
         tenant.subdomain = d["subdomain"]
         tenant.save(update_fields=["subdomain"])
 
-    # Send welcome email (async, best-effort)
+    # Send welcome email (best-effort -- logged, never blocks onboarding)
     try:
         from apps.tenants.emails import send_onboard_welcome_email
         send_onboard_welcome_email(result)
-    except Exception:
-        pass  # email failure should not block onboarding
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning(
+            "Onboarding email failed for tenant=%s err=%s", result["tenant"].id, exc,
+        )
 
     log_audit('CREATE', 'Tenant', target_id=str(result["tenant"].id), target_repr=result["tenant"].name, request=request)
 
@@ -347,7 +350,7 @@ def tenant_reset_admin_password(request, tenant_id):
     domain = getattr(settings, 'PLATFORM_DOMAIN', 'lms.com')
     reset_link = f"https://{tenant.subdomain}.{domain}/reset-password?uid={uid}&token={token}"
 
-    # Best-effort email with reset link (NOT plaintext password)
+    # Send reset link email -- logged, never blocks the reset action
     try:
         send_mail(
             subject=f"Password reset — {getattr(settings, 'PLATFORM_NAME', 'LearnPuddle')}",
@@ -361,11 +364,75 @@ def tenant_reset_admin_password(request, tenant_id):
             ),
             from_email=settings.DEFAULT_FROM_EMAIL,
             recipient_list=[admin_user.email],
-            fail_silently=True,
+            fail_silently=getattr(settings, "EMAIL_FAIL_SILENTLY", False),
         )
-    except Exception:
-        pass
+        import logging
+        logging.getLogger(__name__).info(
+            "Password reset email sent tenant=%s to=%s", tenant_id, admin_user.email,
+        )
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning(
+            "Password reset email failed tenant=%s to=%s err=%s", tenant_id, admin_user.email, exc,
+        )
 
     log_audit('PASSWORD_RESET', 'User', target_id=str(admin_user.id), target_repr=str(admin_user), request=request, tenant=tenant)
 
     return Response({"message": "Password reset successfully", "email": admin_user.email})
+
+
+# ── Send custom email to a tenant ──────────────────────────────────────────
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@super_admin_only
+def tenant_send_email(request, tenant_id):
+    """
+    Send a custom email to a tenant's admin or any specified address.
+    POST body: { "to": "optional@email.com", "subject": "...", "body": "..." }
+    If `to` is omitted, sends to the tenant's active school admin.
+    """
+    from django.core.mail import send_mail as _send_mail
+
+    tenant = get_object_or_404(Tenant, id=tenant_id)
+
+    to_email = (request.data.get("to") or "").strip()
+    subject = (request.data.get("subject") or "").strip()
+    body = (request.data.get("body") or "").strip()
+
+    if not subject:
+        return Response({"error": "Subject is required."}, status=status.HTTP_400_BAD_REQUEST)
+    if not body:
+        return Response({"error": "Body is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+    if not to_email:
+        admin_user = User.objects.filter(tenant=tenant, role="SCHOOL_ADMIN", is_active=True).first()
+        if not admin_user:
+            return Response({"error": "No active admin found for this tenant."}, status=status.HTTP_404_NOT_FOUND)
+        to_email = admin_user.email
+
+    platform_name = getattr(settings, "PLATFORM_NAME", "LearnPuddle")
+
+    try:
+        _send_mail(
+            subject=f"[{platform_name}] {subject}",
+            message=body,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[to_email],
+            fail_silently=False,
+        )
+    except Exception as exc:
+        logger.error("Custom email failed tenant=%s to=%s err=%s", tenant_id, to_email, exc)
+        return Response({"error": f"Email delivery failed: {exc}"}, status=status.HTTP_502_BAD_GATEWAY)
+
+    logger.info("Custom email sent tenant=%s to=%s subject=%s by=%s", tenant_id, to_email, subject, request.user.email)
+    log_audit(
+        "SEND_EMAIL", "Tenant",
+        target_id=str(tenant_id),
+        target_repr=f'"{subject}" to {to_email}',
+        request=request,
+        tenant=tenant,
+    )
+
+    return Response({"sent": True, "to": to_email, "subject": subject})

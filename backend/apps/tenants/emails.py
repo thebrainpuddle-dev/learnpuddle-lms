@@ -4,8 +4,12 @@ Email helpers for tenant lifecycle events (onboarding, trial expiry, etc.).
 Uses Django's send_mail which respects EMAIL_BACKEND in settings.
 """
 
+import logging
+
 from django.conf import settings
 from django.core.mail import send_mail
+
+logger = logging.getLogger(__name__)
 
 
 def _build_login_url(subdomain: str) -> str:
@@ -21,6 +25,10 @@ def send_onboard_welcome_email(result: dict) -> None:
     Send a welcome email to the newly-created school admin.
     `result` is the dict returned by TenantService.create_tenant_with_admin().
     """
+    if not getattr(settings, "SEND_ONBOARDING_EMAIL", True):
+        logger.info("Onboarding email skipped (SEND_ONBOARDING_EMAIL=False)")
+        return
+
     tenant = result["tenant"]
     admin = result["admin"]
     subdomain = tenant.subdomain
@@ -39,13 +47,27 @@ def send_onboard_welcome_email(result: dict) -> None:
         f"— The {getattr(settings, 'PLATFORM_NAME', 'LearnPuddle')} Team"
     )
 
-    send_mail(
-        subject=subject,
-        message=body,
-        from_email=settings.DEFAULT_FROM_EMAIL,
-        recipient_list=[admin.email],
-        fail_silently=True,
-    )
+    fail_silently = getattr(settings, "EMAIL_FAIL_SILENTLY", False)
+
+    try:
+        send_mail(
+            subject=subject,
+            message=body,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[admin.email],
+            fail_silently=fail_silently,
+        )
+        logger.info(
+            "Onboarding welcome email sent tenant=%s to=%s subdomain=%s",
+            tenant.id, admin.email, subdomain,
+        )
+    except Exception as exc:
+        logger.error(
+            "Onboarding welcome email failed tenant=%s to=%s err=%s",
+            tenant.id, admin.email, exc,
+        )
+        if not fail_silently:
+            raise
 
 
 def send_trial_expiry_warning_email(tenant, days_left: int) -> None:
@@ -65,10 +87,24 @@ def send_trial_expiry_warning_email(tenant, days_left: int) -> None:
         f"— The {getattr(settings, 'PLATFORM_NAME', 'LearnPuddle')} Team"
     )
 
-    send_mail(
-        subject=subject,
-        message=body,
-        from_email=settings.DEFAULT_FROM_EMAIL,
-        recipient_list=[admin.email],
-        fail_silently=True,
-    )
+    fail_silently = getattr(settings, "EMAIL_FAIL_SILENTLY", False)
+
+    try:
+        send_mail(
+            subject=subject,
+            message=body,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[admin.email],
+            fail_silently=fail_silently,
+        )
+        logger.info(
+            "Trial expiry email sent tenant=%s to=%s days_left=%d",
+            tenant.id, admin.email, days_left,
+        )
+    except Exception as exc:
+        logger.error(
+            "Trial expiry email failed tenant=%s to=%s err=%s",
+            tenant.id, admin.email, exc,
+        )
+        if not fail_silently:
+            raise

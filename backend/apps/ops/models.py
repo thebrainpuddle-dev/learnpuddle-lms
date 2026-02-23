@@ -272,3 +272,187 @@ class MaintenanceRun(models.Model):
         indexes = [
             models.Index(fields=["status", "starts_at"]),
         ]
+
+
+class OpsRouteError(models.Model):
+    PORTAL_CHOICES = [
+        ("SUPER_ADMIN", "Super Admin"),
+        ("TENANT_ADMIN", "Tenant Admin"),
+        ("TEACHER", "Teacher"),
+        ("UNKNOWN", "Unknown"),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tenant = models.ForeignKey(
+        "tenants.Tenant",
+        on_delete=models.CASCADE,
+        related_name="ops_route_errors",
+        null=True,
+        blank=True,
+    )
+    portal = models.CharField(max_length=20, choices=PORTAL_CHOICES, default="UNKNOWN", db_index=True)
+    tab_key = models.CharField(max_length=64, blank=True, default="", db_index=True)
+    route_path = models.CharField(max_length=255, blank=True, default="")
+    component_name = models.CharField(max_length=128, blank=True, default="")
+
+    endpoint = models.CharField(max_length=255, db_index=True)
+    method = models.CharField(max_length=10, db_index=True)
+    status_code = models.PositiveSmallIntegerField(db_index=True)
+    fingerprint = models.CharField(max_length=255, unique=True)
+
+    first_seen_at = models.DateTimeField(default=timezone.now, db_index=True)
+    last_seen_at = models.DateTimeField(default=timezone.now, db_index=True)
+    last_request_id = models.CharField(max_length=64, blank=True, default="")
+
+    total_count = models.PositiveIntegerField(default=0)
+    count_1h = models.PositiveIntegerField(default=0)
+    count_24h = models.PositiveIntegerField(default=0)
+
+    sample_payload_json = models.JSONField(default=dict, blank=True)
+    sample_response_excerpt = models.TextField(blank=True, default="")
+    sample_error_message = models.TextField(blank=True, default="")
+
+    is_locked = models.BooleanField(default=False, db_index=True)
+    locked_at = models.DateTimeField(null=True, blank=True)
+    locked_by = models.ForeignKey(
+        "users.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="locked_ops_route_errors",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "ops_route_errors"
+        ordering = ["-last_seen_at"]
+        indexes = [
+            models.Index(fields=["tenant", "status_code", "last_seen_at"]),
+            models.Index(fields=["portal", "tab_key", "status_code"]),
+            models.Index(fields=["is_locked", "last_seen_at"]),
+        ]
+
+
+class OpsReplayRun(models.Model):
+    STATUS_CHOICES = [
+        ("PENDING", "Pending"),
+        ("RUNNING", "Running"),
+        ("COMPLETED", "Completed"),
+        ("FAILED", "Failed"),
+        ("CANCELLED", "Cancelled"),
+    ]
+
+    PORTAL_CHOICES = [
+        ("TENANT_ADMIN", "Tenant Admin"),
+        ("TEACHER", "Teacher"),
+    ]
+
+    PRIORITY_CHOICES = [
+        ("NORMAL", "Normal"),
+        ("HIGH", "High"),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tenant = models.ForeignKey("tenants.Tenant", on_delete=models.CASCADE, related_name="ops_replay_runs")
+    portal = models.CharField(max_length=20, choices=PORTAL_CHOICES)
+    status = models.CharField(max_length=12, choices=STATUS_CHOICES, default="PENDING", db_index=True)
+    priority = models.CharField(max_length=10, choices=PRIORITY_CHOICES, default="NORMAL")
+    dry_run = models.BooleanField(default=True)
+
+    actor = models.ForeignKey(
+        "users.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="ops_replay_runs",
+    )
+
+    requested_cases_json = models.JSONField(default=list, blank=True)
+    summary_json = models.JSONField(default=dict, blank=True)
+    incident_links_json = models.JSONField(default=list, blank=True)
+
+    started_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    ended_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "ops_replay_runs"
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["tenant", "created_at"]),
+            models.Index(fields=["status", "created_at"]),
+        ]
+
+
+class OpsReplayStep(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    run = models.ForeignKey(OpsReplayRun, on_delete=models.CASCADE, related_name="steps")
+    case_id = models.CharField(max_length=128)
+    case_label = models.CharField(max_length=200, blank=True, default="")
+    endpoint = models.CharField(max_length=255)
+    method = models.CharField(max_length=10, default="GET")
+    request_payload_json = models.JSONField(default=dict, blank=True)
+    response_status = models.PositiveSmallIntegerField(null=True, blank=True, db_index=True)
+    response_excerpt = models.TextField(blank=True, default="")
+    latency_ms = models.PositiveIntegerField(null=True, blank=True)
+    pass_fail = models.BooleanField(default=False, db_index=True)
+    error_group = models.ForeignKey(
+        OpsRouteError,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="replay_steps",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        db_table = "ops_replay_steps"
+        ordering = ["created_at"]
+        indexes = [
+            models.Index(fields=["run", "created_at"]),
+            models.Index(fields=["case_id", "pass_fail"]),
+        ]
+
+
+class OpsActionApproval(models.Model):
+    STATUS_CHOICES = [
+        ("PENDING", "Pending"),
+        ("APPROVED", "Approved"),
+        ("REJECTED", "Rejected"),
+        ("AUTO_APPROVED", "Auto Approved"),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    action_log = models.OneToOneField(
+        OpsActionLog,
+        on_delete=models.CASCADE,
+        related_name="approval",
+    )
+    requested_by = models.ForeignKey(
+        "users.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="requested_ops_approvals",
+    )
+    approved_by = models.ForeignKey(
+        "users.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="approved_ops_approvals",
+    )
+    approval_status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="PENDING", db_index=True)
+    approval_note = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "ops_action_approvals"
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["approval_status", "created_at"]),
+        ]

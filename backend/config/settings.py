@@ -117,6 +117,7 @@ MIDDLEWARE = [
     # IMPORTANT: Tenant middleware must be after AuthenticationMiddleware
     'utils.tenant_middleware.TenantMiddleware',
     'utils.maintenance_middleware.MaintenanceModeWriteBlockMiddleware',
+    'utils.ops_error_middleware.OpsRouteErrorCaptureMiddleware',
     
     # Logging context — must be after Auth and Tenant to capture user_id and tenant_id
     'utils.request_id_middleware.LoggingContextMiddleware',
@@ -573,6 +574,8 @@ DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default=f'noreply@{_platform_d
 # Reminder email sending (disabled by default - uses in-app notifications only)
 # Set REMINDER_EMAIL_ENABLED=True to also send reminder emails
 REMINDER_EMAIL_ENABLED = config('REMINDER_EMAIL_ENABLED', default=False, cast=bool)
+SEND_ONBOARDING_EMAIL = config('SEND_ONBOARDING_EMAIL', default=True, cast=bool)
+EMAIL_FAIL_SILENTLY = config('EMAIL_FAIL_SILENTLY', default=False, cast=bool)
 AUTO_COURSE_REMINDERS_ENABLED = config('AUTO_COURSE_REMINDERS_ENABLED', default=True, cast=bool)
 # CSV list of lead-day checkpoints when automation sends reminders.
 # Example: "7,3,1,0" => one week, three days, one day, and due day.

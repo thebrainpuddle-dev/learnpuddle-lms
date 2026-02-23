@@ -9,6 +9,7 @@ import {
   CheckCircleIcon,
   XCircleIcon,
   ArrowTopRightOnSquareIcon,
+  EnvelopeIcon,
 } from '@heroicons/react/24/outline';
 
 type Tab = 'overview' | 'plan' | 'features';
@@ -86,6 +87,35 @@ export const SchoolDetailPage: React.FC = () => {
       toast.success('Impersonating', d.user_email);
     },
   });
+
+  const [showEmailForm, setShowEmailForm] = React.useState(false);
+  const [emailTo, setEmailTo] = React.useState('');
+  const [emailSubject, setEmailSubject] = React.useState('');
+  const [emailBody, setEmailBody] = React.useState('');
+
+  const sendEmailMut = useMutation({
+    mutationFn: () => superAdminService.sendEmail(tenantId!, {
+      to: emailTo || undefined,
+      subject: emailSubject,
+      body: emailBody,
+    }),
+    onSuccess: (d) => {
+      toast.success('Email sent', `Delivered to ${d.to}`);
+      setShowEmailForm(false);
+      setEmailSubject('');
+      setEmailBody('');
+    },
+    onError: (err: any) => {
+      const msg = err?.response?.data?.error || 'Email delivery failed.';
+      toast.error('Send failed', msg);
+    },
+  });
+
+  React.useEffect(() => {
+    if (tenant?.admin_email && !emailTo) {
+      setEmailTo(tenant.admin_email);
+    }
+  }, [tenant?.admin_email, emailTo]);
 
   if (isLoading || !tenant) {
     return <div className="flex items-center justify-center min-h-[60vh]"><div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600" /></div>;
@@ -193,6 +223,29 @@ export const SchoolDetailPage: React.FC = () => {
               <button type="button" onClick={() => { if (window.confirm('Reset admin password?')) resetPwMut.mutate(); }} className="w-full text-sm font-medium px-4 py-2 rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50">
                 Reset Admin Password
               </button>
+              <button type="button" onClick={() => setShowEmailForm(!showEmailForm)} className="w-full text-sm font-medium px-4 py-2 rounded-lg border border-indigo-200 text-indigo-700 hover:bg-indigo-50 flex items-center justify-center gap-2">
+                <EnvelopeIcon className="h-4 w-4" />
+                Send Email
+              </button>
+              {showEmailForm && (
+                <div className="mt-2 space-y-3 border-t border-gray-100 pt-3">
+                  <div>
+                    <label htmlFor="email-to" className="block text-xs font-medium text-gray-500 mb-1">To</label>
+                    <input id="email-to" type="email" value={emailTo} onChange={(e) => setEmailTo(e.target.value)} placeholder={tenant.admin_email || 'recipient@example.com'} className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500" />
+                  </div>
+                  <div>
+                    <label htmlFor="email-subject" className="block text-xs font-medium text-gray-500 mb-1">Subject</label>
+                    <input id="email-subject" type="text" value={emailSubject} onChange={(e) => setEmailSubject(e.target.value)} placeholder="Subject line" className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500" />
+                  </div>
+                  <div>
+                    <label htmlFor="email-body" className="block text-xs font-medium text-gray-500 mb-1">Message</label>
+                    <textarea id="email-body" value={emailBody} onChange={(e) => setEmailBody(e.target.value)} rows={4} placeholder="Write your message..." className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500" />
+                  </div>
+                  <button type="button" onClick={() => sendEmailMut.mutate()} disabled={sendEmailMut.isPending || !emailSubject.trim() || !emailBody.trim()} className="w-full text-sm font-medium px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed">
+                    {sendEmailMut.isPending ? 'Sending...' : 'Send'}
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </div>

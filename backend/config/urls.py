@@ -30,6 +30,7 @@ _api_patterns = [
     path('notifications/', include('apps.notifications.urls')),
     path('webhooks/', include('apps.webhooks.urls')),
     path('discussions/', include('apps.discussions.urls')),
+    path('ops/', include('apps.ops.public_urls')),
 ]
 
 urlpatterns = [

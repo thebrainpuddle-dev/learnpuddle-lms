@@ -12,4 +12,5 @@ urlpatterns = [
     path("tenants/<uuid:tenant_id>/usage/", superadmin_views.tenant_usage, name="tenant_usage"),
     path("tenants/<uuid:tenant_id>/apply-plan/", superadmin_views.tenant_apply_plan, name="tenant_apply_plan"),
     path("tenants/<uuid:tenant_id>/reset-admin-password/", superadmin_views.tenant_reset_admin_password, name="tenant_reset_admin_password"),
+    path("tenants/<uuid:tenant_id>/send-email/", superadmin_views.tenant_send_email, name="tenant_send_email"),
 ]
