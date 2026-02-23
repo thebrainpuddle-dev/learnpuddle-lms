@@ -4,6 +4,7 @@ function normalizeDomain(value: string): string {
     .toLowerCase()
     .replace(/^https?:\/\//, '')
     .replace(/\/.*$/, '')
+    .replace(/:\d+$/, '')
     .replace(/\.$/, '');
 }
 
