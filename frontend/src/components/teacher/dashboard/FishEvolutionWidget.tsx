@@ -66,6 +66,10 @@ interface FishEvolutionWidgetProps {
   pointsTotal: number;
 }
 
+function getStageRangeLabel(stage: FishStage): string {
+  return stage.maxPoints == null ? `${stage.minPoints}+ RP` : `${stage.minPoints}-${stage.maxPoints} RP`;
+}
+
 export const FishEvolutionWidget: React.FC<FishEvolutionWidgetProps> = ({ pointsTotal }) => {
   const canvasRef = React.useRef<HTMLCanvasElement | null>(null);
   const [reducedMotion, setReducedMotion] = React.useState(false);
@@ -355,6 +359,15 @@ export const FishEvolutionWidget: React.FC<FishEvolutionWidgetProps> = ({ points
       </div>
 
       <div className="lp-fish-controls-v2">
+        <div className="lp-fish-level-strip">
+          <p className="lp-fish-current-level">
+            Current Level: <span>{liveStage.label}</span>
+          </p>
+          {previewMode && previewStageIndex !== liveStageIndex && (
+            <p className="lp-fish-preview-level">Preview: {FISH_STAGES[previewStageIndex].label}</p>
+          )}
+        </div>
+
         <label htmlFor="fish-state-slider" className="sr-only">
           Preview fish state
         </label>
@@ -392,6 +405,18 @@ export const FishEvolutionWidget: React.FC<FishEvolutionWidgetProps> = ({ points
                 }}
                 aria-label={`${stage.label} state`}
               />
+            );
+          })}
+        </div>
+
+        <div className="lp-fish-stage-labels" aria-hidden="true">
+          {FISH_STAGES.map((stage, index) => {
+            const isCurrent = index === liveStageIndex;
+            return (
+              <div key={stage.key} className={`lp-fish-stage-label ${isCurrent ? 'is-current' : 'is-muted'}`}>
+                <span className="lp-fish-stage-name">{stage.label}</span>
+                <span className="lp-fish-stage-range">{getStageRangeLabel(stage)}</span>
+              </div>
             );
           })}
         </div>
