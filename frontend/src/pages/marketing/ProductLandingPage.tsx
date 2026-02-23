@@ -28,6 +28,8 @@ import {
   BoltIcon,
   CheckCircleIcon,
   ArrowRightIcon,
+  Bars3Icon,
+  XMarkIcon,
 } from '@heroicons/react/24/outline';
 import './ProductLandingPage.css';
 
@@ -427,6 +429,7 @@ export const ProductLandingPage: React.FC = () => {
   const [showCalModal, setShowCalModal] = React.useState(false);
   const [calLoadError, setCalLoadError] = React.useState('');
   const [activeTab, setActiveTab] = React.useState<SolutionKey>('schools');
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = React.useState(false);
 
   React.useEffect(() => {
     if (!showCalModal) return;
@@ -436,6 +439,30 @@ export const ProductLandingPage: React.FC = () => {
       document.body.style.overflow = originalOverflow;
     };
   }, [showCalModal]);
+
+  React.useEffect(() => {
+    const closeMenuOnDesktop = () => {
+      if (window.innerWidth > 900) {
+        setIsMobileMenuOpen(false);
+      }
+    };
+
+    window.addEventListener('resize', closeMenuOnDesktop);
+    return () => window.removeEventListener('resize', closeMenuOnDesktop);
+  }, []);
+
+  React.useEffect(() => {
+    if (!isMobileMenuOpen) return undefined;
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsMobileMenuOpen(false);
+      }
+    };
+
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [isMobileMenuOpen]);
 
   React.useEffect(() => {
     if (!showCalModal || !inlineDemoEnabled) return;
@@ -489,6 +516,7 @@ export const ProductLandingPage: React.FC = () => {
   }, [bookDemoCalLink, inlineDemoEnabled, showCalModal]);
 
   const openBookDemo = React.useCallback(() => {
+    setIsMobileMenuOpen(false);
     if (!inlineDemoEnabled) {
       window.open(bookDemoUrl, '_blank', 'noopener,noreferrer');
       return;
@@ -496,6 +524,10 @@ export const ProductLandingPage: React.FC = () => {
     setCalLoadError('');
     setShowCalModal(true);
   }, [bookDemoUrl, inlineDemoEnabled]);
+
+  const closeMobileMenu = React.useCallback(() => {
+    setIsMobileMenuOpen(false);
+  }, []);
 
   const activeSolution = solutionContent[activeTab];
 
@@ -510,18 +542,34 @@ export const ProductLandingPage: React.FC = () => {
           <a href="/" className="lp-logo" aria-label="LearnPuddle Home">
             LearnPuddle
           </a>
-          <nav className="lp-nav" aria-label="Primary">
-            <a href="#platform">Platform</a>
-            <a href="#solutions">Solutions</a>
-            <a href="#industries">Industries</a>
-            <a href="#security">Security</a>
-            <a href="#demo">Demo</a>
-            <a href="#faq">FAQ</a>
-          </nav>
-          <div className="lp-header-actions">
-            <CTAButton onClick={openBookDemo} className="lp-btn lp-btn-primary">
+          <nav className={`lp-nav ${isMobileMenuOpen ? 'is-open' : ''}`} aria-label="Primary">
+            <a href="#platform" onClick={closeMobileMenu}>Platform</a>
+            <a href="#solutions" onClick={closeMobileMenu}>Solutions</a>
+            <a href="#industries" onClick={closeMobileMenu}>Industries</a>
+            <a href="#security" onClick={closeMobileMenu}>Security</a>
+            <a href="#demo" onClick={closeMobileMenu}>Demo</a>
+            <a href="#faq" onClick={closeMobileMenu}>FAQ</a>
+            <CTAButton onClick={openBookDemo} className="lp-btn lp-btn-primary lp-nav-mobile-cta">
               Book Demo
             </CTAButton>
+          </nav>
+          <div className="lp-header-actions">
+            <CTAButton onClick={openBookDemo} className="lp-btn lp-btn-primary lp-header-cta-desktop">
+              Book Demo
+            </CTAButton>
+            <button
+              type="button"
+              className="lp-menu-toggle"
+              aria-label={isMobileMenuOpen ? 'Close navigation menu' : 'Open navigation menu'}
+              aria-expanded={isMobileMenuOpen}
+              onClick={() => setIsMobileMenuOpen((value) => !value)}
+            >
+              {isMobileMenuOpen ? (
+                <XMarkIcon className="lp-menu-icon" aria-hidden="true" />
+              ) : (
+                <Bars3Icon className="lp-menu-icon" aria-hidden="true" />
+              )}
+            </button>
           </div>
         </div>
       </header>
