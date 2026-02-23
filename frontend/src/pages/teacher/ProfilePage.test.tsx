@@ -145,9 +145,10 @@ describe('ProfilePage achievements tab', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'Achievements' }));
 
-    expect(await screen.findByText(/level 2: certified teacher/i)).toBeInTheDocument();
-    expect(await screen.findByText(/the puddle fish journey/i)).toBeInTheDocument();
-    expect(await screen.findByText('Ripple Badges')).toBeInTheDocument();
+    expect(await screen.findByText(/live journey sync/i)).toBeInTheDocument();
+    expect(await screen.findByText(/fish \+ puddle state/i)).toBeInTheDocument();
+    expect(await screen.findByLabelText(/learning state fish/i)).toBeInTheDocument();
+    expect(screen.queryByText(/ripple badges/i)).not.toBeInTheDocument();
   });
 
   it('claims quest reward from achievements tab', async () => {

@@ -1,15 +1,14 @@
-// src/components/teacher/ContentPlayer.tsx
-
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Hls from 'hls.js';
 import DOMPurify from 'dompurify';
+import { PlayIcon, DocumentTextIcon, LinkIcon, CheckCircleIcon } from '@heroicons/react/24/solid';
 import {
-  PlayIcon,
-  DocumentTextIcon,
-  LinkIcon,
-  CheckCircleIcon,
-} from '@heroicons/react/24/solid';
-import { ArrowTopRightOnSquareIcon } from '@heroicons/react/24/outline';
+  ArrowRightIcon,
+  ArrowTopRightOnSquareIcon,
+  FlagIcon,
+  HandThumbDownIcon,
+  HandThumbUpIcon,
+} from '@heroicons/react/24/outline';
 import { teacherService } from '../../services/teacherService';
 import { getAccessToken } from '../../utils/authSession';
 
@@ -30,6 +29,8 @@ interface ContentPlayerProps {
   isCompleted?: boolean;
   onComplete?: () => void;
   onProgressUpdate?: (seconds: number) => void;
+  onNextItem?: () => void;
+  nextItemLabel?: string;
 }
 
 export const ContentPlayer: React.FC<ContentPlayerProps> = ({
@@ -38,20 +39,11 @@ export const ContentPlayer: React.FC<ContentPlayerProps> = ({
   isCompleted = false,
   onComplete,
   onProgressUpdate,
+  onNextItem,
+  nextItemLabel,
 }) => {
-  const [, setIsPlaying] = useState(false);
-  const [, setCurrentTime] = useState(0);
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  
-  // Track max watched position for anti-skip (allow rewind, prevent forward skip)
   const [maxWatched, setMaxWatched] = useState(initialProgress);
-  
-  // Reset maxWatched when content changes
-  useEffect(() => {
-    setMaxWatched(initialProgress);
-  }, [content.id, initialProgress]);
-
-  const [activeTab, setActiveTab] = useState<'video' | 'transcript'>('video');
   const [transcriptLoading, setTranscriptLoading] = useState(false);
   const [transcriptError, setTranscriptError] = useState<string | null>(null);
   const [transcript, setTranscript] = useState<null | {
@@ -59,10 +51,8 @@ export const ContentPlayer: React.FC<ContentPlayerProps> = ({
     segments: Array<{ start: number; end: number; text: string }>;
   }>(null);
 
-  const videoSrc = useMemo(() => {
-    return content.hls_url || content.file_url || '';
-  }, [content.hls_url, content.file_url]);
-  
+  const videoSrc = useMemo(() => content.hls_url || content.file_url || '', [content.hls_url, content.file_url]);
+
   const formatDuration = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
@@ -75,19 +65,20 @@ export const ContentPlayer: React.FC<ContentPlayerProps> = ({
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
-  // Attach HLS source when needed
+  useEffect(() => {
+    setMaxWatched(initialProgress);
+  }, [content.id, initialProgress]);
+
   useEffect(() => {
     if (content.content_type !== 'VIDEO') return;
     const video = videoRef.current;
-    if (!video) return;
-    if (!videoSrc) return;
+    if (!video || !videoSrc) return;
 
     const isHls = videoSrc.endsWith('.m3u8') || videoSrc.includes('.m3u8');
 
     if (isHls && Hls.isSupported()) {
       const hls = new Hls({
         enableWorker: true,
-        // Add auth headers for the HLS proxy endpoint
         xhrSetup: (xhr) => {
           const token = getAccessToken();
           if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
@@ -100,21 +91,17 @@ export const ContentPlayer: React.FC<ContentPlayerProps> = ({
       };
     }
 
-    // Non-HLS source (regular mp4, etc.)
     video.src = videoSrc;
-  }, [content.content_type, content.id, videoSrc]);
+  }, [content.content_type, videoSrc]);
 
-  // Reset transcript state when content changes
   useEffect(() => {
     setTranscript(null);
     setTranscriptError(null);
     setTranscriptLoading(false);
-    setActiveTab('video');
   }, [content.id]);
 
   useEffect(() => {
     if (content.content_type !== 'VIDEO') return;
-    if (activeTab !== 'transcript') return;
     if (!content.has_transcript) return;
     if (transcript || transcriptLoading) return;
 
@@ -127,70 +114,51 @@ export const ContentPlayer: React.FC<ContentPlayerProps> = ({
       })
       .catch(() => setTranscriptError('Could not load transcript.'))
       .finally(() => setTranscriptLoading(false));
-  }, [activeTab, content.content_type, content.has_transcript, content.id, transcript, transcriptLoading]);
-  
-  // Video player
+  }, [content.content_type, content.has_transcript, content.id, transcript, transcriptLoading]);
+
+  const renderNextItemCta = () => {
+    if (!onNextItem || !nextItemLabel) return null;
+    return (
+      <button
+        type="button"
+        onClick={onNextItem}
+        className="inline-flex items-center gap-2 rounded-xl border border-blue-600 px-4 py-2 text-sm font-semibold text-blue-600 hover:bg-blue-50"
+      >
+        {nextItemLabel}
+        <ArrowRightIcon className="h-4 w-4" />
+      </button>
+    );
+  };
+
   if (content.content_type === 'VIDEO') {
     return (
-      <div className="bg-slate-900 rounded-xl overflow-hidden">
-        {/* Tabs */}
-        <div className="flex border-b border-slate-800">
-          <button
-            onClick={() => setActiveTab('video')}
-            className={`px-4 py-2 text-sm font-medium ${
-              activeTab === 'video' ? 'text-white bg-slate-800' : 'text-slate-300 hover:text-white'
-            }`}
-          >
-            Video
-          </button>
-          <button
-            onClick={() => setActiveTab('transcript')}
-            disabled={!content.has_transcript}
-            className={`px-4 py-2 text-sm font-medium ${
-              !content.has_transcript
-                ? 'text-slate-600 cursor-not-allowed'
-                : activeTab === 'transcript'
-                ? 'text-white bg-slate-800'
-                : 'text-slate-300 hover:text-white'
-            }`}
-            title={content.has_transcript ? 'View transcript' : 'Transcript not ready yet'}
-          >
-            Transcript
-          </button>
-        </div>
-
-        {/* Video container — always mounted so videoRef stays valid for transcript seek */}
-        <div className={`relative aspect-video bg-black ${activeTab !== 'video' ? 'hidden' : ''}`}>
+      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+        <div className="relative aspect-video w-full bg-black">
           {videoSrc ? (
             <video
               ref={videoRef}
-              className="w-full h-full"
+              className="h-full w-full"
               controls
               poster={content.thumbnail_url || undefined}
-              onLoadedMetadata={(e) => {
-                // Resume from last watched position
-                const video = e.currentTarget;
+              onLoadedMetadata={(event) => {
+                const video = event.currentTarget;
                 if (initialProgress > 0 && video.duration > initialProgress) {
                   video.currentTime = initialProgress;
                 }
               }}
-              onTimeUpdate={(e) => {
-                const video = e.currentTarget;
+              onTimeUpdate={(event) => {
+                const video = event.currentTarget;
                 const current = Math.floor(video.currentTime);
-                setCurrentTime(current);
-                setMaxWatched(prev => Math.max(prev, current));
+                setMaxWatched((prev) => Math.max(prev, current));
                 onProgressUpdate?.(current);
               }}
-              onSeeking={(e) => {
-                // Prevent skipping ahead - allow rewind only
-                const video = e.currentTarget;
+              onSeeking={(event) => {
+                const video = event.currentTarget;
                 if (video.currentTime > maxWatched + 2) {
                   video.currentTime = maxWatched;
                 }
               }}
               onEnded={() => onComplete?.()}
-              onPlay={() => setIsPlaying(true)}
-              onPause={() => setIsPlaying(false)}
             >
               {content.transcript_vtt_url && (
                 <track
@@ -203,200 +171,169 @@ export const ContentPlayer: React.FC<ContentPlayerProps> = ({
               )}
             </video>
           ) : (
-            <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-400">
-              <div className="animate-pulse">
-                <PlayIcon className="h-16 w-16 mb-4 mx-auto" />
-              </div>
+            <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-300">
+              <PlayIcon className="mb-4 h-16 w-16 animate-pulse" />
               <p className="font-medium">Video is being processed</p>
-              <p className="text-sm mt-1">HLS streaming will be available shortly. Please check back in a few minutes.</p>
+              <p className="mt-1 text-sm">Streaming will be available shortly.</p>
             </div>
           )}
         </div>
 
-        {/* Transcript panel */}
-        {activeTab === 'transcript' && (
-          <div className="bg-slate-950 max-h-[28rem] overflow-y-auto p-4">
-            {transcriptLoading ? (
-              <p className="text-slate-300 text-sm">Loading transcript...</p>
-            ) : transcriptError ? (
-              <p className="text-red-300 text-sm">{transcriptError}</p>
-            ) : transcript ? (
-              <div className="space-y-3">
-                {transcript.segments.length > 0 ? (
-                  transcript.segments.map((seg, idx) => (
-                    <button
-                      key={idx}
-                      className="w-full text-left rounded-lg p-3 hover:bg-slate-900 transition-colors"
-                      onClick={() => {
-                        const v = videoRef.current;
-                        if (v) {
-                          v.currentTime = seg.start;
-                          v.play().catch(() => undefined);
-                          setActiveTab('video');
-                        }
-                      }}
-                    >
-                      <div className="text-xs text-slate-400 mb-1">
-                        {formatTime(seg.start)} - {formatTime(seg.end)}
-                      </div>
-                      <div className="text-sm text-slate-100">{seg.text}</div>
-                    </button>
-                  ))
-                ) : (
-                  <p className="text-slate-300 text-sm whitespace-pre-wrap">{transcript.full_text}</p>
-                )}
-              </div>
-            ) : (
-              <p className="text-slate-300 text-sm">Transcript not available.</p>
+        <div className="border-t border-slate-200 p-5">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h2 className="text-3xl font-semibold text-slate-900">{content.title}</h2>
+              <p className="mt-1 text-sm text-slate-500">
+                {content.duration ? `Video • ${formatDuration(content.duration)}` : 'Video'}
+              </p>
+            </div>
+            {isCompleted && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-3 py-1 text-sm font-semibold text-emerald-700">
+                <CheckCircleIcon className="h-4 w-4" />
+                Completed
+              </span>
             )}
           </div>
-        )}
-        
-        {/* Video info */}
-        <div className="p-4 flex items-center justify-between">
-          <div>
-            <h3 className="text-white font-medium">{content.title}</h3>
-            <p className="text-slate-400 text-sm">
-              {content.duration ? formatDuration(content.duration) : 'Duration unknown'}
-            </p>
+
+          <div className="mt-5 border-b border-slate-200 pb-2">
+            <div className="flex items-center gap-6 text-sm font-medium">
+              <span className="border-b-2 border-slate-900 pb-2 text-slate-900">Transcript</span>
+              <span className="pb-2 text-slate-400">Notes</span>
+              <span className="pb-2 text-slate-400">Downloads</span>
+            </div>
           </div>
-          
+
+          <div className="mt-3 max-h-64 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-4">
+            {transcriptLoading ? (
+              <p className="text-sm text-slate-500">Loading transcript...</p>
+            ) : transcriptError ? (
+              <p className="text-sm text-rose-600">{transcriptError}</p>
+            ) : transcript ? (
+              transcript.segments.length > 0 ? (
+                <div className="space-y-2">
+                  {transcript.segments.map((segment, index) => (
+                    <button
+                      key={index}
+                      type="button"
+                      className="w-full rounded-lg px-3 py-2 text-left hover:bg-white"
+                      onClick={() => {
+                        const video = videoRef.current;
+                        if (!video) return;
+                        video.currentTime = segment.start;
+                        video.play().catch(() => undefined);
+                      }}
+                    >
+                      <p className="text-xs text-slate-500">{formatTime(segment.start)}</p>
+                      <p className="text-sm text-slate-800">{segment.text}</p>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <p className="whitespace-pre-wrap text-sm text-slate-700">{transcript.full_text}</p>
+              )
+            ) : (
+              <p className="text-sm text-slate-500">Transcript not ready yet.</p>
+            )}
+          </div>
+
+          <div className="mt-4 flex items-center justify-between">
+            <button type="button" className="text-sm font-semibold text-blue-600 hover:text-blue-700">
+              Save note
+            </button>
+            {renderNextItemCta()}
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  const readingLabel = content.content_type === 'LINK' ? 'External Resource' : 'Reading';
+  const readingIcon = content.content_type === 'LINK' ? (
+    <LinkIcon className="h-8 w-8 text-blue-600" />
+  ) : (
+    <DocumentTextIcon className="h-8 w-8 text-blue-600" />
+  );
+
+  const defaultReadingText =
+    content.content_type === 'LINK'
+      ? 'Open this resource and complete the related task.'
+      : 'Review this material and mark it complete once done.';
+
+  return (
+    <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+      <div className="p-8">
+        <div className="mb-6 flex items-start justify-between gap-4">
+          <div className="flex items-center gap-4">
+            <div className="rounded-xl bg-blue-50 p-3">{readingIcon}</div>
+            <div>
+              <p className="text-sm font-semibold text-blue-600">{readingLabel}</p>
+              <h2 className="text-4xl font-semibold text-slate-900">{content.title}</h2>
+            </div>
+          </div>
           {isCompleted && (
-            <div className="flex items-center text-emerald-400">
-              <CheckCircleIcon className="h-5 w-5 mr-1" />
-              <span className="text-sm">Completed</span>
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  }
-  
-  // Document viewer
-  if (content.content_type === 'DOCUMENT') {
-    return (
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-        <div className="p-6">
-          <div className="flex items-start">
-            <div className="p-3 bg-blue-100 rounded-lg mr-4">
-              <DocumentTextIcon className="h-8 w-8 text-blue-600" />
-            </div>
-            <div className="flex-1">
-              <h3 className="font-semibold text-gray-900 mb-1">{content.title}</h3>
-              <p className="text-sm text-gray-500 mb-4">PDF Document</p>
-              
-              <div className="flex items-center space-x-3">
-                {content.file_url && (
-                  <a
-                    href={content.file_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-                    onClick={() => onComplete?.()}
-                  >
-                    <ArrowTopRightOnSquareIcon className="h-4 w-4 mr-2" />
-                    Open Document
-                  </a>
-                )}
-                
-                {isCompleted && (
-                  <span className="flex items-center text-emerald-600">
-                    <CheckCircleIcon className="h-5 w-5 mr-1" />
-                    Completed
-                  </span>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-        
-        {content.file_url && (
-          <div className="border-t border-gray-200 p-6 flex flex-col items-center justify-center">
-            <a
-              href={content.file_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 px-4 py-2 bg-primary-600 text-white text-sm font-medium rounded-lg hover:bg-primary-700"
-            >
-              <ArrowTopRightOnSquareIcon className="h-4 w-4" />
-              Open document in new tab
-            </a>
-          </div>
-        )}
-      </div>
-    );
-  }
-  
-  // External link
-  if (content.content_type === 'LINK') {
-    return (
-      <div className="bg-white rounded-xl border border-gray-200 p-6">
-        <div className="flex items-start">
-          <div className="p-3 bg-purple-100 rounded-lg mr-4">
-            <LinkIcon className="h-8 w-8 text-purple-600" />
-          </div>
-          <div className="flex-1">
-            <h3 className="font-semibold text-gray-900 mb-1">{content.title}</h3>
-            <p className="text-sm text-gray-500 mb-4">External Resource</p>
-            
-            <div className="flex items-center space-x-3">
-              {content.file_url && (
-                <a
-                  href={content.file_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
-                  onClick={() => onComplete?.()}
-                >
-                  <ArrowTopRightOnSquareIcon className="h-4 w-4 mr-2" />
-                  Open Link
-                </a>
-              )}
-              
-              {isCompleted && (
-                <span className="flex items-center text-emerald-600">
-                  <CheckCircleIcon className="h-5 w-5 mr-1" />
-                  Completed
-                </span>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-  
-  // Text content
-  if (content.content_type === 'TEXT') {
-    return (
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-        <div className="p-6 border-b border-gray-200 flex items-center justify-between">
-          <h3 className="font-semibold text-gray-900">{content.title}</h3>
-          {isCompleted && (
-            <span className="flex items-center text-emerald-600">
-              <CheckCircleIcon className="h-5 w-5 mr-1" />
+            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-3 py-1 text-sm font-semibold text-emerald-700">
+              <CheckCircleIcon className="h-4 w-4" />
               Completed
             </span>
           )}
         </div>
-        
-        <div className="p-6 prose prose-slate max-w-none">
-          <div dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(content.text_content || '') }} />
+
+        <div className="max-w-4xl text-lg leading-8 text-slate-700">
+          {content.text_content ? (
+            <div
+              className="prose prose-lg max-w-none prose-slate"
+              dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(content.text_content) }}
+            />
+          ) : (
+            <p>{defaultReadingText}</p>
+          )}
         </div>
-        
-        {!isCompleted && onComplete && (
-          <div className="p-4 border-t border-gray-200 bg-gray-50">
-            <button
-              onClick={onComplete}
-              className="w-full py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors"
+
+        <div className="mt-6 flex flex-wrap items-center gap-3">
+          {content.file_url && (
+            <a
+              href={content.file_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-700"
             >
-              Mark as Complete
+              Open resource
+              <ArrowTopRightOnSquareIcon className="h-4 w-4" />
+            </a>
+          )}
+
+          {!isCompleted && onComplete && (
+            <button
+              type="button"
+              onClick={onComplete}
+              className="inline-flex items-center rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-700"
+            >
+              Mark as completed
             </button>
+          )}
+        </div>
+
+        <div className="mt-10 border-t border-slate-200 pt-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-6 text-blue-600">
+              <button type="button" className="inline-flex items-center gap-2 text-sm font-semibold">
+                <HandThumbUpIcon className="h-5 w-5" />
+                Like
+              </button>
+              <button type="button" className="inline-flex items-center gap-2 text-sm font-semibold">
+                <HandThumbDownIcon className="h-5 w-5" />
+                Dislike
+              </button>
+              <button type="button" className="inline-flex items-center gap-2 text-sm font-semibold">
+                <FlagIcon className="h-5 w-5" />
+                Report an issue
+              </button>
+            </div>
+
+            {renderNextItemCta()}
           </div>
-        )}
+        </div>
       </div>
-    );
-  }
-  
-  return null;
+    </section>
+  );
 };

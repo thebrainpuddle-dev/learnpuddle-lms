@@ -88,6 +88,23 @@ export function useNotifications(options: UseNotificationsOptions = {}): UseNoti
     return delay + Math.random() * 1000; // Add jitter
   }, []);
 
+  // Polling fallback
+  const startPolling = useCallback(() => {
+    const poll = async () => {
+      try {
+        const response = await api.get('/notifications/');
+        const data = response.data;
+        setNotifications(Array.isArray(data) ? data : (data.results || []));
+        setUnreadCount(data.unread_count ?? 0);
+      } catch (error) {
+        console.error('Polling failed:', error);
+      }
+    };
+
+    poll();
+    pollingIntervalRef.current = setInterval(poll, pollingInterval);
+  }, [pollingInterval]);
+
   // Connect to WebSocket
   const connect = useCallback(() => {
     if (!enabled || !isAuthenticated || !accessToken) {
@@ -185,24 +202,7 @@ export function useNotifications(options: UseNotificationsOptions = {}): UseNoti
         }
       }
     };
-  }, [enabled, isAuthenticated, accessToken, maxReconnectAttempts, getReconnectDelay]);
-
-  // Polling fallback
-  const startPolling = useCallback(() => {
-    const poll = async () => {
-      try {
-        const response = await api.get('/notifications/');
-        const data = response.data;
-        setNotifications(Array.isArray(data) ? data : (data.results || []));
-        setUnreadCount(data.unread_count ?? 0);
-      } catch (error) {
-        console.error('Polling failed:', error);
-      }
-    };
-
-    poll();
-    pollingIntervalRef.current = setInterval(poll, pollingInterval);
-  }, [pollingInterval]);
+  }, [enabled, isAuthenticated, accessToken, maxReconnectAttempts, getReconnectDelay, startPolling]);
 
   // Mark notifications as read
   const markAsRead = useCallback((ids: string[]) => {

@@ -11,6 +11,7 @@ jest.mock('../../stores/tenantStore');
 jest.mock('../../services/teacherService', () => ({
   teacherService: {
     getCourse: jest.fn(),
+    listAssignments: jest.fn(),
     updateContent: jest.fn(),
     completeContent: jest.fn(),
     getVideoTranscript: jest.fn(),
@@ -107,6 +108,7 @@ describe('CourseViewPage locking behavior', () => {
       hasFeature: jest.fn(() => true),
     });
     mockedTeacherService.getCourse.mockResolvedValue(courseResponse as any);
+    mockedTeacherService.listAssignments.mockResolvedValue([] as any);
     mockedTeacherService.updateContent.mockResolvedValue({} as any);
     mockedTeacherService.completeContent.mockResolvedValue({} as any);
     mockedTeacherService.getVideoTranscript.mockResolvedValue({
@@ -136,7 +138,7 @@ describe('CourseViewPage locking behavior', () => {
   it('renders locked modules and disables locked lesson buttons', async () => {
     renderPage();
 
-    expect(await screen.findByText('Classroom Mastery')).toBeInTheDocument();
+    expect((await screen.findAllByText('Classroom Mastery')).length).toBeGreaterThan(0);
     expect(screen.getByText('Finish the previous module to unlock this one.')).toBeInTheDocument();
 
     await userEvent.click(
@@ -145,16 +147,14 @@ describe('CourseViewPage locking behavior', () => {
       }),
     );
 
-    const lockedLessonText = await screen.findByText('Lesson 2');
-    const lockedLesson = lockedLessonText.closest('button');
-    expect(lockedLesson).not.toBeNull();
-    expect(lockedLesson as HTMLButtonElement).toBeDisabled();
+    const lockedLesson = await screen.findByRole('button', { name: /lesson 2/i });
+    expect(lockedLesson).toBeDisabled();
   });
 
   it('submits completion for unlocked text lesson', async () => {
     renderPage();
 
-    expect(await screen.findByText('Classroom Mastery')).toBeInTheDocument();
+    expect((await screen.findAllByText('Classroom Mastery')).length).toBeGreaterThan(0);
     const completeButton = await screen.findByRole('button', { name: /mark as complete/i });
     await userEvent.click(completeButton);
 

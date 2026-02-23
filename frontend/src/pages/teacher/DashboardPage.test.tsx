@@ -171,7 +171,7 @@ describe('DashboardPage essentials layout', () => {
     renderPage();
 
     expect(await screen.findByText(/welcome back, rakesh/i)).toBeInTheDocument();
-    expect(await screen.findByText('Current Level')).toBeInTheDocument();
+    expect(await screen.findByText('Current State')).toBeInTheDocument();
     expect(await screen.findByText('5-Day Planner')).toBeInTheDocument();
     expect(await screen.findByText('To Do')).toBeInTheDocument();
     expect((await screen.findAllByText('Continue Learning')).length).toBeGreaterThan(0);

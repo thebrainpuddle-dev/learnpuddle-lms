@@ -37,20 +37,22 @@ describe('FishEvolutionWidget', () => {
   it('supports slider and play interaction', async () => {
     render(<FishEvolutionWidget pointsTotal={340} />);
 
-    expect(screen.getByText(/live stage: pond/i)).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: /live fish and puddle animation/i })).toBeInTheDocument();
+    expect(screen.getByRole('listitem', { name: 'Pond state' })).toHaveClass('is-current');
 
-    await userEvent.click(screen.getByRole('button', { name: 'Ocean' }));
-    expect(screen.getAllByText('Ocean').length).toBeGreaterThan(0);
+    await userEvent.click(screen.getByRole('listitem', { name: 'Ocean state' }));
+    expect(screen.getByRole('listitem', { name: 'Ocean state' })).toHaveClass('is-muted');
+    expect(screen.getByRole('listitem', { name: 'Ocean state' })).toHaveClass('is-preview');
 
-    await userEvent.click(screen.getByRole('button', { name: /play evolution animation/i }));
-    expect(screen.getByRole('button', { name: /pause evolution animation/i })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /play animation/i }));
+    expect(screen.getByRole('button', { name: /pause animation/i })).toBeInTheDocument();
   });
 
   it('disables animation controls for reduced motion users', () => {
     mockMatchMedia(true);
     render(<FishEvolutionWidget pointsTotal={340} />);
 
-    const button = screen.getByRole('button', { name: /play evolution animation/i });
+    const button = screen.getByRole('button', { name: /play animation/i });
     expect(button).toBeDisabled();
     expect(button).toHaveTextContent('Animation Off');
   });

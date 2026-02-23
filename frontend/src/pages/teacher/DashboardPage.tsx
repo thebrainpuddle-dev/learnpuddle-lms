@@ -77,9 +77,6 @@ export const DashboardPage: React.FC = () => {
 
   const continueCourse = dashboard?.continue_learning;
   const currentLevel = gamification?.badge_current;
-  const nextLevel = gamification?.badges.find(
-    (badge) => badge.level === (currentLevel?.level || 0) + 1,
-  );
   const currentLevelProgress = gamification?.badges.find(
     (badge) => badge.level === currentLevel?.level,
   )?.progress_percentage ?? 0;
@@ -121,11 +118,11 @@ export const DashboardPage: React.FC = () => {
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Current Level</p>
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Current State</p>
               <h2 className="mt-1 text-xl font-bold text-slate-900">
-                {currentLevel ? `Level ${currentLevel.level}: ${currentLevel.name}` : 'Loading level...'}
+                {gamificationLoading ? 'Syncing progress...' : `${gamification?.points_total || 0} points synced`}
               </h2>
-              <p className="text-sm text-slate-500">{currentLevel?.ripple_range || 'Tracking your ripple growth'}</p>
+              <p className="text-sm text-slate-500">Your fish journey updates from this score automatically.</p>
             </div>
             <div className="rounded-xl bg-indigo-50 p-2 text-indigo-600">
               <SparklesIcon className="h-5 w-5" />
@@ -134,7 +131,7 @@ export const DashboardPage: React.FC = () => {
 
           <div className="mt-4">
             <div className="mb-1 flex items-center justify-between text-xs font-medium text-slate-500">
-              <span>{gamification?.points_total || 0} points collected</span>
+              <span>Milestone progress</span>
               <span>{Math.round(currentLevelProgress)}%</span>
             </div>
             <div className="h-2 rounded-full bg-slate-100 overflow-hidden">
@@ -143,11 +140,7 @@ export const DashboardPage: React.FC = () => {
                 style={{ width: `${Math.min(100, Math.max(0, currentLevelProgress))}%` }}
               />
             </div>
-            <p className="mt-2 text-xs text-slate-500">
-              {nextLevel
-                ? `Next stop: Level ${nextLevel.level} (${nextLevel.name})`
-                : 'You reached the top level. Keep the momentum going.'}
-            </p>
+            <p className="mt-2 text-xs text-slate-500">Keep completing items to grow your journey state.</p>
           </div>
         </section>
 

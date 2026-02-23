@@ -9,7 +9,6 @@ import { useToast } from '../../components/common';
 import api from '../../config/api';
 import { useGuidedTour } from '../../components/tour';
 import { teacherService } from '../../services/teacherService';
-import { BadgeShowcase } from '../../components/teacher/dashboard/BadgeShowcase';
 import { DailyQuestCard } from '../../components/teacher/dashboard/DailyQuestCard';
 import { FishEvolutionWidget } from '../../components/teacher/dashboard/FishEvolutionWidget';
 import {
@@ -454,13 +453,15 @@ export const ProfilePage: React.FC = () => {
                   </div>
                 ) : gamification ? (
                   <>
-                    <section className="rounded-xl border border-violet-100 bg-gradient-to-r from-violet-50 to-indigo-50 p-5">
-                      <p className="text-xs font-semibold uppercase tracking-wide text-violet-600">Current Level</p>
-                      <h2 className="mt-1 text-2xl font-bold text-slate-900">
-                        Level {gamification.badge_current.level}: {gamification.badge_current.name}
-                      </h2>
-                      <p className="text-sm text-slate-600">{gamification.badge_current.ripple_range}</p>
-                      <p className="mt-3 text-sm font-semibold text-violet-700">Total Ripples: {gamification.points_total}</p>
+                    <section className="rounded-xl border border-indigo-100 bg-gradient-to-r from-indigo-50 to-sky-50 p-5">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-indigo-600">Live Journey Sync</p>
+                      <h2 className="mt-1 text-2xl font-bold text-slate-900">Fish + Puddle State</h2>
+                      <p className="mt-2 text-sm text-slate-600">
+                        Points synced: <span className="font-semibold text-slate-800">{gamification.points_total}</span>
+                      </p>
+                      <p className="text-sm text-slate-500">
+                        Only your active state is highlighted. Other states stay muted until reached.
+                      </p>
                     </section>
 
                     <FishEvolutionWidget pointsTotal={gamification.points_total} />
@@ -470,8 +471,6 @@ export const ProfilePage: React.FC = () => {
                       claiming={claimQuestMutation.isPending}
                       onClaim={() => claimQuestMutation.mutate(gamification.quest.key)}
                     />
-
-                    <BadgeShowcase badges={gamification.badges} currentLevel={gamification.badge_current.level} />
                   </>
                 ) : (
                   <div className="rounded-xl border border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-600">

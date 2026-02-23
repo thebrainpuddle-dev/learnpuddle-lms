@@ -131,7 +131,7 @@ describe('App', () => {
     await waitFor(() => {
       expect(
         screen.getByRole('heading', {
-          name: /run every learning program from one operational system/i,
+          name: /the lms that runs your entire training operation/i,
         }),
       ).toBeInTheDocument();
     });
@@ -146,7 +146,7 @@ describe('App', () => {
     await waitFor(() => {
       expect(
         screen.getByRole('heading', {
-          name: /run every learning program from one operational system/i,
+          name: /the lms that runs your entire training operation/i,
         }),
       ).toBeInTheDocument();
     });

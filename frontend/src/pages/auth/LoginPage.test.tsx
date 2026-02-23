@@ -1,7 +1,7 @@
 // src/pages/auth/LoginPage.test.tsx
 
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { LoginPage } from './LoginPage';
@@ -119,9 +119,9 @@ describe('LoginPage', () => {
     it('should render forgot password link', () => {
       renderLoginPage();
 
-      const forgotLink = screen.getByText(/forgot password/i);
+      const forgotLink = screen.getByRole('link', { name: /forgot password/i });
       expect(forgotLink).toBeInTheDocument();
-      expect(forgotLink.closest('a')).toHaveAttribute('href', '/forgot-password');
+      expect(forgotLink).toHaveAttribute('href', '/forgot-password');
     });
   });
 
