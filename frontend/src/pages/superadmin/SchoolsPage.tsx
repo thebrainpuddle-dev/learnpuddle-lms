@@ -63,7 +63,7 @@ export const SchoolsPage: React.FC = () => {
   const platformDomain = (process.env.REACT_APP_PLATFORM_DOMAIN || 'learnpuddle.com').replace(':3000', '');
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5 sm:space-y-6">
       {/* Header */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
@@ -320,16 +320,16 @@ export const SchoolsPage: React.FC = () => {
 
             <div className="sticky bottom-0 -mx-4 bg-white px-4 pt-3 sm:static sm:mx-0 sm:px-0">
               <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-              <Button variant="outline" onClick={() => setShowOnboard(false)}>Cancel</Button>
-              <Button
-                variant="primary"
-                onClick={() => onboardMutation.mutate(onboardForm)}
-                loading={onboardMutation.isPending}
-                disabled={!onboardForm.school_name || !onboardForm.admin_email || !onboardForm.admin_password}
-              >
-                Onboard School
-              </Button>
-            </div>
+                <Button variant="outline" onClick={() => setShowOnboard(false)}>Cancel</Button>
+                <Button
+                  variant="primary"
+                  onClick={() => onboardMutation.mutate(onboardForm)}
+                  loading={onboardMutation.isPending}
+                  disabled={!onboardForm.school_name || !onboardForm.admin_email || !onboardForm.admin_password}
+                >
+                  Onboard School
+                </Button>
+              </div>
             </div>
           </div>
         </div>

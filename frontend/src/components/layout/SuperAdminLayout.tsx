@@ -1,11 +1,12 @@
 import React from 'react';
-import { Outlet } from 'react-router-dom';
+import { Outlet, useLocation } from 'react-router-dom';
 import { Bars3Icon } from '@heroicons/react/24/outline';
 import { SuperAdminSidebar } from './SuperAdminSidebar';
 import { useGuidedTour } from '../tour';
 
 export const SuperAdminLayout: React.FC = () => {
   const [sidebarOpen, setSidebarOpen] = React.useState(false);
+  const location = useLocation();
   const [isDesktop, setIsDesktop] = React.useState(() =>
     typeof window !== 'undefined' && typeof window.matchMedia === 'function'
       ? window.matchMedia('(min-width: 1024px)').matches
@@ -45,8 +46,15 @@ export const SuperAdminLayout: React.FC = () => {
     }
   }, [isDesktop, isTourActive]);
 
+  React.useEffect(() => {
+    if (!isDesktop && sidebarOpen) {
+      setSidebarOpen(false);
+    }
+    // close mobile sidebar whenever route changes
+  }, [isDesktop, location.pathname, sidebarOpen]);
+
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="min-h-screen overflow-x-hidden bg-slate-50">
       {!isDesktop && <SuperAdminSidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />}
 
       <div className="hidden lg:fixed lg:inset-y-0 lg:flex lg:w-64 lg:flex-col">
@@ -54,7 +62,7 @@ export const SuperAdminLayout: React.FC = () => {
       </div>
 
       <div className="flex min-h-screen min-w-0 flex-1 flex-col lg:pl-64">
-        <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-slate-200 bg-white/95 px-4 backdrop-blur lg:hidden">
+        <header className="sticky top-0 z-20 flex h-14 items-center justify-between border-b border-slate-200 bg-white/95 px-3 backdrop-blur sm:h-16 sm:px-4 lg:hidden">
           <button
             type="button"
             onClick={() => setSidebarOpen(true)}
@@ -68,7 +76,7 @@ export const SuperAdminLayout: React.FC = () => {
           <span className="w-10" />
         </header>
 
-        <main className="flex-1 min-w-0 px-4 py-4 sm:px-6 sm:py-6 lg:px-8">
+        <main className="min-w-0 flex-1 px-3 py-3 sm:px-6 sm:py-6 lg:px-8">
           <Outlet />
         </main>
       </div>

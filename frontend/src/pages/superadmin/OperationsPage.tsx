@@ -64,15 +64,15 @@ export const OperationsPage: React.FC = () => {
   });
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-6">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl">Operations</h1>
           <p className="mt-1 text-gray-500">Real-time tenant health, incidents, and pipeline quality.</p>
         </div>
-        <div className="rounded-lg border border-gray-200 bg-white px-4 py-3">
+        <div className="rounded-lg border border-gray-200 bg-white px-3 py-3 sm:px-4">
           <div className="text-xs uppercase tracking-wide text-gray-500">Pipeline Quality</div>
-          <div className="mt-2 flex items-center gap-2">
+          <div className="mt-2 flex flex-col items-start gap-2 sm:flex-row sm:items-center">
             <span className={`rounded-full px-2 py-1 text-xs font-medium ${qualityClasses[overview?.data_quality || 'stale']}`}>
               {overview?.data_quality || 'stale'}
             </span>
@@ -86,7 +86,7 @@ export const OperationsPage: React.FC = () => {
       {overviewLoading ? (
         <div className="rounded-xl border border-gray-200 bg-white p-6 text-sm text-gray-500">Loading operations summary...</div>
       ) : (
-        <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-5">
           <div className="rounded-xl border border-gray-200 bg-white p-4">
             <div className="text-xs uppercase text-gray-500">Tenants</div>
             <div className="mt-1 text-2xl font-semibold text-gray-900">{overview?.totals.tenants ?? 0}</div>
@@ -112,7 +112,7 @@ export const OperationsPage: React.FC = () => {
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
         <section className="rounded-xl border border-gray-200 bg-white">
-          <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3">
+          <div className="flex flex-col gap-1 border-b border-gray-100 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
             <h2 className="text-sm font-semibold text-gray-900">Open Incidents</h2>
             <span className="text-xs text-gray-500">{incidentsData?.results.length ?? 0} active</span>
           </div>
@@ -122,9 +122,9 @@ export const OperationsPage: React.FC = () => {
             ) : (
               incidentsData?.results.slice(0, 20).map((incident: OpsIncident) => (
                 <div key={incident.id} className="border-b border-gray-100 px-4 py-3">
-                  <div className="flex items-start justify-between gap-3">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                     <div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <span className={`rounded px-2 py-0.5 text-xs font-medium ${incident.severity === 'P1' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>
                           {incident.severity}
                         </span>
@@ -134,7 +134,7 @@ export const OperationsPage: React.FC = () => {
                         {incident.scope} {incident.tenant_name ? `| ${incident.tenant_name}` : ''} | {new Date(incident.started_at).toLocaleString()}
                       </div>
                     </div>
-                    <div className="flex gap-2">
+                    <div className="flex gap-2 self-start">
                       {incident.status === 'OPEN' && (
                         <button
                           type="button"
@@ -181,9 +181,9 @@ export const OperationsPage: React.FC = () => {
             ) : (
               tenantsData?.results.map((tenant: OpsTenantRow) => (
                 <div key={tenant.tenant_id} className="border-b border-gray-100 px-4 py-3">
-                  <div className="flex items-start justify-between gap-3">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                     <div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <span className="text-sm font-medium text-gray-900">{tenant.name}</span>
                         <span className={`rounded px-2 py-0.5 text-xs font-medium ${statusClasses[tenant.status] || 'bg-gray-100 text-gray-700'}`}>
                           {tenant.status}
@@ -199,7 +199,7 @@ export const OperationsPage: React.FC = () => {
                         {tenant.subdomain} | last check {tenant.last_check_at ? new Date(tenant.last_check_at).toLocaleTimeString() : 'n/a'} | latency {tenant.last_latency_ms ?? '-'}ms
                       </div>
                     </div>
-                    <div className="text-right text-xs text-gray-500">
+                    <div className="text-xs text-gray-500 sm:text-right">
                       <div>weekly failures</div>
                       <div className="font-semibold text-gray-800">
                         {Object.values(tenant.failures_week || {}).reduce((acc, value) => acc + value, 0)}

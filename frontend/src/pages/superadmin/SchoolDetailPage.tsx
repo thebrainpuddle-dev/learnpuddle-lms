@@ -179,8 +179,8 @@ export const SchoolDetailPage: React.FC = () => {
           <div className="space-y-4 sm:space-y-6">
             <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3 sm:p-6">
               <h2 className="font-semibold text-gray-900">School Info</h2>
-              <div className="text-sm"><span className="text-gray-500">Admin:</span> <span className="text-gray-900">{tenant.admin_name || '-'}</span></div>
-              <div className="text-sm"><span className="text-gray-500">Email:</span> <span className="text-gray-900">{tenant.admin_email || '-'}</span></div>
+              <div className="text-sm"><span className="text-gray-500">Admin:</span> <span className="break-words text-gray-900">{tenant.admin_name || '-'}</span></div>
+              <div className="text-sm"><span className="text-gray-500">Email:</span> <span className="break-all text-gray-900">{tenant.admin_email || '-'}</span></div>
               <div className="text-sm"><span className="text-gray-500">Created:</span> <span className="text-gray-900">{new Date(tenant.created_at).toLocaleDateString()}</span></div>
               <div className="text-sm"><span className="text-gray-500">Plan:</span> <span className="text-gray-900">{tenant.plan}</span></div>
               {tenant.is_trial && <div className="text-sm"><span className="text-gray-500">Trial ends:</span> <span className="text-gray-900">{tenant.trial_end_date || 'No date set'}</span></div>}
@@ -205,7 +205,7 @@ export const SchoolDetailPage: React.FC = () => {
             <h2 className="font-semibold text-gray-900 mb-3">Subscription Plan</h2>
             <div className="flex flex-wrap items-center gap-2 sm:gap-3">
               {PLAN_OPTIONS.map((p) => (
-                <button type="button" key={p} onClick={() => applyPlanMut.mutate(p)} className={`px-3 py-2 text-sm font-medium rounded-lg border transition-colors sm:px-4 ${tenant.plan === p ? 'bg-indigo-600 text-white border-indigo-600' : 'border-gray-200 text-gray-700 hover:border-indigo-300'}`}>
+                <button type="button" key={p} onClick={() => applyPlanMut.mutate(p)} className={`w-full px-3 py-2 text-sm font-medium rounded-lg border transition-colors sm:w-auto sm:px-4 ${tenant.plan === p ? 'bg-indigo-600 text-white border-indigo-600' : 'border-gray-200 text-gray-700 hover:border-indigo-300'}`}>
                   {p}
                 </button>
               ))}
@@ -240,7 +240,7 @@ export const SchoolDetailPage: React.FC = () => {
                 Is Trial
               </label>
               <label htmlFor="tenant-trial-end-date" className="sr-only">Trial end date</label>
-              <input id="tenant-trial-end-date" name="trial_end_date" type="date" defaultValue={tenant.trial_end_date || ''} onBlur={(e) => updateMut.mutate({ trial_end_date: e.target.value || null })} className="px-3 py-2 border border-gray-300 rounded-lg text-sm" />
+              <input id="tenant-trial-end-date" name="trial_end_date" type="date" defaultValue={tenant.trial_end_date || ''} onBlur={(e) => updateMut.mutate({ trial_end_date: e.target.value || null })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm sm:w-auto" />
             </div>
           </div>
 
@@ -263,8 +263,8 @@ export const SchoolDetailPage: React.FC = () => {
           <p className="text-sm text-gray-500 mb-6">Toggle features on/off for this school. Changes save immediately.</p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {FEATURE_FLAGS.map((f) => (
-              <label key={f.key} className="flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer">
-                <span className="text-sm font-medium text-gray-900">{f.label}</span>
+              <label key={f.key} className="flex items-center justify-between gap-3 p-4 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer">
+                <span className="min-w-0 text-sm font-medium text-gray-900">{f.label}</span>
                 <div className="relative">
                   <input
                     name={`feature_${f.key}`}

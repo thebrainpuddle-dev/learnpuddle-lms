@@ -118,7 +118,7 @@ export const SuperAdminSidebar: React.FC<SuperAdminSidebarProps> = ({ open, onCl
               leaveFrom="translate-x-0"
               leaveTo="-translate-x-full"
             >
-              <Dialog.Panel className="relative mr-16 flex w-full max-w-xs flex-1">
+              <Dialog.Panel className="relative mr-10 flex w-[85vw] max-w-xs flex-1 sm:mr-16">
                 <SidebarContent />
               </Dialog.Panel>
             </Transition.Child>

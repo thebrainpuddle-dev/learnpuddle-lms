@@ -36,7 +36,7 @@ export const SuperAdminDashboardPage: React.FC = () => {
   };
 
   return (
-    <div className="space-y-6 sm:space-y-8" data-tour="superadmin-dashboard-page">
+    <div className="space-y-5 sm:space-y-8" data-tour="superadmin-dashboard-page">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl">Platform Dashboard</h1>
@@ -112,13 +112,13 @@ export const SuperAdminDashboardPage: React.FC = () => {
                 <button
                   key={s.id}
                   onClick={() => navigate(`/super-admin/schools/${s.id}`)}
-                  className="w-full flex flex-col items-start gap-1 rounded-lg p-3 text-left hover:bg-gray-50 sm:flex-row sm:items-center sm:justify-between"
+                  className="flex w-full flex-col items-start gap-1 rounded-lg p-3 text-left hover:bg-gray-50 sm:flex-row sm:items-center sm:justify-between"
                 >
                   <div>
                     <p className="text-sm font-medium text-gray-900">{s.name}</p>
                     <p className="text-xs text-gray-500">{s.subdomain}.{(process.env.REACT_APP_PLATFORM_DOMAIN || 'learnpuddle.com').replace(':3000', '')}</p>
                   </div>
-                  <span className="text-xs text-gray-400">{new Date(s.created_at).toLocaleDateString()}</span>
+                  <span className="text-xs text-gray-400 sm:text-right">{new Date(s.created_at).toLocaleDateString()}</span>
                 </button>
               ))}
             </div>
