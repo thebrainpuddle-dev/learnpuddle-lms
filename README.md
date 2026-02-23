@@ -1,4 +1,4 @@
-# Brain LMS
+# LearnPuddle LMS
 
 A modern, multi-tenant Learning Management System built with Django and React.
 
@@ -217,6 +217,80 @@ REACT_APP_API_URL=http://localhost:8000/api
 - [ ] Set up static file serving (nginx/CDN)
 - [ ] Configure email backend for reminders
 - [ ] Set up media storage (S3/CDN)
+
+## CI/CD (GitHub Actions)
+
+Pipeline file: `/Users/rakeshreddy/LMS/.github/workflows/ci.yml`
+
+### Branch behavior
+- `develop` push:
+  - backend/frontend tests
+  - staging images build + push
+  - staging deploy over SSH
+- `main` push:
+  - backend/frontend tests
+  - production images build + push
+  - production deploy over SSH
+
+### Required GitHub secrets
+
+#### Production
+- `DEPLOY_HOST`
+- `DEPLOY_USER`
+- `DEPLOY_SSH_KEY`
+- `DEPLOY_PORT` (optional, defaults to `22`)
+
+#### Staging
+- `STAGING_HOST`
+- `STAGING_USER`
+- `STAGING_SSH_KEY`
+- `STAGING_PORT` (optional, defaults to `22`)
+
+### Deployment execution model
+Deploy jobs use native OpenSSH (not `appleboy/ssh-action`) for reliability:
+1. Start SSH agent with private key.
+2. Pin host key with `ssh-keyscan` into `~/.ssh/known_hosts`.
+3. Run remote deploy script via `ssh ... 'bash -se'`:
+   - `docker compose pull`
+   - start `db` + `redis`
+   - run `migrate`
+   - run `collectstatic`
+   - restart stack
+   - run origin health check script
+
+### Troubleshooting
+
+#### Error: `ssh: unexpected packet in response to channel open: <nil>`
+This commonly appears with `drone-ssh`/`appleboy/ssh-action` in some server + SSH configurations.
+
+Mitigation in this repo:
+- CI now uses native `ssh` from the runner with:
+  - `BatchMode=yes`
+  - `StrictHostKeyChecking=yes`
+  - `ServerAliveInterval=30`
+  - `ServerAliveCountMax=3`
+
+If deploy still fails:
+1. Verify host/user/key/port secrets.
+2. Confirm key format is valid OpenSSH private key.
+3. Validate server key exchange manually from a local terminal:
+   ```bash
+   ssh -p <PORT> <USER>@<HOST> "echo ok"
+   ```
+4. Check server auth and SSH daemon logs (`/var/log/auth.log`).
+5. Ensure no forced-login banner or shell startup script blocks non-interactive SSH commands.
+
+### Manual deploy (fallback)
+If CI deploy is blocked, run this on the target server:
+```bash
+cd /opt/lms
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d db redis
+docker compose -f docker-compose.prod.yml run --rm -T web python manage.py migrate --noinput
+docker compose -f docker-compose.prod.yml run --rm -T -u root web python manage.py collectstatic --noinput
+docker compose -f docker-compose.prod.yml up -d --remove-orphans
+./scripts/check-origin-health.sh docker-compose.prod.yml learnpuddle.com
+```
 
 ## Contributing
 

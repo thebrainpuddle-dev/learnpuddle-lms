@@ -199,28 +199,51 @@ jobs:
     runs-on: ubuntu-latest
     environment: staging
     steps:
-      - name: Deploy to Staging via SSH
-        uses: appleboy/ssh-action@v1
+      - name: Start SSH agent
+        uses: webfactory/ssh-agent@v0.9.0
         with:
-          host: ${{ secrets.STAGING_HOST }}
-          username: ${{ secrets.STAGING_USER }}
-          key: ${{ secrets.STAGING_SSH_KEY }}
-          script: |
-            cd /opt/lms-staging
-            DOMAIN="$(awk -F= '/^STAGING_DOMAIN=/{print $2}' .env.staging 2>/dev/null | tail -1 | tr -d '\r')"
-            if [ -z "$DOMAIN" ]; then DOMAIN="staging.learnpuddle.com"; fi
-            # Pull new staging images
-            docker compose -f docker-compose.staging.yml pull
-            # Run migrations
-            docker compose -f docker-compose.staging.yml up -d db redis
-            docker compose -f docker-compose.staging.yml run --rm -T web python manage.py migrate --noinput
-            docker compose -f docker-compose.staging.yml run --rm -T -u root web python manage.py collectstatic --noinput
-            # Restart all services
-            docker compose -f docker-compose.staging.yml up -d --remove-orphans
-            # Verify container + nginx origin health (auto-restarts nginx once on failure)
-            sleep 10
-            ./scripts/check-origin-health.sh docker-compose.staging.yml "$DOMAIN"
-            echo "Staging deployment complete!"
+          ssh-private-key: ${{ secrets.STAGING_SSH_KEY }}
+
+      - name: Add staging host key
+        env:
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+          STAGING_PORT: ${{ secrets.STAGING_PORT || '22' }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          ssh-keyscan -p "$STAGING_PORT" -H "$STAGING_HOST" >> ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Deploy to Staging via SSH
+        env:
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+          STAGING_USER: ${{ secrets.STAGING_USER }}
+          STAGING_PORT: ${{ secrets.STAGING_PORT || '22' }}
+        run: |
+          ssh \
+            -p "$STAGING_PORT" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=3 \
+            "$STAGING_USER@$STAGING_HOST" 'bash -se' <<'EOF'
+          set -euo pipefail
+          cd /opt/lms-staging
+          DOMAIN="$(awk -F= '/^STAGING_DOMAIN=/{print $2}' .env.staging 2>/dev/null | tail -1 | tr -d '\r')"
+          if [ -z "$DOMAIN" ]; then DOMAIN="staging.learnpuddle.com"; fi
+          # Pull new staging images
+          docker compose -f docker-compose.staging.yml pull
+          # Run migrations
+          docker compose -f docker-compose.staging.yml up -d db redis
+          docker compose -f docker-compose.staging.yml run --rm -T web python manage.py migrate --noinput
+          docker compose -f docker-compose.staging.yml run --rm -T -u root web python manage.py collectstatic --noinput
+          # Restart all services
+          docker compose -f docker-compose.staging.yml up -d --remove-orphans
+          # Verify container + nginx origin health (auto-restarts nginx once on failure)
+          sleep 10
+          ./scripts/check-origin-health.sh docker-compose.staging.yml "$DOMAIN"
+          echo "Staging deployment complete!"
+          EOF
 
   # ── Build & push Docker images (production - main branch) ────────────────
   docker-build:
@@ -263,25 +286,48 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     steps:
-      - name: Deploy to Production via SSH
-        uses: appleboy/ssh-action@v1
+      - name: Start SSH agent
+        uses: webfactory/ssh-agent@v0.9.0
         with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
-          script: |
-            cd /opt/lms
-            DOMAIN="$(awk -F= '/^PLATFORM_DOMAIN=/{print $2}' .env 2>/dev/null | tail -1 | tr -d '\r')"
-            if [ -z "$DOMAIN" ]; then DOMAIN="localhost"; fi
-            # Pull new images
-            docker compose -f docker-compose.prod.yml pull
-            # Run migrations BEFORE restarting app containers (prevents schema mismatch)
-            docker compose -f docker-compose.prod.yml up -d db redis
-            docker compose -f docker-compose.prod.yml run --rm -T web python manage.py migrate --noinput
-            docker compose -f docker-compose.prod.yml run --rm -T -u root web python manage.py collectstatic --noinput
-            # Now restart all services with new code (migrations already applied)
-            docker compose -f docker-compose.prod.yml up -d --remove-orphans
-            # Verify container + nginx origin health (auto-restarts nginx once on failure)
-            sleep 10
-            ./scripts/check-origin-health.sh docker-compose.prod.yml "$DOMAIN"
-            echo "Production deployment complete!"
+          ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
+
+      - name: Add production host key
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || '22' }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Deploy to Production via SSH
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || '22' }}
+        run: |
+          ssh \
+            -p "$DEPLOY_PORT" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=3 \
+            "$DEPLOY_USER@$DEPLOY_HOST" 'bash -se' <<'EOF'
+          set -euo pipefail
+          cd /opt/lms
+          DOMAIN="$(awk -F= '/^PLATFORM_DOMAIN=/{print $2}' .env 2>/dev/null | tail -1 | tr -d '\r')"
+          if [ -z "$DOMAIN" ]; then DOMAIN="localhost"; fi
+          # Pull new images
+          docker compose -f docker-compose.prod.yml pull
+          # Run migrations BEFORE restarting app containers (prevents schema mismatch)
+          docker compose -f docker-compose.prod.yml up -d db redis
+          docker compose -f docker-compose.prod.yml run --rm -T web python manage.py migrate --noinput
+          docker compose -f docker-compose.prod.yml run --rm -T -u root web python manage.py collectstatic --noinput
+          # Now restart all services with new code (migrations already applied)
+          docker compose -f docker-compose.prod.yml up -d --remove-orphans
+          # Verify container + nginx origin health (auto-restarts nginx once on failure)
+          sleep 10
+          ./scripts/check-origin-health.sh docker-compose.prod.yml "$DOMAIN"
+          echo "Production deployment complete!"
+          EOF
