@@ -393,8 +393,6 @@ def tenant_send_email(request, tenant_id):
     POST body: { "to": "optional@email.com", "subject": "...", "body": "..." }
     If `to` is omitted, sends to the tenant's active school admin.
     """
-    from django.core.mail import send_mail as _send_mail
-
     tenant = get_object_or_404(Tenant, id=tenant_id)
 
     to_email = (request.data.get("to") or "").strip()
@@ -413,20 +411,12 @@ def tenant_send_email(request, tenant_id):
         to_email = admin_user.email
 
     platform_name = getattr(settings, "PLATFORM_NAME", "LearnPuddle")
+    full_subject = f"[{platform_name}] {subject}"
 
-    try:
-        _send_mail(
-            subject=f"[{platform_name}] {subject}",
-            message=body,
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            recipient_list=[to_email],
-            fail_silently=False,
-        )
-    except Exception as exc:
-        logger.error("Custom email failed tenant=%s to=%s err=%s", tenant_id, to_email, exc)
-        return Response({"error": f"Email delivery failed: {exc}"}, status=status.HTTP_502_BAD_GATEWAY)
+    from apps.notifications.tasks import send_arbitrary_email
+    send_arbitrary_email.delay(to_email, full_subject, body, str(tenant_id))
 
-    logger.info("Custom email sent tenant=%s to=%s subject=%s by=%s", tenant_id, to_email, subject, request.user.email)
+    logger.info("Custom email queued tenant=%s to=%s subject=%s by=%s", tenant_id, to_email, subject, request.user.email)
     log_audit(
         "SEND_EMAIL", "Tenant",
         target_id=str(tenant_id),
