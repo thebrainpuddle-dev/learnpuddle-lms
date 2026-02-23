@@ -86,7 +86,7 @@ export const RemindersPage: React.FC = () => {
             For {user?.first_name} {user?.last_name}{theme.name ? ` at ${theme.name}` : ''}
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
           {dataUpdatedAt > 0 && (
             <span className="text-xs text-gray-400 hidden sm:inline">
               Updated {formatDistanceToNow(new Date(dataUpdatedAt), { addSuffix: true })}
@@ -97,7 +97,7 @@ export const RemindersPage: React.FC = () => {
               type="button"
               onClick={() => markAllReadMutation.mutate()}
               disabled={markAllReadMutation.isPending}
-              className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-lg transition-colors disabled:opacity-50"
+              className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700 transition-colors hover:bg-emerald-100 disabled:opacity-50 sm:w-auto"
             >
               <CheckIcon className="h-4 w-4" />
               Mark all read
@@ -107,7 +107,7 @@ export const RemindersPage: React.FC = () => {
             type="button"
             onClick={handleRefresh}
             disabled={refreshing || isLoading}
-            className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 hover:bg-gray-50 rounded-lg transition-colors disabled:opacity-50"
+            className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50 sm:w-auto"
           >
             <ArrowPathIcon className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
             Refresh
@@ -116,7 +116,10 @@ export const RemindersPage: React.FC = () => {
       </div>
 
       {/* Filter tabs */}
-      <div data-tour="teacher-reminders-filters" className="flex items-center gap-1 bg-gray-100 rounded-lg p-1 w-fit">
+      <div
+        data-tour="teacher-reminders-filters"
+        className="flex w-full items-center gap-1 overflow-x-auto rounded-lg bg-gray-100 p-1 sm:w-fit"
+      >
         {([
           { key: 'ALL' as Filter, label: 'All', count: reminders.length },
           { key: 'UNREAD' as Filter, label: 'Unread', count: unreadCount },
@@ -126,7 +129,7 @@ export const RemindersPage: React.FC = () => {
             key={tab.key}
             type="button"
             onClick={() => setFilter(tab.key)}
-            className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+            className={`whitespace-nowrap rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
               filter === tab.key
                 ? 'bg-white text-gray-900 shadow-sm'
                 : 'text-gray-500 hover:text-gray-700'
@@ -161,7 +164,7 @@ export const RemindersPage: React.FC = () => {
             {filtered.map((r) => (
               <div
                 key={r.id}
-                className={`flex items-start gap-4 px-6 py-4 hover:bg-gray-50 transition-colors ${
+                className={`flex flex-col gap-3 px-4 py-4 transition-colors hover:bg-gray-50 sm:flex-row sm:items-start sm:gap-4 sm:px-6 ${
                   !r.is_read ? 'bg-red-50/30' : ''
                 }`}
               >

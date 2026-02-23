@@ -1,11 +1,12 @@
 // src/components/layout/TeacherLayout.tsx
 
 import React from 'react';
-import { Outlet } from 'react-router-dom';
+import { Outlet, useLocation } from 'react-router-dom';
 import { TeacherSidebar } from './TeacherSidebar';
 import { TeacherHeader } from './TeacherHeader';
 
 export const TeacherLayout: React.FC = () => {
+  const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = React.useState(false);
   const [isDesktop, setIsDesktop] = React.useState(() =>
     typeof window !== 'undefined' && typeof window.matchMedia === 'function'
@@ -36,8 +37,14 @@ export const TeacherLayout: React.FC = () => {
     }
   }, [isDesktop, sidebarOpen]);
 
+  React.useEffect(() => {
+    if (!isDesktop && sidebarOpen) {
+      setSidebarOpen(false);
+    }
+  }, [location.pathname, isDesktop, sidebarOpen]);
+
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen overflow-x-hidden bg-gray-50">
       {/* Mobile sidebar */}
       {!isDesktop && <TeacherSidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />}
       
@@ -47,12 +54,12 @@ export const TeacherLayout: React.FC = () => {
       </div>
       
       {/* Main content */}
-      <div className="lg:pl-64 flex min-w-0 flex-1 flex-col">
+      <div className="flex min-w-0 flex-1 flex-col lg:pl-64">
         <TeacherHeader onMenuClick={() => setSidebarOpen(true)} />
         
         <main className="flex-1 min-w-0">
-          <div className="py-6">
-            <div className="mx-auto max-w-7xl px-4 sm:px-6 md:px-8">
+          <div className="py-4 sm:py-6">
+            <div className="mx-auto max-w-7xl px-3 sm:px-6 md:px-8">
               <Outlet />
             </div>
           </div>

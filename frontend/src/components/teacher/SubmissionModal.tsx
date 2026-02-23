@@ -76,29 +76,29 @@ export const SubmissionModal: React.FC<SubmissionModalProps> = ({
           leaveFrom="opacity-100"
           leaveTo="opacity-0"
         >
-          <div className="fixed inset-0 bg-black bg-opacity-25" />
+          <div className="fixed inset-0 bg-black/30" />
         </Transition.Child>
 
         <div className="fixed inset-0 overflow-y-auto">
-          <div className="flex min-h-full items-center justify-center p-4 text-center">
+          <div className="flex min-h-full items-end justify-center p-2 text-center sm:items-center sm:p-4">
             <Transition.Child
               as={Fragment}
               enter="ease-out duration-300"
-              enterFrom="opacity-0 scale-95"
-              enterTo="opacity-100 scale-100"
+              enterFrom="opacity-0 translate-y-3 sm:translate-y-0 sm:scale-95"
+              enterTo="opacity-100 translate-y-0 sm:scale-100"
               leave="ease-in duration-200"
-              leaveFrom="opacity-100 scale-100"
-              leaveTo="opacity-0 scale-95"
+              leaveFrom="opacity-100 translate-y-0 sm:scale-100"
+              leaveTo="opacity-0 translate-y-3 sm:translate-y-0 sm:scale-95"
             >
-              <Dialog.Panel className="w-full max-w-2xl transform overflow-hidden rounded-2xl bg-white p-6 text-left align-middle shadow-xl transition-all">
+              <Dialog.Panel className="w-full max-w-2xl transform overflow-hidden rounded-t-2xl bg-white p-4 text-left align-middle shadow-xl transition-all sm:rounded-2xl sm:p-6">
                 {/* Header */}
-                <div className="flex items-center justify-between mb-6">
-                  <div>
+                <div className="mb-6 flex items-start justify-between gap-4">
+                  <div className="min-w-0">
                     <Dialog.Title as="h3" className="text-lg font-semibold text-gray-900">
                       Submission Details
                     </Dialog.Title>
                     {assignmentTitle && (
-                      <p className="text-sm text-gray-500 mt-1">{assignmentTitle}</p>
+                      <p className="mt-1 truncate text-sm text-gray-500">{assignmentTitle}</p>
                     )}
                   </div>
                   <button
@@ -116,23 +116,25 @@ export const SubmissionModal: React.FC<SubmissionModalProps> = ({
                 ) : submission ? (
                   <div className="space-y-6">
                     {/* Status and Score */}
-                    <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-                      <div className="flex items-center gap-4">
+                    <div className="rounded-lg bg-gray-50 p-4">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
                         {getStatusBadge(submission.status)}
                         <span className="text-sm text-gray-500">
                           Submitted {formatDate(submission.submitted_at)}
                         </span>
                       </div>
-                      {submission.status === 'GRADED' && submission.score !== null && (
-                        <div className="text-right">
-                          <span className="text-2xl font-bold text-emerald-600">
-                            {submission.score}
-                          </span>
-                          {maxScore && (
-                            <span className="text-gray-500 text-lg">/{maxScore}</span>
-                          )}
-                        </div>
-                      )}
+                        {submission.status === 'GRADED' && submission.score !== null && (
+                          <div className="text-left sm:text-right">
+                            <span className="text-2xl font-bold text-emerald-600">
+                              {submission.score}
+                            </span>
+                            {maxScore && (
+                              <span className="text-gray-500 text-lg">/{maxScore}</span>
+                            )}
+                          </div>
+                        )}
+                      </div>
                     </div>
 
                     {/* Submission Text */}
@@ -204,7 +206,7 @@ export const SubmissionModal: React.FC<SubmissionModalProps> = ({
                   <button
                     type="button"
                     onClick={onClose}
-                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
+                    className="w-full rounded-lg bg-gray-100 px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-200 sm:w-auto"
                   >
                     Close
                   </button>

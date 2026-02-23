@@ -55,7 +55,7 @@ export const QuizPage: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <button onClick={() => navigate('/teacher/assignments')} className="inline-flex items-center text-sm text-gray-600 hover:text-gray-900">
           <ArrowLeftIcon className="h-4 w-4 mr-2" />
           Back to assignments
@@ -63,12 +63,12 @@ export const QuizPage: React.FC = () => {
         <div className="text-sm text-gray-600">Quiz</div>
       </div>
 
-      <div className="bg-white border border-gray-200 rounded-xl p-6 space-y-6">
+      <div className="space-y-6 rounded-xl border border-gray-200 bg-white p-4 sm:p-6">
         <h1 className="text-xl font-bold text-gray-900">Quiz</h1>
 
         {data.questions.map((q) => (
-          <div key={q.id} className="border border-gray-200 rounded-xl p-4">
-            <div className="flex items-start justify-between gap-4">
+          <div key={q.id} className="rounded-xl border border-gray-200 p-4">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
               <div>
                 <p className="text-sm text-gray-500 mb-1">
                   Q{q.order} • {
@@ -124,7 +124,7 @@ export const QuizPage: React.FC = () => {
                 })}
               </div>
             ) : q.question_type === 'TRUE_FALSE' ? (
-              <div className="mt-4 flex gap-3">
+              <div className="mt-4 flex flex-col gap-3 sm:flex-row">
                 {[true, false].map((choice) => (
                   <label key={String(choice)} className="inline-flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 cursor-pointer hover:bg-gray-50">
                     <input
@@ -153,7 +153,12 @@ export const QuizPage: React.FC = () => {
         ))}
 
         <div className="flex items-center justify-end">
-          <Button variant="primary" onClick={() => submitMutation.mutate()} loading={submitMutation.isPending}>
+          <Button
+            variant="primary"
+            className="w-full sm:w-auto"
+            onClick={() => submitMutation.mutate()}
+            loading={submitMutation.isPending}
+          >
             Submit quiz
           </Button>
         </div>

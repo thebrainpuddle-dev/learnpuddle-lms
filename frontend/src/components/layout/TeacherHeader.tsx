@@ -102,30 +102,30 @@ export const TeacherHeader: React.FC<TeacherHeaderProps> = ({ onMenuClick }) => 
   };
 
   return (
-    <div className="sticky top-0 z-10 flex h-16 flex-shrink-0 bg-white border-b border-gray-200 shadow-sm">
+    <div className="sticky top-0 z-10 flex h-14 flex-shrink-0 border-b border-gray-200 bg-white shadow-sm sm:h-16">
       {/* Mobile menu button */}
       <button
         type="button"
-        className="px-4 text-gray-500 focus:outline-none lg:hidden"
+        className="px-3 text-gray-500 focus:outline-none lg:hidden"
         onClick={onMenuClick}
       >
         <Bars3Icon className="h-6 w-6" />
       </button>
       
-      <div className="flex flex-1 justify-between px-4 sm:px-6 lg:px-8">
+      <div className="flex min-w-0 flex-1 justify-between px-3 sm:px-6 lg:px-8">
         {/* Search */}
-        <div className="flex flex-1 items-center max-w-lg">
+        <div className="flex min-w-0 flex-1 items-center max-w-lg">
           <SearchBar className="w-full" isAdmin={false} />
         </div>
         
         {/* Right side */}
-        <div className="ml-4 flex items-center md:ml-6 space-x-4">
+        <div className="ml-2 flex items-center gap-2 sm:ml-4 md:ml-6 sm:gap-3">
           {/* Notifications */}
           <div className="relative" ref={dropdownRef}>
             <button
               type="button"
               onClick={() => setDropdownOpen(!dropdownOpen)}
-              className="relative rounded-full bg-white p-2 text-gray-400 hover:text-gray-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2"
+              className="relative rounded-full bg-white p-1.5 text-gray-400 hover:text-gray-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 sm:p-2"
             >
               <BellIcon className="h-6 w-6" />
               {/* Notification badge */}
@@ -138,7 +138,7 @@ export const TeacherHeader: React.FC<TeacherHeaderProps> = ({ onMenuClick }) => 
 
             {/* Dropdown */}
             {dropdownOpen && (
-              <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-white rounded-xl shadow-lg border border-gray-200 z-50">
+              <div className="absolute right-0 mt-2 z-50 w-[calc(100vw-1rem)] max-w-sm rounded-xl border border-gray-200 bg-white shadow-lg sm:w-96 sm:max-w-none">
                 {/* Header */}
                 <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
                   <h3 className="text-sm font-semibold text-gray-900">Notifications</h3>

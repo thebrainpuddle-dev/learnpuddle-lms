@@ -54,7 +54,11 @@ export const CourseViewPage: React.FC = () => {
   const [expandedModules, setExpandedModules] = useState<string[]>([]);
   const [selectedContent, setSelectedContent] = useState<ContentItem | null>(null);
   const [selectedAssignment, setSelectedAssignment] = useState<TeacherAssignmentListItem | null>(null);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(() =>
+    typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      ? window.matchMedia('(min-width: 1024px)').matches
+      : true,
+  );
   const [showConfetti, setShowConfetti] = useState(false);
   const [showHonorCodeModal, setShowHonorCodeModal] = useState(false);
 
@@ -80,6 +84,20 @@ export const CourseViewPage: React.FC = () => {
   React.useEffect(() => {
     lastSavedRef.current = 0;
   }, [selectedContent?.id]);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
+    const media = window.matchMedia('(min-width: 1024px)');
+    const onChange = (event: MediaQueryListEvent) => {
+      if (event.matches) setSidebarOpen(true);
+    };
+    if (media.addEventListener) {
+      media.addEventListener('change', onChange);
+      return () => media.removeEventListener('change', onChange);
+    }
+    media.addListener(onChange);
+    return () => media.removeListener(onChange);
+  }, []);
 
   const { data: course, isLoading } = useQuery<TeacherCourseDetail>({
     queryKey: ['course', courseId],
@@ -209,11 +227,11 @@ export const CourseViewPage: React.FC = () => {
   }
 
   return (
-    <div className="flex flex-col h-[calc(100vh-8rem)]">
+    <div className="flex h-[calc(100dvh-6.5rem)] flex-col lg:h-[calc(100vh-8rem)]">
       <ConfettiBurst active={showConfetti} />
 
-      <div className="flex items-center justify-between pb-4 border-b border-gray-200">
-        <div className="flex items-center min-w-0">
+      <div className="flex flex-col gap-3 border-b border-gray-200 pb-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-w-0 items-center">
           <button
             onClick={() => navigate('/teacher/courses')}
             className="mr-3 p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg"
@@ -222,19 +240,19 @@ export const CourseViewPage: React.FC = () => {
             <ArrowLeftIcon className="h-5 w-5" />
           </button>
           <div className="min-w-0">
-            <h1 className="text-xl font-semibold text-gray-900 truncate">{course?.title}</h1>
-            <div className="flex items-center text-sm text-gray-500 mt-1">
+            <h1 className="truncate text-lg font-semibold text-gray-900 sm:text-xl">{course?.title}</h1>
+            <div className="mt-1 flex flex-wrap items-center text-sm text-gray-500">
               <span>
                 {course?.progress?.completed_content_count}/{course?.progress?.total_content_count} completed
               </span>
-              <span className="mx-2">•</span>
+              <span className="mx-2 hidden sm:inline">•</span>
               <span>{course?.progress?.percentage}% complete</span>
             </div>
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          <div className="hidden items-center gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2 lg:flex">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="hidden items-center gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2 md:flex">
             <CompletionRing value={course?.progress?.percentage || 0} size={44} stroke={5} tone="emerald" />
             <div>
               <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Completion</p>
@@ -309,7 +327,7 @@ export const CourseViewPage: React.FC = () => {
 
       <div className="relative mt-4 flex min-h-0 flex-1 overflow-hidden rounded-2xl border border-slate-200 bg-white">
         <aside
-          className={`absolute inset-y-0 left-0 z-20 w-[24rem] max-w-full border-r border-slate-200 bg-slate-50 transition-transform lg:static lg:translate-x-0 ${
+          className={`absolute inset-y-0 left-0 z-20 w-[88vw] border-r border-slate-200 bg-slate-50 transition-transform sm:w-96 lg:static lg:w-[24rem] lg:translate-x-0 ${
             sidebarOpen ? 'translate-x-0' : '-translate-x-full'
           }`}
         >
@@ -459,7 +477,7 @@ export const CourseViewPage: React.FC = () => {
 
         {sidebarOpen && <div className="absolute inset-0 z-10 bg-black/20 lg:hidden" onClick={() => setSidebarOpen(false)} />}
 
-        <main className="relative flex-1 overflow-y-auto bg-slate-50 p-4 lg:p-6">
+        <main className="relative flex-1 overflow-y-auto bg-slate-50 p-3 sm:p-4 lg:p-6">
           {selectedContent ? (
             <ContentPlayer
               content={{
@@ -492,11 +510,11 @@ export const CourseViewPage: React.FC = () => {
               nextItemLabel={nextUnlockedContent ? 'Go to next item' : nextPendingAssignment ? 'Go to assignment' : undefined}
             />
           ) : selectedAssignment ? (
-            <div className="rounded-xl border border-slate-200 bg-white p-8">
-              <div className="mb-6 flex items-start justify-between gap-4">
+            <div className="rounded-xl border border-slate-200 bg-white p-4 sm:p-6 lg:p-8">
+              <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                 <div>
-                  <h2 className="text-3xl font-semibold text-slate-900">{selectedAssignment.title}</h2>
-                  <p className="mt-4 max-w-3xl text-lg text-slate-700">
+                  <h2 className="text-2xl font-semibold text-slate-900 sm:text-3xl">{selectedAssignment.title}</h2>
+                  <p className="mt-3 max-w-3xl text-base text-slate-700 sm:mt-4 sm:text-lg">
                     {selectedAssignment.description || 'Complete the assignment to continue your learning path.'}
                   </p>
                 </div>
@@ -505,12 +523,12 @@ export const CourseViewPage: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setShowHonorCodeModal(true)}
-                className="inline-flex items-center rounded-lg bg-blue-600 px-6 py-3 text-base font-semibold text-white hover:bg-blue-700"
+                className="inline-flex w-full items-center justify-center rounded-lg bg-blue-600 px-6 py-3 text-base font-semibold text-white hover:bg-blue-700 sm:w-auto"
               >
                 Open Assignment
               </button>
 
-              <div className="mt-10 border-t border-slate-200 pt-5 flex items-center gap-8 text-blue-600">
+              <div className="mt-8 flex flex-wrap items-center gap-5 border-t border-slate-200 pt-5 text-blue-600 sm:mt-10 sm:gap-8">
                 <button type="button" className="inline-flex items-center gap-2 text-sm font-semibold">
                   <HandThumbUpIcon className="h-5 w-5" />
                   Like
@@ -532,10 +550,10 @@ export const CourseViewPage: React.FC = () => {
       </div>
 
       {showHonorCodeModal && selectedAssignment && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 px-4">
-          <div className="w-full max-w-2xl rounded-2xl bg-white p-8 shadow-2xl">
+        <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/40 p-2 sm:items-center sm:px-4">
+          <div className="w-full max-w-2xl rounded-t-2xl bg-white p-4 shadow-2xl sm:rounded-2xl sm:p-8">
             <div className="mb-4 flex items-start justify-between">
-              <h3 className="text-4xl font-semibold text-slate-900">Coursera Honor Code</h3>
+              <h3 className="text-2xl font-semibold text-slate-900 sm:text-4xl">Coursera Honor Code</h3>
               <button
                 type="button"
                 onClick={() => setShowHonorCodeModal(false)}
@@ -546,9 +564,9 @@ export const CourseViewPage: React.FC = () => {
               </button>
             </div>
 
-            <p className="text-2xl text-slate-800 mb-4">We protect integrity in submitted work.</p>
-            <p className="text-lg text-slate-700 mb-3">Before continuing, agree to these principles:</p>
-            <ul className="list-disc pl-6 text-lg text-slate-700 space-y-1">
+            <p className="mb-4 text-lg text-slate-800 sm:text-2xl">We protect integrity in submitted work.</p>
+            <p className="mb-3 text-base text-slate-700 sm:text-lg">Before continuing, agree to these principles:</p>
+            <ul className="list-disc space-y-1 pl-6 text-base text-slate-700 sm:text-lg">
               <li>Submit your own original work.</li>
               <li>Avoid sharing answers with others.</li>
               <li>Report suspected violations.</li>
@@ -558,7 +576,7 @@ export const CourseViewPage: React.FC = () => {
               <button
                 type="button"
                 onClick={handleContinueAssignment}
-                className="rounded-lg bg-blue-600 px-8 py-3 text-base font-semibold text-white hover:bg-blue-700"
+                className="w-full rounded-lg bg-blue-600 px-8 py-3 text-base font-semibold text-white hover:bg-blue-700 sm:w-auto"
               >
                 Continue
               </button>

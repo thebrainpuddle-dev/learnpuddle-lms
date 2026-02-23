@@ -57,8 +57,8 @@ export const TeacherCalendarFiveDay: React.FC<TeacherCalendarFiveDayProps> = ({
   const totalMinutes = endMinutes - startMinutes;
 
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="mb-4 flex items-center justify-between gap-2">
+    <section className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm sm:p-4">
+      <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <h3 className="text-lg font-semibold text-slate-900">5-Day Planner</h3>
         <p className="text-sm font-semibold text-indigo-600">
           {(selectedDay?.total_minutes || 0) > 0
@@ -67,7 +67,7 @@ export const TeacherCalendarFiveDay: React.FC<TeacherCalendarFiveDayProps> = ({
         </p>
       </div>
 
-      <div className="mb-4 flex items-center gap-2">
+      <div className="mb-4 flex items-start gap-2 sm:items-center">
         <button
           type="button"
           onClick={() => showDay(selectedIndex - 1)}
@@ -77,23 +77,25 @@ export const TeacherCalendarFiveDay: React.FC<TeacherCalendarFiveDayProps> = ({
         >
           ←
         </button>
-        <div className="grid flex-1 grid-cols-5 gap-2">
-          {days.map((day) => (
-            <button
-              type="button"
-              key={day.date}
-              onClick={() => setSelectedDate(day.date)}
-              className={`rounded-xl border p-2 text-left transition ${
-                selectedDate === day.date
-                  ? 'border-indigo-500 bg-indigo-600 text-white'
-                  : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
-              }`}
-            >
-              <p className="text-xl font-semibold leading-none">{day.day}</p>
-              <p className="text-xs">{day.short_weekday}</p>
-              <p className="mt-1 text-xs font-semibold">{day.task_count} tasks</p>
-            </button>
-          ))}
+        <div className="flex-1 overflow-x-auto">
+          <div className="flex min-w-max gap-2 sm:grid sm:min-w-0 sm:grid-cols-5">
+            {days.map((day) => (
+              <button
+                type="button"
+                key={day.date}
+                onClick={() => setSelectedDate(day.date)}
+                className={`min-w-[96px] rounded-xl border p-2 text-left transition sm:min-w-0 ${
+                  selectedDate === day.date
+                    ? 'border-indigo-500 bg-indigo-600 text-white'
+                    : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
+                }`}
+              >
+                <p className="text-xl font-semibold leading-none">{day.day}</p>
+                <p className="text-xs">{day.short_weekday}</p>
+                <p className="mt-1 text-xs font-semibold">{day.task_count} tasks</p>
+              </button>
+            ))}
+          </div>
         </div>
         <button
           type="button"
@@ -107,7 +109,7 @@ export const TeacherCalendarFiveDay: React.FC<TeacherCalendarFiveDayProps> = ({
       </div>
 
       <div className="overflow-x-auto">
-        <div className="relative min-w-[760px] rounded-xl border border-slate-200 bg-slate-50 p-3">
+        <div className="relative min-w-[700px] rounded-xl border border-slate-200 bg-slate-50 p-3">
           <div className="mb-2 grid grid-cols-14 text-xs font-medium text-slate-400">
             {Array.from({ length: 14 }).map((_, idx) => (
               <span key={idx}>{`${(7 + idx).toString().padStart(2, '0')}:00`}</span>

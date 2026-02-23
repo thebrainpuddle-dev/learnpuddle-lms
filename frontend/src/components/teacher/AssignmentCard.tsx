@@ -95,12 +95,12 @@ export const AssignmentCard: React.FC<AssignmentCardProps> = ({
     : null;
   
   return (
-    <div className={`rounded-xl p-6 border transition-all hover:shadow-md ${config.bg} ${config.border}`}>
+    <div className={`rounded-xl border p-4 transition-all hover:shadow-md sm:p-6 ${config.bg} ${config.border}`}>
       {/* Header */}
-      <div className="flex items-start justify-between mb-3">
-        <div className="flex-1">
+      <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex-1 min-w-0">
           <h3 className="font-semibold text-gray-900 mb-1">{title}</h3>
-          <p className="text-sm text-gray-500">{courseName}</p>
+          <p className="truncate text-sm text-gray-500">{courseName}</p>
         </div>
         <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${config.badge}`}>
           <StatusIcon className="h-3.5 w-3.5 mr-1" />
@@ -148,7 +148,7 @@ export const AssignmentCard: React.FC<AssignmentCardProps> = ({
       )}
       
       {/* Actions */}
-      <div className="flex items-center justify-between pt-3 border-t border-gray-200/50">
+      <div className="flex flex-col gap-3 border-t border-gray-200/50 pt-3 sm:flex-row sm:items-center sm:justify-between">
         <span className="text-sm text-gray-500">
           Max Score: {maxScore}
         </span>
@@ -156,7 +156,7 @@ export const AssignmentCard: React.FC<AssignmentCardProps> = ({
         {status === 'PENDING' && !isQuiz && (
           <button
             onClick={onSubmit}
-            className="px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700 transition-colors"
+            className="w-full rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-700 sm:w-auto"
           >
             Submit
           </button>
@@ -165,7 +165,7 @@ export const AssignmentCard: React.FC<AssignmentCardProps> = ({
         {status === 'PENDING' && isQuiz && (
           <button
             onClick={onStartQuiz}
-            className="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition-colors"
+            className="w-full rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-700 sm:w-auto"
           >
             Start Quiz
           </button>
@@ -174,7 +174,7 @@ export const AssignmentCard: React.FC<AssignmentCardProps> = ({
         {(status === 'SUBMITTED' || status === 'GRADED') && (
           <button
             onClick={onView}
-            className="px-4 py-2 bg-white text-gray-700 text-sm font-medium rounded-lg border border-gray-300 hover:bg-gray-50 transition-colors"
+            className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 sm:w-auto"
           >
             View Submission
           </button>

@@ -179,10 +179,10 @@ export const ContentPlayer: React.FC<ContentPlayerProps> = ({
           )}
         </div>
 
-        <div className="border-t border-slate-200 p-5">
-          <div className="flex items-start justify-between gap-4">
+        <div className="border-t border-slate-200 p-4 sm:p-5">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
             <div>
-              <h2 className="text-3xl font-semibold text-slate-900">{content.title}</h2>
+              <h2 className="text-2xl font-semibold text-slate-900 sm:text-3xl">{content.title}</h2>
               <p className="mt-1 text-sm text-slate-500">
                 {content.duration ? `Video • ${formatDuration(content.duration)}` : 'Video'}
               </p>
@@ -196,14 +196,14 @@ export const ContentPlayer: React.FC<ContentPlayerProps> = ({
           </div>
 
           <div className="mt-5 border-b border-slate-200 pb-2">
-            <div className="flex items-center gap-6 text-sm font-medium">
+            <div className="flex items-center gap-6 overflow-x-auto text-sm font-medium">
               <span className="border-b-2 border-slate-900 pb-2 text-slate-900">Transcript</span>
               <span className="pb-2 text-slate-400">Notes</span>
               <span className="pb-2 text-slate-400">Downloads</span>
             </div>
           </div>
 
-          <div className="mt-3 max-h-64 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-4">
+          <div className="mt-3 max-h-56 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-3 sm:max-h-64 sm:p-4">
             {transcriptLoading ? (
               <p className="text-sm text-slate-500">Loading transcript...</p>
             ) : transcriptError ? (
@@ -236,7 +236,7 @@ export const ContentPlayer: React.FC<ContentPlayerProps> = ({
             )}
           </div>
 
-          <div className="mt-4 flex items-center justify-between">
+          <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <button type="button" className="text-sm font-semibold text-blue-600 hover:text-blue-700">
               Save note
             </button>
@@ -261,13 +261,13 @@ export const ContentPlayer: React.FC<ContentPlayerProps> = ({
 
   return (
     <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-      <div className="p-8">
-        <div className="mb-6 flex items-start justify-between gap-4">
-          <div className="flex items-center gap-4">
+      <div className="p-4 sm:p-6 lg:p-8">
+        <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="flex items-center gap-3 sm:gap-4">
             <div className="rounded-xl bg-blue-50 p-3">{readingIcon}</div>
             <div>
               <p className="text-sm font-semibold text-blue-600">{readingLabel}</p>
-              <h2 className="text-4xl font-semibold text-slate-900">{content.title}</h2>
+              <h2 className="text-2xl font-semibold text-slate-900 sm:text-3xl lg:text-4xl">{content.title}</h2>
             </div>
           </div>
           {isCompleted && (
@@ -278,7 +278,7 @@ export const ContentPlayer: React.FC<ContentPlayerProps> = ({
           )}
         </div>
 
-        <div className="max-w-4xl text-lg leading-8 text-slate-700">
+        <div className="max-w-4xl text-base leading-7 text-slate-700 sm:text-lg sm:leading-8">
           {content.text_content ? (
             <div
               className="prose prose-lg max-w-none prose-slate"

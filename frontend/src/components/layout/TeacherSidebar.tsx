@@ -76,7 +76,7 @@ export const TeacherSidebar: React.FC<TeacherSidebarProps> = ({ open, onClose })
     <div data-tour="teacher-sidebar" className="flex flex-col h-full bg-gradient-to-b from-slate-900 to-slate-800">
       {/* Logo */}
       <div className="flex items-center justify-between h-16 px-6 border-b border-slate-700">
-        <div className="flex items-center">
+        <div className="flex min-w-0 items-center">
           {theme.logo ? (
             <img
               src={theme.logo}
@@ -88,7 +88,7 @@ export const TeacherSidebar: React.FC<TeacherSidebarProps> = ({ open, onClose })
               <BookOpenIcon className="h-5 w-5 text-white" />
             </div>
           )}
-          <span className="ml-3 text-lg font-semibold text-white">
+          <span className="ml-3 truncate text-lg font-semibold text-white">
             {theme.name}
           </span>
         </div>
@@ -112,11 +112,11 @@ export const TeacherSidebar: React.FC<TeacherSidebarProps> = ({ open, onClose })
               </span>
             </div>
           </div>
-          <div className="ml-3">
-            <p className="text-sm font-medium text-white">
+          <div className="ml-3 min-w-0">
+            <p className="truncate text-sm font-medium text-white">
               {user?.first_name} {user?.last_name}
             </p>
-            <p className="text-xs text-slate-400">{user?.role?.replace('_', ' ')}</p>
+            <p className="truncate text-xs text-slate-400">{user?.role?.replace('_', ' ')}</p>
           </div>
         </div>
       </div>
@@ -199,7 +199,7 @@ export const TeacherSidebar: React.FC<TeacherSidebarProps> = ({ open, onClose })
               leaveFrom="translate-x-0"
               leaveTo="-translate-x-full"
             >
-              <Dialog.Panel className="relative mr-16 flex w-full max-w-xs flex-1">
+              <Dialog.Panel className="relative mr-16 flex w-[85vw] max-w-xs flex-1">
                 <SidebarContent />
               </Dialog.Panel>
             </Transition.Child>

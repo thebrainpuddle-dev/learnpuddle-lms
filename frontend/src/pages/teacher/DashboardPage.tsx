@@ -105,7 +105,7 @@ export const DashboardPage: React.FC = () => {
         {continueCourse && (
           <Button
             variant="primary"
-            className="bg-emerald-600 hover:bg-emerald-700"
+            className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700"
             onClick={() => navigate(`/teacher/courses/${continueCourse.course_id}`)}
           >
             <PlayIcon className="h-4 w-4 mr-2" />
@@ -151,7 +151,7 @@ export const DashboardPage: React.FC = () => {
           </h2>
           <p className="text-sm text-slate-500">Small daily steps beat big rushed days.</p>
 
-          <div className="mt-4 grid grid-cols-3 gap-3 text-center">
+          <div className="mt-4 grid grid-cols-1 gap-3 text-center sm:grid-cols-3">
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
               <p className="text-lg font-bold text-slate-900">{dashboard?.stats.pending_assignments || 0}</p>
               <p className="text-xs text-slate-500">Pending work</p>
@@ -228,10 +228,10 @@ export const DashboardPage: React.FC = () => {
                         e.stopPropagation();
                         markReadMutation.mutate(item.id);
                       }}
-                      className="flex-shrink-0 mt-0.5 h-5 w-5 rounded-md border-2 border-gray-300 hover:border-emerald-500 hover:bg-emerald-50 flex items-center justify-center transition-colors"
+                      className="mt-0.5 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-md border-2 border-gray-300 transition-colors hover:border-emerald-500 hover:bg-emerald-50"
                       title="Mark as done"
                     >
-                      <CheckIcon className="h-3 w-3 text-transparent hover:text-emerald-500" />
+                      <CheckIcon className="h-3 w-3 text-gray-300 hover:text-emerald-500" />
                     </button>
                     <button
                       type="button"
@@ -255,12 +255,12 @@ export const DashboardPage: React.FC = () => {
         </div>
       </div>
 
-      <section className="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
-        <div className="flex items-center justify-between mb-4">
+      <section className="bg-white rounded-xl border border-gray-100 p-4 shadow-sm sm:p-6">
+        <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <h2 className="text-lg font-semibold text-gray-900">Continue Learning</h2>
           <button
             onClick={() => navigate('/teacher/courses')}
-            className="text-sm text-emerald-600 hover:text-emerald-700 flex items-center"
+            className="inline-flex items-center text-sm text-emerald-600 hover:text-emerald-700"
           >
             Open courses
             <ArrowRightIcon className="h-4 w-4 ml-1" />
@@ -277,8 +277,8 @@ export const DashboardPage: React.FC = () => {
               <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_50%,white_1px,transparent_1px)] bg-[size:20px_20px]" />
             </div>
 
-            <div className="relative flex items-center">
-              <div className="flex-shrink-0 mr-6">
+            <div className="relative flex flex-col gap-4 sm:flex-row sm:items-center">
+              <div className="flex-shrink-0 sm:mr-6">
                 <div className="h-20 w-20 bg-emerald-500/20 rounded-xl flex items-center justify-center group-hover:bg-emerald-500/30 transition-colors">
                   <PlayCircleIcon className="h-10 w-10 text-emerald-400" />
                 </div>

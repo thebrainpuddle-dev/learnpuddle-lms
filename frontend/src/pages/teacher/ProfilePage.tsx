@@ -210,7 +210,7 @@ export const ProfilePage: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Profile Settings</h1>
           <p className="mt-1 text-gray-500">Manage your account settings, preferences, and growth milestones</p>
@@ -218,6 +218,7 @@ export const ProfilePage: React.FC = () => {
         <Button
           type="button"
           variant="outline"
+          className="w-full sm:w-auto"
           onClick={startTour}
           data-tour="teacher-profile-tour-replay"
         >
@@ -255,19 +256,19 @@ export const ProfilePage: React.FC = () => {
               )}
             </div>
 
-            <nav data-tour="teacher-profile-sections" className="p-2">
+            <nav data-tour="teacher-profile-sections" className="flex gap-1 overflow-x-auto p-2 lg:block lg:space-y-1">
               {sections.map((section) => (
                 <button
                   key={section.id}
                   onClick={() => setActiveSection(section.id as ProfileSection)}
-                  className={`w-full flex items-center px-4 py-3 rounded-lg text-sm font-medium transition-colors ${
+                  className={`flex flex-shrink-0 items-center rounded-lg px-4 py-3 text-sm font-medium transition-colors lg:w-full ${
                     activeSection === section.id
                       ? 'bg-emerald-50 text-emerald-700'
                       : 'text-gray-600 hover:bg-gray-50'
                   }`}
                 >
                   <section.icon className="h-5 w-5 mr-3" />
-                  {section.label}
+                  <span className="whitespace-nowrap">{section.label}</span>
                 </button>
               ))}
             </nav>
@@ -275,7 +276,7 @@ export const ProfilePage: React.FC = () => {
         </div>
 
         <div className="flex-1">
-          <div className="bg-white rounded-xl border border-gray-100 p-6">
+          <div className="rounded-xl border border-gray-100 bg-white p-4 sm:p-6">
             {activeSection === 'profile' && (
               <form data-tour="teacher-profile-form" onSubmit={handleProfileSubmit}>
                 <h2 className="text-lg font-semibold text-gray-900 mb-6">Profile Information</h2>
@@ -387,7 +388,7 @@ export const ProfilePage: React.FC = () => {
                 </div>
 
                 <div className="mt-6 flex justify-end">
-                  <Button type="submit" loading={isSaving} className="bg-emerald-600 hover:bg-emerald-700">
+                  <Button type="submit" loading={isSaving} className="w-full bg-emerald-600 hover:bg-emerald-700 sm:w-auto">
                     Save Changes
                   </Button>
                 </div>
@@ -403,7 +404,7 @@ export const ProfilePage: React.FC = () => {
                   <Input label="Confirm New Password" type="password" value={passwordForm.confirm_password} onChange={(e) => setPasswordForm({ ...passwordForm, confirm_password: e.target.value })} leftIcon={<KeyIcon className="h-5 w-5" />} required />
                 </div>
                 <div className="mt-6 flex justify-end">
-                  <Button type="submit" loading={isSaving} className="bg-emerald-600 hover:bg-emerald-700">Update Password</Button>
+                  <Button type="submit" loading={isSaving} className="w-full bg-emerald-600 hover:bg-emerald-700 sm:w-auto">Update Password</Button>
                 </div>
               </form>
             )}
@@ -418,7 +419,7 @@ export const ProfilePage: React.FC = () => {
                     { key: 'email_deadline_alerts', title: 'Deadline Alerts', desc: 'Get alerts before deadlines approach' },
                     { key: 'browser_notifications', title: 'Browser Notifications', desc: 'Enable desktop push notifications' },
                   ].map((item) => (
-                    <div key={item.key} className="flex items-center justify-between py-3 border-b border-gray-100 last:border-0">
+                    <div key={item.key} className="flex flex-col gap-3 border-b border-gray-100 py-3 sm:flex-row sm:items-center sm:justify-between last:border-0">
                       <div>
                         <p className="font-medium text-gray-900">{item.title}</p>
                         <p className="text-sm text-gray-500">{item.desc}</p>
@@ -436,7 +437,7 @@ export const ProfilePage: React.FC = () => {
                   ))}
                 </div>
                 <div className="mt-6 flex justify-end">
-                  <Button onClick={handleNotificationsSave} loading={isSaving} className="bg-emerald-600 hover:bg-emerald-700">
+                  <Button onClick={handleNotificationsSave} loading={isSaving} className="w-full bg-emerald-600 hover:bg-emerald-700 sm:w-auto">
                     Save Preferences
                   </Button>
                 </div>
