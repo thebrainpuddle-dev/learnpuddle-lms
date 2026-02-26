@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button, Input, useToast, ConfirmDialog } from '../../components/common';
 import { BulkActionsBar, BulkAction } from '../../components/common/BulkActionsBar';
-import { adminTeachersService, type TeacherInvitation } from '../../services/adminTeachersService';
+import { adminTeachersService } from '../../services/adminTeachersService';
 import { useTenantStore } from '../../stores/tenantStore';
 import {
   MagnifyingGlassIcon,
@@ -294,19 +294,21 @@ export const TeachersPage: React.FC = () => {
         </>
       )}
 
-      {activeTab === 'teachers' && (<div data-tour="admin-teachers-search" className="card">
-        <Input
-          id="teachers-search"
-          name="teachers_search"
-          autoComplete="off"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search by name or email"
-          leftIcon={<MagnifyingGlassIcon className="h-5 w-5" />}
-        />
-      </div>
+      {activeTab === 'teachers' && (
+        <>
+          <div data-tour="admin-teachers-search" className="card">
+            <Input
+              id="teachers-search"
+              name="teachers_search"
+              autoComplete="off"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search by name or email"
+              leftIcon={<MagnifyingGlassIcon className="h-5 w-5" />}
+            />
+          </div>
 
-      <div data-tour="admin-teachers-table" className="hidden md:block card overflow-x-auto">
+          <div data-tour="admin-teachers-table" className="hidden md:block card overflow-x-auto">
         <table className="min-w-full text-sm">
           <thead className="text-left text-gray-500">
             <tr>
@@ -377,7 +379,7 @@ export const TeachersPage: React.FC = () => {
         </table>
       </div>
 
-      <div className="md:hidden space-y-3">
+          <div className="md:hidden space-y-3">
         {isLoading ? (
           <div className="card text-sm text-gray-500">Loading...</div>
         ) : rows.length === 0 ? (
@@ -426,15 +428,16 @@ export const TeachersPage: React.FC = () => {
         )}
       </div>
 
-      {/* Bulk Actions Bar */}
-      <BulkActionsBar
-        selectedCount={selectedIds.size}
-        actions={bulkActions}
-        onAction={handleBulkAction}
-        onClearSelection={clearSelection}
-        isLoading={bulkActionMut.isPending}
-      />
-      </>)}
+          {/* Bulk Actions Bar */}
+          <BulkActionsBar
+            selectedCount={selectedIds.size}
+            actions={bulkActions}
+            onAction={handleBulkAction}
+            onClearSelection={clearSelection}
+            isLoading={bulkActionMut.isPending}
+          />
+        </>
+      )}
 
       {/* Edit modal */}
       {editingTeacher && (
