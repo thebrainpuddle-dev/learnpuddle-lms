@@ -13,7 +13,7 @@ from utils.tenant_utils import get_tenant_from_request
 from utils.tenant_middleware import TenantMiddleware, get_current_tenant, set_current_tenant, clear_current_tenant
 
 
-@override_settings(ALLOWED_HOSTS=['*'])
+@override_settings(ALLOWED_HOSTS=['*'], PLATFORM_DOMAIN='lms.com')
 class TenantUtilsTestCase(TestCase):
     def setUp(self):
         self.factory = RequestFactory()
@@ -291,7 +291,7 @@ class TenantThemeViewHostTestCase(TestCase):
         self.assertEqual(response.data.get('name'), 'LearnPuddle')
 
 
-@override_settings(ALLOWED_HOSTS=['test.lms.com', 'testserver', 'localhost'])
+@override_settings(ALLOWED_HOSTS=['test.lms.com', 'testserver', 'localhost'], PLATFORM_DOMAIN='lms.com')
 class TenantConfigViewTestCase(TestCase):
     def setUp(self):
         self.client = APIClient()

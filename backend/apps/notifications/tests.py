@@ -12,7 +12,7 @@ from apps.notifications.services import notify_reminder
 from apps.notifications.tasks import send_notification_email
 
 
-@override_settings(ALLOWED_HOSTS=["test.lms.com", "testserver", "localhost"])
+@override_settings(ALLOWED_HOSTS=["test.lms.com", "testserver", "localhost"], PLATFORM_DOMAIN="lms.com")
 class NotificationViewTestCase(TestCase):
     def setUp(self):
         self.client = APIClient()
@@ -97,7 +97,7 @@ class NotificationViewTestCase(TestCase):
         self.assertEqual(resp.status_code, 404)
 
 
-@override_settings(ALLOWED_HOSTS=["test.lms.com", "testserver", "localhost"])
+@override_settings(ALLOWED_HOSTS=["test.lms.com", "testserver", "localhost"], PLATFORM_DOMAIN="lms.com")
 class NotificationDeliveryRulesTestCase(TestCase):
     def setUp(self):
         self.tenant = Tenant.objects.create(

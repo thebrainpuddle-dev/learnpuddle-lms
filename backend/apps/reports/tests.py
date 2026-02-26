@@ -10,7 +10,7 @@ from apps.courses.models import Content, Course, Module
 from apps.progress.models import TeacherProgress
 
 
-@override_settings(ALLOWED_HOSTS=["test.lms.com", "testserver", "localhost"])
+@override_settings(ALLOWED_HOSTS=["test.lms.com", "testserver", "localhost"], PLATFORM_DOMAIN="lms.com")
 class ReportsViewTestCase(TestCase):
     def setUp(self):
         self.client = APIClient()

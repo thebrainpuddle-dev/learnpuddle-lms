@@ -14,7 +14,7 @@ from apps.reminders.models import ReminderCampaign
 from apps.reminders.services import run_automated_course_deadline_reminders
 
 
-@override_settings(ALLOWED_HOSTS=["test.lms.com", "testserver", "localhost"])
+@override_settings(ALLOWED_HOSTS=["test.lms.com", "testserver", "localhost"], PLATFORM_DOMAIN="lms.com")
 class ReminderViewTestCase(TestCase):
     def setUp(self):
         self.client = APIClient()

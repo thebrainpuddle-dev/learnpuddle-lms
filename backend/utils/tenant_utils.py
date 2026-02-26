@@ -43,8 +43,6 @@ def get_tenant_from_request(request):
             raise PermissionDenied(f"Tenant '{subdomain}' not found or inactive")
 
     platform_domain = getattr(settings, "PLATFORM_DOMAIN", "").strip().lower().rstrip(".")
-    if platform_domain in {"", "localhost", "127.0.0.1"}:
-        platform_domain = "lms.com"
     if platform_domain and host in {platform_domain, f"www.{platform_domain}"}:
         return None
 

@@ -8,7 +8,7 @@ from apps.tenants.models import Tenant
 from apps.users.models import User
 
 
-@override_settings(ALLOWED_HOSTS=["test.lms.com", "testserver", "localhost"])
+@override_settings(ALLOWED_HOSTS=["test.lms.com", "testserver", "localhost"], PLATFORM_DOMAIN="lms.com")
 class UploadValidationTestCase(TestCase):
     """Tests for file upload type and size validation."""
 
