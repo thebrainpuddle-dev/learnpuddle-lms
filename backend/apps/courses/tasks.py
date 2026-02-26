@@ -917,14 +917,16 @@ def _notify_new_assignments(course, assignments: list[Assignment]):
         return
 
     for a in assignments:
+        deadline_info = f" Due: {a.due_date.strftime('%B %d, %Y')}." if a.due_date else ""
         create_bulk_notifications(
             tenant=course.tenant,
             teachers=teacher_list,
-            notification_type="SYSTEM",
+            notification_type="ASSIGNMENT_DUE",
             title=f"New assignment: {a.title}",
-            message=f"A new assignment was generated for the course '{course.title}'.",
+            message=f"A new assignment is available in '{course.title}'.{deadline_info}",
             course=course,
             assignment=a,
+            send_email=True,
         )
 
 

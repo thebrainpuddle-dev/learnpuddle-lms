@@ -14,6 +14,7 @@ from .serializers import (
     ChangePasswordSerializer
 )
 from .tokens import get_tokens_for_user
+from apps.notifications.email_utils import build_tenant_url, build_bucket_headers
 from utils.decorators import admin_only, tenant_required, check_tenant_limit
 from utils.audit import log_audit
 
@@ -55,6 +56,24 @@ def login_view(request):
     serializer.is_valid(raise_exception=True)
     
     user = serializer.validated_data['user']
+    portal = serializer.validated_data.get('portal', 'tenant')
+
+    if portal == 'tenant':
+        request_tenant = getattr(request, 'tenant', None)
+        if request_tenant is None:
+            host = request.get_host().split(':')[0].lower()
+            # DRF/Django tests often use "testserver" as host unless overridden.
+            if host != 'testserver':
+                return Response(
+                    {'error': 'Tenant context required for this login portal'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+        else:
+            if user.role != 'SUPER_ADMIN' and user.tenant_id != request_tenant.id:
+                return Response(
+                    {'error': 'Invalid credentials for this school portal'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
     
     # Check if 2FA is required
     from django_otp.plugins.otp_totp.models import TOTPDevice
@@ -252,24 +271,17 @@ def register_teacher_view(request):
 
 def _send_verification_email(user, request=None):
     """Send email verification link to a newly created user."""
-    from django.utils.http import urlsafe_base64_encode
-    from django.utils.encoding import force_bytes
-    from django.core.mail import send_mail
+    from django.core.mail import EmailMessage
     from django.conf import settings
-    from utils.email_verification import email_verification_token
+    from utils.email_verification import build_email_verification_payload
 
-    uid = urlsafe_base64_encode(force_bytes(user.pk))
-    token = email_verification_token.make_token(user)
-    domain = getattr(settings, 'PLATFORM_DOMAIN', 'lms.com')
-    scheme = 'https' if not settings.DEBUG else 'http'
-    port = ':3000' if settings.DEBUG else ''
-    subdomain = user.tenant.subdomain if user.tenant else ''
-    base = f"{scheme}://{subdomain + '.' if subdomain else ''}{domain}{port}"
-    verify_link = f"{base}/verify-email?uid={uid}&token={token}"
+    payload = build_email_verification_payload(user)
+    base = build_tenant_url(tenant=user.tenant, path="/verify-email")
+    verify_link = f"{base}?uid={payload['uid']}&token={payload['token']}"
 
-    send_mail(
+    message = EmailMessage(
         subject=f"Welcome to {getattr(settings, 'PLATFORM_NAME', 'LearnPuddle')} — Verify your email",
-        message=(
+        body=(
             f"Hi {user.first_name},\n\n"
             f"Your account has been created. Please verify your email address by clicking the link below:\n\n"
             f"  {verify_link}\n\n"
@@ -277,9 +289,15 @@ def _send_verification_email(user, request=None):
             f"If you didn't expect this, you can safely ignore this email."
         ),
         from_email=settings.DEFAULT_FROM_EMAIL,
-        recipient_list=[user.email],
-        fail_silently=True,
+        to=[user.email],
+        headers=build_bucket_headers(
+            tenant=user.tenant,
+            bucket="security",
+            template_name="plain_text",
+            event="email_verification",
+        ),
     )
+    message.send(fail_silently=True)
 
 
 @api_view(['POST'])
@@ -325,7 +343,7 @@ def request_password_reset_view(request):
     from django.contrib.auth.tokens import default_token_generator
     from django.utils.http import urlsafe_base64_encode
     from django.utils.encoding import force_bytes
-    from django.core.mail import send_mail
+    from django.core.mail import EmailMessage
     from django.conf import settings
     from .models import User
 
@@ -344,16 +362,11 @@ def request_password_reset_view(request):
 
     uid = urlsafe_base64_encode(force_bytes(user.pk))
     token = default_token_generator.make_token(user)
-    domain = getattr(settings, 'PLATFORM_DOMAIN', 'lms.com')
-    scheme = 'https' if not settings.DEBUG else 'http'
-    port = ':3000' if settings.DEBUG else ''
-    subdomain = user.tenant.subdomain if user.tenant else ''
-    base = f"{scheme}://{subdomain + '.' if subdomain else ''}{domain}{port}"
-    reset_link = f"{base}/reset-password?uid={uid}&token={token}"
+    reset_link = f"{build_tenant_url(tenant=user.tenant, path='/reset-password')}?uid={uid}&token={token}"
 
-    send_mail(
+    message = EmailMessage(
         subject=f"Password reset — {getattr(settings, 'PLATFORM_NAME', 'LearnPuddle')}",
-        message=(
+        body=(
             f"Hi {user.first_name},\n\n"
             f"Click the link below to reset your password:\n\n"
             f"  {reset_link}\n\n"
@@ -361,9 +374,15 @@ def request_password_reset_view(request):
             f"If you didn't request this, you can safely ignore this email."
         ),
         from_email=settings.DEFAULT_FROM_EMAIL,
-        recipient_list=[user.email],
-        fail_silently=True,
+        to=[user.email],
+        headers=build_bucket_headers(
+            tenant=user.tenant,
+            bucket="security",
+            template_name="plain_text",
+            event="password_reset",
+        ),
     )
+    message.send(fail_silently=True)
 
     return Response({'message': 'Password reset email sent if account exists'})
 

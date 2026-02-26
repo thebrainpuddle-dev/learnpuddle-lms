@@ -134,6 +134,18 @@ def create_bulk_notifications(
     """
     is_actionable = notification_type in ACTIONABLE_TYPES
 
+    safe_teachers = []
+    for teacher in teachers:
+        if getattr(teacher, "tenant_id", None) != tenant.id:
+            logger.warning(
+                "Blocked cross-tenant bulk notification: teacher=%s teacher_tenant=%s target_tenant=%s",
+                getattr(teacher, "id", None),
+                getattr(teacher, "tenant_id", None),
+                tenant.id,
+            )
+            continue
+        safe_teachers.append(teacher)
+
     notifications = [
         Notification(
             tenant=tenant,
@@ -145,8 +157,10 @@ def create_bulk_notifications(
             assignment=assignment,
             is_actionable=is_actionable,
         )
-        for teacher in teachers
+        for teacher in safe_teachers
     ]
+    if not notifications:
+        return []
     created = Notification.objects.bulk_create(notifications)
     
     # Send real-time notifications and optionally queue emails
@@ -203,5 +217,5 @@ def notify_reminder(tenant, teachers, subject, message, course=None, assignment=
         message=message,
         course=course,
         assignment=assignment,
-        send_email=True,
+        send_email=False,
     )

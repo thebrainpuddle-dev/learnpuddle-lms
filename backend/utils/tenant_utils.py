@@ -6,56 +6,67 @@ from django.core.exceptions import PermissionDenied
 from apps.tenants.models import Tenant
 
 
+def _normalize_host(request) -> str:
+    host = request.get_host().split(":")[0].strip().lower()
+    return host.rstrip(".")
+
+
+def _extract_platform_subdomain(host: str, platform_domain: str) -> str | None:
+    suffix = f".{platform_domain}"
+    if not host.endswith(suffix):
+        return None
+    subdomain = host[: -len(suffix)]
+    if not subdomain or "." in subdomain or subdomain == "www":
+        return None
+    return subdomain
+
+
 def get_tenant_from_request(request):
     """
-    Extract tenant from request based on subdomain or custom domain.
-    
-    Lookup order:
-    1. Platform root (learnpuddle.com) -> None (command center, signup)
-    2. Custom domain (e.g., lms.school.edu)
-    3. Subdomain (e.g., school.learnpuddle.com)
-    4. Development fallback (localhost -> demo)
-    
-    Examples:
-    - learnpuddle.com -> None (platform root)
-    - lms.school.edu -> custom_domain='lms.school.edu'
-    - school.learnpuddle.com -> subdomain='school'
-    - localhost:8000 -> subdomain='demo' (development)
+    Resolve tenant only from known-safe host shapes.
+
+    Allowed host patterns:
+    1. Platform root (learnpuddle.com / www.learnpuddle.com) -> None
+    2. localhost/127.0.0.1 -> demo tenant (dev fallback)
+    3. Verified custom domain (exact match)
+    4. Single-label subdomain under PLATFORM_DOMAIN (school.learnpuddle.com)
     """
-    host = request.get_host().split(':')[0].lower()  # Remove port, lowercase
+    host = _normalize_host(request)
+    if not host:
+        raise PermissionDenied("Invalid host header")
 
-    # Development mode - use demo tenant
-    if host in ['localhost', '127.0.0.1']:
-        subdomain = 'demo'
-    else:
-        # Platform root — no tenant (command center, signup, marketing)
-        # Treat both apex and www host as platform-level.
-        platform_domain = getattr(settings, 'PLATFORM_DOMAIN', '').lower()
-        if platform_domain and host in {platform_domain, f"www.{platform_domain}"}:
-            return None
-
-        # First, try to match a custom domain
+    if host in {"localhost", "127.0.0.1"}:
+        subdomain = "demo"
         try:
-            tenant = Tenant.objects.get(
-                custom_domain=host,
-                custom_domain_verified=True,
-                is_active=True
-            )
-            return tenant
+            return Tenant.objects.get(subdomain=subdomain, is_active=True)
         except Tenant.DoesNotExist:
-            pass
-        
-        # Fall back to subdomain matching
-        parts = host.split('.')
-        if len(parts) < 2:
-            raise PermissionDenied("Invalid domain")
-        subdomain = parts[0]
-    
-    try:
-        tenant = Tenant.objects.get(subdomain=subdomain, is_active=True)
+            raise PermissionDenied(f"Tenant '{subdomain}' not found or inactive")
+
+    platform_domain = getattr(settings, "PLATFORM_DOMAIN", "").strip().lower().rstrip(".")
+    if platform_domain in {"", "localhost", "127.0.0.1"}:
+        platform_domain = "lms.com"
+    if platform_domain and host in {platform_domain, f"www.{platform_domain}"}:
+        return None
+
+    tenant = Tenant.objects.filter(
+        custom_domain=host,
+        custom_domain_verified=True,
+        is_active=True,
+    ).first()
+    if tenant:
         return tenant
-    except Tenant.DoesNotExist:
-        raise PermissionDenied(f"Tenant '{subdomain}' not found or inactive")
+
+    if platform_domain:
+        subdomain = _extract_platform_subdomain(host, platform_domain)
+        if subdomain:
+            try:
+                return Tenant.objects.get(subdomain=subdomain, is_active=True)
+            except Tenant.DoesNotExist:
+                raise PermissionDenied(f"Tenant '{subdomain}' not found or inactive")
+        if host.endswith(f".{platform_domain}"):
+            raise PermissionDenied("Invalid platform host")
+
+    raise PermissionDenied("Unknown host")
 
 
 def get_current_tenant():

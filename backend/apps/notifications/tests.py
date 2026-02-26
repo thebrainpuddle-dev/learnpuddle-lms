@@ -1,11 +1,15 @@
 # apps/notifications/tests.py
 
+from unittest.mock import patch
+
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
 from apps.tenants.models import Tenant
 from apps.users.models import User
 from apps.notifications.models import Notification
+from apps.notifications.services import notify_reminder
+from apps.notifications.tasks import send_notification_email
 
 
 @override_settings(ALLOWED_HOSTS=["test.lms.com", "testserver", "localhost"])
@@ -91,3 +95,63 @@ class NotificationViewTestCase(TestCase):
         import uuid
         resp = self._post_req(f"/api/notifications/{uuid.uuid4()}/read/")
         self.assertEqual(resp.status_code, 404)
+
+
+@override_settings(ALLOWED_HOSTS=["test.lms.com", "testserver", "localhost"])
+class NotificationDeliveryRulesTestCase(TestCase):
+    def setUp(self):
+        self.tenant = Tenant.objects.create(
+            name="Notify School", slug="notify-school", subdomain="notify", email="n@t.com", is_active=True
+        )
+        self.teacher = User.objects.create_user(
+            email="teacher@notify.com",
+            password="testpass123",
+            first_name="Notify",
+            last_name="Teacher",
+            tenant=self.tenant,
+            role="TEACHER",
+        )
+
+    @override_settings(REMINDER_EMAIL_ENABLED=True, COURSE_ASSIGNMENT_EMAIL_ENABLED=True)
+    @patch("apps.notifications.tasks.send_templated_email")
+    def test_course_assignment_respects_email_courses_preference(self, mocked_send):
+        self.teacher.notification_preferences = {"email_courses": False}
+        self.teacher.save(update_fields=["notification_preferences"])
+        notification = Notification.objects.create(
+            tenant=self.tenant,
+            teacher=self.teacher,
+            notification_type="COURSE_ASSIGNED",
+            title="New Course",
+            message="Assigned",
+        )
+        result = send_notification_email(str(notification.id))
+
+        self.assertEqual(result.get("reason"), "user_preference")
+        mocked_send.assert_not_called()
+
+    @patch("apps.notifications.services._queue_email")
+    def test_notify_reminder_does_not_queue_notification_email(self, mocked_queue):
+        created = notify_reminder(
+            tenant=self.tenant,
+            teachers=[self.teacher],
+            subject="Reminder",
+            message="Reminder message",
+        )
+
+        self.assertEqual(len(created), 1)
+        mocked_queue.assert_not_called()
+
+    @override_settings(REMINDER_EMAIL_ENABLED=False)
+    @patch("apps.notifications.tasks.send_templated_email")
+    def test_assignment_due_not_blocked_by_reminder_toggle(self, mocked_send):
+        notification = Notification.objects.create(
+            tenant=self.tenant,
+            teacher=self.teacher,
+            notification_type="ASSIGNMENT_DUE",
+            title="Assignment Due",
+            message="Please submit",
+        )
+        result = send_notification_email(str(notification.id))
+
+        self.assertTrue(result.get("sent"))
+        mocked_send.assert_called_once()

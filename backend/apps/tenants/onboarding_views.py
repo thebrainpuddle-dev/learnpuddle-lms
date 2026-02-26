@@ -12,9 +12,7 @@ Allows new schools to:
 import logging
 from datetime import timedelta
 from django.conf import settings
-from django.core.mail import send_mail
 from django.db import transaction
-from django.template.loader import render_to_string
 from django.utils import timezone
 from django.utils.text import slugify
 from django.views.decorators.csrf import csrf_exempt
@@ -25,6 +23,7 @@ from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from .models import Tenant
 from .services import PLAN_PRESETS, apply_plan_preset
+from apps.notifications.email_utils import build_tenant_url, build_bucket_headers
 
 
 class SignupThrottle(ScopedRateThrottle):
@@ -166,7 +165,7 @@ def tenant_signup(request):
                 'tenant_id': str(tenant.id),
                 'subdomain': tenant.subdomain,
                 'message': 'Account created! Please check your email to verify your account.',
-                'login_url': f"https://{tenant.subdomain}.{settings.PLATFORM_DOMAIN}/login",
+                'login_url': build_tenant_url(tenant=tenant, path="/login"),
             }, status=status.HTTP_201_CREATED)
             
     except Exception as e:
@@ -179,13 +178,14 @@ def tenant_signup(request):
 
 def send_verification_email(user, tenant):
     """Send email verification link to new admin."""
-    from utils.email_verification import generate_verification_token
+    from utils.email_verification import build_email_verification_payload
+    from django.core.mail import EmailMessage
     
     try:
-        token = generate_verification_token(user)
+        payload = build_email_verification_payload(user)
         verification_url = (
-            f"https://{tenant.subdomain}.{settings.PLATFORM_DOMAIN}"
-            f"/verify-email?token={token}"
+            f"{build_tenant_url(tenant=tenant, path='/verify-email')}"
+            f"?uid={payload['uid']}&token={payload['token']}"
         )
         
         subject = f"Verify your {settings.PLATFORM_NAME} account"
@@ -200,19 +200,25 @@ Your school "{tenant.name}" has been created. Please verify your email to activa
 
 This link will expire in 24 hours.
 
-Your login URL: https://{tenant.subdomain}.{settings.PLATFORM_DOMAIN}/login
+Your login URL: {build_tenant_url(tenant=tenant, path='/login')}
 
 Best regards,
 The {settings.PLATFORM_NAME} Team
         """
         
-        send_mail(
+        email = EmailMessage(
             subject=subject,
-            message=message,
+            body=message,
             from_email=settings.DEFAULT_FROM_EMAIL,
-            recipient_list=[user.email],
-            fail_silently=True,
+            to=[user.email],
+            headers=build_bucket_headers(
+                tenant=tenant,
+                bucket="onboarding",
+                template_name="plain_text",
+                event="onboarding_verification",
+            ),
         )
+        email.send(fail_silently=True)
     except Exception as e:
         logger.error(f"Failed to send verification email: {e}")
 

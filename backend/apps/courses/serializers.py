@@ -283,14 +283,23 @@ class CourseDetailSerializer(serializers.ModelSerializer):
         
         # Notify newly assigned teachers (only if course is published)
         if course.is_published:
-            self._notify_assigned_teachers(course, tenant, set(), assigned_groups, assigned_teachers)
+            if course.assigned_to_all:
+                self._notify_assigned_to_all(course, tenant, already_assigned_ids=set())
+            else:
+                self._notify_assigned_teachers(
+                    course,
+                    tenant,
+                    old_teacher_ids=set(),
+                    new_groups=assigned_groups,
+                    new_teachers=assigned_teachers,
+                    old_group_ids=set(),
+                )
         
         return course
 
     def update(self, instance, validated_data):
         assigned_groups = validated_data.pop('assigned_groups', None)
         assigned_teachers = validated_data.pop('assigned_teachers', None)
-        assigned_to_all = validated_data.get('assigned_to_all', instance.assigned_to_all)
         was_published = instance.is_published
         
         # Track current assignments before update
@@ -314,19 +323,79 @@ class CourseDetailSerializer(serializers.ModelSerializer):
         if instance.is_published:
             request = self.context.get('request')
             tenant = request.tenant if request else instance.tenant
-            
-            new_group_ids = set(instance.assigned_groups.values_list('id', flat=True)) if assigned_groups is not None else old_group_ids
-            new_teacher_ids = set(instance.assigned_teachers.values_list('id', flat=True)) if assigned_teachers is not None else old_teacher_ids
-            
-            self._notify_assigned_teachers(
-                instance, tenant, 
-                old_teacher_ids if not old_assigned_to_all else set(),
-                list(instance.assigned_groups.all()) if assigned_groups is not None else [],
-                list(instance.assigned_teachers.all()) if assigned_teachers is not None else [],
-                old_group_ids if not old_assigned_to_all else set(),
-            )
+
+            # Course was just published: notify all currently assigned users.
+            if not was_published:
+                if instance.assigned_to_all:
+                    self._notify_assigned_to_all(instance, tenant, already_assigned_ids=set())
+                else:
+                    self._notify_assigned_teachers(
+                        instance,
+                        tenant,
+                        old_teacher_ids=set(),
+                        new_groups=list(instance.assigned_groups.all()),
+                        new_teachers=list(instance.assigned_teachers.all()),
+                        old_group_ids=set(),
+                    )
+                return instance
+
+            # Already-published course switched from scoped assignments to "all".
+            if (not old_assigned_to_all) and instance.assigned_to_all:
+                old_assigned_ids = self._all_assigned_teacher_ids(
+                    tenant=tenant,
+                    direct_teacher_ids=old_teacher_ids,
+                    group_ids=old_group_ids,
+                )
+                self._notify_assigned_to_all(
+                    instance,
+                    tenant,
+                    already_assigned_ids=old_assigned_ids,
+                )
+                return instance
+
+            # Keep scoped assignment notifications only when remaining scoped.
+            # Do not blast on true->true or true->false transitions.
+            if not old_assigned_to_all and not instance.assigned_to_all:
+                self._notify_assigned_teachers(
+                    instance,
+                    tenant,
+                    old_teacher_ids=old_teacher_ids,
+                    new_groups=list(instance.assigned_groups.all()) if assigned_groups is not None else [],
+                    new_teachers=list(instance.assigned_teachers.all()) if assigned_teachers is not None else [],
+                    old_group_ids=old_group_ids,
+                )
         
         return instance
+
+    def _eligible_teacher_queryset(self, tenant):
+        return User.objects.filter(
+            tenant=tenant,
+            role__in=['TEACHER', 'HOD', 'IB_COORDINATOR'],
+            is_active=True,
+        )
+
+    def _group_teacher_ids(self, tenant, group_ids):
+        if not group_ids:
+            return set()
+        return set(
+            self._eligible_teacher_queryset(tenant)
+            .filter(teacher_groups__id__in=group_ids)
+            .values_list('id', flat=True)
+        )
+
+    def _all_assigned_teacher_ids(self, tenant, direct_teacher_ids, group_ids):
+        return set(direct_teacher_ids or set()) | self._group_teacher_ids(tenant, group_ids or set())
+
+    def _notify_assigned_to_all(self, course, tenant, already_assigned_ids):
+        from apps.notifications.services import notify_course_assigned
+
+        teacher_qs = self._eligible_teacher_queryset(tenant)
+        if already_assigned_ids:
+            teacher_qs = teacher_qs.exclude(id__in=already_assigned_ids)
+
+        newly_assigned = list(teacher_qs.distinct())
+        if newly_assigned:
+            notify_course_assigned(tenant, newly_assigned, course)
 
     def _notify_assigned_teachers(self, course, tenant, old_teacher_ids, new_groups, new_teachers, old_group_ids=None):
         """
@@ -352,15 +421,7 @@ class CourseDetailSerializer(serializers.ModelSerializer):
         # Calculate teachers in old groups
         old_teachers_from_groups = set()
         if old_group_ids:
-            from .models import TeacherGroup
-            for group in TeacherGroup.objects.filter(id__in=old_group_ids):
-                old_teachers_from_groups.update(
-                    group.members.filter(
-                        tenant=tenant,
-                        role__in=['TEACHER', 'HOD', 'IB_COORDINATOR'],
-                        is_active=True
-                    ).values_list('id', flat=True)
-                )
+            old_teachers_from_groups = self._group_teacher_ids(tenant, old_group_ids)
         
         # All old assignments
         all_old = old_teacher_ids | old_teachers_from_groups

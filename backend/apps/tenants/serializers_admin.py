@@ -18,11 +18,26 @@ class TenantSettingsSerializer(serializers.ModelSerializer):
             "primary_color",
             "secondary_color",
             "font_family",
+            "notification_from_name",
+            "notification_reply_to",
+            "email_bucket_prefix",
             "is_active",
             "is_trial",
             "trial_end_date",
         ]
         read_only_fields = ["id", "subdomain", "logo_url"]
+
+    def validate_notification_from_name(self, value: str) -> str:
+        return (value or "").strip()
+
+    def validate_notification_reply_to(self, value: str) -> str:
+        return (value or "").strip().lower()
+
+    def validate_email_bucket_prefix(self, value: str) -> str:
+        normalized = (value or "").strip().lower()
+        if normalized and not normalized.replace("-", "").replace("_", "").isalnum():
+            raise serializers.ValidationError("Use only letters, numbers, hyphens, or underscores.")
+        return normalized
 
     def get_logo_url(self, obj: Tenant):
         if not obj.logo:
@@ -38,4 +53,3 @@ class TenantSettingsSerializer(serializers.ModelSerializer):
         except Exception:
             return None
         return request.build_absolute_uri(url) if request else url
-

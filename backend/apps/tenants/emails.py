@@ -8,7 +8,7 @@ import logging
 
 from django.conf import settings
 
-from apps.notifications.email_utils import send_templated_email, build_login_url
+from apps.notifications.email_utils import send_templated_email, build_tenant_url, build_bucket_headers
 
 logger = logging.getLogger(__name__)
 
@@ -24,8 +24,7 @@ def send_onboard_welcome_email(result: dict) -> None:
 
     tenant = result["tenant"]
     admin = result["admin"]
-    subdomain = tenant.subdomain
-    login_url = build_login_url(subdomain)
+    login_url = build_tenant_url(tenant=tenant, path="/login")
     platform_name = getattr(settings, "PLATFORM_NAME", "LearnPuddle")
 
     subject = f"Welcome to {platform_name} — Your school is ready!"
@@ -45,6 +44,7 @@ def send_onboard_welcome_email(result: dict) -> None:
             subject=subject,
             template_name="admin_welcome.html",
             context=context,
+            headers=build_bucket_headers(tenant, "onboarding", "admin_welcome.html", "admin_welcome"),
             fail_silently=fail_silently,
         )
         logger.info(
@@ -66,7 +66,7 @@ def send_trial_expiry_warning_email(tenant, days_left: int) -> None:
     if not admin:
         return
 
-    login_url = build_login_url(tenant.subdomain)
+    login_url = build_tenant_url(tenant=tenant, path="/login")
     platform_name = getattr(settings, "PLATFORM_NAME", "LearnPuddle")
 
     subject = f"Your trial expires in {days_left} day{'s' if days_left != 1 else ''}"
@@ -86,6 +86,7 @@ def send_trial_expiry_warning_email(tenant, days_left: int) -> None:
             subject=subject,
             template_name="trial_expiry.html",
             context=context,
+            headers=build_bucket_headers(tenant, "onboarding", "trial_expiry.html", "trial_expiry"),
             fail_silently=fail_silently,
         )
         logger.info(

@@ -6,7 +6,6 @@ from datetime import date as date_cls
 from typing import Iterable
 
 from django.conf import settings
-from django.core.mail import send_mail
 from django.db import models
 from django.utils import timezone
 
@@ -15,6 +14,14 @@ from apps.progress.models import Assignment, AssignmentSubmission
 from apps.progress.completion_metrics import get_completed_teacher_ids_for_course
 from apps.tenants.models import Tenant
 from apps.users.models import User
+
+from apps.notifications.email_utils import (
+    send_templated_email,
+    build_tenant_url,
+    build_school_sender_email,
+    build_tenant_reply_to,
+    build_bucket_headers,
+)
 
 from .models import ReminderCampaign, ReminderDelivery
 
@@ -145,7 +152,9 @@ def _teacher_allows_reminder_email(teacher: User) -> bool:
 
 def _send_campaign_emails(campaign: ReminderCampaign, recipients: Iterable[User]) -> DispatchResult:
     email_sending_enabled = getattr(settings, "REMINDER_EMAIL_ENABLED", False)
-    from_email = getattr(settings, "DEFAULT_FROM_EMAIL", None) or f"no-reply@{getattr(settings, 'PLATFORM_DOMAIN', 'localhost')}"
+    from_email = build_school_sender_email(campaign.tenant)
+    reply_to = build_tenant_reply_to(campaign.tenant)
+    bucket = "reminder_automated" if campaign.source == "AUTOMATED" else "reminder_manual"
 
     sent = 0
     failed = 0
@@ -156,11 +165,26 @@ def _send_campaign_emails(campaign: ReminderCampaign, recipients: Iterable[User]
 
             if should_send_email:
                 try:
-                    send_mail(
+                    send_templated_email(
+                        to_email=teacher.email,
                         subject=campaign.subject,
-                        message=campaign.message,
+                        template_name="notification.html",
+                        context={
+                            "first_name": teacher.first_name or "there",
+                            "notification_title": campaign.subject,
+                            "notification_message": campaign.message,
+                            "school_name": campaign.tenant.name if campaign.tenant else "your organization",
+                            "action_url": build_tenant_url(campaign.tenant, "/dashboard"),
+                            "action_text": "Go to Dashboard",
+                        },
                         from_email=from_email,
-                        recipient_list=[teacher.email],
+                        reply_to=reply_to,
+                        headers=build_bucket_headers(
+                            tenant=campaign.tenant,
+                            bucket=bucket,
+                            template_name="notification.html",
+                            event=f"reminder_{campaign.reminder_type.lower()}_{campaign.source.lower()}",
+                        ),
                         fail_silently=True,
                     )
                 except Exception as exc:

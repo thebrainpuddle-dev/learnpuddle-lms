@@ -106,7 +106,7 @@ Your DNS shows **two A records** for `learnpuddle.com`:
 |-------|-------|---------------|
 | **1. DNS (Cloudflare)** | Cloudflare → DNS → Records | `@` and `*` A records point `learnpuddle.com` and `*.learnpuddle.com` to your Droplet IP. All traffic for root + subdomains goes to the same server. |
 | **2. Nginx** | `nginx/nginx.conf` | `server_name _` accepts any Host. Forwards requests to Django with `Host` header intact. No per-domain config. |
-| **3. Django** | `.env` → `PLATFORM_DOMAIN` | `ALLOWED_HOSTS=.learnpuddle.com,learnpuddle.com` validates the Host. `tenant_utils.py` resolves tenant from subdomain. |
+| **3. Django** | `.env` → `PLATFORM_DOMAIN` | `ALLOWED_HOSTS=*` is acceptable only because `tenant_utils.py` now enforces strict host allowlisting (platform domain + verified custom domains). |
 | **4. Tenant resolution** | `backend/utils/tenant_utils.py` | `learnpuddle.com` → platform root (no tenant). `school.learnpuddle.com` → Tenant(subdomain='school'). |
 
 **Flow:** User visits `https://demo.learnpuddle.com` → Cloudflare resolves to Droplet IP → Nginx receives request → Django gets `Host: demo.learnpuddle.com` → tenant_utils extracts `demo` → loads Tenant(subdomain='demo').

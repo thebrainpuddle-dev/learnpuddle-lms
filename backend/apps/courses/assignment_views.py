@@ -5,6 +5,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from django.db import transaction
+from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.utils.dateparse import parse_date, parse_datetime
 from django.utils import timezone
@@ -17,6 +18,7 @@ from apps.courses.models import Content, Course, Module
 from apps.courses.tasks import compile_assignment_source_text, _generate_quiz_questions_with_meta
 from apps.courses.video_models import VideoTranscript
 from apps.progress.models import Assignment, Quiz, QuizQuestion
+from apps.users.models import User
 from utils.decorators import admin_only, tenant_required
 
 
@@ -293,6 +295,41 @@ def _replace_quiz_questions(assignment: Assignment, questions: list[dict[str, An
         )
 
 
+def _course_assigned_teachers(course: Course):
+    teachers = User.objects.filter(
+        tenant=course.tenant,
+        role__in=["TEACHER", "HOD", "IB_COORDINATOR"],
+        is_active=True,
+    )
+    if not course.assigned_to_all:
+        group_ids = course.assigned_groups.values_list("id", flat=True)
+        teacher_ids = course.assigned_teachers.values_list("id", flat=True)
+        teachers = teachers.filter(Q(id__in=teacher_ids) | Q(teacher_groups__in=group_ids)).distinct()
+    return list(teachers)
+
+
+def _notify_assignment_created(course: Course, assignment: Assignment):
+    from apps.notifications.services import create_bulk_notifications
+
+    teachers = _course_assigned_teachers(course)
+    if not teachers:
+        return
+
+    deadline_info = ""
+    if assignment.due_date:
+        deadline_info = f" Due: {assignment.due_date.strftime('%B %d, %Y')}."
+    create_bulk_notifications(
+        tenant=course.tenant,
+        teachers=teachers,
+        notification_type="ASSIGNMENT_DUE",
+        title=f"New assignment: {assignment.title}",
+        message=f"A new assignment is available in '{course.title}'.{deadline_info}",
+        course=course,
+        assignment=assignment,
+        send_email=True,
+    )
+
+
 @api_view(["GET", "POST"])
 @permission_classes([IsAuthenticated])
 @admin_only
@@ -354,6 +391,9 @@ def assignment_list_create(request, course_id):
             )
             if assignment_type == "QUIZ":
                 _replace_quiz_questions(assignment, questions, is_auto_generated=False)
+
+        if assignment.is_active:
+            _notify_assignment_created(course, assignment)
 
         assignment = Assignment.objects.select_related("module").select_related("quiz").get(id=assignment.id)
         return Response(_serialize_assignment(assignment), status=status.HTTP_201_CREATED)
@@ -568,6 +608,9 @@ def assignment_ai_generate(request, course_id):
                 },
             )
             _replace_quiz_questions(assignment, question_payloads, is_auto_generated=True)
+
+        if assignment.is_active:
+            _notify_assignment_created(course, assignment)
 
         assignment = Assignment.objects.select_related("module").select_related("quiz").get(id=assignment.id)
         return Response(_serialize_assignment(assignment), status=status.HTTP_201_CREATED)

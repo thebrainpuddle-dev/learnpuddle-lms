@@ -6,7 +6,7 @@ from apps.tenants.models import Tenant
 from apps.users.models import User
 
 
-@override_settings(ALLOWED_HOSTS=['test.lms.com', 'testserver', 'localhost'])
+@override_settings(ALLOWED_HOSTS=['test.lms.com', 'other.lms.com', 'testserver', 'localhost'], PLATFORM_DOMAIN='lms.com')
 class AuthenticationTestCase(TestCase):
     def setUp(self):
         self.client = APIClient()
@@ -17,6 +17,12 @@ class AuthenticationTestCase(TestCase):
             slug='test',
             subdomain='test',
             email='test@school.com'
+        )
+        self.other_tenant = Tenant.objects.create(
+            name='Other School',
+            slug='other',
+            subdomain='other',
+            email='other@school.com'
         )
         
         # Create user
@@ -54,6 +60,16 @@ class AuthenticationTestCase(TestCase):
         })
         
         self.assertEqual(response.status_code, 400)
+
+    def test_login_rejects_cross_tenant_host(self):
+        """Tenant login must fail when host tenant doesn't match user tenant."""
+        response = self.client.post('/api/users/auth/login/', {
+            'email': 'teacher@test.com',
+            'password': 'testpass123',
+            'portal': 'tenant',
+        }, HTTP_HOST='other.lms.com')
+
+        self.assertEqual(response.status_code, 403)
 
     def test_login_ignores_stale_authorization_header(self):
         """Login should work even when a stale Bearer token is present."""

@@ -4,7 +4,13 @@ from celery import shared_task
 from django.conf import settings
 from django.core.mail import send_mail
 
-from .email_utils import send_templated_email, build_login_url
+from .email_utils import (
+    send_templated_email,
+    build_tenant_url,
+    build_school_sender_email,
+    build_tenant_reply_to,
+    build_bucket_headers,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,8 +43,7 @@ def send_teacher_welcome_email(self, user_id: str, temp_password: str | None = N
     tenant = teacher.tenant
     school_name = tenant.name if tenant else "your organization"
     platform_name = getattr(settings, "PLATFORM_NAME", "LearnPuddle")
-    subdomain = tenant.subdomain if tenant else ""
-    login_url = build_login_url(subdomain)
+    login_url = build_tenant_url(tenant=tenant, path="/login")
 
     subject = f"Welcome to {school_name} on {platform_name}"
 
@@ -56,6 +61,12 @@ def send_teacher_welcome_email(self, user_id: str, temp_password: str | None = N
             subject=subject,
             template_name="teacher_welcome.html",
             context=context,
+            headers=build_bucket_headers(
+                tenant=tenant,
+                bucket="onboarding",
+                template_name="teacher_welcome.html",
+                event="teacher_welcome",
+            ),
         )
         logger.info("teacher welcome email sent to=%s user_id=%s", teacher.email, user_id)
         return {"sent": True, "to": teacher.email}
@@ -86,8 +97,7 @@ def send_teacher_invitation_email(self, invitation_id: str):
     tenant = invitation.tenant
     school_name = tenant.name if tenant else "your organization"
     platform_name = getattr(settings, "PLATFORM_NAME", "LearnPuddle")
-    subdomain = tenant.subdomain if tenant else ""
-    accept_url = build_login_url(subdomain, f"/accept-invitation/{invitation.token}")
+    accept_url = build_tenant_url(tenant=tenant, path=f"/accept-invitation/{invitation.token}")
     inviter_name = invitation.invited_by.get_full_name() if invitation.invited_by else "your administrator"
     expires_at = invitation.expires_at.strftime("%B %d, %Y") if invitation.expires_at else "7 days from now"
 
@@ -108,6 +118,12 @@ def send_teacher_invitation_email(self, invitation_id: str):
             subject=subject,
             template_name="teacher_invitation.html",
             context=context,
+            headers=build_bucket_headers(
+                tenant=tenant,
+                bucket="onboarding",
+                template_name="teacher_invitation.html",
+                event="teacher_invitation",
+            ),
         )
         logger.info("teacher invitation email sent to=%s invitation_id=%s", invitation.email, invitation_id)
         return {"sent": True, "to": invitation.email}
@@ -152,6 +168,12 @@ def send_demo_followup_email(self, booking_id: str):
             subject=subject,
             template_name="demo_confirmation.html",
             context=context,
+            headers=build_bucket_headers(
+                tenant=None,
+                bucket="onboarding",
+                template_name="demo_confirmation.html",
+                event="demo_confirmation",
+            ),
         )
         from django.utils import timezone
         booking.followup_sent_at = timezone.now()
@@ -213,40 +235,81 @@ def send_notification_email(self, notification_id: str):
     if notification.notification_type == "COURSE_ASSIGNED":
         if not getattr(settings, "COURSE_ASSIGNMENT_EMAIL_ENABLED", True):
             return {"skipped": True, "reason": "course_assignment_email_disabled"}
-    elif not getattr(settings, "REMINDER_EMAIL_ENABLED", False):
-        return {"skipped": True, "reason": "email_disabled"}
+    elif notification.notification_type == "REMINDER":
+        if not getattr(settings, "REMINDER_EMAIL_ENABLED", False):
+            return {"skipped": True, "reason": "email_disabled"}
 
     teacher = notification.teacher
     if not teacher.email:
         return {"skipped": True, "reason": "no_email"}
 
     prefs = teacher.notification_preferences or {}
-    if not prefs.get("email_reminders", True):
+    pref_key_map = {
+        "COURSE_ASSIGNED": "email_courses",
+        "ASSIGNMENT_DUE": "email_assignments",
+        "REMINDER": "email_reminders",
+        "ANNOUNCEMENT": "email_announcements",
+    }
+    pref_key = pref_key_map.get(notification.notification_type, "email_reminders")
+    if not prefs.get(pref_key, True):
         return {"skipped": True, "reason": "user_preference"}
 
     platform_name = getattr(settings, "PLATFORM_NAME", "LearnPuddle")
     tenant = teacher.tenant
     school_name = tenant.name if tenant else "your organization"
-    subdomain = tenant.subdomain if tenant else ""
-    dashboard_url = build_login_url(subdomain, "/dashboard")
+    dashboard_url = build_tenant_url(tenant=tenant, path="/dashboard")
 
     subject = f"[{platform_name}] {notification.title}"
+    template_name = "notification.html"
+    bucket = "security"
+    event = notification.notification_type.lower()
 
-    context = {
-        "first_name": teacher.first_name or "there",
-        "notification_title": notification.title,
-        "notification_message": notification.message,
-        "school_name": school_name,
-        "action_url": dashboard_url,
-        "action_text": "Go to Dashboard",
-    }
+    if notification.notification_type == "COURSE_ASSIGNED":
+        template_name = "course_assigned.html"
+        bucket = "course_assignment"
+        course = notification.course
+        course_url = dashboard_url
+        if course:
+            course_url = build_tenant_url(tenant=tenant, path=f"/teacher/courses/{course.id}")
+        context = {
+            "first_name": teacher.first_name or "there",
+            "school_name": school_name,
+            "course_title": getattr(course, "title", notification.title),
+            "course_description": getattr(course, "description", ""),
+            "deadline": course.deadline.strftime("%B %d, %Y") if course and getattr(course, "deadline", None) else "",
+            "content_count": course.modules.count() if course else 0,
+            "course_url": course_url,
+        }
+    else:
+        if notification.notification_type == "ASSIGNMENT_DUE":
+            bucket = "assignment_due"
+        elif notification.notification_type == "REMINDER":
+            bucket = "reminder_manual"
+        elif notification.notification_type == "ANNOUNCEMENT":
+            bucket = "security"
+        context = {
+            "first_name": teacher.first_name or "there",
+            "notification_title": notification.title,
+            "notification_message": notification.message,
+            "school_name": school_name,
+            "action_url": dashboard_url,
+            "action_text": "Go to Dashboard",
+        }
 
     try:
         send_templated_email(
             to_email=teacher.email,
             subject=subject,
-            template_name="notification.html",
+            template_name=template_name,
             context=context,
+            from_email=build_school_sender_email(tenant),
+            reply_to=build_tenant_reply_to(tenant),
+            headers=build_bucket_headers(
+                tenant=tenant,
+                bucket=bucket,
+                template_name=template_name,
+                event=event,
+            ),
         )
         logger.info(
             "notification email sent id=%s to=%s type=%s",

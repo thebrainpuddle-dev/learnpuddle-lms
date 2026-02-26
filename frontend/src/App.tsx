@@ -9,6 +9,7 @@ import { LoginPage } from './pages/auth/LoginPage';
 import { SuperAdminLoginPage } from './pages/auth/SuperAdminLoginPage';
 import { ForgotPasswordPage } from './pages/auth/ForgotPasswordPage';
 import { ResetPasswordPage } from './pages/auth/ResetPasswordPage';
+import { VerifyEmailPage } from './pages/auth/VerifyEmailPage';
 import { SSOCallbackPage } from './pages/auth/SSOCallbackPage';
 import { SignupPage } from './pages/onboarding/SignupPage';
 import { SecuritySettings } from './pages/settings/SecuritySettings';
@@ -142,6 +143,7 @@ function AppContent() {
       {/* Public Routes — Password Reset */}
       <Route path="/forgot-password" element={<ForgotPasswordPage />} />
       <Route path="/reset-password" element={<ResetPasswordPage />} />
+      <Route path="/verify-email" element={<VerifyEmailPage />} />
 
       {/* Public Routes — SSO Callback */}
       <Route path="/auth/sso-callback" element={<SSOCallbackPage />} />

@@ -93,6 +93,25 @@ class Tenant(models.Model):
     custom_domain_verified = models.BooleanField(default=False)
     custom_domain_ssl_expires = models.DateTimeField(null=True, blank=True)
 
+    # Notification sender profile (school-branded display + routing bucket)
+    notification_from_name = models.CharField(
+        max_length=200,
+        blank=True,
+        default='',
+        help_text="Optional display sender name for school notifications",
+    )
+    notification_reply_to = models.EmailField(
+        blank=True,
+        default='',
+        help_text="Reply-to email for school notifications",
+    )
+    email_bucket_prefix = models.CharField(
+        max_length=120,
+        blank=True,
+        default='',
+        help_text="Optional bucket prefix for outbound email analytics",
+    )
+
     # Super admin internal notes
     internal_notes = models.TextField(blank=True, default='')
 

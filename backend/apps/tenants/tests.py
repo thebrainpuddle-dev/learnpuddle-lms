@@ -71,6 +71,14 @@ class TenantUtilsTestCase(TestCase):
         with self.assertRaises(PermissionDenied):
             get_tenant_from_request(request)
 
+    def test_unknown_non_platform_host_is_rejected(self):
+        """Known subdomain on foreign domain must not resolve."""
+        request = self.factory.get('/', HTTP_HOST='test.evil.com')
+
+        from django.core.exceptions import PermissionDenied
+        with self.assertRaises(PermissionDenied):
+            get_tenant_from_request(request)
+
     @override_settings(PLATFORM_DOMAIN='learnpuddle.com')
     def test_platform_root_returns_none(self):
         """Platform apex domain should not resolve to a tenant."""

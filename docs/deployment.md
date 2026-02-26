@@ -86,6 +86,10 @@ openssl rand -hex 50   # for SECRET_KEY and JWT_SIGNING_KEY
 openssl rand -base64 24   # for DB_PASSWORD, REDIS_PASSWORD, FLOWER_PASSWORD
 ```
 
+Important host config for this release:
+- Set `ALLOWED_HOSTS=*` only if strict host validation in `backend/utils/tenant_utils.py` is enabled.
+- Keep `PLATFORM_DOMAIN` accurate; tenant resolution now allows only platform hosts and verified custom domains.
+
 ### 2.4 Start the Stack
 
 ```bash
