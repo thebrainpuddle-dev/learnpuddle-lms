@@ -426,3 +426,203 @@ def tenant_send_email(request, tenant_id):
     )
 
     return Response({"sent": True, "to": to_email, "subject": subject})
+
+
+# ── Bulk email to multiple tenants ─────────────────────────────────────────
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@super_admin_only
+def bulk_send_email(request):
+    """
+    Send a custom email to multiple tenants' admins.
+    POST body: { "tenant_ids": [...], "subject": "...", "body": "..." }
+    """
+    tenant_ids = request.data.get("tenant_ids", [])
+    subject = (request.data.get("subject") or "").strip()
+    body = (request.data.get("body") or "").strip()
+
+    if not subject:
+        return Response({"error": "Subject is required."}, status=status.HTTP_400_BAD_REQUEST)
+    if not body:
+        return Response({"error": "Body is required."}, status=status.HTTP_400_BAD_REQUEST)
+    if not tenant_ids or not isinstance(tenant_ids, list):
+        return Response({"error": "tenant_ids must be a non-empty list."}, status=status.HTTP_400_BAD_REQUEST)
+    if len(tenant_ids) > 100:
+        return Response({"error": "Maximum 100 tenants per bulk email."}, status=status.HTTP_400_BAD_REQUEST)
+
+    from apps.notifications.tasks import send_arbitrary_email
+
+    platform_name = getattr(settings, "PLATFORM_NAME", "LearnPuddle")
+    full_subject = f"[{platform_name}] {subject}"
+
+    queued = 0
+    skipped = []
+    for tid in tenant_ids:
+        try:
+            tenant = Tenant.objects.get(id=tid)
+        except Tenant.DoesNotExist:
+            skipped.append({"tenant_id": str(tid), "reason": "not_found"})
+            continue
+
+        admin_user = User.objects.filter(tenant=tenant, role="SCHOOL_ADMIN", is_active=True).first()
+        if not admin_user:
+            skipped.append({"tenant_id": str(tid), "reason": "no_admin"})
+            continue
+
+        send_arbitrary_email.delay(admin_user.email, full_subject, body, str(tid))
+        queued += 1
+
+    log_audit(
+        "BULK_EMAIL", "Tenant",
+        target_repr=f"Bulk email to {queued} tenants",
+        changes={"subject": subject, "queued": queued, "skipped": len(skipped)},
+        request=request,
+    )
+
+    return Response({"queued": queued, "skipped": skipped})
+
+
+# ── Demo Bookings CRUD ─────────────────────────────────────────────────────
+
+
+class DemoBookingPagination(PageNumberPagination):
+    page_size = 20
+    page_size_query_param = "page_size"
+    max_page_size = 100
+
+
+@api_view(["GET", "POST"])
+@permission_classes([IsAuthenticated])
+@super_admin_only
+def demo_booking_list_create(request):
+    """
+    GET: List all demo bookings with optional filters.
+    POST: Create a manual demo booking entry.
+    """
+    from apps.tenants.models import DemoBooking
+
+    if request.method == "GET":
+        qs = DemoBooking.objects.all()
+
+        status_filter = request.GET.get("status")
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+
+        search = request.GET.get("search")
+        if search:
+            from django.db.models import Q
+            qs = qs.filter(Q(name__icontains=search) | Q(email__icontains=search) | Q(company__icontains=search))
+
+        paginator = DemoBookingPagination()
+        page = paginator.paginate_queryset(qs, request)
+        data = [_serialize_demo_booking(b) for b in page]
+        return paginator.get_paginated_response(data)
+
+    # POST
+    name = (request.data.get("name") or "").strip()
+    email = (request.data.get("email") or "").strip()
+    scheduled_at = request.data.get("scheduled_at")
+
+    if not name or not email or not scheduled_at:
+        return Response({"error": "name, email, and scheduled_at are required."}, status=status.HTTP_400_BAD_REQUEST)
+
+    from django.utils.dateparse import parse_datetime
+    scheduled_dt = parse_datetime(str(scheduled_at))
+    if not scheduled_dt:
+        return Response({"error": "Invalid scheduled_at format. Use ISO 8601."}, status=status.HTTP_400_BAD_REQUEST)
+
+    booking = DemoBooking.objects.create(
+        name=name,
+        email=email,
+        company=(request.data.get("company") or "").strip(),
+        phone=(request.data.get("phone") or "").strip(),
+        scheduled_at=scheduled_dt,
+        notes=(request.data.get("notes") or "").strip(),
+        source="manual",
+        created_by=request.user,
+    )
+
+    from apps.notifications.tasks import send_demo_followup_email
+    send_demo_followup_email.delay(str(booking.id))
+
+    log_audit("CREATE", "DemoBooking", target_id=str(booking.id), target_repr=f"{name} ({email})", request=request)
+    return Response(_serialize_demo_booking(booking), status=status.HTTP_201_CREATED)
+
+
+@api_view(["GET", "PATCH", "DELETE"])
+@permission_classes([IsAuthenticated])
+@super_admin_only
+def demo_booking_detail(request, booking_id):
+    """
+    GET: Retrieve a single demo booking.
+    PATCH: Update status, notes, etc.
+    DELETE: Remove a demo booking.
+    """
+    from apps.tenants.models import DemoBooking
+    booking = get_object_or_404(DemoBooking, id=booking_id)
+
+    if request.method == "GET":
+        return Response(_serialize_demo_booking(booking))
+
+    if request.method == "DELETE":
+        booking.delete()
+        return Response({"deleted": True})
+
+    # PATCH
+    allowed_fields = {"status", "notes", "name", "email", "company", "phone", "scheduled_at"}
+    changes = {}
+    for field in allowed_fields:
+        if field in request.data:
+            val = request.data[field]
+            if field == "scheduled_at" and val:
+                from django.utils.dateparse import parse_datetime
+                val = parse_datetime(str(val))
+                if not val:
+                    return Response({"error": "Invalid scheduled_at format."}, status=status.HTTP_400_BAD_REQUEST)
+            changes[field] = val
+            setattr(booking, field, val)
+
+    booking.save()
+    log_audit("UPDATE", "DemoBooking", target_id=str(booking.id), target_repr=str(booking), changes=changes, request=request)
+    return Response(_serialize_demo_booking(booking))
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@super_admin_only
+def demo_booking_send_email(request, booking_id):
+    """Send a custom email to a demo booking contact."""
+    from apps.tenants.models import DemoBooking
+    booking = get_object_or_404(DemoBooking, id=booking_id)
+
+    subject = (request.data.get("subject") or "").strip()
+    body = (request.data.get("body") or "").strip()
+
+    if not subject or not body:
+        return Response({"error": "subject and body are required."}, status=status.HTTP_400_BAD_REQUEST)
+
+    platform_name = getattr(settings, "PLATFORM_NAME", "LearnPuddle")
+    from apps.notifications.tasks import send_arbitrary_email
+    send_arbitrary_email.delay(booking.email, f"[{platform_name}] {subject}", body)
+
+    return Response({"sent": True, "to": booking.email})
+
+
+def _serialize_demo_booking(booking):
+    return {
+        "id": str(booking.id),
+        "name": booking.name,
+        "email": booking.email,
+        "company": booking.company,
+        "phone": booking.phone,
+        "source": booking.source,
+        "cal_event_id": booking.cal_event_id,
+        "scheduled_at": booking.scheduled_at.isoformat() if booking.scheduled_at else None,
+        "notes": booking.notes,
+        "status": booking.status,
+        "followup_sent_at": booking.followup_sent_at.isoformat() if booking.followup_sent_at else None,
+        "created_at": booking.created_at.isoformat() if booking.created_at else None,
+        "created_by": str(booking.created_by_id) if booking.created_by_id else None,
+    }

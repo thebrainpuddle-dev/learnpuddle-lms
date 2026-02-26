@@ -576,11 +576,15 @@ DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default=f'noreply@{_platform_d
 # Set REMINDER_EMAIL_ENABLED=True to also send reminder emails
 REMINDER_EMAIL_ENABLED = config('REMINDER_EMAIL_ENABLED', default=False, cast=bool)
 SEND_ONBOARDING_EMAIL = config('SEND_ONBOARDING_EMAIL', default=True, cast=bool)
+COURSE_ASSIGNMENT_EMAIL_ENABLED = config('COURSE_ASSIGNMENT_EMAIL_ENABLED', default=True, cast=bool)
 EMAIL_FAIL_SILENTLY = config('EMAIL_FAIL_SILENTLY', default=False, cast=bool)
 AUTO_COURSE_REMINDERS_ENABLED = config('AUTO_COURSE_REMINDERS_ENABLED', default=True, cast=bool)
 # CSV list of lead-day checkpoints when automation sends reminders.
 # Example: "7,3,1,0" => one week, three days, one day, and due day.
 AUTO_COURSE_REMINDER_LEAD_DAYS = config('AUTO_COURSE_REMINDER_LEAD_DAYS', default='7,3,1,0')
+
+# Cal.com webhook integration (demo booking automation)
+CAL_WEBHOOK_SECRET = config('CAL_WEBHOOK_SECRET', default='')
 
 # Platform branding (used in emails and public pages)
 PLATFORM_NAME = config('PLATFORM_NAME', default='LearnPuddle')

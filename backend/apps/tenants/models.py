@@ -168,3 +168,47 @@ class AuditLog(models.Model):
 
     def __str__(self):
         return f"{self.actor} {self.action} {self.target_type}:{self.target_id}"
+
+
+class DemoBooking(models.Model):
+    """Tracks demo call bookings from the marketing site or manual super admin entry."""
+
+    SOURCE_CHOICES = [
+        ('cal_webhook', 'Cal.com Webhook'),
+        ('manual', 'Manual Entry'),
+    ]
+    STATUS_CHOICES = [
+        ('scheduled', 'Scheduled'),
+        ('completed', 'Completed'),
+        ('cancelled', 'Cancelled'),
+        ('no_show', 'No Show'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=200)
+    email = models.EmailField()
+    company = models.CharField(max_length=200, blank=True, default='')
+    phone = models.CharField(max_length=50, blank=True, default='')
+    source = models.CharField(max_length=20, choices=SOURCE_CHOICES, default='manual')
+    cal_event_id = models.CharField(max_length=200, blank=True, default='')
+    scheduled_at = models.DateTimeField()
+    notes = models.TextField(blank=True, default='')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='scheduled')
+    followup_sent_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    created_by = models.ForeignKey(
+        'users.User', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='created_demo_bookings',
+    )
+
+    class Meta:
+        db_table = 'demo_bookings'
+        ordering = ['-scheduled_at']
+        indexes = [
+            models.Index(fields=['status']),
+            models.Index(fields=['email']),
+            models.Index(fields=['scheduled_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.name} ({self.email}) - {self.scheduled_at}"

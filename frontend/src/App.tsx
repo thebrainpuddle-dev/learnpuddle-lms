@@ -42,7 +42,9 @@ import {
   OperationsPage as SuperAdminOperationsPage,
   SchoolsPage as SuperAdminSchoolsPage,
   SchoolDetailPage as SuperAdminSchoolDetailPage,
+  DemoBookingsPage as SuperAdminDemoBookingsPage,
 } from './pages/superadmin';
+import { AcceptInvitationPage } from './pages/auth/AcceptInvitationPage';
 import { ProductLandingPage } from './pages/marketing';
 import api from './config/api';
 import { useSessionLifecycle } from './hooks/useSessionLifecycle';
@@ -150,6 +152,9 @@ function AppContent() {
         element={onPlatformHost ? <Navigate to="/" replace /> : <SignupPage />}
       />
 
+      {/* Public Routes — Teacher Invitation Acceptance */}
+      <Route path="/accept-invitation/:token" element={<AcceptInvitationPage />} />
+
       {/* Public Routes — Super Admin login (platform admin) */}
       <Route
         path="/super-admin/login"
@@ -175,6 +180,7 @@ function AppContent() {
         <Route path="operations" element={<SuperAdminOperationsPage />} />
         <Route path="schools" element={<SuperAdminSchoolsPage />} />
         <Route path="schools/:tenantId" element={<SuperAdminSchoolDetailPage />} />
+        <Route path="demo-bookings" element={<SuperAdminDemoBookingsPage />} />
         <Route index element={<Navigate to="/super-admin/dashboard" replace />} />
         <Route path="*" element={<Navigate to="/super-admin/dashboard" replace />} />
       </Route>

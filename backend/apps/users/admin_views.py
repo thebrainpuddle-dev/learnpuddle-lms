@@ -4,16 +4,17 @@ import secrets
 
 from django.db import models
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes, parser_classes
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework import status
 
 from utils.decorators import admin_only, tenant_required, check_tenant_limit
 from utils.audit import log_audit
-from .models import User
+from .models import User, TeacherInvitation
 from .serializers import UserSerializer
 
 
@@ -249,7 +250,7 @@ def teachers_bulk_import_view(request):
             continue
 
         try:
-            User.objects.create_user(
+            new_teacher = User.objects.create_user(
                 email=email,
                 password=password,
                 first_name=first_name,
@@ -263,6 +264,12 @@ def teachers_bulk_import_view(request):
             )
             created_count += 1
             results.append({"row": i, "email": email, "status": "success"})
+
+            try:
+                from apps.notifications.tasks import send_teacher_welcome_email
+                send_teacher_welcome_email.delay(str(new_teacher.id), password if force_password_change else None)
+            except Exception:
+                pass  # email is best-effort
         except Exception:
             results.append({"row": i, "email": email, "status": "error", "message": "Failed to create user"})
 
@@ -354,4 +361,216 @@ def teachers_bulk_action(request):
         'affected_count': affected_count,
         'requested_count': len(teacher_ids),
     }, status=status.HTTP_200_OK)
+
+
+# ── Teacher Invitation Endpoints ───────────────────────────────────────────
+
+
+def _serialize_invitation(inv):
+    return {
+        "id": str(inv.id),
+        "email": inv.email,
+        "first_name": inv.first_name,
+        "last_name": inv.last_name,
+        "status": inv.status,
+        "created_at": inv.created_at.isoformat() if inv.created_at else None,
+        "expires_at": inv.expires_at.isoformat() if inv.expires_at else None,
+        "accepted_at": inv.accepted_at.isoformat() if inv.accepted_at else None,
+        "invited_by": inv.invited_by.get_full_name() if inv.invited_by else None,
+    }
+
+
+@api_view(["GET", "POST"])
+@permission_classes([IsAuthenticated])
+@admin_only
+@tenant_required
+def teacher_invitations_view(request):
+    """
+    GET: List all invitations for this tenant.
+    POST: Create and send a single teacher invitation.
+    """
+    tenant = request.tenant
+
+    if request.method == "GET":
+        qs = TeacherInvitation.objects.filter(tenant=tenant).order_by("-created_at")
+        status_filter = request.GET.get("status")
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+        data = [_serialize_invitation(inv) for inv in qs[:200]]
+        return Response(data)
+
+    # POST
+    email = (request.data.get("email") or "").strip().lower()
+    first_name = (request.data.get("first_name") or "").strip()
+    last_name = (request.data.get("last_name") or "").strip()
+
+    if not email or not first_name:
+        return Response({"error": "email and first_name are required."}, status=status.HTTP_400_BAD_REQUEST)
+
+    if User.objects.filter(email__iexact=email).exists():
+        return Response({"error": "A user with this email already exists."}, status=status.HTTP_400_BAD_REQUEST)
+
+    existing = TeacherInvitation.objects.filter(
+        tenant=tenant, email__iexact=email, status="pending"
+    ).first()
+    if existing and not existing.is_expired:
+        return Response({"error": "A pending invitation already exists for this email."}, status=status.HTTP_400_BAD_REQUEST)
+
+    invitation = TeacherInvitation.objects.create(
+        tenant=tenant,
+        email=email,
+        first_name=first_name,
+        last_name=last_name,
+        invited_by=request.user,
+        expires_at=timezone.now() + timezone.timedelta(days=7),
+    )
+
+    from apps.notifications.tasks import send_teacher_invitation_email
+    send_teacher_invitation_email.delay(str(invitation.id))
+
+    log_audit("CREATE", "TeacherInvitation", target_id=str(invitation.id), target_repr=email, request=request)
+    return Response(_serialize_invitation(invitation), status=status.HTTP_201_CREATED)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@admin_only
+@tenant_required
+@parser_classes([MultiPartParser, FormParser])
+def teacher_bulk_invite_view(request):
+    """
+    Bulk invite teachers via CSV upload.
+    CSV columns: email, first_name, last_name (optional)
+    """
+    f = request.FILES.get("file")
+    if not f:
+        return Response({"error": "CSV file is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        content = f.read().decode("utf-8-sig")
+    except Exception:
+        return Response({"error": "Could not read file as UTF-8"}, status=status.HTTP_400_BAD_REQUEST)
+
+    reader = csv.DictReader(io.StringIO(content))
+    tenant = request.tenant
+    results = []
+    created_count = 0
+
+    for i, row in enumerate(reader, start=1):
+        if i > 500:
+            results.append({"row": i, "email": "", "status": "error", "message": "Row limit exceeded (500)"})
+            break
+
+        email = (row.get("email") or "").strip().lower()
+        first_name = (row.get("first_name") or "").strip()
+        last_name = (row.get("last_name") or "").strip()
+
+        if not email or not first_name:
+            results.append({"row": i, "email": email, "status": "error", "message": "Missing email or first_name"})
+            continue
+
+        if User.objects.filter(email__iexact=email).exists():
+            results.append({"row": i, "email": email, "status": "error", "message": "User already exists"})
+            continue
+
+        existing = TeacherInvitation.objects.filter(
+            tenant=tenant, email__iexact=email, status="pending"
+        ).first()
+        if existing and not existing.is_expired:
+            results.append({"row": i, "email": email, "status": "error", "message": "Pending invitation exists"})
+            continue
+
+        try:
+            invitation = TeacherInvitation.objects.create(
+                tenant=tenant,
+                email=email,
+                first_name=first_name,
+                last_name=last_name,
+                invited_by=request.user,
+                expires_at=timezone.now() + timezone.timedelta(days=7),
+            )
+            from apps.notifications.tasks import send_teacher_invitation_email
+            send_teacher_invitation_email.delay(str(invitation.id))
+            created_count += 1
+            results.append({"row": i, "email": email, "status": "success"})
+        except Exception:
+            results.append({"row": i, "email": email, "status": "error", "message": "Failed to create invitation"})
+
+    if created_count:
+        log_audit("IMPORT", "TeacherInvitation", target_repr=f"Bulk invite: {created_count} teachers", changes={"created": created_count}, request=request)
+
+    return Response({"created": created_count, "total_rows": len(results), "results": results}, status=status.HTTP_201_CREATED)
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def invitation_validate_view(request, token):
+    """Public endpoint: validate an invitation token and return its details."""
+    try:
+        invitation = TeacherInvitation.objects.select_related("tenant").get(token=token)
+    except TeacherInvitation.DoesNotExist:
+        return Response({"error": "Invalid invitation link."}, status=status.HTTP_404_NOT_FOUND)
+
+    if invitation.status == "accepted":
+        return Response({"error": "This invitation has already been used."}, status=status.HTTP_400_BAD_REQUEST)
+
+    if invitation.is_expired:
+        if invitation.status != "expired":
+            invitation.status = "expired"
+            invitation.save(update_fields=["status"])
+        return Response({"error": "This invitation has expired."}, status=status.HTTP_400_BAD_REQUEST)
+
+    return Response({
+        "email": invitation.email,
+        "first_name": invitation.first_name,
+        "last_name": invitation.last_name,
+        "school_name": invitation.tenant.name if invitation.tenant else "",
+        "expires_at": invitation.expires_at.isoformat(),
+    })
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def invitation_accept_view(request, token):
+    """Public endpoint: accept an invitation and create the teacher account."""
+    try:
+        invitation = TeacherInvitation.objects.select_related("tenant").get(token=token)
+    except TeacherInvitation.DoesNotExist:
+        return Response({"error": "Invalid invitation link."}, status=status.HTTP_404_NOT_FOUND)
+
+    if invitation.status == "accepted":
+        return Response({"error": "This invitation has already been used."}, status=status.HTTP_400_BAD_REQUEST)
+
+    if invitation.is_expired:
+        if invitation.status != "expired":
+            invitation.status = "expired"
+            invitation.save(update_fields=["status"])
+        return Response({"error": "This invitation has expired."}, status=status.HTTP_400_BAD_REQUEST)
+
+    password = (request.data.get("password") or "").strip()
+    if not password or len(password) < 8:
+        return Response({"error": "Password must be at least 8 characters."}, status=status.HTTP_400_BAD_REQUEST)
+
+    if User.objects.filter(email__iexact=invitation.email).exists():
+        return Response({"error": "An account with this email already exists."}, status=status.HTTP_400_BAD_REQUEST)
+
+    user = User.objects.create_user(
+        email=invitation.email,
+        password=password,
+        first_name=invitation.first_name,
+        last_name=invitation.last_name,
+        tenant=invitation.tenant,
+        role="TEACHER",
+        is_active=True,
+        email_verified=True,
+    )
+
+    invitation.status = "accepted"
+    invitation.accepted_at = timezone.now()
+    invitation.save(update_fields=["status", "accepted_at"])
+
+    return Response({
+        "message": "Account created successfully. You can now log in.",
+        "email": user.email,
+    }, status=status.HTTP_201_CREATED)
 

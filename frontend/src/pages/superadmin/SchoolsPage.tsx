@@ -10,6 +10,7 @@ import {
   XMarkIcon,
   CheckCircleIcon,
   XCircleIcon,
+  EnvelopeIcon,
 } from '@heroicons/react/24/outline';
 
 export const SchoolsPage: React.FC = () => {
@@ -20,6 +21,9 @@ export const SchoolsPage: React.FC = () => {
   const [searchParams] = useSearchParams();
   const [search, setSearch] = useState('');
   const [showOnboard, setShowOnboard] = useState(searchParams.get('onboard') === 'true');
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [showBulkEmail, setShowBulkEmail] = useState(false);
+  const [bulkEmailForm, setBulkEmailForm] = useState({ subject: '', body: '' });
   const [onboardForm, setOnboardForm] = useState<OnboardPayload>({
     school_name: '',
     admin_email: '',
@@ -59,8 +63,32 @@ export const SchoolsPage: React.FC = () => {
     },
   });
 
+  const bulkEmailMut = useMutation({
+    mutationFn: (data: { tenant_ids: string[]; subject: string; body: string }) => superAdminService.bulkSendEmail(data),
+    onSuccess: (result) => {
+      toast.success('Bulk Email Sent', `Queued ${result.queued} emails.`);
+      setShowBulkEmail(false);
+      setBulkEmailForm({ subject: '', body: '' });
+      setSelectedIds(new Set());
+    },
+    onError: (err: any) => toast.error('Error', err?.response?.data?.error || 'Failed to send bulk email'),
+  });
+
   const tenants: TenantListItem[] = data?.results ?? [];
   const platformDomain = (process.env.REACT_APP_PLATFORM_DOMAIN || 'learnpuddle.com').replace(':3000', '');
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+  const toggleSelectAll = () => {
+    if (selectedIds.size === tenants.length) setSelectedIds(new Set());
+    else setSelectedIds(new Set(tenants.map((t) => t.id)));
+  };
 
   return (
     <div className="space-y-5 sm:space-y-6">
@@ -70,13 +98,24 @@ export const SchoolsPage: React.FC = () => {
           <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl">Schools</h1>
           <p className="mt-1 text-gray-500">Manage all schools on the platform</p>
         </div>
-        <button
-          data-tour="superadmin-schools-onboard"
-          onClick={() => setShowOnboard(true)}
-          className="w-full rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-700 sm:w-auto"
-        >
-          + Onboard School
-        </button>
+        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
+          {selectedIds.size > 0 && (
+            <button
+              onClick={() => setShowBulkEmail(true)}
+              className="w-full rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-2 text-sm font-medium text-indigo-700 transition-colors hover:bg-indigo-100 sm:w-auto inline-flex items-center gap-2 justify-center"
+            >
+              <EnvelopeIcon className="h-4 w-4" />
+              Email Selected ({selectedIds.size})
+            </button>
+          )}
+          <button
+            data-tour="superadmin-schools-onboard"
+            onClick={() => setShowOnboard(true)}
+            className="w-full rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-700 sm:w-auto"
+          >
+            + Onboard School
+          </button>
+        </div>
       </div>
 
       {/* Search */}
@@ -170,6 +209,15 @@ export const SchoolsPage: React.FC = () => {
           <table className="min-w-[760px] divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr>
+                <th className="pl-4 pr-2 py-3 w-10">
+                  <input
+                    type="checkbox"
+                    checked={tenants.length > 0 && selectedIds.size === tenants.length}
+                    onChange={toggleSelectAll}
+                    className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                    aria-label="Select all schools"
+                  />
+                </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">School</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Subdomain</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Teachers</th>
@@ -182,11 +230,11 @@ export const SchoolsPage: React.FC = () => {
             <tbody className="divide-y divide-gray-200">
               {isLoading ? (
                 Array.from({ length: 4 }).map((_, i) => (
-                  <tr key={i}><td colSpan={7} className="px-6 py-4"><div className="h-4 bg-gray-100 rounded animate-pulse" /></td></tr>
+                  <tr key={i}><td colSpan={8} className="px-6 py-4"><div className="h-4 bg-gray-100 rounded animate-pulse" /></td></tr>
                 ))
               ) : tenants.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-6 py-12 text-center">
+                  <td colSpan={8} className="px-6 py-12 text-center">
                     <BuildingOffice2Icon className="h-10 w-10 mx-auto text-gray-300 mb-3" />
                     <p className="text-gray-500">No schools found</p>
                   </td>
@@ -197,9 +245,18 @@ export const SchoolsPage: React.FC = () => {
                     key={t.id}
                     data-tour="superadmin-school-row"
                     data-tenant-id={t.id}
-                    className="hover:bg-gray-50 cursor-pointer"
+                    className={`hover:bg-gray-50 cursor-pointer ${selectedIds.has(t.id) ? 'bg-indigo-50' : ''}`}
                     onClick={() => nav(`/super-admin/schools/${t.id}`)}
                   >
+                    <td className="pl-4 pr-2 py-4" onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(t.id)}
+                        onChange={() => toggleSelect(t.id)}
+                        className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                        aria-label={`Select ${t.name}`}
+                      />
+                    </td>
                     <td className="px-6 py-4 font-medium text-gray-900">{t.name}</td>
                     <td className="px-6 py-4 text-sm text-gray-600">{t.subdomain}</td>
                     <td className="px-6 py-4 text-sm text-gray-600">{t.teacher_count}</td>
@@ -330,6 +387,62 @@ export const SchoolsPage: React.FC = () => {
                   Onboard School
                 </Button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Email Modal */}
+      {showBulkEmail && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md mx-4 p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold">Email {selectedIds.size} School{selectedIds.size !== 1 ? 's' : ''}</h2>
+              <button onClick={() => setShowBulkEmail(false)} className="text-gray-400 hover:text-gray-600"><XMarkIcon className="h-5 w-5" /></button>
+            </div>
+            <p className="text-sm text-gray-500 mb-4">
+              This email will be sent to the school admin of each selected school.
+            </p>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Subject *</label>
+                <input
+                  type="text"
+                  value={bulkEmailForm.subject}
+                  onChange={(e) => setBulkEmailForm(p => ({ ...p, subject: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500"
+                  placeholder="Important update..."
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Body *</label>
+                <textarea
+                  rows={5}
+                  value={bulkEmailForm.body}
+                  onChange={(e) => setBulkEmailForm(p => ({ ...p, body: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500"
+                  placeholder="Dear School Administrator,..."
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-3 mt-5">
+              <Button variant="outline" onClick={() => setShowBulkEmail(false)}>Cancel</Button>
+              <Button
+                variant="primary"
+                onClick={() => {
+                  if (!bulkEmailForm.subject || !bulkEmailForm.body) {
+                    toast.error('Missing Fields', 'Subject and body are required.');
+                    return;
+                  }
+                  bulkEmailMut.mutate({
+                    tenant_ids: Array.from(selectedIds),
+                    ...bulkEmailForm,
+                  });
+                }}
+                loading={bulkEmailMut.isPending}
+              >
+                Send to {selectedIds.size} School{selectedIds.size !== 1 ? 's' : ''}
+              </Button>
             </div>
           </div>
         </div>

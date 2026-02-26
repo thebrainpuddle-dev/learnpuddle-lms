@@ -6,6 +6,7 @@ import {
   HomeIcon,
   SignalIcon,
   BuildingOffice2Icon,
+  CalendarDaysIcon,
   ArrowRightOnRectangleIcon,
   QuestionMarkCircleIcon,
 } from '@heroicons/react/24/outline';
@@ -17,6 +18,7 @@ const navItems = [
   { to: '/super-admin/dashboard', label: 'Dashboard', icon: HomeIcon, tourId: 'superadmin-nav-dashboard' },
   { to: '/super-admin/operations', label: 'Operations', icon: SignalIcon, tourId: 'superadmin-nav-operations' },
   { to: '/super-admin/schools', label: 'Schools', icon: BuildingOffice2Icon, tourId: 'superadmin-nav-schools' },
+  { to: '/super-admin/demo-bookings', label: 'Demo Bookings', icon: CalendarDaysIcon, tourId: 'superadmin-nav-demo-bookings' },
 ];
 
 interface SuperAdminSidebarProps {

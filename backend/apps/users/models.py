@@ -1,5 +1,6 @@
 # apps/users/models.py
 
+import secrets
 from django.contrib.auth.models import AbstractUser
 from django.db import models
 from django.utils import timezone
@@ -160,3 +161,54 @@ class User(AbstractUser):
         self.deleted_at = None
         self.deleted_by = None
         self.save(update_fields=['is_deleted', 'is_active', 'deleted_at', 'deleted_by'])
+
+
+def _generate_invitation_token():
+    return secrets.token_urlsafe(48)
+
+
+class TeacherInvitation(models.Model):
+    """Token-based invitation for teachers to self-register and set their own password."""
+
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('accepted', 'Accepted'),
+        ('expired', 'Expired'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tenant = models.ForeignKey(
+        'tenants.Tenant', on_delete=models.CASCADE, related_name='teacher_invitations',
+    )
+    email = models.EmailField()
+    first_name = models.CharField(max_length=100)
+    last_name = models.CharField(max_length=100, blank=True, default='')
+    token = models.CharField(max_length=100, unique=True, default=_generate_invitation_token)
+    invited_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name='sent_invitations',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    accepted_at = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+
+    class Meta:
+        db_table = 'teacher_invitations'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['token']),
+            models.Index(fields=['tenant', 'status']),
+            models.Index(fields=['email']),
+        ]
+
+    def __str__(self):
+        return f"Invitation for {self.email} ({self.status})"
+
+    @property
+    def is_expired(self):
+        return timezone.now() > self.expires_at
+
+    def save(self, *args, **kwargs):
+        if not self.expires_at:
+            self.expires_at = timezone.now() + timezone.timedelta(days=7)
+        super().save(*args, **kwargs)

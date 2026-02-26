@@ -247,6 +247,22 @@ export const FEATURE_FLAGS = [
   { key: 'feature_teacher_authoring', label: 'Teacher Authoring' },
 ] as const;
 
+export interface DemoBooking {
+  id: string;
+  name: string;
+  email: string;
+  company: string;
+  phone: string;
+  source: 'cal_webhook' | 'manual';
+  cal_event_id: string;
+  scheduled_at: string | null;
+  notes: string;
+  status: 'scheduled' | 'completed' | 'cancelled' | 'no_show';
+  followup_sent_at: string | null;
+  created_at: string;
+  created_by: string | null;
+}
+
 export const superAdminService = {
   async getStats(): Promise<PlatformStats> {
     const res = await api.get('/super-admin/stats/');
@@ -291,6 +307,36 @@ export const superAdminService = {
   async sendEmail(tenantId: string, data: { to?: string; subject: string; body: string }) {
     const res = await api.post(`/super-admin/tenants/${tenantId}/send-email/`, data);
     return res.data as { sent: boolean; to: string; subject: string };
+  },
+
+  async bulkSendEmail(data: { tenant_ids: string[]; subject: string; body: string }) {
+    const res = await api.post('/super-admin/bulk-email/', data);
+    return res.data as { queued: number; skipped: Array<{ tenant_id: string; reason: string }> };
+  },
+
+  async listDemoBookings(params?: { search?: string; status?: string; page?: number }) {
+    const res = await api.get('/super-admin/demo-bookings/', { params });
+    return res.data as { count: number; results: DemoBooking[] };
+  },
+
+  async createDemoBooking(data: { name: string; email: string; scheduled_at: string; company?: string; phone?: string; notes?: string }) {
+    const res = await api.post('/super-admin/demo-bookings/', data);
+    return res.data as DemoBooking;
+  },
+
+  async updateDemoBooking(id: string, data: Partial<DemoBooking>) {
+    const res = await api.patch(`/super-admin/demo-bookings/${id}/`, data);
+    return res.data as DemoBooking;
+  },
+
+  async deleteDemoBooking(id: string) {
+    const res = await api.delete(`/super-admin/demo-bookings/${id}/`);
+    return res.data;
+  },
+
+  async sendDemoBookingEmail(id: string, data: { subject: string; body: string }) {
+    const res = await api.post(`/super-admin/demo-bookings/${id}/send-email/`, data);
+    return res.data as { sent: boolean; to: string };
   },
 
   async impersonate(tenantId: string) {

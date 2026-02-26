@@ -11,6 +11,7 @@ from drf_spectacular.views import (
 )
 from .views import health_live_view, health_ready_view, health_view
 from utils.media_views import protected_media_view, public_media_view
+from apps.tenants.webhook_views import cal_webhook
 
 # Versioned API routes — all new clients should use /api/v1/
 _api_patterns = [
@@ -46,6 +47,9 @@ urlpatterns = [
     path('media/tenant_logos/<path:path>', public_media_view, name='public_media_logos'),
     # Protected media files (auth required, tenant-isolated)
     path('media/<path:path>', protected_media_view, name='protected_media'),
+
+    # Public webhook endpoints (no JWT auth, signature-verified)
+    path('api/webhooks/cal/', cal_webhook, name='cal_webhook'),
 
     # Versioned API (canonical)
     path('api/v1/', include((_api_patterns, 'api_v1'))),

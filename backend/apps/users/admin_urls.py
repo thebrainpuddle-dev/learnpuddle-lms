@@ -11,5 +11,9 @@ urlpatterns = [
     path("teachers/bulk-action/", admin_views.teachers_bulk_action, name="teachers_bulk_action"),
     path("teachers/<uuid:teacher_id>/", admin_views.teacher_detail_view, name="teacher_detail"),
     path("teachers/<uuid:teacher_id>/restore/", admin_views.restore_teacher_view, name="restore_teacher"),
+
+    # Teacher invitations (admin-managed)
+    path("teachers/invitations/", admin_views.teacher_invitations_view, name="teacher_invitations"),
+    path("teachers/bulk-invite/", admin_views.teacher_bulk_invite_view, name="teacher_bulk_invite"),
 ]
 

@@ -164,16 +164,28 @@ def create_bulk_notifications(
 def notify_course_assigned(tenant, teachers, course):
     """
     Notify teachers that they've been assigned to a course.
-    Sends both in-app notification and email.
+    Sends in-app notification and email (if COURSE_ASSIGNMENT_EMAIL_ENABLED).
     """
+    from django.conf import settings as django_settings
+    send_email = getattr(django_settings, "COURSE_ASSIGNMENT_EMAIL_ENABLED", True)
+
+    deadline_info = ""
+    if getattr(course, "deadline", None):
+        deadline_info = f" Deadline: {course.deadline.strftime('%B %d, %Y')}."
+
+    message = (
+        f"You have been assigned to the course '{course.title}'.{deadline_info} "
+        f"Log in to your dashboard to get started!"
+    )
+
     return create_bulk_notifications(
         tenant=tenant,
         teachers=teachers,
         notification_type='COURSE_ASSIGNED',
         title=f"New Course: {course.title}",
-        message=f"You have been assigned to the course '{course.title}'. Start learning now!",
+        message=message,
         course=course,
-        send_email=True,
+        send_email=send_email,
     )
 
 

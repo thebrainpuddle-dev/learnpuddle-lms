@@ -1,9 +1,9 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button, Input, useToast, ConfirmDialog } from '../../components/common';
 import { BulkActionsBar, BulkAction } from '../../components/common/BulkActionsBar';
-import { adminTeachersService } from '../../services/adminTeachersService';
+import { adminTeachersService, type TeacherInvitation } from '../../services/adminTeachersService';
 import { useTenantStore } from '../../stores/tenantStore';
 import {
   MagnifyingGlassIcon,
@@ -16,9 +16,17 @@ import {
   TrashIcon,
   PlayIcon,
   StopIcon,
+  EnvelopeIcon,
+  ClockIcon,
 } from '@heroicons/react/24/outline';
 import type { User } from '../../types';
 import { usePageTitle } from '../../hooks/usePageTitle';
+
+const INVITE_STATUS_COLORS: Record<string, string> = {
+  pending: 'bg-yellow-100 text-yellow-700',
+  accepted: 'bg-green-100 text-green-700',
+  expired: 'bg-gray-100 text-gray-500',
+};
 
 export const TeachersPage: React.FC = () => {
   usePageTitle('Teachers');
@@ -26,12 +34,17 @@ export const TeachersPage: React.FC = () => {
   const toast = useToast();
   const qc = useQueryClient();
   const csvRef = useRef<HTMLInputElement>(null);
+  const inviteCsvRef = useRef<HTMLInputElement>(null);
   const { usage } = useTenantStore();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeTab = searchParams.get('tab') || 'teachers';
   const [search, setSearch] = useState('');
   const [editingTeacher, setEditingTeacher] = useState<User | null>(null);
   const [editForm, setEditForm] = useState<Partial<User>>({});
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [deactivateTarget, setDeactivateTarget] = useState<User | null>(null);
+  const [showInviteForm, setShowInviteForm] = useState(false);
+  const [inviteForm, setInviteForm] = useState({ email: '', first_name: '', last_name: '' });
 
   const { data: teachers, isLoading } = useQuery({
     queryKey: ['adminTeachers', search],
@@ -67,6 +80,32 @@ export const TeachersPage: React.FC = () => {
       setSelectedIds(new Set());
     },
     onError: () => toast.error('Bulk action failed', 'Please try again.'),
+  });
+
+  const { data: invitations } = useQuery({
+    queryKey: ['teacherInvitations'],
+    queryFn: () => adminTeachersService.listInvitations(),
+    enabled: activeTab === 'invitations',
+  });
+
+  const inviteMut = useMutation({
+    mutationFn: (data: { email: string; first_name: string; last_name?: string }) => adminTeachersService.createInvitation(data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['teacherInvitations'] });
+      toast.success('Invitation Sent', 'An invitation email has been sent.');
+      setShowInviteForm(false);
+      setInviteForm({ email: '', first_name: '', last_name: '' });
+    },
+    onError: (err: any) => toast.error('Error', err?.response?.data?.error || 'Failed to send invitation'),
+  });
+
+  const bulkInviteMut = useMutation({
+    mutationFn: (file: File) => adminTeachersService.bulkInviteCSV(file),
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ['teacherInvitations'] });
+      toast.success('Bulk Invite Complete', `${data.created} of ${data.total_rows} invitations sent.`);
+    },
+    onError: () => toast.error('Bulk Invite Failed', 'Check CSV format.'),
   });
 
   const rows = useMemo(() => teachers ?? [], [teachers]);
@@ -110,6 +149,11 @@ export const TeachersPage: React.FC = () => {
     setEditForm({ first_name: t.first_name, last_name: t.last_name, department: t.department, employee_id: t.employee_id, role: t.role, is_active: t.is_active });
   };
 
+  const setTab = (tab: string) => {
+    setSearchParams({ tab });
+    setSearch('');
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -120,18 +164,137 @@ export const TeachersPage: React.FC = () => {
             {usage && <span className="ml-2 text-gray-400">({usage.teachers.used}/{usage.teachers.limit} used)</span>}
           </p>
         </div>
-        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
-          <input ref={csvRef} name="teachers_csv_import" type="file" accept=".csv" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) importMut.mutate(f); }} />
-          <Button className="w-full sm:w-auto" variant="outline" onClick={() => csvRef.current?.click()} loading={importMut.isPending}>
-            <ArrowUpTrayIcon className="h-4 w-4 mr-2" />CSV Import
-          </Button>
-          <Button className="w-full sm:w-auto" variant="primary" onClick={() => navigate('/admin/teachers/new')}>
-            <UserPlusIcon className="h-4 w-4 mr-2" />Create Teacher
-          </Button>
-        </div>
+        {activeTab === 'teachers' && (
+          <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
+            <input ref={csvRef} name="teachers_csv_import" type="file" accept=".csv" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) importMut.mutate(f); }} />
+            <Button className="w-full sm:w-auto" variant="outline" onClick={() => csvRef.current?.click()} loading={importMut.isPending}>
+              <ArrowUpTrayIcon className="h-4 w-4 mr-2" />CSV Import
+            </Button>
+            <Button className="w-full sm:w-auto" variant="primary" onClick={() => navigate('/admin/teachers/new')}>
+              <UserPlusIcon className="h-4 w-4 mr-2" />Create Teacher
+            </Button>
+          </div>
+        )}
+        {activeTab === 'invitations' && (
+          <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
+            <input ref={inviteCsvRef} name="teachers_csv_invite" type="file" accept=".csv" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) bulkInviteMut.mutate(f); }} />
+            <Button className="w-full sm:w-auto" variant="outline" onClick={() => inviteCsvRef.current?.click()} loading={bulkInviteMut.isPending}>
+              <ArrowUpTrayIcon className="h-4 w-4 mr-2" />Bulk Invite CSV
+            </Button>
+            <Button className="w-full sm:w-auto" variant="primary" onClick={() => setShowInviteForm(true)}>
+              <EnvelopeIcon className="h-4 w-4 mr-2" />Invite Teacher
+            </Button>
+          </div>
+        )}
       </div>
 
-      <div data-tour="admin-teachers-search" className="card">
+      {/* Tabs */}
+      <div className="border-b border-gray-200">
+        <nav className="flex gap-6">
+          {[
+            { key: 'teachers', label: 'Teachers' },
+            { key: 'invitations', label: 'Invitations' },
+          ].map((tab) => (
+            <button
+              key={tab.key}
+              onClick={() => setTab(tab.key)}
+              className={`py-2.5 text-sm font-medium border-b-2 transition ${
+                activeTab === tab.key
+                  ? 'border-indigo-600 text-indigo-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </nav>
+      </div>
+
+      {activeTab === 'invitations' && (
+        <>
+          {/* Invitations Table */}
+          <div className="overflow-x-auto bg-white rounded-xl border border-gray-200 shadow-sm">
+            <table className="min-w-full divide-y divide-gray-200 text-sm">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Email</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Invited By</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Expires</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {!invitations || invitations.length === 0 ? (
+                  <tr><td colSpan={5} className="px-4 py-8 text-center text-gray-500">No invitations sent yet.</td></tr>
+                ) : (
+                  invitations.map((inv) => (
+                    <tr key={inv.id} className="hover:bg-gray-50">
+                      <td className="px-4 py-3 text-gray-900">{inv.email}</td>
+                      <td className="px-4 py-3 text-gray-600">{inv.first_name} {inv.last_name}</td>
+                      <td className="px-4 py-3">
+                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${INVITE_STATUS_COLORS[inv.status] || 'bg-gray-100'}`}>
+                          {inv.status === 'pending' && <ClockIcon className="h-3 w-3" />}
+                          {inv.status === 'accepted' && <CheckCircleIcon className="h-3 w-3" />}
+                          {inv.status.charAt(0).toUpperCase() + inv.status.slice(1)}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-gray-600">{inv.invited_by || '—'}</td>
+                      <td className="px-4 py-3 text-gray-600">
+                        {inv.expires_at ? new Date(inv.expires_at).toLocaleDateString() : '—'}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Single Invite Modal */}
+          {showInviteForm && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+              <div className="bg-white rounded-xl shadow-xl w-full max-w-md mx-4 p-6">
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="text-lg font-semibold">Invite Teacher</h2>
+                  <button onClick={() => setShowInviteForm(false)} className="text-gray-400 hover:text-gray-600"><XMarkIcon className="h-5 w-5" /></button>
+                </div>
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Email *</label>
+                    <input type="email" value={inviteForm.email} onChange={(e) => setInviteForm(p => ({ ...p, email: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500" placeholder="teacher@school.com" />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">First Name *</label>
+                      <input type="text" value={inviteForm.first_name} onChange={(e) => setInviteForm(p => ({ ...p, first_name: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Last Name</label>
+                      <input type="text" value={inviteForm.last_name} onChange={(e) => setInviteForm(p => ({ ...p, last_name: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500" />
+                    </div>
+                  </div>
+                  <p className="text-xs text-gray-500">An email will be sent with a link to set their password and join the platform. The invitation expires in 7 days.</p>
+                </div>
+                <div className="flex justify-end gap-3 mt-5">
+                  <Button variant="outline" onClick={() => setShowInviteForm(false)}>Cancel</Button>
+                  <Button
+                    variant="primary"
+                    onClick={() => {
+                      if (!inviteForm.email || !inviteForm.first_name) { toast.error('Missing Fields', 'Email and first name are required.'); return; }
+                      inviteMut.mutate(inviteForm);
+                    }}
+                    loading={inviteMut.isPending}
+                  >
+                    Send Invitation
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {activeTab === 'teachers' && (<div data-tour="admin-teachers-search" className="card">
         <Input
           id="teachers-search"
           name="teachers_search"
@@ -271,6 +434,7 @@ export const TeachersPage: React.FC = () => {
         onClearSelection={clearSelection}
         isLoading={bulkActionMut.isPending}
       />
+      </>)}
 
       {/* Edit modal */}
       {editingTeacher && (

@@ -1,7 +1,7 @@
 # apps/users/urls.py
 
 from django.urls import path
-from . import views, sso_views, twofa_views
+from . import views, sso_views, twofa_views, admin_views
 
 app_name = 'users'
 
@@ -28,6 +28,10 @@ urlpatterns = [
     path('auth/sso/status/', sso_views.sso_status, name='sso_status'),
     path('auth/sso/unlink/', sso_views.sso_unlink, name='sso_unlink'),
     
+    # Teacher invitation acceptance (public endpoints)
+    path('auth/invitation/<str:token>/', admin_views.invitation_validate_view, name='invitation_validate'),
+    path('auth/invitation/<str:token>/accept/', admin_views.invitation_accept_view, name='invitation_accept'),
+
     # 2FA (Two-Factor Authentication)
     path('auth/2fa/status/', twofa_views.twofa_status, name='twofa_status'),
     path('auth/2fa/setup/', twofa_views.twofa_setup_start, name='twofa_setup_start'),
