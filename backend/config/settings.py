@@ -610,7 +610,7 @@ OPS_RETENTION_DAYS = config("OPS_RETENTION_DAYS", default=30, cast=int)
 CSP_ENABLED = config('CSP_ENABLED', default=True, cast=bool)
 CSP_REPORT_ONLY = config('CSP_REPORT_ONLY', default=False, cast=bool)  # Set True to test without enforcing
 CSP_REPORT_URI = config('CSP_REPORT_URI', default='')  # e.g., /api/csp-report/ or external service
-CSP_PATHS = ['/admin/', '/api/docs/', '/api/redoc/']  # Paths that get Django CSP (not React SPA)
+CSP_PATHS = ['/django-admin/', '/api/docs/', '/api/redoc/']  # Paths that get Django CSP (not React SPA)
 
 # -----------------------------------------------------------------------------
 # Sentry error tracking (optional; set SENTRY_DSN to enable)

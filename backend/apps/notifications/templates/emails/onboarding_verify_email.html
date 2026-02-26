@@ -1,0 +1,43 @@
+{% extends "emails/base.html" %}
+
+{% block title %}Verify your email{% endblock %}
+
+{% block content %}
+<h1 class="greeting">Welcome, {{ first_name }}!</h1>
+
+<p class="content">
+  Your account for <strong>{{ school_name }}</strong> is almost ready. Please verify your email to activate your access.
+</p>
+
+<p style="text-align: center; margin: 32px 0;">
+  <a href="{{ verify_url }}" class="btn">Verify Email</a>
+</p>
+
+<div class="highlight-box">
+  <table cellspacing="0" cellpadding="0" border="0" style="width: 100%;">
+    <tr>
+      <td style="color: #6b7280; padding: 4px 0; width: 120px; font-size: 14px;">Login URL:</td>
+      <td style="color: #1f2937; padding: 4px 0; font-weight: 500; font-size: 14px;">
+        <a href="{{ login_url }}" style="color: #7c3aed; text-decoration: none;">{{ login_url }}</a>
+      </td>
+    </tr>
+  </table>
+</div>
+
+<p class="small-text">
+  This verification link expires in 24 hours.<br>
+  Need a password reset later?
+  <a href="{{ forgot_password_url }}" style="color: #7c3aed; text-decoration: none;">Reset password</a>.
+</p>
+
+<div class="divider"></div>
+
+<p class="content" style="font-size: 13px; color: #9ca3af;">
+  <strong>Link not working?</strong> Copy and paste this URL into your browser:<br>
+  <span style="word-break: break-all; color: #7c3aed;">{{ verify_url }}</span>
+</p>
+{% endblock %}
+
+{% block footer_extra %}
+You're receiving this because an account was created for you on {{ platform_name }}.
+{% endblock %}

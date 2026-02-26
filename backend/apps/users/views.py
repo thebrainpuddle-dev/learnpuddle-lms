@@ -14,7 +14,7 @@ from .serializers import (
     ChangePasswordSerializer
 )
 from .tokens import get_tokens_for_user
-from apps.notifications.email_utils import build_tenant_url, build_bucket_headers
+from apps.notifications.email_utils import build_tenant_url, build_bucket_headers, send_templated_email
 from utils.decorators import admin_only, tenant_required, check_tenant_limit
 from utils.audit import log_audit
 
@@ -271,33 +271,34 @@ def register_teacher_view(request):
 
 def _send_verification_email(user, request=None):
     """Send email verification link to a newly created user."""
-    from django.core.mail import EmailMessage
     from django.conf import settings
     from utils.email_verification import build_email_verification_payload
 
     payload = build_email_verification_payload(user)
     base = build_tenant_url(tenant=user.tenant, path="/verify-email")
     verify_link = f"{base}?uid={payload['uid']}&token={payload['token']}"
+    login_url = build_tenant_url(tenant=user.tenant, path="/login")
+    forgot_password_url = build_tenant_url(tenant=user.tenant, path="/forgot-password")
 
-    message = EmailMessage(
+    send_templated_email(
+        to_email=user.email,
         subject=f"Welcome to {getattr(settings, 'PLATFORM_NAME', 'LearnPuddle')} — Verify your email",
-        body=(
-            f"Hi {user.first_name},\n\n"
-            f"Your account has been created. Please verify your email address by clicking the link below:\n\n"
-            f"  {verify_link}\n\n"
-            f"This link expires in 3 days.\n\n"
-            f"If you didn't expect this, you can safely ignore this email."
-        ),
-        from_email=settings.DEFAULT_FROM_EMAIL,
-        to=[user.email],
+        template_name="onboarding_verify_email.html",
+        context={
+            "first_name": user.first_name or "there",
+            "school_name": user.tenant.name if user.tenant else getattr(settings, "PLATFORM_NAME", "LearnPuddle"),
+            "verify_url": verify_link,
+            "login_url": login_url,
+            "forgot_password_url": forgot_password_url,
+        },
         headers=build_bucket_headers(
             tenant=user.tenant,
             bucket="security",
-            template_name="plain_text",
+            template_name="onboarding_verify_email.html",
             event="email_verification",
         ),
+        fail_silently=True,
     )
-    message.send(fail_silently=True)
 
 
 @api_view(['POST'])
@@ -400,6 +401,7 @@ def confirm_password_reset_view(request):
     from django.contrib.auth.password_validation import validate_password
     from django.core.exceptions import ValidationError
     from django.utils.http import urlsafe_base64_decode
+    from django.utils import timezone
     from .models import User
 
     uid = request.data.get('uid')
@@ -431,7 +433,9 @@ def confirm_password_reset_view(request):
         )
 
     user.set_password(new_password)
-    user.save()
+    # Mark last_login to hard-expire this token immediately after first successful use.
+    user.last_login = timezone.now()
+    user.save(update_fields=['password', 'last_login'])
 
     log_audit('PASSWORD_RESET', 'User', target_id=str(user.id), target_repr=str(user), request=request, actor=user)
 

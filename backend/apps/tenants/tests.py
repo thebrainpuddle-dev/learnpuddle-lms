@@ -160,8 +160,8 @@ class TenantMiddlewareTestCase(TestCase):
         self.assertEqual(response.status_code, 200)
     
     def test_middleware_skips_admin_paths(self):
-        """Test that middleware skips /admin/ paths."""
-        request = self.factory.get('/admin/', HTTP_HOST='localhost:8000')
+        """Test that middleware skips /django-admin/ paths."""
+        request = self.factory.get('/django-admin/', HTTP_HOST='localhost:8000')
         
         response = self.middleware(request)
         
@@ -325,3 +325,44 @@ class TenantConfigViewTestCase(TestCase):
         self.assertTrue(response.data.get('degraded'))
         self.assertIn('usage', response.data)
         self.assertEqual(response.data['usage']['teachers']['limit'], self.tenant.max_teachers)
+
+
+@override_settings(PLATFORM_DOMAIN='lms.com', ALLOWED_HOSTS=['*'])
+class TenantEmailFlowTestCase(TestCase):
+    def setUp(self):
+        self.tenant = Tenant.objects.create(
+            name='Email School',
+            slug='email-school',
+            subdomain='emailtest',
+            email='admin@emailtest.com',
+        )
+        self.admin = User.objects.create_user(
+            email='admin@emailtest.com',
+            password='testpass123',
+            first_name='Admin',
+            last_name='Email',
+            tenant=self.tenant,
+            role='SCHOOL_ADMIN',
+        )
+
+    @patch('apps.tenants.emails.send_templated_email')
+    def test_onboard_welcome_uses_template_with_reset_instructions(self, mocked_send):
+        from apps.tenants.emails import send_onboard_welcome_email
+
+        send_onboard_welcome_email({'tenant': self.tenant, 'admin': self.admin})
+
+        self.assertTrue(mocked_send.called)
+        kwargs = mocked_send.call_args.kwargs
+        self.assertEqual(kwargs['template_name'], 'admin_welcome.html')
+        self.assertIn('/forgot-password', kwargs['context']['forgot_password_url'])
+
+    @patch('apps.tenants.onboarding_views.send_templated_email')
+    def test_signup_verification_email_uses_html_template(self, mocked_send):
+        from apps.tenants.onboarding_views import send_verification_email
+
+        send_verification_email(self.admin, self.tenant)
+
+        self.assertTrue(mocked_send.called)
+        kwargs = mocked_send.call_args.kwargs
+        self.assertEqual(kwargs['template_name'], 'onboarding_verify_email.html')
+        self.assertIn('/verify-email', kwargs['context']['verify_url'])

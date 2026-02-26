@@ -35,7 +35,7 @@ _api_patterns = [
 ]
 
 urlpatterns = [
-    path('admin/', admin.site.urls),
+    path('django-admin/', admin.site.urls),
     path('health/live/', health_live_view),
     path('health/ready/', health_ready_view),
     path('health/', health_view),

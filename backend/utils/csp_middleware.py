@@ -38,7 +38,7 @@ class CSPMiddleware:
         
         # Paths that should have CSP (Django admin, etc.)
         # React SPA paths are handled by nginx
-        self.csp_paths = getattr(settings, 'CSP_PATHS', ['/admin/', '/api/docs/', '/api/redoc/'])
+        self.csp_paths = getattr(settings, 'CSP_PATHS', ['/django-admin/', '/api/docs/', '/api/redoc/'])
 
     def __call__(self, request):
         # Generate nonce for this request

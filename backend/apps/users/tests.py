@@ -236,6 +236,26 @@ class AuthenticationTestCase(TestCase):
         
         self.assertEqual(response.status_code, 400)
 
+    def test_password_reset_link_is_single_use(self):
+        """A reset token should fail after one successful password reset."""
+        from django.contrib.auth.tokens import default_token_generator
+        from django.utils.http import urlsafe_base64_encode
+        from django.utils.encoding import force_bytes
+
+        uid = urlsafe_base64_encode(force_bytes(self.user.pk))
+        token = default_token_generator.make_token(self.user)
+        payload = {
+            'uid': uid,
+            'token': token,
+            'new_password': 'ResetPass123!',
+        }
+
+        first = self.client.post('/api/users/auth/confirm-password-reset/', payload)
+        self.assertEqual(first.status_code, 200)
+
+        second = self.client.post('/api/users/auth/confirm-password-reset/', payload)
+        self.assertEqual(second.status_code, 400)
+
 
 class TokenClaimsTestCase(TestCase):
     def setUp(self):

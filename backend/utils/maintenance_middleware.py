@@ -10,7 +10,7 @@ class MaintenanceModeWriteBlockMiddleware:
     SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
     EXEMPT_PATH_PREFIXES = (
         "/health/",
-        "/admin/",
+        "/django-admin/",
         "/api/super-admin/",
         "/api/v1/super-admin/",
         "/api/users/auth/",

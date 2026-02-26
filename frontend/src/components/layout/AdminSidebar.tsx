@@ -122,6 +122,7 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({ open, onClose }) => 
             key={item.name}
             to={item.href}
             data-tour={item.tourId}
+            onClick={() => onClose?.()}
             className={({ isActive }) =>
               isActive
                 ? 'sidebar-link sidebar-link-active'
@@ -173,7 +174,7 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({ open, onClose }) => 
             <div className="fixed inset-0 bg-gray-900/80" />
           </Transition.Child>
 
-          <div className="fixed inset-0 flex">
+          <div className="fixed inset-0 flex pointer-events-none">
             <Transition.Child
               as={Fragment}
               enter="transition ease-in-out duration-300 transform"
@@ -183,7 +184,7 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({ open, onClose }) => 
               leaveFrom="translate-x-0"
               leaveTo="-translate-x-full"
             >
-              <Dialog.Panel className="relative mr-10 flex w-[85vw] max-w-xs flex-1 sm:mr-16">
+              <Dialog.Panel className="pointer-events-auto relative mr-10 flex w-[85vw] max-w-xs flex-1 sm:mr-16">
                 <SidebarContent />
               </Dialog.Panel>
             </Transition.Child>

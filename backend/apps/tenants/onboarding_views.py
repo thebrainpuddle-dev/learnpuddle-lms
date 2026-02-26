@@ -23,7 +23,7 @@ from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from .models import Tenant
 from .services import PLAN_PRESETS, apply_plan_preset
-from apps.notifications.email_utils import build_tenant_url, build_bucket_headers
+from apps.notifications.email_utils import build_tenant_url, send_templated_email, build_bucket_headers
 
 
 class SignupThrottle(ScopedRateThrottle):
@@ -179,7 +179,6 @@ def tenant_signup(request):
 def send_verification_email(user, tenant):
     """Send email verification link to new admin."""
     from utils.email_verification import build_email_verification_payload
-    from django.core.mail import EmailMessage
     
     try:
         payload = build_email_verification_payload(user)
@@ -187,38 +186,28 @@ def send_verification_email(user, tenant):
             f"{build_tenant_url(tenant=tenant, path='/verify-email')}"
             f"?uid={payload['uid']}&token={payload['token']}"
         )
+        login_url = build_tenant_url(tenant=tenant, path='/login')
+        forgot_password_url = build_tenant_url(tenant=tenant, path='/forgot-password')
         
-        subject = f"Verify your {settings.PLATFORM_NAME} account"
-        message = f"""
-Hello {user.first_name},
-
-Welcome to {settings.PLATFORM_NAME}!
-
-Your school "{tenant.name}" has been created. Please verify your email to activate your account:
-
-{verification_url}
-
-This link will expire in 24 hours.
-
-Your login URL: {build_tenant_url(tenant=tenant, path='/login')}
-
-Best regards,
-The {settings.PLATFORM_NAME} Team
-        """
-        
-        email = EmailMessage(
-            subject=subject,
-            body=message,
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            to=[user.email],
+        send_templated_email(
+            to_email=user.email,
+            subject=f"Verify your {settings.PLATFORM_NAME} account",
+            template_name="onboarding_verify_email.html",
+            context={
+                "first_name": user.first_name or "there",
+                "school_name": tenant.name,
+                "verify_url": verification_url,
+                "login_url": login_url,
+                "forgot_password_url": forgot_password_url,
+            },
             headers=build_bucket_headers(
                 tenant=tenant,
                 bucket="onboarding",
-                template_name="plain_text",
+                template_name="onboarding_verify_email.html",
                 event="onboarding_verification",
             ),
+            fail_silently=True,
         )
-        email.send(fail_silently=True)
     except Exception as e:
         logger.error(f"Failed to send verification email: {e}")
 

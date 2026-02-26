@@ -25,6 +25,7 @@ def send_onboard_welcome_email(result: dict) -> None:
     tenant = result["tenant"]
     admin = result["admin"]
     login_url = build_tenant_url(tenant=tenant, path="/login")
+    forgot_password_url = build_tenant_url(tenant=tenant, path="/forgot-password")
     platform_name = getattr(settings, "PLATFORM_NAME", "LearnPuddle")
 
     subject = f"Welcome to {platform_name} — Your school is ready!"
@@ -34,6 +35,7 @@ def send_onboard_welcome_email(result: dict) -> None:
         "email": admin.email,
         "school_name": tenant.name,
         "login_url": login_url,
+        "forgot_password_url": forgot_password_url,
     }
 
     fail_silently = getattr(settings, "EMAIL_FAIL_SILENTLY", False)
@@ -49,7 +51,7 @@ def send_onboard_welcome_email(result: dict) -> None:
         )
         logger.info(
             "Onboarding welcome email sent tenant=%s to=%s subdomain=%s",
-            tenant.id, admin.email, subdomain,
+            tenant.id, admin.email, tenant.subdomain,
         )
     except Exception as exc:
         logger.error(

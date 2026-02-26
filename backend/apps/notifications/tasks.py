@@ -44,6 +44,7 @@ def send_teacher_welcome_email(self, user_id: str, temp_password: str | None = N
     school_name = tenant.name if tenant else "your organization"
     platform_name = getattr(settings, "PLATFORM_NAME", "LearnPuddle")
     login_url = build_tenant_url(tenant=tenant, path="/login")
+    forgot_password_url = build_tenant_url(tenant=tenant, path="/forgot-password")
 
     subject = f"Welcome to {school_name} on {platform_name}"
 
@@ -53,6 +54,7 @@ def send_teacher_welcome_email(self, user_id: str, temp_password: str | None = N
         "temp_password": temp_password,
         "school_name": school_name,
         "login_url": login_url,
+        "forgot_password_url": forgot_password_url,
     }
 
     try:
@@ -98,6 +100,7 @@ def send_teacher_invitation_email(self, invitation_id: str):
     school_name = tenant.name if tenant else "your organization"
     platform_name = getattr(settings, "PLATFORM_NAME", "LearnPuddle")
     accept_url = build_tenant_url(tenant=tenant, path=f"/accept-invitation/{invitation.token}")
+    forgot_password_url = build_tenant_url(tenant=tenant, path="/forgot-password")
     inviter_name = invitation.invited_by.get_full_name() if invitation.invited_by else "your administrator"
     expires_at = invitation.expires_at.strftime("%B %d, %Y") if invitation.expires_at else "7 days from now"
 
@@ -110,6 +113,7 @@ def send_teacher_invitation_email(self, invitation_id: str):
         "inviter_name": inviter_name,
         "accept_url": accept_url,
         "expires_at": expires_at,
+        "forgot_password_url": forgot_password_url,
     }
 
     try:

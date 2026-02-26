@@ -57,7 +57,7 @@ class TenantMiddleware:
         # Public endpoints: do not enforce tenant-membership check
         # (but we still want tenant resolution for tenant-scoped responses like theme)
         public_paths = [
-            '/admin/',
+            '/django-admin/',
             '/api/auth/register/',  # Tenant registration (future)
             '/api/onboarding/',  # Tenant signup (root domain)
             '/api/users/auth/login/',
