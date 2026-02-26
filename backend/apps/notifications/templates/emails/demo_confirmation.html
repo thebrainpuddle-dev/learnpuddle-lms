@@ -1,0 +1,50 @@
+{% extends "emails/base.html" %}
+
+{% block title %}Demo Confirmed - {{ platform_name }}{% endblock %}
+
+{% block content %}
+<h1 class="greeting">Thanks for booking, {{ first_name }}!</h1>
+
+<p class="content">
+  Your demo with {{ platform_name }} is confirmed. We're excited to show you how our platform 
+  can transform learning for your organization.
+</p>
+
+<div class="highlight-box purple">
+  <p style="margin: 0 0 8px 0; font-size: 13px; color: #7c3aed; text-transform: uppercase; font-weight: 600; letter-spacing: 0.5px;">Scheduled For</p>
+  <p style="margin: 0; font-size: 20px; font-weight: 600; color: #1f2937;">{{ scheduled_at }}</p>
+</div>
+
+<div class="divider"></div>
+
+<p class="content" style="margin-bottom: 8px;"><strong>What to expect:</strong></p>
+
+<ul class="steps-list">
+  <li>
+    <span class="step-number">✓</span>
+    <span>A personalized walkthrough tailored to your needs</span>
+  </li>
+  <li>
+    <span class="step-number">✓</span>
+    <span>Q&A session about features, pricing, and setup</span>
+  </li>
+  <li>
+    <span class="step-number">✓</span>
+    <span>No commitment required — just a friendly conversation</span>
+  </li>
+</ul>
+
+{% if company %}
+<p class="content">
+  We've noted that you're from <strong>{{ company }}</strong> and we'll prepare relevant examples for your industry.
+</p>
+{% endif %}
+
+<p class="small-text">
+  Need to reschedule? Simply reply to this email and we'll find a time that works better.
+</p>
+{% endblock %}
+
+{% block footer_extra %}
+You're receiving this because you booked a demo at {{ platform_name }}.
+{% endblock %}

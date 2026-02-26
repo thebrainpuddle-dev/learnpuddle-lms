@@ -1,0 +1,60 @@
+{% extends "emails/base.html" %}
+
+{% block title %}Your School is Ready - {{ platform_name }}{% endblock %}
+
+{% block content %}
+<h1 class="greeting">Welcome, {{ first_name }}! 🚀</h1>
+
+<p class="content">
+  Congratulations! Your school <strong>"{{ school_name }}"</strong> has been set up on {{ platform_name }}. 
+  You're now ready to start managing courses, teachers, and learning experiences.
+</p>
+
+<div class="highlight-box purple">
+  <p style="margin: 0 0 12px 0; font-weight: 600; color: #6d28d9;">Your Admin Login</p>
+  <table cellspacing="0" cellpadding="0" border="0" style="width: 100%;">
+    <tr>
+      <td style="color: #6b7280; padding: 4px 0; width: 80px; font-size: 14px;">URL:</td>
+      <td style="color: #1f2937; padding: 4px 0; font-weight: 500; font-size: 14px;">
+        <a href="{{ login_url }}" style="color: #7c3aed; text-decoration: none;">{{ login_url }}</a>
+      </td>
+    </tr>
+    <tr>
+      <td style="color: #6b7280; padding: 4px 0; width: 80px; font-size: 14px;">Email:</td>
+      <td style="color: #1f2937; padding: 4px 0; font-weight: 500; font-size: 14px;">{{ email }}</td>
+    </tr>
+  </table>
+</div>
+
+<p style="text-align: center; margin: 32px 0;">
+  <a href="{{ login_url }}" class="btn">Go to Admin Dashboard</a>
+</p>
+
+<div class="divider"></div>
+
+<p class="content" style="margin-bottom: 8px;"><strong>Get started in 3 steps:</strong></p>
+
+<ul class="steps-list">
+  <li>
+    <span class="step-number">1</span>
+    <span><strong>Add teachers</strong> — Import via CSV or invite individually</span>
+  </li>
+  <li>
+    <span class="step-number">2</span>
+    <span><strong>Create courses</strong> — Upload videos, documents, and assessments</span>
+  </li>
+  <li>
+    <span class="step-number">3</span>
+    <span><strong>Assign & track</strong> — Assign courses and monitor progress</span>
+  </li>
+</ul>
+
+<p class="small-text">
+  Please change your password after your first login for security.<br>
+  If you have any questions, reply to this email — we're here to help!
+</p>
+{% endblock %}
+
+{% block footer_extra %}
+You're receiving this because you created a school on {{ platform_name }}.
+{% endblock %}

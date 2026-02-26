@@ -1,0 +1,42 @@
+{% extends "emails/base.html" %}
+
+{% block title %}Trial Expiring Soon - {{ platform_name }}{% endblock %}
+
+{% block content %}
+<h1 class="greeting">Hi {{ first_name }},</h1>
+
+<p class="content">
+  Your trial for <strong>"{{ school_name }}"</strong> on {{ platform_name }} 
+  will expire in <strong style="color: #dc2626;">{{ days_left }} day{% if days_left != 1 %}s{% endif %}</strong>.
+</p>
+
+<div class="highlight-box" style="border-color: #fecaca; background-color: #fef2f2;">
+  <p style="margin: 0; font-size: 15px; color: #991b1b;">
+    ⚠️ After your trial ends, you and your teachers will lose access to courses and progress data.
+  </p>
+</div>
+
+<p class="content">
+  Don't let your hard work go to waste! Upgrade now to continue using {{ platform_name }} 
+  with all your data intact.
+</p>
+
+<p style="text-align: center; margin: 32px 0;">
+  <a href="{{ login_url }}" class="btn">Upgrade Now</a>
+</p>
+
+<div class="divider"></div>
+
+<p class="content" style="font-size: 14px;">
+  <strong>Need more time?</strong> Reply to this email and we'll be happy to extend your trial 
+  so you can fully evaluate {{ platform_name }}.
+</p>
+
+<p class="small-text">
+  Questions about pricing or features? We're here to help.
+</p>
+{% endblock %}
+
+{% block footer_extra %}
+You're receiving this because your {{ platform_name }} trial is expiring soon.
+{% endblock %}

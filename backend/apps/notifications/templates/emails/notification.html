@@ -1,0 +1,26 @@
+{% extends "emails/base.html" %}
+
+{% block title %}{{ notification_title }} - {{ platform_name }}{% endblock %}
+
+{% block content %}
+<h1 class="greeting">Hi {{ first_name }},</h1>
+
+<div class="highlight-box">
+  <p style="margin: 0 0 8px 0; font-weight: 600; color: #1f2937;">{{ notification_title }}</p>
+  <p style="margin: 0; font-size: 15px; color: #4b5563; line-height: 1.6;">{{ notification_message }}</p>
+</div>
+
+{% if action_url %}
+<p style="text-align: center; margin: 32px 0;">
+  <a href="{{ action_url }}" class="btn">{{ action_text|default:"View Details" }}</a>
+</p>
+{% endif %}
+
+<p class="small-text">
+  Log in to your dashboard to see all your notifications and updates.
+</p>
+{% endblock %}
+
+{% block footer_extra %}
+You're receiving this notification from {{ school_name }}.
+{% endblock %}

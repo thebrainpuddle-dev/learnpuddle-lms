@@ -1,0 +1,59 @@
+{% extends "emails/base.html" %}
+
+{% block title %}Welcome to {{ school_name }}{% endblock %}
+
+{% block content %}
+<h1 class="greeting">Welcome, {{ first_name }}! 🎉</h1>
+
+<p class="content">
+  You've been added as a teacher to <strong>{{ school_name }}</strong> on {{ platform_name }}. 
+  Your account is ready and waiting for you.
+</p>
+
+<div class="highlight-box purple">
+  <p style="margin: 0 0 12px 0; font-weight: 600; color: #6d28d9;">Your Login Credentials</p>
+  <table cellspacing="0" cellpadding="0" border="0" style="width: 100%;">
+    <tr>
+      <td style="color: #6b7280; padding: 4px 0; width: 80px; font-size: 14px;">Email:</td>
+      <td style="color: #1f2937; padding: 4px 0; font-weight: 500; font-size: 14px;">{{ email }}</td>
+    </tr>
+    {% if temp_password %}
+    <tr>
+      <td style="color: #6b7280; padding: 4px 0; width: 80px; font-size: 14px;">Password:</td>
+      <td style="color: #1f2937; padding: 4px 0; font-weight: 500; font-size: 14px; font-family: monospace;">{{ temp_password }}</td>
+    </tr>
+    {% endif %}
+  </table>
+</div>
+
+<p style="text-align: center; margin: 32px 0;">
+  <a href="{{ login_url }}" class="btn">Log In to Your Account</a>
+</p>
+
+<div class="divider"></div>
+
+<p class="content" style="margin-bottom: 8px;"><strong>What's next?</strong></p>
+
+<ul class="steps-list">
+  <li>
+    <span class="step-number">1</span>
+    <span>Log in using the credentials above</span>
+  </li>
+  <li>
+    <span class="step-number">2</span>
+    <span>{% if temp_password %}Change your password for security{% else %}Complete your profile{% endif %}</span>
+  </li>
+  <li>
+    <span class="step-number">3</span>
+    <span>Explore your assigned courses and start learning</span>
+  </li>
+</ul>
+
+<p class="small-text">
+  If you have any questions, please contact your school administrator.
+</p>
+{% endblock %}
+
+{% block footer_extra %}
+This email was sent because you were added as a teacher to {{ school_name }}.
+{% endblock %}

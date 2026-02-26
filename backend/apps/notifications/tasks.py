@@ -4,6 +4,8 @@ from celery import shared_task
 from django.conf import settings
 from django.core.mail import send_mail
 
+from .email_utils import send_templated_email, build_login_url
+
 logger = logging.getLogger(__name__)
 
 
@@ -35,38 +37,25 @@ def send_teacher_welcome_email(self, user_id: str, temp_password: str | None = N
     tenant = teacher.tenant
     school_name = tenant.name if tenant else "your organization"
     platform_name = getattr(settings, "PLATFORM_NAME", "LearnPuddle")
-    platform_domain = getattr(settings, "PLATFORM_DOMAIN", "localhost")
     subdomain = tenant.subdomain if tenant else ""
-    login_url = f"https://{subdomain}.{platform_domain}/login" if subdomain else f"https://{platform_domain}/login"
-    from_email = getattr(settings, "DEFAULT_FROM_EMAIL", None) or f"noreply@{platform_domain}"
+    login_url = build_login_url(subdomain)
 
     subject = f"Welcome to {school_name} on {platform_name}"
 
-    password_line = ""
-    if temp_password:
-        password_line = f"Your temporary password: {temp_password}\nPlease change your password after your first login.\n\n"
-
-    body = (
-        f"Hi {teacher.first_name},\n\n"
-        f"You've been added to {school_name} on {platform_name}.\n\n"
-        f"Email: {teacher.email}\n"
-        f"{password_line}"
-        f"Log in here: {login_url}\n\n"
-        f"What's next:\n"
-        f"  1. Log in with the credentials above\n"
-        f"  2. Update your profile\n"
-        f"  3. Check your assigned courses\n\n"
-        f"If you have questions, please contact your school administrator.\n\n"
-        f"— The {platform_name} Team"
-    )
+    context = {
+        "first_name": teacher.first_name or "there",
+        "email": teacher.email,
+        "temp_password": temp_password,
+        "school_name": school_name,
+        "login_url": login_url,
+    }
 
     try:
-        send_mail(
+        send_templated_email(
+            to_email=teacher.email,
             subject=subject,
-            message=body,
-            from_email=from_email,
-            recipient_list=[teacher.email],
-            fail_silently=False,
+            template_name="teacher_welcome.html",
+            context=context,
         )
         logger.info("teacher welcome email sent to=%s user_id=%s", teacher.email, user_id)
         return {"sent": True, "to": teacher.email}
@@ -97,31 +86,28 @@ def send_teacher_invitation_email(self, invitation_id: str):
     tenant = invitation.tenant
     school_name = tenant.name if tenant else "your organization"
     platform_name = getattr(settings, "PLATFORM_NAME", "LearnPuddle")
-    platform_domain = getattr(settings, "PLATFORM_DOMAIN", "localhost")
     subdomain = tenant.subdomain if tenant else ""
-    base_url = f"https://{subdomain}.{platform_domain}" if subdomain else f"https://{platform_domain}"
-    accept_url = f"{base_url}/accept-invitation/{invitation.token}"
-    from_email = getattr(settings, "DEFAULT_FROM_EMAIL", None) or f"noreply@{platform_domain}"
+    accept_url = build_login_url(subdomain, f"/accept-invitation/{invitation.token}")
     inviter_name = invitation.invited_by.get_full_name() if invitation.invited_by else "your administrator"
+    expires_at = invitation.expires_at.strftime("%B %d, %Y") if invitation.expires_at else "7 days from now"
 
     subject = f"You're invited to join {school_name} on {platform_name}"
-    body = (
-        f"Hi {invitation.first_name},\n\n"
-        f"{inviter_name} has invited you to join {school_name} on {platform_name}.\n\n"
-        f"Click the link below to set your password and activate your account:\n\n"
-        f"  {accept_url}\n\n"
-        f"This invitation expires in 7 days.\n\n"
-        f"If you didn't expect this invitation, you can safely ignore this email.\n\n"
-        f"— The {platform_name} Team"
-    )
+
+    context = {
+        "first_name": invitation.first_name or "there",
+        "email": invitation.email,
+        "school_name": school_name,
+        "inviter_name": inviter_name,
+        "accept_url": accept_url,
+        "expires_at": expires_at,
+    }
 
     try:
-        send_mail(
+        send_templated_email(
+            to_email=invitation.email,
             subject=subject,
-            message=body,
-            from_email=from_email,
-            recipient_list=[invitation.email],
-            fail_silently=False,
+            template_name="teacher_invitation.html",
+            context=context,
         )
         logger.info("teacher invitation email sent to=%s invitation_id=%s", invitation.email, invitation_id)
         return {"sent": True, "to": invitation.email}
@@ -149,32 +135,23 @@ def send_demo_followup_email(self, booking_id: str):
         return {"skipped": True, "reason": "not_found"}
 
     platform_name = getattr(settings, "PLATFORM_NAME", "LearnPuddle")
-    platform_domain = getattr(settings, "PLATFORM_DOMAIN", "localhost")
-    from_email = getattr(settings, "DEFAULT_FROM_EMAIL", None) or f"noreply@{platform_domain}"
-
-    scheduled_str = booking.scheduled_at.strftime("%B %d, %Y at %I:%M %p") if booking.scheduled_at else "TBD"
+    scheduled_str = booking.scheduled_at.strftime("%B %d, %Y at %I:%M %p") if booking.scheduled_at else "To be confirmed"
     first_name = booking.name.split()[0] if booking.name else "there"
 
     subject = f"Thanks for booking a {platform_name} demo"
-    body = (
-        f"Hi {first_name},\n\n"
-        f"Thank you for scheduling a demo with {platform_name}!\n\n"
-        f"Your demo is scheduled for: {scheduled_str}\n\n"
-        f"What to expect:\n"
-        f"  - A walkthrough of the platform tailored to your needs\n"
-        f"  - Q&A session about features, pricing, and setup\n"
-        f"  - No commitment required\n\n"
-        f"If you need to reschedule, simply reply to this email.\n\n"
-        f"— The {platform_name} Team"
-    )
+
+    context = {
+        "first_name": first_name,
+        "scheduled_at": scheduled_str,
+        "company": booking.company or "",
+    }
 
     try:
-        send_mail(
+        send_templated_email(
+            to_email=booking.email,
             subject=subject,
-            message=body,
-            from_email=from_email,
-            recipient_list=[booking.email],
-            fail_silently=False,
+            template_name="demo_confirmation.html",
+            context=context,
         )
         from django.utils import timezone
         booking.followup_sent_at = timezone.now()
@@ -228,7 +205,7 @@ def send_notification_email(self, notification_id: str):
     from .models import Notification
 
     try:
-        notification = Notification.objects.select_related("teacher").get(id=notification_id)
+        notification = Notification.objects.select_related("teacher", "teacher__tenant").get(id=notification_id)
     except Notification.DoesNotExist:
         logger.warning("send_notification_email: notification %s not found", notification_id)
         return {"skipped": True, "reason": "not_found"}
@@ -247,19 +224,29 @@ def send_notification_email(self, notification_id: str):
     if not prefs.get("email_reminders", True):
         return {"skipped": True, "reason": "user_preference"}
 
-    from_email = getattr(settings, "DEFAULT_FROM_EMAIL", None) or f"noreply@{getattr(settings, 'PLATFORM_DOMAIN', 'localhost')}"
     platform_name = getattr(settings, "PLATFORM_NAME", "LearnPuddle")
+    tenant = teacher.tenant
+    school_name = tenant.name if tenant else "your organization"
+    subdomain = tenant.subdomain if tenant else ""
+    dashboard_url = build_login_url(subdomain, "/dashboard")
 
     subject = f"[{platform_name}] {notification.title}"
-    body = notification.message
+
+    context = {
+        "first_name": teacher.first_name or "there",
+        "notification_title": notification.title,
+        "notification_message": notification.message,
+        "school_name": school_name,
+        "action_url": dashboard_url,
+        "action_text": "Go to Dashboard",
+    }
 
     try:
-        send_mail(
+        send_templated_email(
+            to_email=teacher.email,
             subject=subject,
-            message=body,
-            from_email=from_email,
-            recipient_list=[teacher.email],
-            fail_silently=False,
+            template_name="notification.html",
+            context=context,
         )
         logger.info(
             "notification email sent id=%s to=%s type=%s",

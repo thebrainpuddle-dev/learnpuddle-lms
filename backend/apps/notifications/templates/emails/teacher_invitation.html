@@ -1,0 +1,52 @@
+{% extends "emails/base.html" %}
+
+{% block title %}You're Invited to {{ school_name }}{% endblock %}
+
+{% block content %}
+<h1 class="greeting">Hi {{ first_name }},</h1>
+
+<p class="content">
+  <strong>{{ inviter_name }}</strong> has invited you to join <strong>{{ school_name }}</strong> 
+  on {{ platform_name }}.
+</p>
+
+<p class="content">
+  Click the button below to set your password and activate your account. It only takes a minute!
+</p>
+
+<p style="text-align: center; margin: 32px 0;">
+  <a href="{{ accept_url }}" class="btn">Accept Invitation</a>
+</p>
+
+<div class="highlight-box">
+  <table cellspacing="0" cellpadding="0" border="0" style="width: 100%;">
+    <tr>
+      <td style="color: #6b7280; padding: 4px 0; width: 100px; font-size: 14px;">School:</td>
+      <td style="color: #1f2937; padding: 4px 0; font-weight: 500; font-size: 14px;">{{ school_name }}</td>
+    </tr>
+    <tr>
+      <td style="color: #6b7280; padding: 4px 0; width: 100px; font-size: 14px;">Your Email:</td>
+      <td style="color: #1f2937; padding: 4px 0; font-weight: 500; font-size: 14px;">{{ email }}</td>
+    </tr>
+    <tr>
+      <td style="color: #6b7280; padding: 4px 0; width: 100px; font-size: 14px;">Expires:</td>
+      <td style="color: #1f2937; padding: 4px 0; font-weight: 500; font-size: 14px;">{{ expires_at }}</td>
+    </tr>
+  </table>
+</div>
+
+<p class="small-text">
+  If you didn't expect this invitation, you can safely ignore this email.
+</p>
+
+<div class="divider"></div>
+
+<p class="content" style="font-size: 13px; color: #9ca3af;">
+  <strong>Link not working?</strong> Copy and paste this URL into your browser:<br>
+  <span style="word-break: break-all; color: #7c3aed;">{{ accept_url }}</span>
+</p>
+{% endblock %}
+
+{% block footer_extra %}
+This invitation expires in 7 days.
+{% endblock %}
