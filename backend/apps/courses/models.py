@@ -200,8 +200,8 @@ class Content(SoftDeleteMixin, models.Model):
         ('DOCUMENT', 'Document'),
         ('LINK', 'External Link'),
         ('TEXT', 'Text Content'),
-        ('INTERACTIVE_LESSON', 'Interactive Lesson'),
-        ('SCENARIO', 'Scenario Simulation'),
+        ('AI_CLASSROOM', 'AI Classroom'),
+        ('CHATBOT', 'AI Chatbot'),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -218,6 +218,22 @@ class Content(SoftDeleteMixin, models.Model):
 
     # Text content
     text_content = models.TextField(blank=True)
+
+    # Linked AI content
+    maic_classroom = models.ForeignKey(
+        'courses.MAICClassroom',
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='content_items',
+        help_text="Linked MAIC classroom when content_type=AI_CLASSROOM",
+    )
+    ai_chatbot = models.ForeignKey(
+        'courses.AIChatbot',
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='content_items',
+        help_text="Linked AI chatbot when content_type=CHATBOT",
+    )
 
     # Settings
     is_mandatory = models.BooleanField(default=True)
@@ -281,3 +297,8 @@ from .video_models import VideoAsset, VideoTranscript  # noqa: E402,F401
 
 # MAIC models (AI Classroom)
 from .maic_models import TenantAIConfig, MAICClassroom  # noqa: E402,F401
+
+# AI Chatbot models
+from .chatbot_models import (  # noqa: E402,F401
+    AIChatbot, AIChatbotKnowledge, AIChatbotChunk, AIChatbotConversation,
+)

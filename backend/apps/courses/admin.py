@@ -3,6 +3,7 @@
 from django.contrib import admin
 from .models import TeacherGroup, Course, Module, Content
 from .maic_models import TenantAIConfig, MAICClassroom
+from .chatbot_models import AIChatbot, AIChatbotKnowledge, AIChatbotConversation
 
 
 class TenantFilteredAdmin(admin.ModelAdmin):
@@ -117,3 +118,32 @@ class MAICClassroomAdmin(TenantFilteredAdmin):
     list_filter = ['status', 'is_public', 'tenant']
     search_fields = ['title', 'topic']
     readonly_fields = ['id', 'config', 'created_at', 'updated_at']
+
+
+# --- Chatbot Admin --------------------------------------------------------
+
+@admin.register(AIChatbot)
+class AIChatbotAdmin(TenantFilteredAdmin):
+    list_display = ['name', 'creator', 'persona_preset', 'is_active', 'created_at']
+    list_filter = ['persona_preset', 'is_active', 'tenant']
+    search_fields = ['name']
+
+
+@admin.register(AIChatbotKnowledge)
+class AIChatbotKnowledgeAdmin(admin.ModelAdmin):
+    list_display = ['title', 'chatbot', 'source_type', 'embedding_status', 'chunk_count']
+    list_filter = ['embedding_status', 'source_type']
+
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        if request.user.is_superuser:
+            return qs
+        if hasattr(request.user, 'tenant') and request.user.tenant:
+            return qs.filter(chatbot__tenant=request.user.tenant)
+        return qs.none()
+
+
+@admin.register(AIChatbotConversation)
+class AIChatbotConversationAdmin(TenantFilteredAdmin):
+    list_display = ['title', 'chatbot', 'student', 'message_count', 'is_flagged', 'last_message_at']
+    list_filter = ['is_flagged']

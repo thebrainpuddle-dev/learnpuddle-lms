@@ -1,52 +1,24 @@
 // src/App.tsx
 
-import React, { useEffect, useState } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import React, { useEffect, useState, Suspense } from 'react';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { applyTheme, loadTenantTheme, DEFAULT_THEME, type TenantTheme } from './config/theme';
-import { ProtectedRoute, ToastProvider, ErrorBoundary, PWAPrompt, OfflineIndicator } from './components/common';
-import { LoginPage } from './pages/auth/LoginPage';
-import { SuperAdminLoginPage } from './pages/auth/SuperAdminLoginPage';
-import { ForgotPasswordPage } from './pages/auth/ForgotPasswordPage';
-import { ResetPasswordPage } from './pages/auth/ResetPasswordPage';
-import { VerifyEmailPage } from './pages/auth/VerifyEmailPage';
-import { SSOCallbackPage } from './pages/auth/SSOCallbackPage';
-import { SignupPage } from './pages/onboarding/SignupPage';
-import { SecuritySettings } from './pages/settings/SecuritySettings';
+import {
+  ProtectedRoute,
+  ToastProvider,
+  ErrorBoundary,
+  PageErrorBoundary,
+  PWAPrompt,
+  OfflineIndicator,
+} from './components/common';
+// InstallPrompt removed — PWAPrompt (via usePWA) handles both install and update notifications
+// import { InstallPrompt } from './components/pwa';
 import { AdminLayout } from './components/layout/AdminLayout';
 import { TeacherLayout } from './components/layout/TeacherLayout';
-import {
-  DashboardPage as AdminDashboardPage,
-  TeachersPage,
-  CreateTeacherPage,
-  CoursesPage as AdminCoursesPage,
-  CourseEditorPage,
-  AnalyticsPage,
-  SettingsPage,
-  GroupsPage,
-  RemindersPage,
-  MediaLibraryPage,
-  AnnouncementsPage,
-} from './pages/admin';
-import {
-  DashboardPage as TeacherDashboardPage,
-  MyCoursesPage,
-  CourseViewPage,
-  AssignmentsPage,
-  RemindersPage as TeacherRemindersPage,
-  QuizPage,
-  ProfilePage,
-} from './pages/teacher';
+import { StudentLayout } from './components/layout/StudentLayout';
 import { SuperAdminLayout } from './components/layout/SuperAdminLayout';
-import {
-  SuperAdminDashboardPage,
-  OperationsPage as SuperAdminOperationsPage,
-  SchoolsPage as SuperAdminSchoolsPage,
-  SchoolDetailPage as SuperAdminSchoolDetailPage,
-  DemoBookingsPage as SuperAdminDemoBookingsPage,
-} from './pages/superadmin';
-import { AcceptInvitationPage } from './pages/auth/AcceptInvitationPage';
-import { ProductLandingPage } from './pages/marketing';
+import { PageShell } from './design-system/layout';
 import api from './config/api';
 import { useSessionLifecycle } from './hooks/useSessionLifecycle';
 import { useAuthStore } from './stores/authStore';
@@ -55,6 +27,203 @@ import { TourProvider } from './components/tour';
 import { isPlatformRequest } from './utils/hostRouting';
 import './assets/styles/index.css';
 
+// ─── Static imports (keep for fast initial load) ────────────────────────────
+import { LoginPage } from './pages/auth/LoginPage';
+import { PageLoader } from './components/PageLoader';
+
+// ─── Lazy-loaded page components ────────────────────────────────────────────
+// Auth
+const SuperAdminLoginPage = React.lazy(() =>
+  import('./pages/auth/SuperAdminLoginPage').then((m) => ({ default: m.SuperAdminLoginPage }))
+);
+const ForgotPasswordPage = React.lazy(() =>
+  import('./pages/auth/ForgotPasswordPage').then((m) => ({ default: m.ForgotPasswordPage }))
+);
+const ResetPasswordPage = React.lazy(() =>
+  import('./pages/auth/ResetPasswordPage').then((m) => ({ default: m.ResetPasswordPage }))
+);
+const VerifyEmailPage = React.lazy(() =>
+  import('./pages/auth/VerifyEmailPage').then((m) => ({ default: m.VerifyEmailPage }))
+);
+const SSOCallbackPage = React.lazy(() =>
+  import('./pages/auth/SSOCallbackPage').then((m) => ({ default: m.SSOCallbackPage }))
+);
+const AcceptInvitationPage = React.lazy(() =>
+  import('./pages/auth/AcceptInvitationPage').then((m) => ({ default: m.AcceptInvitationPage }))
+);
+
+// Onboarding / settings
+const SignupPage = React.lazy(() =>
+  import('./pages/onboarding/SignupPage').then((m) => ({ default: m.SignupPage }))
+);
+const SecuritySettings = React.lazy(() =>
+  import('./pages/settings/SecuritySettings').then((m) => ({ default: m.SecuritySettings }))
+);
+
+// Marketing
+const ProductLandingPage = React.lazy(() =>
+  import('./pages/marketing').then((m) => ({ default: m.ProductLandingPage }))
+);
+
+// Admin pages
+const AdminDashboardPage = React.lazy(() =>
+  import('./pages/admin/DashboardPage').then((m) => ({ default: m.DashboardPage }))
+);
+const TeachersPage = React.lazy(() =>
+  import('./pages/admin/TeachersPage').then((m) => ({ default: m.TeachersPage }))
+);
+const CreateTeacherPage = React.lazy(() =>
+  import('./pages/admin/CreateTeacherPage').then((m) => ({ default: m.CreateTeacherPage }))
+);
+const AdminCoursesPage = React.lazy(() =>
+  import('./pages/admin/CoursesPage').then((m) => ({ default: m.CoursesPage }))
+);
+const CourseEditorPage = React.lazy(() =>
+  import('./pages/admin/CourseEditorPage').then((m) => ({ default: m.CourseEditorPage }))
+);
+const AnalyticsPage = React.lazy(() =>
+  import('./pages/admin/AnalyticsPage').then((m) => ({ default: m.AnalyticsPage }))
+);
+const SettingsPage = React.lazy(() =>
+  import('./pages/admin/SettingsPage').then((m) => ({ default: m.SettingsPage }))
+);
+const GroupsPage = React.lazy(() =>
+  import('./pages/admin/GroupsPage').then((m) => ({ default: m.GroupsPage }))
+);
+const RemindersPage = React.lazy(() =>
+  import('./pages/admin/RemindersPage').then((m) => ({ default: m.RemindersPage }))
+);
+const CertificationsPage = React.lazy(() =>
+  import('./pages/admin/CertificationsPage').then((m) => ({ default: m.CertificationsPage }))
+);
+const BillingPage = React.lazy(() =>
+  import('./pages/admin/BillingPage').then((m) => ({ default: m.BillingPage }))
+);
+const SchoolViewPage = React.lazy(() =>
+  import('./pages/admin/SchoolViewPage').then((m) => ({ default: m.SchoolViewPage }))
+);
+const GradeDetailPage = React.lazy(() =>
+  import('./pages/admin/GradeDetailPage').then((m) => ({ default: m.GradeDetailPage }))
+);
+const AdminSectionDetailPage = React.lazy(() =>
+  import('./pages/admin/SectionDetailPage').then((m) => ({ default: m.SectionDetailPage }))
+);
+
+// Teacher pages
+const TeacherDashboardPage = React.lazy(() =>
+  import('./pages/teacher/DashboardPage').then((m) => ({ default: m.DashboardPage }))
+);
+const MyCoursesPage = React.lazy(() =>
+  import('./pages/teacher/MyCoursesPage').then((m) => ({ default: m.MyCoursesPage }))
+);
+const CourseViewPage = React.lazy(() =>
+  import('./pages/teacher/CourseViewPage').then((m) => ({ default: m.CourseViewPage }))
+);
+const AssignmentsPage = React.lazy(() =>
+  import('./pages/teacher/AssignmentsPage').then((m) => ({ default: m.AssignmentsPage }))
+);
+const TeacherRemindersPage = React.lazy(() =>
+  import('./pages/teacher/RemindersPage').then((m) => ({ default: m.RemindersPage }))
+);
+const QuizPage = React.lazy(() =>
+  import('./pages/teacher/QuizPage').then((m) => ({ default: m.QuizPage }))
+);
+const ProfilePage = React.lazy(() =>
+  import('./pages/teacher/ProfilePage').then((m) => ({ default: m.ProfilePage }))
+);
+const GamificationPage = React.lazy(() => import('./pages/teacher/GamificationPage'));
+const CompetencyPage = React.lazy(() =>
+  import('./pages/teacher/CompetencyPage').then((m) => ({ default: m.CompetencyPage }))
+);
+const MyClassesPage = React.lazy(() =>
+  import('./pages/teacher/MyClassesPage').then((m) => ({ default: m.MyClassesPage }))
+);
+const TeacherSectionDashboardPage = React.lazy(() =>
+  import('./pages/teacher/SectionDashboardPage').then((m) => ({ default: m.SectionDashboardPage }))
+);
+
+// OpenMAIC Features
+const DiscussionPage = React.lazy(() =>
+  import('./pages/teacher/DiscussionPage').then((m) => ({ default: m.DiscussionPage }))
+);
+const DiscussionThreadPage = React.lazy(() =>
+  import('./pages/teacher/DiscussionThreadPage').then((m) => ({ default: m.DiscussionThreadPage }))
+);
+
+// MAIC AI Classroom
+const MAICLibraryPage = React.lazy(() =>
+  import('./pages/teacher/MAICLibraryPage').then((m) => ({ default: m.MAICLibraryPage }))
+);
+const MAICCreatePage = React.lazy(() =>
+  import('./pages/teacher/MAICCreatePage').then((m) => ({ default: m.MAICCreatePage }))
+);
+const MAICPlayerPage = React.lazy(() =>
+  import('./pages/teacher/MAICPlayerPage').then((m) => ({ default: m.MAICPlayerPage }))
+);
+const MAICBrowsePage = React.lazy(() =>
+  import('./pages/student/MAICBrowsePage').then((m) => ({ default: m.MAICBrowsePage }))
+);
+const StudentMAICPlayerPage = React.lazy(() =>
+  import('./pages/student/MAICPlayerPage').then((m) => ({ default: m.StudentMAICPlayerPage }))
+);
+
+// AI Chatbot
+const ChatbotListPage = React.lazy(() =>
+  import('./pages/teacher/ChatbotListPage').then((m) => ({ default: m.ChatbotListPage }))
+);
+const ChatbotBuilderPage = React.lazy(() =>
+  import('./pages/teacher/ChatbotBuilderPage').then((m) => ({ default: m.ChatbotBuilderPage }))
+);
+const StudentChatbotsPage = React.lazy(() =>
+  import('./pages/student/StudentChatbotsPage').then((m) => ({ default: m.StudentChatbotsPage }))
+);
+const StudentChatPage = React.lazy(() =>
+  import('./pages/student/StudentChatPage').then((m) => ({ default: m.StudentChatPage }))
+);
+
+// Student pages
+const StudentDashboardPage = React.lazy(() =>
+  import('./pages/student/DashboardPage').then((m) => ({ default: m.DashboardPage }))
+);
+const StudentCourseListPage = React.lazy(() =>
+  import('./pages/student/CourseListPage').then((m) => ({ default: m.CourseListPage }))
+);
+const StudentCourseViewPage = React.lazy(() =>
+  import('./pages/student/CourseViewPage').then((m) => ({ default: m.CourseViewPage }))
+);
+const StudentAssignmentsPage = React.lazy(() =>
+  import('./pages/student/AssignmentsPage').then((m) => ({ default: m.AssignmentsPage }))
+);
+const StudentQuizPage = React.lazy(() =>
+  import('./pages/student/QuizPage').then((m) => ({ default: m.QuizPage }))
+);
+const StudentProfilePage = React.lazy(() =>
+  import('./pages/student/ProfilePage').then((m) => ({ default: m.ProfilePage }))
+);
+const StudentSettingsPage = React.lazy(() =>
+  import('./pages/student/SettingsPage').then((m) => ({ default: m.SettingsPage }))
+);
+const StudentAchievementsPage = React.lazy(() =>
+  import('./pages/student/AchievementsPage').then((m) => ({ default: m.AchievementsPage }))
+);
+// Super Admin pages
+const SuperAdminDashboardPage = React.lazy(() =>
+  import('./pages/superadmin/DashboardPage').then((m) => ({ default: m.SuperAdminDashboardPage }))
+);
+const SuperAdminOperationsPage = React.lazy(() =>
+  import('./pages/superadmin/OperationsPage').then((m) => ({ default: m.OperationsPage }))
+);
+const SuperAdminSchoolsPage = React.lazy(() =>
+  import('./pages/superadmin/SchoolsPage').then((m) => ({ default: m.SchoolsPage }))
+);
+const SuperAdminSchoolDetailPage = React.lazy(() =>
+  import('./pages/superadmin/SchoolDetailPage').then((m) => ({ default: m.SchoolDetailPage }))
+);
+const SuperAdminDemoBookingsPage = React.lazy(() =>
+  import('./pages/superadmin/DemoBookingsPage').then((m) => ({ default: m.DemoBookingsPage }))
+);
+
+// ─── QueryClient ─────────────────────────────────────────────────────────────
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
@@ -77,7 +246,21 @@ function getDashboardPathForRole(role?: string | null): string | null {
   if (role === 'SUPER_ADMIN') return '/super-admin/dashboard';
   if (role === 'SCHOOL_ADMIN') return '/admin/dashboard';
   if (role === 'TEACHER' || role === 'HOD' || role === 'IB_COORDINATOR') return '/teacher/dashboard';
+  if (role === 'STUDENT') return '/student/dashboard';
   return null;
+}
+
+// Wrap a page element with both an ErrorBoundary and a Suspense boundary.
+// The ErrorBoundary resets automatically when the URL pathname changes.
+function RoutePage({ children }: { children: React.ReactNode }) {
+  const { pathname } = useLocation();
+  return (
+    <PageErrorBoundary pathname={pathname}>
+      <Suspense fallback={<PageLoader />}>
+        {children}
+      </Suspense>
+    </PageErrorBoundary>
+  );
 }
 
 function AppContent() {
@@ -135,27 +318,33 @@ function AppContent() {
           ) : isAuthenticated && user && dashboardPath ? (
             <Navigate to={dashboardPath} replace />
           ) : (
-            <LoginPage />
+            <RoutePage><LoginPage /></RoutePage>
           )
         }
       />
 
       {/* Public Routes — Password Reset */}
-      <Route path="/forgot-password" element={<ForgotPasswordPage />} />
-      <Route path="/reset-password" element={<ResetPasswordPage />} />
-      <Route path="/verify-email" element={<VerifyEmailPage />} />
+      <Route path="/forgot-password" element={<RoutePage><ForgotPasswordPage /></RoutePage>} />
+      <Route path="/reset-password" element={<RoutePage><ResetPasswordPage /></RoutePage>} />
+      <Route path="/verify-email" element={<RoutePage><VerifyEmailPage /></RoutePage>} />
 
       {/* Public Routes — SSO Callback */}
-      <Route path="/auth/sso-callback" element={<SSOCallbackPage />} />
+      <Route path="/auth/sso-callback" element={<RoutePage><SSOCallbackPage /></RoutePage>} />
 
       {/* Public Routes — Tenant Self-Service Signup */}
       <Route
         path="/signup"
-        element={onPlatformHost ? <Navigate to="/" replace /> : <SignupPage />}
+        element={
+          onPlatformHost ? (
+            <Navigate to="/" replace />
+          ) : (
+            <RoutePage><SignupPage /></RoutePage>
+          )
+        }
       />
 
       {/* Public Routes — Teacher Invitation Acceptance */}
-      <Route path="/accept-invitation/:token" element={<AcceptInvitationPage />} />
+      <Route path="/accept-invitation/:token" element={<RoutePage><AcceptInvitationPage /></RoutePage>} />
 
       {/* Public Routes — Super Admin login (platform admin) */}
       <Route
@@ -164,11 +353,11 @@ function AppContent() {
           isAuthenticated && user ? (
             <Navigate to={getDashboardPathForRole(user.role) || '/login'} replace />
           ) : (
-            <SuperAdminLoginPage />
+            <RoutePage><SuperAdminLoginPage /></RoutePage>
           )
         }
       />
-      
+
       {/* Protected Super Admin (Command Center) Routes */}
       <Route
         path="/super-admin"
@@ -178,11 +367,11 @@ function AppContent() {
           </ProtectedRoute>
         }
       >
-        <Route path="dashboard" element={<SuperAdminDashboardPage />} />
-        <Route path="operations" element={<SuperAdminOperationsPage />} />
-        <Route path="schools" element={<SuperAdminSchoolsPage />} />
-        <Route path="schools/:tenantId" element={<SuperAdminSchoolDetailPage />} />
-        <Route path="demo-bookings" element={<SuperAdminDemoBookingsPage />} />
+        <Route path="dashboard" element={<RoutePage><SuperAdminDashboardPage /></RoutePage>} />
+        <Route path="operations" element={<RoutePage><SuperAdminOperationsPage /></RoutePage>} />
+        <Route path="schools" element={<RoutePage><SuperAdminSchoolsPage /></RoutePage>} />
+        <Route path="schools/:tenantId" element={<RoutePage><SuperAdminSchoolDetailPage /></RoutePage>} />
+        <Route path="demo-bookings" element={<RoutePage><SuperAdminDemoBookingsPage /></RoutePage>} />
         <Route index element={<Navigate to="/super-admin/dashboard" replace />} />
         <Route path="*" element={<Navigate to="/super-admin/dashboard" replace />} />
       </Route>
@@ -192,27 +381,30 @@ function AppContent() {
         path="/admin"
         element={
           <ProtectedRoute allowedRoles={['SCHOOL_ADMIN']}>
-            <AdminLayout />
+            <PageShell />
           </ProtectedRoute>
         }
       >
-        <Route path="dashboard" element={<AdminDashboardPage />} />
-        <Route path="courses" element={<AdminCoursesPage />} />
-        <Route path="courses/new" element={<CourseEditorPage />} />
-        <Route path="courses/:courseId/edit" element={<CourseEditorPage />} />
-        <Route path="media" element={<MediaLibraryPage />} />
-        <Route path="teachers" element={<TeachersPage />} />
-        <Route path="teachers/new" element={<CreateTeacherPage />} />
-        <Route path="groups" element={<GroupsPage />} />
-        <Route path="reminders" element={<RemindersPage />} />
-        <Route path="announcements" element={<AnnouncementsPage />} />
-        <Route path="analytics" element={<AnalyticsPage />} />
-        <Route path="settings" element={<SettingsPage />} />
-        <Route path="settings/security" element={<SecuritySettings />} />
+        <Route path="dashboard" element={<RoutePage><AdminDashboardPage /></RoutePage>} />
+        <Route path="courses" element={<RoutePage><AdminCoursesPage /></RoutePage>} />
+        <Route path="courses/new" element={<RoutePage><CourseEditorPage /></RoutePage>} />
+        <Route path="certifications" element={<RoutePage><CertificationsPage /></RoutePage>} />
+        <Route path="courses/:courseId/edit" element={<RoutePage><CourseEditorPage /></RoutePage>} />
+        <Route path="teachers" element={<RoutePage><TeachersPage /></RoutePage>} />
+        <Route path="teachers/new" element={<RoutePage><CreateTeacherPage /></RoutePage>} />
+        <Route path="groups" element={<RoutePage><GroupsPage /></RoutePage>} />
+        <Route path="reminders" element={<RoutePage><RemindersPage /></RoutePage>} />
+        <Route path="school" element={<RoutePage><SchoolViewPage /></RoutePage>} />
+        <Route path="school/grade/:gradeId" element={<RoutePage><GradeDetailPage /></RoutePage>} />
+        <Route path="school/section/:sectionId" element={<RoutePage><AdminSectionDetailPage /></RoutePage>} />
+        <Route path="analytics" element={<RoutePage><AnalyticsPage /></RoutePage>} />
+        <Route path="billing" element={<RoutePage><BillingPage /></RoutePage>} />
+        <Route path="settings" element={<RoutePage><SettingsPage /></RoutePage>} />
+        <Route path="settings/security" element={<RoutePage><SecuritySettings /></RoutePage>} />
         <Route index element={<Navigate to="/admin/dashboard" replace />} />
         <Route path="*" element={<Navigate to="/admin/dashboard" replace />} />
       </Route>
-      
+
       {/* Protected Teacher Routes with Layout */}
       <Route
         path="/teacher"
@@ -222,27 +414,66 @@ function AppContent() {
           </ProtectedRoute>
         }
       >
-        <Route path="dashboard" element={<TeacherDashboardPage />} />
-        <Route path="courses" element={<MyCoursesPage />} />
-        <Route path="courses/:courseId" element={<CourseViewPage />} />
-        <Route path="authoring" element={<AdminCoursesPage />} />
-        <Route path="authoring/new" element={<CourseEditorPage />} />
-        <Route path="authoring/:courseId/edit" element={<CourseEditorPage />} />
-        <Route path="assignments" element={<AssignmentsPage />} />
-        <Route path="reminders" element={<TeacherRemindersPage />} />
-        <Route path="quizzes/:assignmentId" element={<QuizPage />} />
-        <Route path="profile" element={<ProfilePage />} />
-        <Route path="settings/security" element={<SecuritySettings />} />
+        <Route path="dashboard" element={<RoutePage><TeacherDashboardPage /></RoutePage>} />
+        <Route path="courses" element={<RoutePage><MyCoursesPage /></RoutePage>} />
+        <Route path="courses/:courseId" element={<RoutePage><CourseViewPage /></RoutePage>} />
+        <Route path="authoring" element={<RoutePage><AdminCoursesPage /></RoutePage>} />
+        <Route path="authoring/new" element={<RoutePage><CourseEditorPage /></RoutePage>} />
+        <Route path="authoring/:courseId/edit" element={<RoutePage><CourseEditorPage /></RoutePage>} />
+        <Route path="assignments" element={<RoutePage><AssignmentsPage /></RoutePage>} />
+        <Route path="reminders" element={<RoutePage><TeacherRemindersPage /></RoutePage>} />
+        <Route path="quizzes/:assignmentId" element={<RoutePage><QuizPage /></RoutePage>} />
+        <Route path="profile" element={<RoutePage><ProfilePage /></RoutePage>} />
+        <Route path="gamification" element={<RoutePage><GamificationPage /></RoutePage>} />
+        <Route path="competency" element={<RoutePage><CompetencyPage /></RoutePage>} />
+        {/* OpenMAIC Features */}
+        <Route path="ai-classroom" element={<RoutePage><MAICLibraryPage /></RoutePage>} />
+        <Route path="ai-classroom/new" element={<RoutePage><MAICCreatePage /></RoutePage>} />
+        <Route path="ai-classroom/:id" element={<RoutePage><MAICPlayerPage /></RoutePage>} />
+        <Route path="chatbots" element={<RoutePage><ChatbotListPage /></RoutePage>} />
+        <Route path="chatbots/new" element={<RoutePage><ChatbotBuilderPage /></RoutePage>} />
+        <Route path="chatbots/:id" element={<RoutePage><ChatbotBuilderPage /></RoutePage>} />
+        <Route path="discussions" element={<RoutePage><DiscussionPage /></RoutePage>} />
+        <Route path="discussions/:threadId" element={<RoutePage><DiscussionThreadPage /></RoutePage>} />
+        <Route path="my-classes" element={<RoutePage><MyClassesPage /></RoutePage>} />
+        <Route path="my-classes/section/:sectionId" element={<RoutePage><TeacherSectionDashboardPage /></RoutePage>} />
+        <Route path="settings/security" element={<RoutePage><SecuritySettings /></RoutePage>} />
         <Route index element={<Navigate to="/teacher/dashboard" replace />} />
         <Route path="*" element={<Navigate to="/teacher/dashboard" replace />} />
       </Route>
-      
+
+      {/* Protected Student Routes with Layout */}
+      <Route
+        path="/student"
+        element={
+          <ProtectedRoute allowedRoles={['STUDENT']}>
+            <StudentLayout />
+          </ProtectedRoute>
+        }
+      >
+        <Route path="dashboard" element={<RoutePage><StudentDashboardPage /></RoutePage>} />
+        <Route path="courses" element={<RoutePage><StudentCourseListPage /></RoutePage>} />
+        <Route path="courses/:courseId" element={<RoutePage><StudentCourseViewPage /></RoutePage>} />
+        <Route path="assignments" element={<RoutePage><StudentAssignmentsPage /></RoutePage>} />
+        <Route path="quizzes/:assignmentId" element={<RoutePage><StudentQuizPage /></RoutePage>} />
+        <Route path="achievements" element={<RoutePage><StudentAchievementsPage /></RoutePage>} />
+        <Route path="ai-classroom" element={<RoutePage><MAICBrowsePage /></RoutePage>} />
+        <Route path="ai-classroom/:id" element={<RoutePage><StudentMAICPlayerPage /></RoutePage>} />
+        <Route path="chatbots" element={<RoutePage><StudentChatbotsPage /></RoutePage>} />
+        <Route path="chatbots/:id" element={<RoutePage><StudentChatPage /></RoutePage>} />
+        <Route path="profile" element={<RoutePage><StudentProfilePage /></RoutePage>} />
+        <Route path="settings" element={<RoutePage><StudentSettingsPage /></RoutePage>} />
+        <Route path="settings/security" element={<RoutePage><SecuritySettings /></RoutePage>} />
+        <Route index element={<Navigate to="/student/dashboard" replace />} />
+        <Route path="*" element={<Navigate to="/student/dashboard" replace />} />
+      </Route>
+
       {/* Default redirect */}
       <Route
         path="/"
         element={
           onPlatformHost ? (
-            <ProductLandingPage />
+            <RoutePage><ProductLandingPage /></RoutePage>
           ) : (
             <Navigate
               to={
@@ -255,7 +486,7 @@ function AppContent() {
           )
         }
       />
-      
+
       {/* 404 */}
       <Route
         path="*"
@@ -345,7 +576,7 @@ function TenantErrorPage({ theme }: { theme: TenantTheme }) {
 function App() {
   const [loading, setLoading] = useState(true);
   const { theme, setTheme } = useTenantStore();
-  
+
   useEffect(() => {
     loadTenantTheme()
       .then((tenantTheme) => {
@@ -359,7 +590,7 @@ function App() {
         setLoading(false);
       });
   }, [setTheme]);
-  
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -372,7 +603,7 @@ function App() {
   if (!theme.tenantFound) {
     return <TenantErrorPage theme={theme} />;
   }
-  
+
   return (
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>

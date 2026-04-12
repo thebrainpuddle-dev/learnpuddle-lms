@@ -272,7 +272,7 @@ Return exactly {num_modules} sections. Use realistic, specific titles and descri
                 item.setdefault("order", cidx)
                 # Normalize content_type
                 ct = str(item["content_type"]).upper()
-                if ct not in {"VIDEO", "DOCUMENT", "TEXT", "LINK", "INTERACTIVE_LESSON", "SCENARIO"}:
+                if ct not in {"VIDEO", "DOCUMENT", "TEXT", "LINK", "AI_CLASSROOM", "CHATBOT"}:
                     item["content_type"] = "TEXT"
                 else:
                     item["content_type"] = ct

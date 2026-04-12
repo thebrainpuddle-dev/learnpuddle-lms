@@ -17,6 +17,8 @@ class ContentSerializer(serializers.ModelSerializer):
     """Serializer for course content."""
     video_status = serializers.SerializerMethodField()
     file_url = serializers.SerializerMethodField()
+    maic_classroom_id = serializers.PrimaryKeyRelatedField(source='maic_classroom', read_only=True)
+    ai_chatbot_id = serializers.PrimaryKeyRelatedField(source='ai_chatbot', read_only=True)
 
     class Meta:
         model = Content
@@ -24,7 +26,7 @@ class ContentSerializer(serializers.ModelSerializer):
             'id', 'title', 'content_type', 'order',
             'file_url', 'file_size', 'duration',
             'text_content', 'is_mandatory', 'is_active',
-            'video_status',
+            'video_status', 'maic_classroom_id', 'ai_chatbot_id',
             'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
@@ -479,13 +481,14 @@ class CreateModuleSerializer(serializers.ModelSerializer):
 
 class CreateContentSerializer(serializers.ModelSerializer):
     """Serializer for creating content."""
-    
+
     class Meta:
         model = Content
         fields = [
             'title', 'content_type', 'order',
             'file_url', 'file_size', 'duration',
-            'text_content', 'is_mandatory', 'is_active'
+            'text_content', 'is_mandatory', 'is_active',
+            'maic_classroom', 'ai_chatbot',
         ]
 
     def validate_text_content(self, value):

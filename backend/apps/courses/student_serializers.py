@@ -20,6 +20,9 @@ class StudentContentProgressSerializer(serializers.ModelSerializer):
     thumbnail_url = serializers.SerializerMethodField()
     has_transcript = serializers.SerializerMethodField()
 
+    maic_classroom_id = serializers.PrimaryKeyRelatedField(source='maic_classroom', read_only=True)
+    ai_chatbot_id = serializers.PrimaryKeyRelatedField(source='ai_chatbot', read_only=True)
+
     class Meta:
         model = Content
         fields = [
@@ -29,6 +32,7 @@ class StudentContentProgressSerializer(serializers.ModelSerializer):
             "is_mandatory", "is_active",
             "status", "progress_percentage", "video_progress_seconds",
             "is_completed", "has_transcript",
+            "maic_classroom_id", "ai_chatbot_id",
         ]
 
     def _progress_map(self):

@@ -23,6 +23,9 @@ class TeacherContentProgressSerializer(serializers.ModelSerializer):
     has_transcript = serializers.SerializerMethodField()
     transcript_vtt_url = serializers.SerializerMethodField()
 
+    maic_classroom_id = serializers.PrimaryKeyRelatedField(source='maic_classroom', read_only=True)
+    ai_chatbot_id = serializers.PrimaryKeyRelatedField(source='ai_chatbot', read_only=True)
+
     class Meta:
         model = Content
         fields = [
@@ -46,6 +49,8 @@ class TeacherContentProgressSerializer(serializers.ModelSerializer):
             "lock_reason",
             "has_transcript",
             "transcript_vtt_url",
+            "maic_classroom_id",
+            "ai_chatbot_id",
         ]
 
     def _progress_map(self):

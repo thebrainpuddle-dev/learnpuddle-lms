@@ -4,8 +4,11 @@ import React, { useState, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ContentPlayer } from '../../components/teacher';
+import { ChatWidget } from '../../components/ai/ChatWidget';
+import type { ContentContext } from '../../components/ai/ChatWidget';
 import { CompletionRing } from '../../components/teacher/dashboard/CompletionRing';
 import { ConfettiBurst } from '../../components/teacher/dashboard/ConfettiBurst';
+import api from '../../config/api';
 import { teacherService } from '../../services/teacherService';
 import type { TeacherAssignmentListItem, TeacherCourseDetail } from '../../services/teacherService';
 import {
@@ -25,9 +28,9 @@ import {
   FlagIcon,
 } from '@heroicons/react/24/outline';
 import { useTenantStore } from '../../stores/tenantStore';
-import api from '../../config/api';
 import { CheckCircleIcon as CheckCircleSolidIcon } from '@heroicons/react/24/solid';
 import { usePageTitle } from '../../hooks/usePageTitle';
+import { useToast } from '../../components/common';
 
 type ContentItem = TeacherCourseDetail['modules'][number]['contents'][number];
 
@@ -35,6 +38,8 @@ const contentTypeLabel = (type: ContentItem['content_type']) => {
   if (type === 'VIDEO') return 'Video';
   if (type === 'DOCUMENT') return 'Reading';
   if (type === 'LINK') return 'Link';
+  if (type === 'AI_CLASSROOM') return 'AI Classroom';
+  if (type === 'CHATBOT') return 'AI Chatbot';
   return 'Reading';
 };
 
@@ -50,6 +55,7 @@ export const CourseViewPage: React.FC = () => {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { hasFeature } = useTenantStore();
+  const toast = useToast();
 
   const [expandedModules, setExpandedModules] = useState<string[]>([]);
   const [selectedContent, setSelectedContent] = useState<ContentItem | null>(null);
@@ -173,6 +179,8 @@ export const CourseViewPage: React.FC = () => {
     [courseAssignments],
   );
 
+  const chatContentContext: ContentContext | null = null;
+
   const toggleModule = (moduleId: string) => {
     setExpandedModules((previous) =>
       previous.includes(moduleId) ? previous.filter((id) => id !== moduleId) : [...previous, moduleId],
@@ -221,7 +229,7 @@ export const CourseViewPage: React.FC = () => {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-tp-accent"></div>
       </div>
     );
   }
@@ -230,18 +238,18 @@ export const CourseViewPage: React.FC = () => {
     <div className="flex h-[calc(100dvh-6.5rem)] flex-col lg:h-[calc(100vh-8rem)]">
       <ConfettiBurst active={showConfetti} />
 
-      <div className="flex flex-col gap-3 border-b border-gray-200 pb-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-col gap-3 border-b border-slate-200 pb-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex min-w-0 items-center">
           <button
             onClick={() => navigate('/teacher/courses')}
-            className="mr-3 p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg"
+            className="mr-3 p-2 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-lg"
             aria-label="Back to my courses"
           >
             <ArrowLeftIcon className="h-5 w-5" />
           </button>
           <div className="min-w-0">
-            <h1 className="truncate text-lg font-semibold text-gray-900 sm:text-xl">{course?.title}</h1>
-            <div className="mt-1 flex flex-wrap items-center text-sm text-gray-500">
+            <h1 className="truncate text-lg font-semibold text-slate-900 sm:text-xl">{course?.title}</h1>
+            <div className="mt-1 flex flex-wrap items-center text-sm text-slate-500">
               <span>
                 {course?.progress?.completed_content_count}/{course?.progress?.total_content_count} completed
               </span>
@@ -305,7 +313,7 @@ export const CourseViewPage: React.FC = () => {
                   container.appendChild(pId);
                   w.print();
                 } catch {
-                  alert('Could not generate certificate.');
+                  toast.error('Certificate Error', 'Could not generate certificate.');
                 }
               }}
               className="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-lg hover:bg-amber-100"
@@ -317,7 +325,7 @@ export const CourseViewPage: React.FC = () => {
 
           <button
             onClick={() => setSidebarOpen((open) => !open)}
-            className="lg:hidden p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg"
+            className="lg:hidden p-2 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-lg"
             aria-label="Toggle course rail"
           >
             <Bars3BottomLeftIcon className="h-5 w-5" />
@@ -333,7 +341,7 @@ export const CourseViewPage: React.FC = () => {
         >
           <div className="flex h-full flex-col">
             <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
-              <h2 className="text-lg font-semibold text-blue-700 truncate">{course?.title}</h2>
+              <h2 className="text-[15px] font-semibold text-tp-accent truncate">{course?.title}</h2>
               <button
                 type="button"
                 onClick={() => setSidebarOpen(false)}
@@ -361,7 +369,7 @@ export const CourseViewPage: React.FC = () => {
                           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                             Module {module.order}
                           </p>
-                          <p className="text-base font-semibold text-slate-900 leading-tight">{module.title}</p>
+                          <p className="text-[14px] font-semibold text-slate-900 leading-tight">{module.title}</p>
                           {module.is_locked && <p className="mt-1 text-xs text-slate-500">{module.lock_reason}</p>}
                         </div>
                         <div className="flex items-center gap-2">
@@ -398,7 +406,7 @@ export const CourseViewPage: React.FC = () => {
                                 }}
                                 className={`w-full border-l-4 px-3 py-2 text-left transition-colors ${
                                   isSelected
-                                    ? 'border-l-blue-600 bg-blue-50'
+                                    ? 'border-l-tp-accent bg-orange-50'
                                     : content.is_locked
                                     ? 'border-l-transparent bg-slate-50 text-slate-400 cursor-not-allowed'
                                     : 'border-l-transparent hover:bg-slate-50'
@@ -411,13 +419,13 @@ export const CourseViewPage: React.FC = () => {
                                   </span>
                                   <span className="min-w-0">
                                     <span
-                                      className={`block text-sm font-medium leading-tight ${
-                                        isSelected ? 'text-blue-700' : content.is_locked ? 'text-slate-400' : 'text-slate-900'
+                                      className={`block text-[13px] font-medium leading-tight ${
+                                        isSelected ? 'text-tp-accent' : content.is_locked ? 'text-slate-400' : 'text-slate-900'
                                       }`}
                                     >
                                       {content.title}
                                     </span>
-                                    <span className="mt-0.5 block text-xs text-slate-500">
+                                    <span className="mt-0.5 block text-[11px] text-slate-500">
                                       {contentTypeLabel(content.content_type)}
                                       {formatDuration(content.duration) ? ` • ${formatDuration(content.duration)}` : ''}
                                     </span>
@@ -446,7 +454,7 @@ export const CourseViewPage: React.FC = () => {
                         type="button"
                         onClick={() => handleOpenAssignment(assignment)}
                         className={`w-full border-l-4 px-3 py-2 text-left transition-colors ${
-                          isSelected ? 'border-l-blue-600 bg-blue-50' : 'border-l-transparent hover:bg-slate-50'
+                          isSelected ? 'border-l-tp-accent bg-orange-50' : 'border-l-transparent hover:bg-slate-50'
                         }`}
                       >
                         <div className="flex items-start gap-2">
@@ -458,10 +466,10 @@ export const CourseViewPage: React.FC = () => {
                             )}
                           </span>
                           <span className="min-w-0">
-                            <span className={`block text-sm font-medium ${isSelected ? 'text-blue-700' : 'text-slate-900'}`}>
+                            <span className={`block text-[13px] font-medium ${isSelected ? 'text-tp-accent' : 'text-slate-900'}`}>
                               {assignment.title}
                             </span>
-                            <span className="mt-0.5 block text-xs text-slate-500">
+                            <span className="mt-0.5 block text-[11px] text-slate-500">
                               {assignment.is_quiz ? 'Graded Assignment' : 'Assignment'}
                             </span>
                           </span>
@@ -503,7 +511,7 @@ export const CourseViewPage: React.FC = () => {
                   await queryClient.invalidateQueries({ queryKey: ['teacherCourses'] });
                 } catch (error: any) {
                   const reason = error?.response?.data?.error || 'This lesson is locked.';
-                  alert(reason);
+                  toast.error('Content Locked', reason);
                 }
               }}
               onNextItem={nextUnlockedContent || nextPendingAssignment ? handleNextItem : undefined}
@@ -523,12 +531,12 @@ export const CourseViewPage: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setShowHonorCodeModal(true)}
-                className="inline-flex w-full items-center justify-center rounded-lg bg-blue-600 px-6 py-3 text-base font-semibold text-white hover:bg-blue-700 sm:w-auto"
+                className="inline-flex w-full items-center justify-center rounded-lg bg-tp-accent px-6 py-3 text-base font-semibold text-white hover:bg-orange-600 sm:w-auto"
               >
                 Open Assignment
               </button>
 
-              <div className="mt-8 flex flex-wrap items-center gap-5 border-t border-slate-200 pt-5 text-blue-600 sm:mt-10 sm:gap-8">
+              <div className="mt-8 flex flex-wrap items-center gap-5 border-t border-slate-200 pt-5 text-tp-accent sm:mt-10 sm:gap-8">
                 <button type="button" className="inline-flex items-center gap-2 text-sm font-semibold">
                   <HandThumbUpIcon className="h-5 w-5" />
                   Like
@@ -549,34 +557,37 @@ export const CourseViewPage: React.FC = () => {
         </main>
       </div>
 
+      {/* AI Chat Widget — context-aware mentor */}
+      {courseId && <ChatWidget courseId={courseId} contentContext={chatContentContext} />}
+
       {showHonorCodeModal && selectedAssignment && (
-        <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/40 p-2 sm:items-center sm:px-4">
-          <div className="w-full max-w-2xl rounded-t-2xl bg-white p-4 shadow-2xl sm:rounded-2xl sm:p-8">
+        <div className="fixed inset-0 z-40 flex items-end justify-center bg-slate-900/50 backdrop-blur-[2px] p-2 sm:items-center sm:px-4">
+          <div className="w-full max-w-2xl rounded-2xl bg-white p-4 shadow-2xl sm:p-8">
             <div className="mb-4 flex items-start justify-between">
-              <h3 className="text-2xl font-semibold text-slate-900 sm:text-4xl">Coursera Honor Code</h3>
+              <h3 className="text-[22px] font-bold text-slate-900">Academic Integrity Pledge</h3>
               <button
                 type="button"
                 onClick={() => setShowHonorCodeModal(false)}
                 className="rounded-md p-1 text-slate-500 hover:bg-slate-100"
-                aria-label="Close honor code"
+                aria-label="Close academic integrity pledge"
               >
                 <XMarkIcon className="h-6 w-6" />
               </button>
             </div>
 
-            <p className="mb-4 text-lg text-slate-800 sm:text-2xl">We protect integrity in submitted work.</p>
-            <p className="mb-3 text-base text-slate-700 sm:text-lg">Before continuing, agree to these principles:</p>
+            <p className="mb-4 text-lg text-slate-800 sm:text-2xl">We uphold integrity in all submitted work.</p>
+            <p className="mb-3 text-base text-slate-700 sm:text-lg">Before continuing, please agree to these principles:</p>
             <ul className="list-disc space-y-1 pl-6 text-base text-slate-700 sm:text-lg">
               <li>Submit your own original work.</li>
               <li>Avoid sharing answers with others.</li>
-              <li>Report suspected violations.</li>
+              <li>Report suspected violations to your coordinator.</li>
             </ul>
 
             <div className="mt-8 flex justify-end">
               <button
                 type="button"
                 onClick={handleContinueAssignment}
-                className="w-full rounded-lg bg-blue-600 px-8 py-3 text-base font-semibold text-white hover:bg-blue-700 sm:w-auto"
+                className="w-full rounded-lg bg-tp-accent px-8 py-3 text-base font-semibold text-white hover:bg-orange-600 sm:w-auto"
               >
                 Continue
               </button>

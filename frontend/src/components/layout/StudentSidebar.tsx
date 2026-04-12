@@ -1,6 +1,6 @@
-// src/components/layout/TeacherSidebar.tsx
+// src/components/layout/StudentSidebar.tsx
 //
-// Polished sidebar — section labels, refined active states, clean typography.
+// Polished sidebar for student portal — indigo accent, section labels.
 
 import React, { Fragment } from 'react';
 import { Dialog, Transition } from '@headlessui/react';
@@ -8,17 +8,14 @@ import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard,
   BookOpen,
-  Megaphone,
   ClipboardList,
-  BarChart3,
-  Compass,
+  Trophy,
+  UserCircle,
   Settings,
   HelpCircle,
   LogOut,
   X,
   Presentation,
-  MessageSquare,
-  GraduationCap,
   Bot,
 } from 'lucide-react';
 import { cn } from '../../design-system/theme/cn';
@@ -27,33 +24,29 @@ import { useTenantStore } from '../../stores/tenantStore';
 import { authService } from '../../services/authService';
 import { broadcastLogout } from '../../utils/authSession';
 
-interface TeacherSidebarProps {
+interface StudentSidebarProps {
   open: boolean;
   onClose?: () => void;
 }
 
 const MAIN_NAV = [
-  { label: 'Overview', href: '/teacher/dashboard', icon: LayoutDashboard },
-  { label: 'My Courses', href: '/teacher/courses', icon: BookOpen },
-  { label: 'My Classes', href: '/teacher/my-classes', icon: GraduationCap },
-];
-
-const LEARNING_NAV = [
-  { label: 'AI Classroom', href: '/teacher/ai-classroom', icon: Presentation },
-  { label: 'AI Chatbots', href: '/teacher/chatbots', icon: Bot },
-  { label: 'Discussions', href: '/teacher/discussions', icon: MessageSquare },
+  { label: 'Dashboard', href: '/student/dashboard', icon: LayoutDashboard },
+  { label: 'My Courses', href: '/student/courses', icon: BookOpen },
 ];
 
 const TOOLS_NAV = [
-  { label: 'Announcements', href: '/teacher/reminders', icon: Megaphone },
-  { label: 'Assessments', href: '/teacher/assignments', icon: ClipboardList },
-  { label: 'Competency', href: '/teacher/competency', icon: Compass },
-  { label: 'Reports', href: '/teacher/gamification', icon: BarChart3 },
+  { label: 'Assignments', href: '/student/assignments', icon: ClipboardList },
+  { label: 'Achievements', href: '/student/achievements', icon: Trophy },
+];
+
+const LEARNING_TOOLS_NAV = [
+  { label: 'AI Classroom', href: '/student/ai-classroom', icon: Presentation },
+  { label: 'AI Chatbots', href: '/student/chatbots', icon: Bot },
 ];
 
 const BOTTOM_ITEMS = [
-  { label: 'Settings', href: '/teacher/profile', icon: Settings },
-  { label: 'Support', href: '/teacher/support', icon: HelpCircle },
+  { label: 'Profile', href: '/student/profile', icon: UserCircle },
+  { label: 'Settings', href: '/student/settings', icon: Settings },
 ];
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
@@ -79,7 +72,7 @@ function NavItem({
         cn(
           'relative flex items-center gap-2.5 px-3 py-[9px] rounded-lg text-[13px] font-medium transition-all duration-150',
           isActive
-            ? 'bg-orange-50 text-tp-accent'
+            ? 'bg-indigo-50 text-indigo-600'
             : 'text-gray-500 hover:bg-gray-50 hover:text-tp-text',
         )
       }
@@ -87,9 +80,9 @@ function NavItem({
       {({ isActive }) => (
         <>
           {isActive && (
-            <span className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-4 rounded-r-full bg-tp-accent" />
+            <span className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-4 rounded-r-full bg-indigo-600" />
           )}
-          <item.icon className={cn('h-[18px] w-[18px] flex-shrink-0', isActive ? 'text-tp-accent' : 'text-gray-400')} />
+          <item.icon className={cn('h-[18px] w-[18px] flex-shrink-0', isActive ? 'text-indigo-600' : 'text-gray-400')} />
           <span>{item.label}</span>
         </>
       )}
@@ -97,7 +90,7 @@ function NavItem({
   );
 }
 
-export const TeacherSidebar: React.FC<TeacherSidebarProps> = ({ open, onClose }) => {
+export const StudentSidebar: React.FC<StudentSidebarProps> = ({ open, onClose }) => {
   const { user, clearAuth, refreshToken } = useAuthStore();
   const { theme } = useTenantStore();
 
@@ -127,7 +120,7 @@ export const TeacherSidebar: React.FC<TeacherSidebarProps> = ({ open, onClose })
             className="h-8 w-8 rounded-lg object-cover"
           />
         ) : (
-          <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-tp-accent to-amber-500 flex items-center justify-center flex-shrink-0 shadow-sm">
+          <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-indigo-500 to-indigo-600 flex items-center justify-center flex-shrink-0 shadow-sm">
             <span className="text-white font-bold text-[13px]">{tenantInitial}</span>
           </div>
         )}
@@ -148,8 +141,8 @@ export const TeacherSidebar: React.FC<TeacherSidebarProps> = ({ open, onClose })
       {/* User */}
       <div className="px-4 py-3.5 border-b border-gray-100">
         <div className="flex items-center gap-2.5">
-          <div className="h-9 w-9 rounded-full bg-gradient-to-br from-orange-100 to-orange-50 flex items-center justify-center ring-2 ring-orange-100 flex-shrink-0">
-            <span className="text-tp-accent font-semibold text-[12px]">
+          <div className="h-9 w-9 rounded-full bg-gradient-to-br from-indigo-100 to-indigo-50 flex items-center justify-center ring-2 ring-indigo-100 flex-shrink-0">
+            <span className="text-indigo-600 font-semibold text-[12px]">
               {user?.first_name?.charAt(0)}
               {user?.last_name?.charAt(0)}
             </span>
@@ -158,7 +151,7 @@ export const TeacherSidebar: React.FC<TeacherSidebarProps> = ({ open, onClose })
             <p className="text-[13px] font-medium text-tp-text truncate leading-tight">
               {user?.first_name} {user?.last_name}
             </p>
-            <p className="text-[11px] text-gray-400 font-medium">Teacher</p>
+            <p className="text-[11px] text-gray-400 font-medium">Student</p>
           </div>
         </div>
       </div>
@@ -172,16 +165,16 @@ export const TeacherSidebar: React.FC<TeacherSidebarProps> = ({ open, onClose })
           ))}
         </div>
 
-        <SectionLabel>AI Learning</SectionLabel>
+        <SectionLabel>Learning</SectionLabel>
         <div className="space-y-0.5">
-          {LEARNING_NAV.map((item) => (
+          {TOOLS_NAV.map((item) => (
             <NavItem key={item.href} item={item} onClose={onClose} />
           ))}
         </div>
 
-        <SectionLabel>Tools</SectionLabel>
+        <SectionLabel>Learning Tools</SectionLabel>
         <div className="space-y-0.5">
-          {TOOLS_NAV.map((item) => (
+          {LEARNING_TOOLS_NAV.map((item) => (
             <NavItem key={item.href} item={item} onClose={onClose} />
           ))}
         </div>
@@ -192,6 +185,14 @@ export const TeacherSidebar: React.FC<TeacherSidebarProps> = ({ open, onClose })
         {BOTTOM_ITEMS.map((item) => (
           <NavItem key={item.href} item={item} onClose={onClose} />
         ))}
+
+        <a
+          href="mailto:support@learnpuddle.com"
+          className="relative flex items-center gap-2.5 px-3 py-[9px] rounded-lg text-[13px] font-medium text-gray-500 hover:bg-gray-50 hover:text-tp-text transition-all duration-150"
+        >
+          <HelpCircle className="h-[18px] w-[18px] flex-shrink-0 text-gray-400" />
+          <span>Support</span>
+        </a>
 
         <button
           onClick={handleLogout}
