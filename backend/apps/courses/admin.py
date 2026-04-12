@@ -2,6 +2,7 @@
 
 from django.contrib import admin
 from .models import TeacherGroup, Course, Module, Content
+from .maic_models import TenantAIConfig, MAICClassroom
 
 
 class TenantFilteredAdmin(admin.ModelAdmin):
@@ -91,3 +92,28 @@ class ContentAdmin(admin.ModelAdmin):
         if hasattr(request.user, 'tenant') and request.user.tenant:
             return qs.filter(module__course__tenant=request.user.tenant)
         return qs.none()
+
+
+# --- MAIC Admin -----------------------------------------------------------
+
+@admin.register(TenantAIConfig)
+class TenantAIConfigAdmin(admin.ModelAdmin):
+    list_display = ['tenant', 'llm_provider', 'llm_model', 'tts_provider', 'maic_enabled', 'updated_at']
+    list_filter = ['llm_provider', 'tts_provider', 'maic_enabled']
+    readonly_fields = ['id', 'created_at', 'updated_at']
+
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        if request.user.is_superuser:
+            return qs
+        if hasattr(request.user, 'tenant') and request.user.tenant:
+            return qs.filter(tenant=request.user.tenant)
+        return qs.none()
+
+
+@admin.register(MAICClassroom)
+class MAICClassroomAdmin(TenantFilteredAdmin):
+    list_display = ['title', 'tenant', 'creator', 'status', 'is_public', 'scene_count', 'created_at']
+    list_filter = ['status', 'is_public', 'tenant']
+    search_fields = ['title', 'topic']
+    readonly_fields = ['id', 'config', 'created_at', 'updated_at']

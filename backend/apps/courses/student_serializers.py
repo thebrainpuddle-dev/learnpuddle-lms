@@ -1,3 +1,5 @@
+# apps/courses/student_serializers.py
+
 from django.db import models
 from rest_framework import serializers
 
@@ -7,45 +9,26 @@ from utils.s3_utils import sign_file_field, sign_url
 from utils.rich_text import rewrite_rich_text_for_serializer
 
 
-class TeacherContentProgressSerializer(serializers.ModelSerializer):
-    """
-    Content serializer augmented with teacher progress.
-    """
+class StudentContentProgressSerializer(serializers.ModelSerializer):
+    """Content serializer augmented with student progress."""
 
     status = serializers.SerializerMethodField()
     progress_percentage = serializers.SerializerMethodField()
     video_progress_seconds = serializers.SerializerMethodField()
     is_completed = serializers.SerializerMethodField()
-    is_locked = serializers.SerializerMethodField()
-    lock_reason = serializers.SerializerMethodField()
     hls_url = serializers.SerializerMethodField()
     thumbnail_url = serializers.SerializerMethodField()
     has_transcript = serializers.SerializerMethodField()
-    transcript_vtt_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Content
         fields = [
-            "id",
-            "title",
-            "content_type",
-            "order",
-            "file_url",
-            "hls_url",
-            "thumbnail_url",
-            "file_size",
-            "duration",
-            "text_content",
-            "is_mandatory",
-            "is_active",
-            "status",
-            "progress_percentage",
-            "video_progress_seconds",
-            "is_completed",
-            "is_locked",
-            "lock_reason",
-            "has_transcript",
-            "transcript_vtt_url",
+            "id", "title", "content_type", "order",
+            "file_url", "hls_url", "thumbnail_url",
+            "file_size", "duration", "text_content",
+            "is_mandatory", "is_active",
+            "status", "progress_percentage", "video_progress_seconds",
+            "is_completed", "has_transcript",
         ]
 
     def _progress_map(self):
@@ -54,10 +37,6 @@ class TeacherContentProgressSerializer(serializers.ModelSerializer):
     def _video_asset(self, obj):
         assets = self.context.get("video_assets_by_content_id", {}) or {}
         return assets.get(str(obj.id))
-
-    def _content_state(self, obj):
-        states = self.context.get("content_state_by_id", {}) or {}
-        return states.get(str(obj.id))
 
     def get_status(self, obj):
         p = self._progress_map().get(str(obj.id))
@@ -74,14 +53,6 @@ class TeacherContentProgressSerializer(serializers.ModelSerializer):
     def get_is_completed(self, obj):
         p = self._progress_map().get(str(obj.id))
         return bool(p and p.status == "COMPLETED")
-
-    def get_is_locked(self, obj):
-        state = self._content_state(obj)
-        return bool(getattr(state, "is_locked", False))
-
-    def get_lock_reason(self, obj):
-        state = self._content_state(obj)
-        return getattr(state, "lock_reason", "") if state else ""
 
     def _abs(self, url: str) -> str:
         if not url:
@@ -100,8 +71,6 @@ class TeacherContentProgressSerializer(serializers.ModelSerializer):
         hls_url = getattr(asset, "hls_master_url", "") or ""
         if not hls_url:
             return ""
-        # Return backend proxy URL that serves m3u8 with signed segment URLs
-        # URL ends with .m3u8 so HLS.js recognizes it as an HLS source
         req = self.context.get("request")
         if req:
             return req.build_absolute_uri(f"/api/courses/hls/{obj.id}/master.m3u8")
@@ -116,7 +85,6 @@ class TeacherContentProgressSerializer(serializers.ModelSerializer):
         thumb_url = getattr(asset, "thumbnail_url", "") or ""
         if not thumb_url:
             return ""
-        # Generate signed URL for private S3/DO Spaces files
         return sign_url(thumb_url)
 
     def get_has_transcript(self, obj):
@@ -124,19 +92,6 @@ class TeacherContentProgressSerializer(serializers.ModelSerializer):
             return False
         asset = self._video_asset(obj)
         return bool(asset and getattr(asset, "transcript", None))
-
-    def get_transcript_vtt_url(self, obj):
-        if obj.content_type != "VIDEO":
-            return ""
-        asset = self._video_asset(obj)
-        transcript = getattr(asset, "transcript", None) if asset else None
-        if not transcript:
-            return ""
-        vtt_url = getattr(transcript, "vtt_url", "") or ""
-        if not vtt_url:
-            return ""
-        # Generate signed URL for private S3/DO Spaces files
-        return sign_url(vtt_url)
 
     def _rewrite_rich_text(self, raw_html: str) -> str:
         return rewrite_rich_text_for_serializer(raw_html, self.context)
@@ -147,65 +102,52 @@ class TeacherContentProgressSerializer(serializers.ModelSerializer):
         return data
 
 
-class TeacherModuleSerializer(serializers.ModelSerializer):
+class StudentModuleSerializer(serializers.ModelSerializer):
     contents = serializers.SerializerMethodField()
     completed_content_count = serializers.SerializerMethodField()
     total_content_count = serializers.SerializerMethodField()
     completion_percentage = serializers.SerializerMethodField()
     is_completed = serializers.SerializerMethodField()
-    is_locked = serializers.SerializerMethodField()
-    lock_reason = serializers.SerializerMethodField()
 
     class Meta:
         model = Module
         fields = [
-            "id",
-            "title",
-            "description",
-            "order",
-            "is_active",
-            "completed_content_count",
-            "total_content_count",
-            "completion_percentage",
-            "is_completed",
-            "is_locked",
-            "lock_reason",
-            "contents",
+            "id", "title", "description", "order", "is_active",
+            "completed_content_count", "total_content_count",
+            "completion_percentage", "is_completed", "contents",
         ]
-
-    def _module_state(self, obj):
-        states = self.context.get("module_state_by_id", {}) or {}
-        return states.get(str(obj.id))
 
     def get_contents(self, obj):
         contents = obj.contents.filter(is_active=True).order_by("order")
-        return TeacherContentProgressSerializer(
+        return StudentContentProgressSerializer(
             contents, many=True, context=self.context
         ).data
 
+    def _count_completed(self, obj):
+        progress_map = self.context.get("progress_by_content_id", {})
+        content_ids = set(
+            str(c.id) for c in obj.contents.filter(is_active=True)
+        )
+        return sum(
+            1 for cid in content_ids
+            if progress_map.get(cid) and progress_map[cid].status == "COMPLETED"
+        )
+
     def get_completed_content_count(self, obj):
-        state = self._module_state(obj)
-        return getattr(state, "completed_content_count", 0) if state else 0
+        return self._count_completed(obj)
 
     def get_total_content_count(self, obj):
-        state = self._module_state(obj)
-        return getattr(state, "total_content_count", 0) if state else 0
+        return obj.contents.filter(is_active=True).count()
 
     def get_completion_percentage(self, obj):
-        state = self._module_state(obj)
-        return getattr(state, "completion_percentage", 0.0) if state else 0.0
+        total = self.get_total_content_count(obj)
+        if total == 0:
+            return 0.0
+        return round((self._count_completed(obj) / total) * 100, 2)
 
     def get_is_completed(self, obj):
-        state = self._module_state(obj)
-        return bool(getattr(state, "is_completed", False)) if state else False
-
-    def get_is_locked(self, obj):
-        state = self._module_state(obj)
-        return bool(getattr(state, "is_locked", False)) if state else False
-
-    def get_lock_reason(self, obj):
-        state = self._module_state(obj)
-        return getattr(state, "lock_reason", "") if state else ""
+        total = self.get_total_content_count(obj)
+        return total > 0 and self._count_completed(obj) >= total
 
     def _rewrite_rich_text(self, raw_html: str) -> str:
         return rewrite_rich_text_for_serializer(raw_html, self.context)
@@ -216,7 +158,7 @@ class TeacherModuleSerializer(serializers.ModelSerializer):
         return data
 
 
-class TeacherCourseListSerializer(serializers.ModelSerializer):
+class StudentCourseListSerializer(serializers.ModelSerializer):
     progress_percentage = serializers.SerializerMethodField()
     completed_content_count = serializers.SerializerMethodField()
     total_content_count = serializers.SerializerMethodField()
@@ -225,22 +167,10 @@ class TeacherCourseListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Course
         fields = [
-            "id",
-            "title",
-            "slug",
-            "description",
-            "thumbnail",
-            "thumbnail_url",
-            "is_mandatory",
-            "deadline",
-            "estimated_hours",
-            "is_published",
-            "is_active",
-            "created_at",
-            "updated_at",
-            "progress_percentage",
-            "completed_content_count",
-            "total_content_count",
+            "id", "title", "slug", "description", "thumbnail", "thumbnail_url",
+            "is_mandatory", "deadline", "estimated_hours",
+            "is_published", "is_active", "created_at", "updated_at",
+            "progress_percentage", "completed_content_count", "total_content_count",
         ]
 
     def get_thumbnail_url(self, obj):
@@ -248,52 +178,37 @@ class TeacherCourseListSerializer(serializers.ModelSerializer):
             return None
         return sign_file_field(obj.thumbnail)
 
-    def _get_teacher(self):
-        return self.context["request"].user
-
     def get_total_content_count(self, obj):
-        # Use annotation precomputed by the view queryset (eliminates N+1 query).
-        # Fall back to a DB count when the serializer is used outside the list view.
         if hasattr(obj, '_total_content_count'):
             return obj._total_content_count
         return Content.objects.filter(module__course=obj, is_active=True).count()
 
     def get_completed_content_count(self, obj):
-        # Use annotation precomputed by the view queryset (eliminates N+1 query).
         if hasattr(obj, '_completed_content_count'):
             return int(obj._completed_content_count)
-        teacher = self._get_teacher()
+        user = self.context["request"].user
         return TeacherProgress.objects.filter(
-            teacher=teacher,
-            course=obj,
-            content__isnull=False,
-            status="COMPLETED",
+            teacher=user, course=obj,
+            content__isnull=False, status="COMPLETED",
         ).count()
 
     def get_progress_percentage(self, obj):
-        # Use annotations precomputed by the view queryset (eliminates N+1 query).
         if hasattr(obj, '_progress_sum') and hasattr(obj, '_total_content_count'):
             total = obj._total_content_count
             if total == 0:
                 return 0.0
             return round(float(obj._progress_sum) / total, 2)
-
-        teacher = self._get_teacher()
+        user = self.context["request"].user
         total = self.get_total_content_count(obj)
         if total == 0:
             return 0.0
-
-        # Sum of all content progress percentages (average across all content)
         progress_sum = TeacherProgress.objects.filter(
-            teacher=teacher,
-            course=obj,
-            content__isnull=False,
+            teacher=user, course=obj, content__isnull=False,
         ).aggregate(total=models.Sum('progress_percentage'))['total'] or 0
-
         return round(float(progress_sum) / total, 2)
 
 
-class TeacherCourseDetailSerializer(serializers.ModelSerializer):
+class StudentCourseDetailSerializer(serializers.ModelSerializer):
     modules = serializers.SerializerMethodField()
     progress = serializers.SerializerMethodField()
     thumbnail_url = serializers.SerializerMethodField()
@@ -301,23 +216,12 @@ class TeacherCourseDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = Course
         fields = [
-            "id",
-            "title",
-            "slug",
-            "description",
-            "thumbnail",
-            "thumbnail_url",
-            "is_mandatory",
-            "deadline",
-            "estimated_hours",
-            "is_published",
-            "is_active",
-            "created_at",
-            "updated_at",
-            "progress",
-            "modules",
+            "id", "title", "slug", "description", "thumbnail", "thumbnail_url",
+            "is_mandatory", "deadline", "estimated_hours",
+            "is_published", "is_active", "created_at", "updated_at",
+            "progress", "modules",
         ]
-    
+
     def get_thumbnail_url(self, obj):
         if not obj.thumbnail:
             return None
@@ -325,24 +229,17 @@ class TeacherCourseDetailSerializer(serializers.ModelSerializer):
 
     def get_modules(self, obj):
         modules = obj.modules.filter(is_active=True).order_by("order")
-        return TeacherModuleSerializer(modules, many=True, context=self.context).data
+        return StudentModuleSerializer(modules, many=True, context=self.context).data
 
     def get_progress(self, obj):
-        teacher = self.context["request"].user
+        user = self.context["request"].user
         total = Content.objects.filter(module__course=obj, is_active=True).count()
         completed = TeacherProgress.objects.filter(
-            teacher=teacher,
-            course=obj,
-            content__isnull=False,
-            status="COMPLETED",
+            teacher=user, course=obj,
+            content__isnull=False, status="COMPLETED",
         ).count()
-        
-        # Calculate percentage as average of content progress percentages
         progress_sum = TeacherProgress.objects.filter(
-            teacher=teacher,
-            course=obj,
-            content__isnull=False,
+            teacher=user, course=obj, content__isnull=False,
         ).aggregate(total=models.Sum('progress_percentage'))['total'] or 0
         pct = round(float(progress_sum) / total, 2) if total else 0.0
-        
         return {"completed_content_count": completed, "total_content_count": total, "percentage": pct}

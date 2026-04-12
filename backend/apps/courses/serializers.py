@@ -4,12 +4,11 @@ from rest_framework import serializers
 from django.db import transaction
 from django.db.models import Q
 from .models import Course, Module, Content, TeacherGroup
+from apps.academics.models import Section
 from apps.users.models import User
 from utils.s3_utils import sign_file_field, sign_url
 from utils.rich_text import (
-    build_rich_text_image_url_map,
-    collect_rich_text_image_ids,
-    rewrite_rich_text_html_for_output,
+    rewrite_rich_text_for_serializer,
     sanitize_rich_text_html,
 )
 
@@ -68,20 +67,7 @@ class ContentSerializer(serializers.ModelSerializer):
         return sanitize_rich_text_html(value)
 
     def _rewrite_rich_text(self, raw_html: str) -> str:
-        image_ids = collect_rich_text_image_ids(raw_html)
-        if not image_ids:
-            return raw_html
-
-        cache = self.context.setdefault("_rich_text_image_url_map", {})
-        missing = [image_id for image_id in image_ids if image_id not in cache]
-        if missing:
-            cache.update(
-                build_rich_text_image_url_map(
-                    missing,
-                    request=self.context.get("request"),
-                )
-            )
-        return rewrite_rich_text_html_for_output(raw_html, cache)
+        return rewrite_rich_text_for_serializer(raw_html, self.context)
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
@@ -105,26 +91,18 @@ class ModuleSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at', 'updated_at']
     
     def get_content_count(self, obj):
-        return obj.contents.filter(is_active=True).count()
+        # Use already-fetched contents (prefetched for the nested ContentSerializer)
+        # and count in Python to avoid an extra DB query per module.
+        try:
+            return sum(1 for c in obj.contents.all() if c.is_active)
+        except AttributeError:
+            return obj.contents.filter(is_active=True).count()
 
     def validate_description(self, value):
         return sanitize_rich_text_html(value)
 
     def _rewrite_rich_text(self, raw_html: str) -> str:
-        image_ids = collect_rich_text_image_ids(raw_html)
-        if not image_ids:
-            return raw_html
-
-        cache = self.context.setdefault("_rich_text_image_url_map", {})
-        missing = [image_id for image_id in image_ids if image_id not in cache]
-        if missing:
-            cache.update(
-                build_rich_text_image_url_map(
-                    missing,
-                    request=self.context.get("request"),
-                )
-            )
-        return rewrite_rich_text_html_for_output(raw_html, cache)
+        return rewrite_rich_text_for_serializer(raw_html, self.context)
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
@@ -159,23 +137,40 @@ class CourseListSerializer(serializers.ModelSerializer):
         return sign_file_field(obj.thumbnail)
 
     def get_content_count(self, obj):
+        # Use annotation precomputed by the view queryset (eliminates N+1 query).
+        # Fall back to a DB count when the serializer is used outside the list view.
+        if hasattr(obj, '_content_count'):
+            return obj._content_count
         return Content.objects.filter(module__course=obj, is_active=True).count()
-    
+
     def get_module_count(self, obj):
+        # Use annotation precomputed by the view queryset (eliminates N+1 query).
+        if hasattr(obj, '_module_count'):
+            return obj._module_count
         return obj.modules.filter(is_active=True).count()
-    
+
     def get_assigned_teacher_count(self, obj):
         if obj.assigned_to_all:
-            # Count all teachers in tenant
+            # Use the pre-computed tenant-wide teacher count from the view context
+            # to avoid a per-course query (eliminates N+1).
+            cached = self.context.get('tenant_teacher_count')
+            if cached is not None:
+                return cached
             return User.objects.filter(
                 tenant=obj.tenant,
                 role='TEACHER',
                 is_active=True
             ).count()
-        
-        # Count from groups + individual assignments (single queryset to avoid UNION pitfalls)
-        group_ids = obj.assigned_groups.values_list("id", flat=True)
-        individual_ids = obj.assigned_teachers.values_list("id", flat=True)
+
+        # Use the prefetched M2M sets so we don't issue extra queries per course.
+        # The view prefetches 'assigned_teachers' and 'assigned_groups'.
+        individual_ids = {t.id for t in obj.assigned_teachers.all()}
+        groups = list(obj.assigned_groups.all())
+
+        if not individual_ids and not groups:
+            return 0
+
+        group_ids = [g.id for g in groups]
 
         return (
             User.objects.filter(
@@ -200,7 +195,7 @@ class CourseListSerializer(serializers.ModelSerializer):
 
 class CourseDetailSerializer(serializers.ModelSerializer):
     """Detailed course serializer with modules."""
-    
+
     modules = ModuleSerializer(many=True, read_only=True)
     assigned_groups = serializers.PrimaryKeyRelatedField(
         many=True,
@@ -212,8 +207,26 @@ class CourseDetailSerializer(serializers.ModelSerializer):
         queryset=User.objects.none(),
         required=False
     )
+    target_sections = serializers.PrimaryKeyRelatedField(
+        many=True,
+        queryset=Section.all_objects.none(),
+        required=False
+    )
     stats = serializers.SerializerMethodField()
     thumbnail_url = serializers.SerializerMethodField()
+
+    @staticmethod
+    def _strip_html(value):
+        import re
+        return re.sub(r'<[^>]+>', '', value).strip() or value
+
+    def validate_title(self, value):
+        return self._strip_html(value)
+
+    def validate_description(self, value):
+        if value:
+            return self._strip_html(value)
+        return value
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -229,13 +242,18 @@ class CourseDetailSerializer(serializers.ModelSerializer):
             ).exclude(
                 role__in=['SUPER_ADMIN', 'SCHOOL_ADMIN'],
             )
+            sections_qs = Section.all_objects.filter(
+                tenant=request.tenant
+            )
             # DRF many=True wraps field in ManyRelatedField.
             # Must set queryset on child_relation for validation to work.
             self.fields['assigned_groups'].child_relation.queryset = groups_qs
             self.fields['assigned_teachers'].child_relation.queryset = teachers_qs
+            self.fields['target_sections'].child_relation.queryset = sections_qs
         else:
             self.fields['assigned_groups'].child_relation.queryset = TeacherGroup.objects.none()
             self.fields['assigned_teachers'].child_relation.queryset = User.objects.none()
+            self.fields['target_sections'].child_relation.queryset = Section.all_objects.none()
     
     class Meta:
         model = Course
@@ -243,6 +261,7 @@ class CourseDetailSerializer(serializers.ModelSerializer):
             'id', 'title', 'slug', 'description', 'thumbnail', 'thumbnail_url',
             'is_mandatory', 'deadline', 'estimated_hours',
             'assigned_to_all', 'assigned_groups', 'assigned_teachers',
+            'target_sections',
             'is_published', 'is_active', 'modules', 'stats',
             'created_by', 'created_at', 'updated_at'
         ]
@@ -263,23 +282,26 @@ class CourseDetailSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         assigned_groups = validated_data.pop('assigned_groups', [])
         assigned_teachers = validated_data.pop('assigned_teachers', [])
-        
+        target_sections = validated_data.pop('target_sections', [])
+
         # Get current user and tenant from context
         request = self.context['request']
         user = request.user
         tenant = request.tenant
-        
+
         course = Course.objects.create(
             **validated_data,
             tenant=tenant,
             created_by=user
         )
-        
+
         # Set assignments
         if assigned_groups:
             course.assigned_groups.set(assigned_groups)
         if assigned_teachers:
             course.assigned_teachers.set(assigned_teachers)
+        if target_sections:
+            course.target_sections.set(target_sections)
         
         # Notify newly assigned teachers (only if course is published)
         if course.is_published:
@@ -300,6 +322,7 @@ class CourseDetailSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         assigned_groups = validated_data.pop('assigned_groups', None)
         assigned_teachers = validated_data.pop('assigned_teachers', None)
+        target_sections = validated_data.pop('target_sections', None)
         was_published = instance.is_published
         
         # Track current assignments before update
@@ -318,6 +341,8 @@ class CourseDetailSerializer(serializers.ModelSerializer):
                 instance.assigned_groups.set(assigned_groups)
             if assigned_teachers is not None:
                 instance.assigned_teachers.set(assigned_teachers)
+            if target_sections is not None:
+                instance.target_sections.set(target_sections)
         
         # Notify outside the transaction (non-critical)
         if instance.is_published:

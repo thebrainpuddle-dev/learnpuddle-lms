@@ -72,6 +72,39 @@ class Course(SoftDeleteMixin, models.Model):
     assigned_groups = models.ManyToManyField(TeacherGroup, related_name='courses', blank=True)
     assigned_teachers = models.ManyToManyField('users.User', related_name='assigned_courses', blank=True)
 
+    # Student assignment
+    assigned_students = models.ManyToManyField(
+        'users.User', related_name='student_assigned_courses', blank=True,
+        limit_choices_to={'role': 'STUDENT'},
+        help_text="Individual students assigned to this course",
+    )
+    assigned_to_all_students = models.BooleanField(
+        default=False, help_text="Assign to all students in tenant",
+    )
+
+    # ─── Academic Course Fields ───────────────────────────────────────────
+    COURSE_TYPE_CHOICES = [
+        ('PD', 'Professional Development'),
+        ('ACADEMIC', 'Academic'),
+    ]
+    course_type = models.CharField(
+        max_length=10, choices=COURSE_TYPE_CHOICES, default='PD',
+        help_text="PD = admin creates for teachers, ACADEMIC = teacher creates for students",
+    )
+    subject = models.ForeignKey(
+        'academics.Subject', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='courses',
+        help_text="Linked subject (required for ACADEMIC courses)",
+    )
+    target_grades = models.ManyToManyField(
+        'academics.Grade', related_name='targeted_courses', blank=True,
+        help_text="Which grades this academic course targets",
+    )
+    target_sections = models.ManyToManyField(
+        'academics.Section', related_name='targeted_courses', blank=True,
+        help_text="Specific sections targeted (if empty, targets all sections in target_grades)",
+    )
+
     # Status
     is_published = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
@@ -97,6 +130,7 @@ class Course(SoftDeleteMixin, models.Model):
             models.Index(fields=['tenant', 'is_mandatory', 'is_active']),
             models.Index(fields=['tenant', 'created_at']),
             models.Index(fields=['deadline']),
+            models.Index(fields=['tenant', 'course_type']),
             # Full-text search
             GinIndex(fields=['search_vector'], name='course_search_vector_idx'),
         ]
@@ -166,6 +200,8 @@ class Content(SoftDeleteMixin, models.Model):
         ('DOCUMENT', 'Document'),
         ('LINK', 'External Link'),
         ('TEXT', 'Text Content'),
+        ('INTERACTIVE_LESSON', 'Interactive Lesson'),
+        ('SCENARIO', 'Scenario Simulation'),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -242,3 +278,6 @@ class RichTextImageAsset(models.Model):
 # Ensure Django registers video-related models that live in a separate module.
 # (Django auto-imports `apps.courses.models` but not sibling modules by default.)
 from .video_models import VideoAsset, VideoTranscript  # noqa: E402,F401
+
+# MAIC models (AI Classroom)
+from .maic_models import TenantAIConfig, MAICClassroom  # noqa: E402,F401

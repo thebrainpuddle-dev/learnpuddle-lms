@@ -12,7 +12,7 @@ SECRET_KEY = config('SECRET_KEY')
 DEBUG = config('DEBUG', default=False, cast=bool)
 
 _platform_domain_early = config('PLATFORM_DOMAIN', default='localhost')
-_default_allowed_hosts = ["localhost", "127.0.0.1"]
+_default_allowed_hosts = ["localhost", ".localhost", "127.0.0.1"]
 if _platform_domain_early != 'localhost':
     _default_allowed_hosts.append(f".{_platform_domain_early}")
 _env_allowed_hosts = [h.strip() for h in config("ALLOWED_HOSTS", default="").split(",") if h.strip()]
@@ -34,6 +34,9 @@ SECURE_SSL_REDIRECT = config("SECURE_SSL_REDIRECT", default=not DEBUG, cast=bool
 SESSION_COOKIE_SECURE = config("SESSION_COOKIE_SECURE", default=not DEBUG, cast=bool)
 CSRF_COOKIE_SECURE = config("CSRF_COOKIE_SECURE", default=not DEBUG, cast=bool)
 
+SESSION_COOKIE_HTTPONLY = True
+CSRF_COOKIE_HTTPONLY = True
+
 SESSION_COOKIE_SAMESITE = config("SESSION_COOKIE_SAMESITE", default="Lax")
 CSRF_COOKIE_SAMESITE = config("CSRF_COOKIE_SAMESITE", default="Lax")
 
@@ -47,7 +50,7 @@ SECURE_HSTS_INCLUDE_SUBDOMAINS = config("SECURE_HSTS_INCLUDE_SUBDOMAINS", defaul
 SECURE_HSTS_PRELOAD = config("SECURE_HSTS_PRELOAD", default=not DEBUG, cast=bool)
 
 SECURE_CONTENT_TYPE_NOSNIFF = True
-X_FRAME_OPTIONS = "DENY"
+X_FRAME_OPTIONS = "SAMEORIGIN"
 SECURE_REFERRER_POLICY = "same-origin"
 
 # CSRF trusted origins (comma-separated), e.g. https://demo.lms.com,https://*.lms.com
@@ -82,6 +85,7 @@ INSTALLED_APPS = [
     
     # Local apps
     'apps.tenants',
+    'apps.billing',
     'apps.users',
     'apps.courses',
     'apps.progress',
@@ -93,6 +97,7 @@ INSTALLED_APPS = [
     'apps.webhooks',
     'apps.discussions',
     'apps.ops',
+    'apps.academics',
 ]
 
 # Custom User Model
@@ -163,7 +168,7 @@ DATABASES = {
 # Password validation
 AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},
-    {'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator'},
+    {'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator', 'OPTIONS': {'min_length': 12}},
     {'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator'},
     {'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator'},
 ]
@@ -280,12 +285,22 @@ FILE_UPLOAD_HANDLERS = [
     "django.core.files.uploadhandler.TemporaryFileUploadHandler",
 ]
 
+# LLM Provider configuration
+LLM_PROVIDER = config("LLM_PROVIDER", default="auto")
+OPENROUTER_API_KEY = config("OPENROUTER_API_KEY", default="")
+OPENROUTER_BASE_URL = config("OPENROUTER_BASE_URL", default="https://openrouter.ai/api/v1")
+OPENROUTER_DEFAULT_MODEL = config("OPENROUTER_DEFAULT_MODEL", default="deepseek/deepseek-chat-v3-0324")
+OPENROUTER_FALLBACK_MODELS = config("OPENROUTER_FALLBACK_MODELS", default="qwen/qwen3.6-plus:free,nvidia/nemotron-nano-9b-v2:free")
+
 # Ollama LLM for quiz generation (local, self-hosted)
 OLLAMA_BASE_URL = config("OLLAMA_BASE_URL", default="http://localhost:11434")
 OLLAMA_MODEL = config("OLLAMA_MODEL", default="mistral")
 
 # REST Framework Configuration
 REST_FRAMEWORK = {
+    # Normalize DRF's auto-generated {"detail": "..."} to {"error": "..."}
+    # for consistency with manual error responses across all views.
+    'EXCEPTION_HANDLER': 'utils.exception_handler.custom_exception_handler',
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ],
@@ -321,6 +336,7 @@ REST_FRAMEWORK = {
         'reminder_send': '10/hour',
         'video_upload': '20/hour',
         'impersonate': '10/hour',
+        'superadmin_email': '30/hour',
         # Email verification
         'email_verify': '10/minute',
         'resend_verify': '3/minute',
@@ -331,6 +347,13 @@ REST_FRAMEWORK = {
         'upload': '30/minute',
         # 2FA verification (prevent brute force on 6-digit codes)
         'twofa_verify': '5/minute',
+        # Teacher invitation acceptance (public endpoint — prevent brute force)
+        'invitation_accept': '5/minute',
+        # Academic admin destructive operations
+        'csv_import': '10/hour',
+        'promotion': '5/hour',
+        # Client-side error ingestion (public endpoint)
+        'client_error_ingest': '30/minute',
     },
     # OpenAPI schema generation
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
@@ -404,6 +427,15 @@ SIMPLE_JWT = {
     'AUTH_HEADER_TYPES': ('Bearer',),
 }
 
+# Warn if JWT signing key is the same as SECRET_KEY (should be separate in production)
+import logging as _logging
+_settings_logger = _logging.getLogger('config.settings')
+if SIMPLE_JWT['SIGNING_KEY'] == SECRET_KEY:
+    _settings_logger.warning(
+        "SECURITY WARNING: JWT_SIGNING_KEY is the same as SECRET_KEY. "
+        "Set a separate JWT_SIGNING_KEY in production."
+    )
+
 # CORS Configuration (for frontend)
 # CORS - Allow localhost only in DEBUG mode, use regex for production
 if DEBUG:
@@ -415,10 +447,27 @@ if DEBUG:
         "http://127.0.0.1:3001",
         "http://127.0.0.1:3002",
     ]
+    # Allow any subdomain of localhost (e.g., demo.localhost:3000) for tenant testing
+    CORS_ALLOWED_ORIGIN_REGEXES = [
+        r"^http://([a-z0-9-]+\.)?localhost:(3000|3001|3002|8000)$",
+    ]
 else:
     CORS_ALLOWED_ORIGINS = []
 
 CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOW_HEADERS = [
+    "accept",
+    "authorization",
+    "content-type",
+    "user-agent",
+    "x-csrftoken",
+    "x-requested-with",
+    "x-lp-portal",
+    "x-lp-tab",
+    "x-lp-route",
+    "x-lp-component",
+    "x-tenant-subdomain",
+]
 
 # Production: use regex to allow root + subdomains (learnpuddle.com, school.learnpuddle.com)
 _escaped_domain = _platform_domain_early.replace('.', r'\.')
@@ -544,6 +593,42 @@ CELERY_RESULT_SERIALIZER = "json"
 CELERY_TASK_TIME_LIMIT = config("CELERY_TASK_TIME_LIMIT", default=60 * 60 * 2, cast=int)  # 2h
 CELERY_TASK_SOFT_TIME_LIMIT = config("CELERY_TASK_SOFT_TIME_LIMIT", default=60 * 60 * 2 - 60, cast=int)
 CELERY_RESULT_EXPIRES = config("CELERY_RESULT_EXPIRES", default=60 * 60 * 24, cast=int)  # 24h
+
+# Celery Beat periodic task schedule
+from celery.schedules import crontab  # noqa: E402
+
+CELERY_BEAT_SCHEDULE = {
+    # Archive notifications older than 90 days — daily at 03:00 UTC.
+    "archive-old-notifications": {
+        "task": "notifications.archive_old_notifications",
+        "schedule": crontab(hour=3, minute=0),
+    },
+    # Hard-delete notifications archived > 30 days ago — weekly Sunday 04:00 UTC.
+    "delete-archived-notifications": {
+        "task": "notifications.delete_archived_notifications",
+        "schedule": crontab(hour=4, minute=0, day_of_week=0),
+    },
+    # Gamification: process streak breaks and freeze resets — daily at 00:05.
+    "process-daily-streaks": {
+        "task": "progress.process_daily_streaks",
+        "schedule": crontab(hour=0, minute=5),
+    },
+    # Gamification: compute leaderboard rankings — every 15 minutes.
+    "compute-leaderboard-snapshots": {
+        "task": "progress.compute_leaderboard_snapshots",
+        "schedule": crontab(minute="*/15"),
+    },
+    # Billing: flag subscriptions past_due for >7 days — daily at 08:00.
+    "billing-check-past-due-daily": {
+        "task": "billing.check_past_due_subscriptions",
+        "schedule": crontab(hour=8, minute=0),
+    },
+    # Billing: clean up webhook events older than 90 days — weekly Saturday 03:00.
+    "billing-cleanup-webhook-events-weekly": {
+        "task": "billing.cleanup_stale_webhook_events",
+        "schedule": crontab(hour=3, minute=0, day_of_week=6),
+    },
+}
 
 # -----------------------------------------------------------------------------
 # Django Channels (WebSocket) - real-time notifications
@@ -677,3 +762,15 @@ OTP_TOTP_ISSUER = config('OTP_ISSUER', default='LearnPuddle')
 # Number of backup codes to generate
 OTP_STATIC_THROTTLE_FACTOR = 1
 BACKUP_CODES_COUNT = 10
+
+# -----------------------------------------------------------------------------
+# Stripe Configuration (billing & subscriptions)
+# -----------------------------------------------------------------------------
+STRIPE_SECRET_KEY = config('STRIPE_SECRET_KEY', default='')
+STRIPE_PUBLISHABLE_KEY = config('STRIPE_PUBLISHABLE_KEY', default='')
+STRIPE_WEBHOOK_SECRET = config('STRIPE_WEBHOOK_SECRET', default='')
+
+# -----------------------------------------------------------------------------
+# ElevenLabs TTS (Text-to-Speech)
+# -----------------------------------------------------------------------------
+ELEVENLABS_API_KEY = config('ELEVENLABS_API_KEY', default='')

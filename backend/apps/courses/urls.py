@@ -5,13 +5,27 @@ from . import views
 from . import video_views
 from . import learning_path_views
 from . import assignment_views
+from . import ai_views
+from . import material_views
 
 app_name = 'courses'
 
 urlpatterns = [
+    # AI Course Generation (admin only)
+    path('ai/generate-outline/', ai_views.ai_generate_outline, name='ai_generate_outline'),
+    path('ai/generate-content/', ai_views.ai_generate_content, name='ai_generate_content'),
+    path('ai/create-from-outline/', ai_views.ai_create_from_outline, name='ai_create_from_outline'),
+    path('ai/summarize/', ai_views.ai_summarize, name='ai_summarize'),
+
+    # Material parsing (admin only)
+    path('ai/parse-material/', material_views.parse_material, name='ai_parse_material'),
+
+    # Assignment generation (admin only)
+    path('ai/generate-assignment/', ai_views.ai_generate_assignment, name='ai_generate_assignment'),
+
     # Global search
     path('search/', views.global_search, name='global_search'),
-    
+
     # Course CRUD
     path('', views.course_list_create, name='course_list_create'),
     path('bulk-action/', views.courses_bulk_action, name='courses_bulk_action'),
