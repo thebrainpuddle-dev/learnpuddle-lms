@@ -34,17 +34,39 @@ def _get_encoding():
     return tiktoken.encoding_for_model("gpt-4o")
 
 
-def _extract_text_from_pdf(file_path: str) -> list[dict]:
-    """Extract text from PDF, returning list of {page, text} dicts."""
-    import fitz  # PyMuPDF
+def _extract_text(file_path: str) -> list[dict]:
+    """
+    Extract text from a file, returning list of {page, text} dicts.
+    Supports PDF (.pdf), Word (.docx), and plain text (.txt, .md, etc.).
+    """
+    lower = file_path.lower()
 
-    pages = []
-    with fitz.open(file_path) as doc:
-        for page_num, page in enumerate(doc, start=1):
-            text = page.get_text("text").strip()
-            if text:
-                pages.append({"page": page_num, "text": text})
-    return pages
+    if lower.endswith('.pdf'):
+        import fitz  # PyMuPDF
+
+        pages = []
+        with fitz.open(file_path) as doc:
+            for page_num, page in enumerate(doc, start=1):
+                text = page.get_text("text").strip()
+                if text:
+                    pages.append({"page": page_num, "text": text})
+        return pages
+
+    if lower.endswith('.docx'):
+        import docx
+
+        doc = docx.Document(file_path)
+        text = "\n\n".join(p.text for p in doc.paragraphs)
+        if text.strip():
+            return [{"page": None, "text": text}]
+        return []
+
+    # Plain text fallback (.txt, .md, etc.)
+    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+        text = f.read()
+    if text.strip():
+        return [{"page": None, "text": text}]
+    return []
 
 
 def _chunk_text(
@@ -155,7 +177,7 @@ def ingest_chatbot_knowledge(self, knowledge_id: str):
                     for chunk in remote_file.chunks():
                         tmp.write(chunk)
                     tmp.flush()
-                    pages = _extract_text_from_pdf(tmp.name)
+                    pages = _extract_text(tmp.name)
             for page_data in pages:
                 raw_chunks.extend(
                     _chunk_text(page_data["text"], page_number=page_data["page"])
@@ -169,16 +191,11 @@ def ingest_chatbot_knowledge(self, knowledge_id: str):
                     for chunk in remote_file.chunks():
                         tmp.write(chunk)
                     tmp.flush()
-                    if tmp.name.endswith('.pdf'):
-                        pages = _extract_text_from_pdf(tmp.name)
-                        for page_data in pages:
-                            raw_chunks.extend(
-                                _chunk_text(page_data["text"], page_number=page_data["page"])
-                            )
-                    else:
-                        tmp.seek(0)
-                        text = tmp.read().decode('utf-8', errors='replace')
-                        raw_chunks = _chunk_text(text)
+                    pages = _extract_text(tmp.name)
+                    for page_data in pages:
+                        raw_chunks.extend(
+                            _chunk_text(page_data["text"], page_number=page_data["page"])
+                        )
         else:
             raise ValueError(f"Unsupported source_type: {knowledge.source_type}")
 

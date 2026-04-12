@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Hls from 'hls.js';
 import DOMPurify from 'dompurify';
-import { PlayIcon, DocumentTextIcon, LinkIcon, CheckCircleIcon } from '@heroicons/react/24/solid';
+import { PlayIcon, DocumentTextIcon, LinkIcon, CheckCircleIcon, AcademicCapIcon, ChatBubbleLeftRightIcon } from '@heroicons/react/24/solid';
 import {
   ArrowRightIcon,
   ArrowTopRightOnSquareIcon,
@@ -16,7 +16,7 @@ interface ContentPlayerProps {
   content: {
     id: string;
     title: string;
-    content_type: 'VIDEO' | 'DOCUMENT' | 'LINK' | 'TEXT';
+    content_type: 'VIDEO' | 'DOCUMENT' | 'LINK' | 'TEXT' | 'AI_CLASSROOM' | 'CHATBOT';
     file_url?: string;
     hls_url?: string;
     thumbnail_url?: string;
@@ -241,6 +241,130 @@ export const ContentPlayer: React.FC<ContentPlayerProps> = ({
               Save note
             </button>
             {renderNextItemCta()}
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  if (content.content_type === 'AI_CLASSROOM') {
+    const rolePrefix = window.location.pathname.startsWith('/student') ? '/student' : '/teacher';
+    return (
+      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+        <div className="p-4 sm:p-6 lg:p-8">
+          <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div className="flex items-center gap-3 sm:gap-4">
+              <div className="rounded-xl bg-violet-50 p-3">
+                <AcademicCapIcon className="h-8 w-8 text-violet-600" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-violet-600">AI Classroom</p>
+                <h2 className="text-2xl font-semibold text-slate-900 sm:text-3xl lg:text-4xl">{content.title}</h2>
+              </div>
+            </div>
+            {isCompleted && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-3 py-1 text-sm font-semibold text-emerald-700">
+                <CheckCircleIcon className="h-4 w-4" />
+                Completed
+              </span>
+            )}
+          </div>
+
+          {content.text_content && (
+            <div className="mb-6 max-w-4xl text-base leading-7 text-slate-700 sm:text-lg sm:leading-8">
+              <div
+                className="prose prose-lg max-w-none prose-slate"
+                dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(content.text_content) }}
+              />
+            </div>
+          )}
+
+          <div className="flex flex-wrap items-center gap-3">
+            <a
+              href={`${rolePrefix}/ai-classroom/${content.id}`}
+              className="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-violet-700"
+            >
+              Launch AI Classroom
+              <ArrowTopRightOnSquareIcon className="h-4 w-4" />
+            </a>
+
+            {!isCompleted && onComplete && (
+              <button
+                type="button"
+                onClick={onComplete}
+                className="inline-flex items-center rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-700"
+              >
+                Mark as completed
+              </button>
+            )}
+          </div>
+
+          <div className="mt-10 border-t border-slate-200 pt-5">
+            <div className="flex flex-wrap items-center justify-end gap-3">
+              {renderNextItemCta()}
+            </div>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  if (content.content_type === 'CHATBOT') {
+    const rolePrefix = window.location.pathname.startsWith('/student') ? '/student' : '/teacher';
+    return (
+      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+        <div className="p-4 sm:p-6 lg:p-8">
+          <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div className="flex items-center gap-3 sm:gap-4">
+              <div className="rounded-xl bg-teal-50 p-3">
+                <ChatBubbleLeftRightIcon className="h-8 w-8 text-teal-600" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-teal-600">AI Chatbot</p>
+                <h2 className="text-2xl font-semibold text-slate-900 sm:text-3xl lg:text-4xl">{content.title}</h2>
+              </div>
+            </div>
+            {isCompleted && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-3 py-1 text-sm font-semibold text-emerald-700">
+                <CheckCircleIcon className="h-4 w-4" />
+                Completed
+              </span>
+            )}
+          </div>
+
+          {content.text_content && (
+            <div className="mb-6 max-w-4xl text-base leading-7 text-slate-700 sm:text-lg sm:leading-8">
+              <div
+                className="prose prose-lg max-w-none prose-slate"
+                dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(content.text_content) }}
+              />
+            </div>
+          )}
+
+          <div className="flex flex-wrap items-center gap-3">
+            <a
+              href={`${rolePrefix}/chatbots/${content.id}`}
+              className="inline-flex items-center gap-2 rounded-lg bg-teal-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-teal-700"
+            >
+              Open Chatbot
+              <ArrowTopRightOnSquareIcon className="h-4 w-4" />
+            </a>
+
+            {!isCompleted && onComplete && (
+              <button
+                type="button"
+                onClick={onComplete}
+                className="inline-flex items-center rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-700"
+              >
+                Mark as completed
+              </button>
+            )}
+          </div>
+
+          <div className="mt-10 border-t border-slate-200 pt-5">
+            <div className="flex flex-wrap items-center justify-end gap-3">
+              {renderNextItemCta()}
+            </div>
           </div>
         </div>
       </section>

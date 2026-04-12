@@ -15,11 +15,13 @@ from pgvector.django import CosineDistance
 
 from apps.courses.chatbot_models import AIChatbotChunk, EMBEDDING_MODEL
 from apps.courses.chatbot_guardrails import build_system_prompt
+from apps.courses.chatbot_tasks import _get_encoding
 
 logger = logging.getLogger(__name__)
 
 SIMILARITY_THRESHOLD = 0.4  # cosine distance threshold
 TOP_K = 5                    # number of chunks to retrieve
+HISTORY_TOKEN_BUDGET = 6000  # max tokens for conversation history
 
 
 def _embed_query(query: str, api_key: str, base_url: str = "") -> list[float]:
@@ -107,12 +109,20 @@ def stream_chat_response(
 
     # Step 4: Build messages array
     llm_messages = [{"role": "system", "content": system_prompt}]
-    # Add conversation history (last 20 messages for context window management)
-    for msg in conversation_messages[-20:]:
-        llm_messages.append({
-            "role": msg["role"],
-            "content": msg["content"],
-        })
+    # Add conversation history with token budget to avoid exceeding context window.
+    # Iterate backward through the last 20 messages, keeping only those that fit.
+    enc = _get_encoding()
+    recent_messages = conversation_messages[-20:]
+    budget_remaining = HISTORY_TOKEN_BUDGET
+    trimmed_history = []
+    for msg in reversed(recent_messages):
+        msg_tokens = len(enc.encode(msg["content"]))
+        if msg_tokens > budget_remaining:
+            break
+        budget_remaining -= msg_tokens
+        trimmed_history.append({"role": msg["role"], "content": msg["content"]})
+    trimmed_history.reverse()
+    llm_messages.extend(trimmed_history)
     llm_messages.append({"role": "user", "content": user_message})
 
     # Step 5: Stream LLM response

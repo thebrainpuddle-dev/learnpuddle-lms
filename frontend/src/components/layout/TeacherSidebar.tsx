@@ -53,7 +53,6 @@ const TOOLS_NAV = [
 
 const BOTTOM_ITEMS = [
   { label: 'Settings', href: '/teacher/profile', icon: Settings },
-  { label: 'Support', href: '/teacher/support', icon: HelpCircle },
 ];
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
@@ -192,6 +191,14 @@ export const TeacherSidebar: React.FC<TeacherSidebarProps> = ({ open, onClose })
         {BOTTOM_ITEMS.map((item) => (
           <NavItem key={item.href} item={item} onClose={onClose} />
         ))}
+
+        <a
+          href="mailto:support@learnpuddle.com"
+          className="relative flex items-center gap-2.5 px-3 py-[9px] rounded-lg text-[13px] font-medium text-gray-500 hover:bg-gray-50 hover:text-tp-text transition-all duration-150"
+        >
+          <HelpCircle className="h-[18px] w-[18px] flex-shrink-0 text-gray-400" />
+          <span>Support</span>
+        </a>
 
         <button
           onClick={handleLogout}
