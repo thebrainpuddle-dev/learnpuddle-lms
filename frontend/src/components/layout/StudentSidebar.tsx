@@ -17,6 +17,7 @@ import {
   X,
   Presentation,
   Bot,
+  StickyNote,
 } from 'lucide-react';
 import { cn } from '../../design-system/theme/cn';
 import { useAuthStore } from '../../stores/authStore';
@@ -42,6 +43,7 @@ const TOOLS_NAV = [
 const LEARNING_TOOLS_NAV = [
   { label: 'AI Classroom', href: '/student/ai-classroom', icon: Presentation },
   { label: 'AI Chatbots', href: '/student/chatbots', icon: Bot },
+  { label: 'Study Notes', href: '/student/study-notes', icon: StickyNote },
 ];
 
 const BOTTOM_ITEMS = [

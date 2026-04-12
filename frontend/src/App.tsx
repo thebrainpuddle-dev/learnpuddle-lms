@@ -206,6 +206,9 @@ const StudentSettingsPage = React.lazy(() =>
 const StudentAchievementsPage = React.lazy(() =>
   import('./pages/student/AchievementsPage').then((m) => ({ default: m.AchievementsPage }))
 );
+const StudyNotesPage = React.lazy(() =>
+  import('./pages/student/StudyNotesPage').then((m) => ({ default: m.StudyNotesPage }))
+);
 // Super Admin pages
 const SuperAdminDashboardPage = React.lazy(() =>
   import('./pages/superadmin/DashboardPage').then((m) => ({ default: m.SuperAdminDashboardPage }))
@@ -457,6 +460,7 @@ function AppContent() {
         <Route path="assignments" element={<RoutePage><StudentAssignmentsPage /></RoutePage>} />
         <Route path="quizzes/:assignmentId" element={<RoutePage><StudentQuizPage /></RoutePage>} />
         <Route path="achievements" element={<RoutePage><StudentAchievementsPage /></RoutePage>} />
+        <Route path="study-notes" element={<RoutePage><StudyNotesPage /></RoutePage>} />
         <Route path="ai-classroom" element={<RoutePage><MAICBrowsePage /></RoutePage>} />
         <Route path="ai-classroom/:id" element={<RoutePage><StudentMAICPlayerPage /></RoutePage>} />
         <Route path="chatbots" element={<RoutePage><StudentChatbotsPage /></RoutePage>} />
