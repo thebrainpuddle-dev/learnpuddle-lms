@@ -25,6 +25,8 @@ const presetConfig: Record<
 interface Props {
   chatbot: AIChatbot;
   onDelete?: (id: string) => void;
+  /** Whether to show the Edit button. Defaults to true. Set to false for student views. */
+  showEdit?: boolean;
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
@@ -32,6 +34,7 @@ interface Props {
 export const ChatbotCard = React.memo<Props>(function ChatbotCard({
   chatbot,
   onDelete,
+  showEdit = true,
 }) {
   const navigate = useNavigate();
   const preset = presetConfig[chatbot.persona_preset] || presetConfig.open;
@@ -101,15 +104,17 @@ export const ChatbotCard = React.memo<Props>(function ChatbotCard({
 
       {/* Actions */}
       <div className="flex items-center gap-2 pt-3 border-t border-gray-100">
-        <button
-          type="button"
-          onClick={() => navigate(`/teacher/chatbots/${chatbot.id}`)}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium text-indigo-600 hover:bg-indigo-50 transition-colors"
-          aria-label={`Edit chatbot: ${chatbot.name}`}
-        >
-          <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
-          Edit
-        </button>
+        {showEdit && (
+          <button
+            type="button"
+            onClick={() => navigate(`/teacher/chatbots/${chatbot.id}`)}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium text-indigo-600 hover:bg-indigo-50 transition-colors"
+            aria-label={`Edit chatbot: ${chatbot.name}`}
+          >
+            <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+            Edit
+          </button>
+        )}
 
         {onDelete && (
           <button

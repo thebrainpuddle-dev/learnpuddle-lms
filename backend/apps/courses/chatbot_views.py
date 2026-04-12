@@ -5,16 +5,19 @@ All endpoints gated by @check_feature("feature_maic").
 """
 import hashlib
 import logging
+import os
 import time
 
 from django.core.files.storage import default_storage
-from django.db.models import Q
+from django.db import transaction
+from django.db.models import Count, Q, Sum
 from django.http import StreamingHttpResponse
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes, parser_classes
+from rest_framework.decorators import api_view, permission_classes, parser_classes, throttle_classes
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 
 from apps.courses.chatbot_models import (
     AIChatbot, AIChatbotKnowledge, AIChatbotConversation,
@@ -48,7 +51,10 @@ ALLOWED_EXTENSIONS = {'.pdf', '.txt', '.md', '.docx'}
 def teacher_chatbot_list_create(request):
     """GET: list teacher's chatbots. POST: create new chatbot."""
     if request.method == "GET":
-        chatbots = AIChatbot.objects.filter(creator=request.user)
+        chatbots = AIChatbot.objects.filter(creator=request.user).annotate(
+            _knowledge_count=Count('knowledge_sources', distinct=True),
+            _conversation_count=Count('conversations', distinct=True),
+        )
         serializer = AIChatbotSerializer(chatbots, many=True)
         return Response(serializer.data)
 
@@ -168,8 +174,9 @@ def teacher_knowledge_list_create(request, chatbot_id):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Save file
-        path = f"tenant/{request.tenant.id}/chatbot/{chatbot_id}/{file.name}"
+        # Save file (sanitize filename to prevent path traversal)
+        sanitized_name = os.path.basename(file.name).replace('..', '')
+        path = f"tenant/{request.tenant.id}/chatbot/{chatbot_id}/{sanitized_name}"
         saved_path = default_storage.save(path, file)
 
         # Compute hash
@@ -277,7 +284,7 @@ def teacher_chatbot_analytics(request, chatbot_id):
 
     return Response({
         "total_conversations": conversations.count(),
-        "total_messages": sum(c.message_count for c in conversations),
+        "total_messages": conversations.aggregate(total=Sum('message_count'))['total'] or 0,
         "unique_students": conversations.values('student').distinct().count(),
         "flagged_count": conversations.filter(is_flagged=True).count(),
     })
@@ -310,6 +317,9 @@ def student_chatbot_list(request):
     chatbots = AIChatbot.objects.filter(
         creator_id__in=teacher_ids,
         is_active=True,
+    ).annotate(
+        _knowledge_count=Count('knowledge_sources', distinct=True),
+        _conversation_count=Count('conversations', distinct=True),
     )
 
     serializer = AIChatbotSerializer(chatbots, many=True)
@@ -371,11 +381,14 @@ def student_conversation_detail(request, chatbot_id, conversation_id):
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
+@throttle_classes([ScopedRateThrottle])
 @student_or_admin
 @tenant_required
 @check_feature("feature_maic")
 def student_chat(request, chatbot_id):
     """Send message to chatbot — returns SSE stream."""
+    request.throttle_scope = 'chatbot_chat'
+
     chatbot = _verify_student_chatbot_access(request, chatbot_id)
     if isinstance(chatbot, Response):
         return chatbot
@@ -386,6 +399,13 @@ def student_chat(request, chatbot_id):
     if not message:
         return Response(
             {"error": "message is required"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Fix 5: message length limit
+    if len(message) > 4000:
+        return Response(
+            {"error": "Message too long"},
             status=status.HTTP_400_BAD_REQUEST,
         )
 
@@ -405,19 +425,21 @@ def student_chat(request, chatbot_id):
             title=message[:100],
         )
 
-    # Add user message to conversation
-    conversation.messages.append({
-        "role": "user",
-        "content": message,
-        "timestamp": int(time.time()),
-    })
-    conversation.message_count += 1
-    conversation.save(update_fields=['messages', 'message_count', 'last_message_at'])
+    # Snapshot existing messages for LLM context (before appending user msg)
+    prior_messages = list(conversation.messages)
 
-    # Auto-set title from first message
-    if not conversation.title:
-        conversation.title = message[:100]
-        conversation.save(update_fields=['title'])
+    # Save user message inside a transaction with select_for_update to avoid race conditions
+    with transaction.atomic():
+        conv = AIChatbotConversation.objects.select_for_update().get(pk=conversation.pk)
+        conv.messages.append({
+            "role": "user",
+            "content": message,
+            "timestamp": int(time.time()),
+        })
+        conv.message_count += 1
+        if not conv.title:
+            conv.title = message[:100]
+        conv.save(update_fields=['messages', 'message_count', 'last_message_at', 'title'])
 
     # Get AI config
     try:
@@ -429,61 +451,60 @@ def student_chat(request, chatbot_id):
         )
 
     def sse_generator():
-        full_response = {"content": "", "sources": []}
         try:
             gen = stream_chat_response(
                 chatbot=chatbot,
-                conversation_messages=conversation.messages[:-1],  # Exclude the just-added user msg
+                conversation_messages=prior_messages,
                 user_message=message,
                 ai_config=ai_config,
             )
             for chunk in gen:
                 yield chunk
 
-                # Capture the returned data
-                if '"type": "done"' in chunk or '"type":"done"' in chunk:
-                    pass  # Stream is done
-
         except Exception as exc:
             logger.exception("Chat stream error")
-            yield f"data: {__import__('json').dumps({'type': 'error', 'error': str(exc)})}\n\n"
+            yield f"data: {__import__('json').dumps({'type': 'error', 'error': 'An error occurred while generating the response.'})}\n\n"
             return
 
-        # Save assistant response to conversation
-        # We need to reconstruct the full content from the stream
-        # The stream_chat_response generator doesn't return its result in a way
-        # we can capture via `return`, so we accumulate from SSE chunks
-        # This is handled by the client sending back the final content,
-        # OR we parse the chunks ourselves. For simplicity, we accumulate:
-
-    # We need a wrapper that saves the response after streaming
+    # Wrapper that saves the response after streaming and yields conversation_id in done event
     def sse_with_save():
         full_content = ""
         sources = []
         import json as _json
         for chunk in sse_generator():
-            yield chunk
-            # Parse chunk to accumulate content
+            # Intercept the done event to inject conversation_id
             if chunk.startswith("data: "):
                 try:
                     data = _json.loads(chunk[6:].strip())
                     if data.get("type") == "content":
                         full_content += data.get("content", "")
+                        yield chunk
+                        continue
                     elif data.get("type") == "sources":
                         sources = data.get("sources", [])
+                        yield chunk
+                        continue
+                    elif data.get("type") == "done":
+                        # Replace the done event with one that includes conversation_id
+                        done_data = {"type": "done", "conversation_id": str(conversation.pk)}
+                        yield f"data: {_json.dumps(done_data)}\n\n"
+                        continue
                 except (ValueError, KeyError):
                     pass
+            yield chunk
 
-        # Save assistant message
+        # Save assistant message with select_for_update to prevent race conditions
         if full_content:
-            conversation.messages.append({
-                "role": "assistant",
-                "content": full_content,
-                "timestamp": int(time.time()),
-                "sources": sources if sources else None,
-            })
-            conversation.message_count += 1
-            conversation.save(update_fields=['messages', 'message_count', 'last_message_at'])
+            with transaction.atomic():
+                conv = AIChatbotConversation.objects.select_for_update().get(pk=conversation.pk)
+                conv.messages.append({
+                    "role": "assistant",
+                    "content": full_content,
+                    "timestamp": int(time.time()),
+                    "sources": sources if sources else None,
+                })
+                conv.message_count += 1
+                conv.save(update_fields=['messages', 'message_count', 'last_message_at'])
 
     response = StreamingHttpResponse(
         sse_with_save(),

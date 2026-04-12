@@ -18,33 +18,6 @@ import type {
   PersonaPreset,
 } from '../../types/chatbot';
 
-// ─── Persona Preset Options ─────────────────────────────────────────────────
-
-const PERSONA_PRESETS: {
-  value: PersonaPreset;
-  label: string;
-  description: string;
-}[] = [
-  {
-    value: 'tutor',
-    label: 'Tutor',
-    description:
-      'Guides students step-by-step through problems using the Socratic method. Never gives direct answers.',
-  },
-  {
-    value: 'reference',
-    label: 'Reference',
-    description:
-      'Answers factual questions using uploaded knowledge sources. Stays strictly on topic.',
-  },
-  {
-    value: 'open',
-    label: 'Open',
-    description:
-      'General-purpose assistant that can discuss any topic within the guardrails you set.',
-  },
-];
-
 // ─── Main Component ──────────────────────────────────────────────────────────
 
 export function ChatbotBuilderPage() {
@@ -183,38 +156,6 @@ export function ChatbotBuilderPage() {
           />
         </div>
 
-        {/* Persona Preset */}
-        <fieldset>
-          <legend className="block text-sm font-medium text-gray-700 mb-2">
-            Persona Preset
-          </legend>
-          <div className="space-y-3">
-            {PERSONA_PRESETS.map((preset) => (
-              <label
-                key={preset.value}
-                className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
-                  personaPreset === preset.value
-                    ? 'border-indigo-300 bg-indigo-50'
-                    : 'border-gray-200 hover:border-gray-300'
-                }`}
-              >
-                <input
-                  type="radio"
-                  name="persona_preset"
-                  value={preset.value}
-                  checked={personaPreset === preset.value}
-                  onChange={() => setPersonaPreset(preset.value)}
-                  className="mt-0.5 h-4 w-4 text-indigo-600 border-gray-300 focus:ring-indigo-500"
-                />
-                <div>
-                  <span className="text-sm font-medium text-gray-900">{preset.label}</span>
-                  <p className="text-xs text-gray-500 mt-0.5">{preset.description}</p>
-                </div>
-              </label>
-            ))}
-          </div>
-        </fieldset>
-
         {/* Persona Description */}
         <div>
           <label
@@ -231,46 +172,6 @@ export function ChatbotBuilderPage() {
             placeholder="Describe how the chatbot should behave and communicate..."
             className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-indigo-500 focus:border-indigo-500"
           />
-        </div>
-
-        {/* Custom Rules */}
-        <div>
-          <label htmlFor="custom-rules" className="block text-sm font-medium text-gray-700 mb-1">
-            Custom Rules
-          </label>
-          <textarea
-            id="custom-rules"
-            value={customRules}
-            onChange={(e) => setCustomRules(e.target.value)}
-            rows={3}
-            placeholder="Add any specific rules or constraints (one per line)..."
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-indigo-500 focus:border-indigo-500"
-          />
-        </div>
-
-        {/* Block Off-Topic toggle */}
-        <div className="flex items-center justify-between">
-          <div>
-            <span className="text-sm font-medium text-gray-700">Block Off-Topic Messages</span>
-            <p className="text-xs text-gray-500 mt-0.5">
-              Prevent the chatbot from responding to unrelated questions
-            </p>
-          </div>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={blockOffTopic}
-            onClick={() => setBlockOffTopic(!blockOffTopic)}
-            className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 ${
-              blockOffTopic ? 'bg-indigo-600' : 'bg-gray-200'
-            }`}
-          >
-            <span
-              className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                blockOffTopic ? 'translate-x-5' : 'translate-x-0'
-              }`}
-            />
-          </button>
         </div>
 
         {/* Welcome Message */}

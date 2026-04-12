@@ -7,6 +7,7 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Bot, Plus, Search } from 'lucide-react';
 import { usePageTitle } from '../../hooks/usePageTitle';
+import { useToast } from '../../components/common';
 import { chatbotApi } from '../../services/openmaicService';
 import { useChatbotStore } from '../../stores/chatbotStore';
 import { ChatbotCard } from '../../components/maic/ChatbotCard';
@@ -17,6 +18,7 @@ import type { AIChatbot } from '../../types/chatbot';
 export function ChatbotListPage() {
   usePageTitle('AI Chatbots');
   const navigate = useNavigate();
+  const toast = useToast();
 
   const [search, setSearch] = useState('');
 
@@ -63,8 +65,8 @@ export function ChatbotListPage() {
     try {
       await chatbotApi.delete(id);
       removeChatbot(id);
-    } catch {
-      // Silently fail — could add toast here
+    } catch (err: unknown) {
+      toast.error('Delete failed', err instanceof Error ? err.message : 'Could not delete chatbot.');
     }
   }
 

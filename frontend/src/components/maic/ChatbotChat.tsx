@@ -7,8 +7,14 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { Send, Bot, User, Loader2 } from 'lucide-react';
 import { useChatbotStore } from '../../stores/chatbotStore';
+import { getAccessToken } from '../../utils/authSession';
+import api from '../../config/api';
 import type { ChatMessage, ChatSSEEvent } from '../../types/chatbot';
 import { cn } from '../../lib/utils';
+
+// Derive the base URL from the shared axios instance so SSE fetch() calls
+// hit the same backend as every other API call.
+const API_BASE_URL = api.defaults.baseURL ?? '';
 
 // ─── Props ──────────────────────────────────────────────────────────────────
 
@@ -17,15 +23,6 @@ interface Props {
   conversationId: string | null;
   welcomeMessage: string;
   onConversationCreated: (id: string) => void;
-}
-
-// ─── Helpers ────────────────────────────────────────────────────────────────
-
-function getToken(): string | null {
-  return (
-    localStorage.getItem('access_token') ||
-    sessionStorage.getItem('access_token')
-  );
 }
 
 /** Parse an SSE text chunk into individual event objects. */
@@ -71,12 +68,21 @@ export function ChatbotChat({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const messageCountRef = useRef(localMessages.length);
+  messageCountRef.current = localMessages.length;
 
   // Track current conversation id locally (may be created mid-stream)
   const convIdRef = useRef<string | null>(conversationId);
   useEffect(() => {
     convIdRef.current = conversationId;
   }, [conversationId]);
+
+  // Abort any in-flight SSE stream on unmount
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, []);
 
   // Reset messages when conversation changes
   useEffect(() => {
@@ -87,17 +93,19 @@ export function ChatbotChat({
     setStreaming(false);
 
     // If switching to an existing conversation, fetch its messages
+    const controller = new AbortController();
     if (conversationId && chatbotId) {
       (async () => {
         try {
-          const token = getToken();
+          const token = getAccessToken();
           const res = await fetch(
-            `/api/v1/student/chatbots/${chatbotId}/conversations/${conversationId}/`,
+            `${API_BASE_URL}/v1/student/chatbots/${chatbotId}/conversations/${conversationId}/`,
             {
               headers: {
                 Authorization: `Bearer ${token}`,
                 'Content-Type': 'application/json',
               },
+              signal: controller.signal,
             },
           );
           if (res.ok) {
@@ -111,6 +119,10 @@ export function ChatbotChat({
         }
       })();
     }
+
+    return () => {
+      controller.abort();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId, chatbotId]);
 
@@ -153,9 +165,9 @@ export function ChatbotChat({
         null;
 
       try {
-        const token = getToken();
+        const token = getAccessToken();
         const res = await fetch(
-          `/api/v1/student/chatbots/${chatbotId}/chat/`,
+          `${API_BASE_URL}/v1/student/chatbots/${chatbotId}/chat/`,
           {
             method: 'POST',
             headers: {
@@ -251,7 +263,7 @@ export function ChatbotChat({
           });
           setSources((prev) => {
             const next = new Map(prev);
-            next.set(localMessages.length, streamSources!);
+            next.set(messageCountRef.current, streamSources!);
             return next;
           });
         }

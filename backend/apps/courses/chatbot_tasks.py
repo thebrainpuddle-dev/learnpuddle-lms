@@ -5,6 +5,8 @@ PDF/text -> chunks -> embeddings -> pgvector bulk insert.
 """
 import hashlib
 import logging
+import os
+import tempfile
 from typing import Optional
 
 import tiktoken
@@ -14,6 +16,7 @@ from django.db import transaction
 from apps.courses.chatbot_models import (
     AIChatbotChunk,
     AIChatbotKnowledge,
+    EMBEDDING_MODEL,
 )
 from utils.tenant_middleware import set_current_tenant, clear_current_tenant
 
@@ -22,9 +25,8 @@ logger = logging.getLogger(__name__)
 # Chunking config
 CHUNK_SIZE = 512       # tokens per chunk
 CHUNK_OVERLAP = 50     # token overlap between chunks
-EMBEDDING_MODEL = "text-embedding-3-small"
 EMBEDDING_DIMS = 1536
-BATCH_SIZE = 128       # embeddings per API call
+BATCH_SIZE = 16        # embeddings per API call
 
 
 def _get_encoding():
@@ -143,11 +145,17 @@ def ingest_chatbot_knowledge(self, knowledge_id: str):
         knowledge.save(update_fields=['embedding_status', 'updated_at'])
 
         # Step 1: Extract text
+        # Use default_storage.open() instead of default_storage.path()
+        # so this works with both local and remote (S3) storage backends.
         raw_chunks = []
         if knowledge.source_type == 'pdf' and knowledge.file_url:
             from django.core.files.storage import default_storage
-            file_path = default_storage.path(knowledge.file_url)
-            pages = _extract_text_from_pdf(file_path)
+            with default_storage.open(knowledge.file_url, 'rb') as remote_file:
+                with tempfile.NamedTemporaryFile(suffix='.pdf', delete=True) as tmp:
+                    for chunk in remote_file.chunks():
+                        tmp.write(chunk)
+                    tmp.flush()
+                    pages = _extract_text_from_pdf(tmp.name)
             for page_data in pages:
                 raw_chunks.extend(
                     _chunk_text(page_data["text"], page_number=page_data["page"])
@@ -156,17 +164,21 @@ def ingest_chatbot_knowledge(self, knowledge_id: str):
             raw_chunks = _chunk_text(knowledge.raw_text)
         elif knowledge.source_type == 'document' and knowledge.file_url:
             from django.core.files.storage import default_storage
-            file_path = default_storage.path(knowledge.file_url)
-            if file_path.endswith('.pdf'):
-                pages = _extract_text_from_pdf(file_path)
-                for page_data in pages:
-                    raw_chunks.extend(
-                        _chunk_text(page_data["text"], page_number=page_data["page"])
-                    )
-            else:
-                with open(file_path, 'r', errors='replace') as f:
-                    text = f.read()
-                raw_chunks = _chunk_text(text)
+            with default_storage.open(knowledge.file_url, 'rb') as remote_file:
+                with tempfile.NamedTemporaryFile(suffix=os.path.splitext(knowledge.file_url)[1] or '.bin', delete=True) as tmp:
+                    for chunk in remote_file.chunks():
+                        tmp.write(chunk)
+                    tmp.flush()
+                    if tmp.name.endswith('.pdf'):
+                        pages = _extract_text_from_pdf(tmp.name)
+                        for page_data in pages:
+                            raw_chunks.extend(
+                                _chunk_text(page_data["text"], page_number=page_data["page"])
+                            )
+                    else:
+                        tmp.seek(0)
+                        text = tmp.read().decode('utf-8', errors='replace')
+                        raw_chunks = _chunk_text(text)
         else:
             raise ValueError(f"Unsupported source_type: {knowledge.source_type}")
 

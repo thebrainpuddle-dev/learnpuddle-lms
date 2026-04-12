@@ -21,9 +21,15 @@ class AIChatbotSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at', 'updated_at']
 
     def get_knowledge_count(self, obj):
+        # Use annotation if available (avoids N+1), fall back to .count()
+        if hasattr(obj, '_knowledge_count'):
+            return obj._knowledge_count
         return obj.knowledge_sources.count()
 
     def get_conversation_count(self, obj):
+        # Use annotation if available (avoids N+1), fall back to .count()
+        if hasattr(obj, '_conversation_count'):
+            return obj._conversation_count
         return obj.conversations.count()
 
 

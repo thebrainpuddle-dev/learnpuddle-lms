@@ -355,6 +355,8 @@ REST_FRAMEWORK = {
         'promotion': '5/hour',
         # Client-side error ingestion (public endpoint)
         'client_error_ingest': '30/minute',
+        # AI Chatbot chat endpoint
+        'chatbot_chat': '30/minute',
     },
     # OpenAPI schema generation
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',

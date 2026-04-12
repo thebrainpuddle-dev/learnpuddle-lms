@@ -10,6 +10,9 @@ from pgvector.django import VectorField, HnswIndex
 
 from utils.tenant_manager import TenantManager
 
+# Shared embedding model constant — imported by chatbot_tasks.py and chatbot_rag_service.py
+EMBEDDING_MODEL = "text-embedding-3-small"
+
 
 class AIChatbot(models.Model):
     """Teacher-created AI chatbot with persona and guardrails."""

@@ -19,7 +19,7 @@ export function StudentChatbotsPage() {
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
 
-  const { data: chatbots = [], isLoading } = useQuery({
+  const { data: chatbots = [], isLoading, error } = useQuery({
     queryKey: ['student-chatbots'],
     queryFn: async () => {
       const res = await chatbotStudentApi.list();
@@ -60,6 +60,13 @@ export function StudentChatbotsPage() {
         </div>
       </div>
 
+      {/* Error */}
+      {error && (
+        <div className="rounded-lg bg-red-50 border border-red-200 p-4 text-sm text-red-700">
+          {error instanceof Error ? error.message : 'Failed to load chatbots'}
+        </div>
+      )}
+
       {/* Grid */}
       {isLoading ? (
         <div className="flex justify-center py-16">
@@ -93,7 +100,7 @@ export function StudentChatbotsPage() {
                 }
               }}
             >
-              <ChatbotCard chatbot={chatbot} />
+              <ChatbotCard chatbot={chatbot} showEdit={false} />
             </div>
           ))}
         </div>

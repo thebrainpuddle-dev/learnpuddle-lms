@@ -13,7 +13,7 @@ from typing import Generator
 import requests as http_requests
 from pgvector.django import CosineDistance
 
-from apps.courses.chatbot_models import AIChatbotChunk
+from apps.courses.chatbot_models import AIChatbotChunk, EMBEDDING_MODEL
 from apps.courses.chatbot_guardrails import build_system_prompt
 
 logger = logging.getLogger(__name__)
@@ -31,7 +31,7 @@ def _embed_query(query: str, api_key: str, base_url: str = "") -> list[float]:
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         },
-        json={"model": "text-embedding-3-small", "input": [query]},
+        json={"model": EMBEDDING_MODEL, "input": [query]},
         timeout=30,
     )
     resp.raise_for_status()
@@ -155,7 +155,7 @@ def stream_chat_response(
 
     except http_requests.RequestException as exc:
         logger.exception("LLM streaming failed")
-        yield f"data: {json.dumps({'type': 'error', 'error': str(exc)})}\n\n"
+        yield f"data: {json.dumps({'type': 'error', 'error': 'An error occurred while generating the response.'})}\n\n"
 
     # Send sources at the end
     if sources:

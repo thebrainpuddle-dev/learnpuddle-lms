@@ -37,7 +37,9 @@ export function StudyNotesPage() {
   const [search, setSearch] = useState('');
   const [expandedCourses, setExpandedCourses] = useState<Set<string>>(new Set());
 
-  // Fetch all courses, then fetch detail for each to get modules + contents
+  const [loadingCourses, setLoadingCourses] = useState<Set<string>>(new Set());
+
+  // Fetch only the course list on mount
   useEffect(() => {
     let cancelled = false;
 
@@ -47,31 +49,6 @@ export function StudyNotesPage() {
         const list = await studentService.getStudentCourses();
         if (cancelled) return;
         setCourses(list);
-
-        // Fetch details in parallel
-        const details = await Promise.all(
-          list.map((c) => studentService.getStudentCourseDetail(c.id).catch(() => null)),
-        );
-        if (cancelled) return;
-
-        const map = new Map<string, StudentCourseDetail>();
-        details.forEach((d) => {
-          if (d) map.set(d.id, d);
-        });
-        setCourseDetails(map);
-
-        // Expand all courses that have notes by default
-        const ids = new Set<string>();
-        list.forEach((c) => {
-          const detail = map.get(c.id);
-          if (detail) {
-            const hasNotes = detail.modules.some((m) =>
-              m.contents.some((ct) => ct.content_type === 'DOCUMENT' || ct.content_type === 'TEXT'),
-            );
-            if (hasNotes) ids.add(c.id);
-          }
-        });
-        setExpandedCourses(ids);
       } catch {
         // silent — empty state shown
       } finally {
@@ -85,13 +62,19 @@ export function StudyNotesPage() {
     };
   }, []);
 
-  // Build grouped notes from course details
+  // Build grouped notes from course details — includes all enrolled courses
+  // so un-fetched ones still appear as expandable accordion items.
   const courseNotes: CourseNotes[] = useMemo(() => {
     const result: CourseNotes[] = [];
 
     for (const course of courses) {
       const detail = courseDetails.get(course.id);
-      if (!detail) continue;
+
+      if (!detail) {
+        // Detail not yet fetched — show the course with an empty item list
+        result.push({ courseId: course.id, courseTitle: course.title, items: [] });
+        continue;
+      }
 
       const items: NoteItem[] = [];
       for (const mod of detail.modules) {
@@ -110,15 +93,13 @@ export function StudyNotesPage() {
         }
       }
 
-      if (items.length > 0) {
-        result.push({ courseId: course.id, courseTitle: course.title, items });
-      }
+      result.push({ courseId: course.id, courseTitle: course.title, items });
     }
 
     return result;
   }, [courses, courseDetails]);
 
-  // Filter by search
+  // Filter by search — when searching, only include courses with matching items
   const filtered = useMemo(() => {
     if (!search.trim()) return courseNotes;
     const q = search.toLowerCase();
@@ -132,18 +113,52 @@ export function StudyNotesPage() {
             it.moduleName.toLowerCase().includes(q),
         ),
       }))
-      .filter((cn) => cn.items.length > 0);
+      .filter((cn) => cn.items.length > 0 || cn.courseTitle.toLowerCase().includes(q));
   }, [courseNotes, search]);
 
   const totalNotes = courseNotes.reduce((sum, cn) => sum + cn.items.length, 0);
 
-  function toggleCourse(courseId: string) {
-    setExpandedCourses((prev) => {
-      const next = new Set(prev);
-      if (next.has(courseId)) next.delete(courseId);
-      else next.add(courseId);
-      return next;
-    });
+  async function toggleCourse(courseId: string) {
+    const isCurrentlyExpanded = expandedCourses.has(courseId);
+
+    if (isCurrentlyExpanded) {
+      // Collapse
+      setExpandedCourses((prev) => {
+        const next = new Set(prev);
+        next.delete(courseId);
+        return next;
+      });
+      return;
+    }
+
+    // Expand — fetch detail if not cached
+    if (!courseDetails.has(courseId)) {
+      setLoadingCourses((prev) => new Set(prev).add(courseId));
+      try {
+        const detail = await studentService.getStudentCourseDetail(courseId);
+        setCourseDetails((prev) => {
+          const next = new Map(prev);
+          next.set(detail.id, detail);
+          return next;
+        });
+      } catch {
+        // Failed to load — don't expand
+        setLoadingCourses((prev) => {
+          const next = new Set(prev);
+          next.delete(courseId);
+          return next;
+        });
+        return;
+      } finally {
+        setLoadingCourses((prev) => {
+          const next = new Set(prev);
+          next.delete(courseId);
+          return next;
+        });
+      }
+    }
+
+    setExpandedCourses((prev) => new Set(prev).add(courseId));
   }
 
   // ─── Loading ─────────────────────────────────────────────────────────────
@@ -204,6 +219,7 @@ export function StudyNotesPage() {
       <div className="space-y-3">
         {filtered.map((cn) => {
           const isExpanded = expandedCourses.has(cn.courseId);
+          const isCourseLoading = loadingCourses.has(cn.courseId);
 
           return (
             <div key={cn.courseId} className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
@@ -214,7 +230,9 @@ export function StudyNotesPage() {
                 className="w-full flex items-center justify-between px-5 py-3.5 hover:bg-gray-50 transition-colors"
               >
                 <div className="flex items-center gap-3 min-w-0">
-                  {isExpanded ? (
+                  {isCourseLoading ? (
+                    <div className="h-4 w-4 animate-spin rounded-full border-2 border-indigo-600 border-t-transparent flex-shrink-0" />
+                  ) : isExpanded ? (
                     <ChevronDown className="h-4 w-4 text-gray-400 flex-shrink-0" />
                   ) : (
                     <ChevronRight className="h-4 w-4 text-gray-400 flex-shrink-0" />

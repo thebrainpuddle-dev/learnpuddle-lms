@@ -106,9 +106,7 @@ export const chatbotApi = {
     api.get<AIChatbotKnowledge[]>(`/v1/teacher/chatbots/${chatbotId}/knowledge/`),
 
   uploadKnowledge: (chatbotId: string, formData: FormData) =>
-    api.post<AIChatbotKnowledge>(`/v1/teacher/chatbots/${chatbotId}/knowledge/`, formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    }),
+    api.post<AIChatbotKnowledge>(`/v1/teacher/chatbots/${chatbotId}/knowledge/`, formData),
 
   deleteKnowledge: (chatbotId: string, knowledgeId: string) =>
     api.delete(`/v1/teacher/chatbots/${chatbotId}/knowledge/${knowledgeId}/`),
