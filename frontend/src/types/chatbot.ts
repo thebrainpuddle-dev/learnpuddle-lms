@@ -81,6 +81,7 @@ export interface ChatSSEEvent {
   content?: string;
   sources?: Array<{ title: string; page?: number | null }>;
   error?: string;
+  conversation_id?: string;
 }
 
 export interface ChatbotAnalytics {

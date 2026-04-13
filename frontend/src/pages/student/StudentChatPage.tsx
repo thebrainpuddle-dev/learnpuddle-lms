@@ -31,7 +31,10 @@ export function StudentChatPage() {
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
-  // Fetch chatbot detail (from the student list, filter by id)
+  // Fetch chatbot detail — the backend has no dedicated student detail endpoint
+  // (see backend/apps/courses/chatbot_urls.py student_urlpatterns), so we fetch
+  // the full list and filter client-side. Replace with a direct detail call if/when
+  // the backend adds GET /v1/student/chatbots/<id>/.
   const { data: chatbot, isLoading: chatbotLoading } = useQuery({
     queryKey: ['student-chatbot-detail', chatbotId],
     queryFn: async () => {

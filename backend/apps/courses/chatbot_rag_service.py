@@ -8,6 +8,7 @@ RAG pipeline for AI Chatbot:
 """
 import json
 import logging
+import time
 from typing import Generator
 
 import requests as http_requests
@@ -25,19 +26,27 @@ HISTORY_TOKEN_BUDGET = 6000  # max tokens for conversation history
 
 
 def _embed_query(query: str, api_key: str, base_url: str = "") -> list[float]:
-    """Embed a single query string."""
+    """Embed a single query string with retry (3 attempts, exponential backoff)."""
     url = (base_url.rstrip("/") if base_url else "https://api.openai.com") + "/v1/embeddings"
-    resp = http_requests.post(
-        url,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        json={"model": EMBEDDING_MODEL, "input": [query]},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    return resp.json()["data"][0]["embedding"]
+    last_exc = None
+    for attempt in range(3):
+        try:
+            resp = http_requests.post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={"model": EMBEDDING_MODEL, "input": [query]},
+                timeout=30,
+            )
+            resp.raise_for_status()
+            return resp.json()["data"][0]["embedding"]
+        except http_requests.RequestException as exc:
+            last_exc = exc
+            if attempt < 2:
+                time.sleep(2 ** attempt)  # 1s, 2s
+    raise last_exc
 
 
 def retrieve_context(
@@ -52,10 +61,10 @@ def retrieve_context(
     chunks = (
         AIChatbotChunk.all_objects
         .filter(tenant_id=tenant_id, chatbot_id=chatbot_id)
+        .select_related('knowledge')
         .annotate(distance=CosineDistance('embedding', query_embedding))
         .filter(distance__lt=SIMILARITY_THRESHOLD)
         .order_by('distance')[:TOP_K]
-        .select_related('knowledge')
     )
 
     return [
@@ -141,31 +150,49 @@ def stream_chat_response(
 
     full_content = ""
 
-    try:
-        resp = http_requests.post(
-            url, headers=headers, json=payload, stream=True, timeout=120,
-        )
-        resp.raise_for_status()
+    # Retry the initial connection (2 attempts), then stream with proper cleanup
+    resp = None
+    last_exc = None
+    for attempt in range(2):
+        try:
+            resp = http_requests.post(
+                url, headers=headers, json=payload, stream=True, timeout=120,
+            )
+            resp.raise_for_status()
+            break  # connection succeeded
+        except http_requests.RequestException as exc:
+            last_exc = exc
+            if resp is not None:
+                resp.close()
+                resp = None
+            if attempt < 1:
+                time.sleep(1)
 
-        for line in resp.iter_lines(decode_unicode=True):
-            if not line or not line.startswith("data: "):
-                continue
-            data_str = line[6:]
-            if data_str == "[DONE]":
-                break
-            try:
-                data = json.loads(data_str)
-                delta = data.get("choices", [{}])[0].get("delta", {})
-                content = delta.get("content", "")
-                if content:
-                    full_content += content
-                    yield f"data: {json.dumps({'type': 'content', 'content': content})}\n\n"
-            except (json.JSONDecodeError, IndexError, KeyError):
-                continue
-
-    except http_requests.RequestException as exc:
-        logger.exception("LLM streaming failed")
+    if resp is None:
+        logger.exception("LLM streaming failed after retries", exc_info=last_exc)
         yield f"data: {json.dumps({'type': 'error', 'error': 'An error occurred while generating the response.'})}\n\n"
+    else:
+        try:
+            for line in resp.iter_lines(decode_unicode=True):
+                if not line or not line.startswith("data: "):
+                    continue
+                data_str = line[6:]
+                if data_str == "[DONE]":
+                    break
+                try:
+                    data = json.loads(data_str)
+                    delta = data.get("choices", [{}])[0].get("delta", {})
+                    content = delta.get("content", "")
+                    if content:
+                        full_content += content
+                        yield f"data: {json.dumps({'type': 'content', 'content': content})}\n\n"
+                except (json.JSONDecodeError, IndexError, KeyError):
+                    continue
+        except http_requests.RequestException:
+            logger.exception("LLM streaming failed mid-stream")
+            yield f"data: {json.dumps({'type': 'error', 'error': 'An error occurred while generating the response.'})}\n\n"
+        finally:
+            resp.close()
 
     # Send sources at the end
     if sources:

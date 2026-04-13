@@ -110,6 +110,8 @@ class AIChatbotKnowledge(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    all_objects = models.Manager()
+
     class Meta:
         db_table = 'ai_chatbot_knowledge'
         ordering = ['-created_at']

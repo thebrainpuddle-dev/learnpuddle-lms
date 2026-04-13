@@ -136,7 +136,7 @@ def _get_embeddings(texts: list[str], api_key: str, base_url: str = "") -> list[
     return all_embeddings
 
 
-@shared_task(bind=True, max_retries=2)
+@shared_task(bind=True, max_retries=2, soft_time_limit=600, time_limit=660)
 def ingest_chatbot_knowledge(self, knowledge_id: str):
     """
     Main ingestion pipeline:

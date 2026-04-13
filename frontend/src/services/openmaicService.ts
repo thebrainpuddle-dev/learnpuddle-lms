@@ -6,7 +6,7 @@ import api from '../config/api';
 import type { MAICClassroomMeta, MAICOutlineScene, MAICAgent } from '../types/maic';
 import type { MAICAction } from '../types/maic-actions';
 import type { MAICScene } from '../types/maic-scenes';
-import type { AIChatbot, AIChatbotKnowledge, AIChatbotCreatePayload, Conversation } from '../types/chatbot';
+import type { AIChatbot, AIChatbotKnowledge, AIChatbotCreatePayload, ChatbotAnalytics, Conversation } from '../types/chatbot';
 
 // ─── MAIC AI Classroom API (Teacher) ─────────────────────────────────────────
 
@@ -120,7 +120,7 @@ export const chatbotApi = {
 
   // Analytics
   analytics: (chatbotId: string) =>
-    api.get(`/v1/teacher/chatbots/${chatbotId}/analytics/`),
+    api.get<ChatbotAnalytics>(`/v1/teacher/chatbots/${chatbotId}/analytics/`),
 };
 
 // ─── AI Chatbot API (Student) ─────────────────────────────────────────

@@ -33,7 +33,27 @@ class AIChatbotSerializer(serializers.ModelSerializer):
         return obj.conversations.count()
 
 
+class AIChatbotStudentSerializer(serializers.ModelSerializer):
+    """Read-only serializer for student-facing chatbot views (hides internal config)."""
+    knowledge_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = AIChatbot
+        fields = [
+            'id', 'name', 'avatar_url', 'persona_preset',
+            'welcome_message', 'is_active', 'knowledge_count',
+            'created_at',
+        ]
+        read_only_fields = fields
+
+    def get_knowledge_count(self, obj):
+        return getattr(obj, '_knowledge_count', obj.knowledge_sources.count())
+
+
 class AIChatbotCreateSerializer(serializers.ModelSerializer):
+    persona_description = serializers.CharField(max_length=2000, required=False, allow_blank=True)
+    custom_rules = serializers.CharField(max_length=2000, required=False, allow_blank=True)
+
     class Meta:
         model = AIChatbot
         fields = [

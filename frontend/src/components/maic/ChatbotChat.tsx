@@ -25,19 +25,19 @@ interface Props {
   onConversationCreated: (id: string) => void;
 }
 
-/** Parse an SSE text chunk into individual event objects. */
-function parseSSEChunk(chunk: string): ChatSSEEvent[] {
+/** Parse COMPLETE SSE lines into individual event objects. */
+function parseSSELines(completePart: string): ChatSSEEvent[] {
   const events: ChatSSEEvent[] = [];
-  const lines = chunk.split('\n');
+  const lines = completePart.split('\n');
   for (const line of lines) {
-    if (line.startsWith('data: ')) {
-      const raw = line.slice(6).trim();
-      if (!raw || raw === '[DONE]') continue;
-      try {
-        events.push(JSON.parse(raw) as ChatSSEEvent);
-      } catch {
-        // non-JSON data line, skip
-      }
+    const trimmed = line.trim();
+    if (!trimmed || !trimmed.startsWith('data: ')) continue;
+    const raw = trimmed.slice(6).trim();
+    if (!raw || raw === '[DONE]') continue;
+    try {
+      events.push(JSON.parse(raw) as ChatSSEEvent);
+    } catch {
+      // non-JSON data line, skip
     }
   }
   return events;
@@ -68,6 +68,7 @@ export function ChatbotChat({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const streamingRef = useRef(false);
   const messageCountRef = useRef(localMessages.length);
   messageCountRef.current = localMessages.length;
 
@@ -135,7 +136,16 @@ export function ChatbotChat({
 
   const sendMessage = useCallback(
     async (text: string) => {
-      if (!text.trim() || isStreaming) return;
+      if (!text.trim() || streamingRef.current) return;
+      streamingRef.current = true;
+
+      // Check for valid token before attempting SSE fetch
+      const token = getAccessToken();
+      if (!token) {
+        setError('Session expired. Please refresh the page to continue.');
+        streamingRef.current = false;
+        return;
+      }
 
       const userMsg: ChatMessage = {
         role: 'user',
@@ -165,7 +175,6 @@ export function ChatbotChat({
         null;
 
       try {
-        const token = getAccessToken();
         const res = await fetch(
           `${API_BASE_URL}/v1/student/chatbots/${chatbotId}/chat/`,
           {
@@ -183,8 +192,18 @@ export function ChatbotChat({
         );
 
         if (!res.ok) {
-          const errBody = await res.text();
-          throw new Error(errBody || `HTTP ${res.status}`);
+          let errMsg = `Request failed (${res.status})`;
+          if (res.status === 401) {
+            errMsg = 'Your session has expired. Please refresh the page.';
+          } else {
+            try {
+              const body = await res.json();
+              errMsg = body.detail || body.error || errMsg;
+            } catch {
+              // Response is not JSON (e.g. HTML error page), ignore
+            }
+          }
+          throw new Error(errMsg);
         }
 
         const reader = res.body?.getReader();
@@ -199,12 +218,14 @@ export function ChatbotChat({
 
           buffer += decoder.decode(value, { stream: true });
 
-          // Process complete lines in buffer
-          const events = parseSSEChunk(buffer);
-          // Keep only the last incomplete line in buffer
+          // Only parse COMPLETE lines; keep incomplete remainder in buffer
           const lastNewline = buffer.lastIndexOf('\n');
-          buffer =
-            lastNewline >= 0 ? buffer.slice(lastNewline + 1) : buffer;
+          if (lastNewline < 0) continue; // no complete line yet
+
+          const completePart = buffer.slice(0, lastNewline + 1);
+          buffer = buffer.slice(lastNewline + 1);
+
+          const events = parseSSELines(completePart);
 
           for (const evt of events) {
             switch (evt.type) {
@@ -230,16 +251,12 @@ export function ChatbotChat({
                 break;
 
               case 'done': {
-                // Extract conversation_id if returned
-                const doneData = evt as ChatSSEEvent & {
-                  conversation_id?: string;
-                };
                 if (
-                  doneData.conversation_id &&
+                  evt.conversation_id &&
                   !convIdRef.current
                 ) {
-                  convIdRef.current = doneData.conversation_id;
-                  onConversationCreated(doneData.conversation_id);
+                  convIdRef.current = evt.conversation_id;
+                  onConversationCreated(evt.conversation_id);
                 }
                 break;
               }
@@ -272,13 +289,14 @@ export function ChatbotChat({
           setError((err as Error).message || 'Failed to send message');
         }
       } finally {
+        streamingRef.current = false;
         setStreaming(false);
         setStreamingContent('');
         abortRef.current = null;
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [chatbotId, isStreaming, onConversationCreated],
+    [chatbotId, onConversationCreated],
   );
 
   // Handle form submit

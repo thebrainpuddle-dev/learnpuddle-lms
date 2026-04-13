@@ -17,13 +17,14 @@ from rest_framework.decorators import api_view, permission_classes, parser_class
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.throttling import ScopedRateThrottle
+from rest_framework.throttling import UserRateThrottle
 
 from apps.courses.chatbot_models import (
     AIChatbot, AIChatbotKnowledge, AIChatbotConversation,
 )
 from apps.courses.chatbot_serializers import (
-    AIChatbotSerializer, AIChatbotCreateSerializer,
+    AIChatbotSerializer, AIChatbotStudentSerializer,
+    AIChatbotCreateSerializer,
     AIChatbotKnowledgeSerializer,
     AIChatbotConversationListSerializer,
     AIChatbotConversationDetailSerializer,
@@ -36,6 +37,11 @@ from utils.decorators import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class ChatbotChatThrottle(UserRateThrottle):
+    rate = '30/minute'
+
 
 MAX_UPLOAD_SIZE = 10 * 1024 * 1024  # 10MB
 ALLOWED_EXTENSIONS = {'.pdf', '.txt', '.md', '.docx'}
@@ -322,7 +328,7 @@ def student_chatbot_list(request):
         _conversation_count=Count('conversations', distinct=True),
     )
 
-    serializer = AIChatbotSerializer(chatbots, many=True)
+    serializer = AIChatbotStudentSerializer(chatbots, many=True)
     return Response(serializer.data)
 
 
@@ -381,14 +387,12 @@ def student_conversation_detail(request, chatbot_id, conversation_id):
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
-@throttle_classes([ScopedRateThrottle])
+@throttle_classes([ChatbotChatThrottle])
 @student_or_admin
 @tenant_required
 @check_feature("feature_maic")
 def student_chat(request, chatbot_id):
     """Send message to chatbot — returns SSE stream."""
-    request.throttle_scope = 'chatbot_chat'
-
     chatbot = _verify_student_chatbot_access(request, chatbot_id)
     if isinstance(chatbot, Response):
         return chatbot
@@ -471,40 +475,48 @@ def student_chat(request, chatbot_id):
         full_content = ""
         sources = []
         import json as _json
-        for chunk in sse_generator():
-            # Intercept the done event to inject conversation_id
-            if chunk.startswith("data: "):
+        try:
+            for chunk in sse_generator():
+                # Intercept the done event to inject conversation_id
+                if chunk.startswith("data: "):
+                    try:
+                        data = _json.loads(chunk[6:].strip())
+                        if data.get("type") == "content":
+                            full_content += data.get("content", "")
+                            yield chunk
+                            continue
+                        elif data.get("type") == "sources":
+                            sources = data.get("sources", [])
+                            yield chunk
+                            continue
+                        elif data.get("type") == "done":
+                            # Replace the done event with one that includes conversation_id
+                            done_data = {"type": "done", "conversation_id": str(conversation.pk)}
+                            yield f"data: {_json.dumps(done_data)}\n\n"
+                            continue
+                    except (ValueError, KeyError):
+                        pass
+                yield chunk
+        except GeneratorExit:
+            pass
+        finally:
+            # Save assistant message (even partial on disconnect)
+            if full_content:
                 try:
-                    data = _json.loads(chunk[6:].strip())
-                    if data.get("type") == "content":
-                        full_content += data.get("content", "")
-                        yield chunk
-                        continue
-                    elif data.get("type") == "sources":
-                        sources = data.get("sources", [])
-                        yield chunk
-                        continue
-                    elif data.get("type") == "done":
-                        # Replace the done event with one that includes conversation_id
-                        done_data = {"type": "done", "conversation_id": str(conversation.pk)}
-                        yield f"data: {_json.dumps(done_data)}\n\n"
-                        continue
-                except (ValueError, KeyError):
-                    pass
-            yield chunk
-
-        # Save assistant message with select_for_update to prevent race conditions
-        if full_content:
-            with transaction.atomic():
-                conv = AIChatbotConversation.objects.select_for_update().get(pk=conversation.pk)
-                conv.messages.append({
-                    "role": "assistant",
-                    "content": full_content,
-                    "timestamp": int(time.time()),
-                    "sources": sources if sources else None,
-                })
-                conv.message_count += 1
-                conv.save(update_fields=['messages', 'message_count', 'last_message_at'])
+                    with transaction.atomic():
+                        conv = AIChatbotConversation.objects.select_for_update().get(pk=conversation.pk)
+                        msgs = list(conv.messages)
+                        msgs.append({
+                            "role": "assistant",
+                            "content": full_content,
+                            "timestamp": int(time.time()),
+                            "sources": sources if sources else None,
+                        })
+                        conv.messages = msgs
+                        conv.message_count = len(msgs)
+                        conv.save(update_fields=['messages', 'message_count', 'last_message_at'])
+                except Exception:
+                    logger.exception("Failed to save assistant message on disconnect")
 
     response = StreamingHttpResponse(
         sse_with_save(),
