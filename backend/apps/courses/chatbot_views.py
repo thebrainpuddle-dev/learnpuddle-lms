@@ -6,10 +6,8 @@ All endpoints gated by @check_feature("feature_maic").
 import hashlib
 import logging
 import os
-import time
 
 from django.core.files.storage import default_storage
-from django.db import transaction
 from django.db.models import Count, Q, Sum
 from django.http import StreamingHttpResponse
 from rest_framework import status
@@ -159,6 +157,28 @@ def teacher_knowledge_list_create(request, chatbot_id):
             source_type='text',
             title=title or 'Text Input',
             raw_text=raw_text,
+            content_hash=content_hash,
+        )
+    elif source_type == 'url':
+        url = request.data.get('url', '').strip()
+        if not url:
+            return Response(
+                {"error": "url is required for url source type"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not url.startswith('http://') and not url.startswith('https://'):
+            return Response(
+                {"error": "URL must start with http:// or https://"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        content_hash = hashlib.sha256(url.encode()).hexdigest()
+
+        knowledge = AIChatbotKnowledge.objects.create(
+            tenant=request.tenant,
+            chatbot=chatbot,
+            source_type='url',
+            title=title or url,
+            file_url=url,
             content_hash=content_hash,
         )
     else:
@@ -373,8 +393,9 @@ def student_conversation_list_create(request, chatbot_id):
         student=request.user,
         title='',
     )
+    # Return metadata only (messages stored in client sessionStorage, not DB)
     return Response(
-        AIChatbotConversationDetailSerializer(conversation).data,
+        AIChatbotConversationListSerializer(conversation).data,
         status=status.HTTP_201_CREATED,
     )
 
@@ -385,7 +406,7 @@ def student_conversation_list_create(request, chatbot_id):
 @tenant_required
 @check_feature("feature_maic")
 def student_conversation_detail(request, chatbot_id, conversation_id):
-    """Get conversation detail."""
+    """Get conversation metadata (messages stored in client sessionStorage)."""
     chatbot = _verify_student_chatbot_access(request, chatbot_id)
     if isinstance(chatbot, Response):
         return chatbot
@@ -397,7 +418,8 @@ def student_conversation_detail(request, chatbot_id, conversation_id):
     except AIChatbotConversation.DoesNotExist:
         return Response({"error": "Conversation not found"}, status=status.HTTP_404_NOT_FOUND)
 
-    return Response(AIChatbotConversationDetailSerializer(conversation).data)
+    # Return metadata only — messages live in client sessionStorage
+    return Response(AIChatbotConversationListSerializer(conversation).data)
 
 
 @api_view(["POST"])
@@ -414,6 +436,8 @@ def student_chat(request, chatbot_id):
 
     message = request.data.get("message", "").strip()
     conversation_id = request.data.get("conversation_id")
+    # Client sends chat history from sessionStorage (list of {role, content} dicts)
+    history = request.data.get("history", [])
 
     if not message:
         return Response(
@@ -421,14 +445,22 @@ def student_chat(request, chatbot_id):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    # Fix 5: message length limit
     if len(message) > 4000:
         return Response(
             {"error": "Message too long"},
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    # Get or create conversation
+    # Validate history format
+    if not isinstance(history, list):
+        history = []
+    # Sanitize: keep only role and content keys, filter invalid entries
+    sanitized_history = []
+    for msg in history:
+        if isinstance(msg, dict) and msg.get("role") in ("user", "assistant") and msg.get("content"):
+            sanitized_history.append({"role": msg["role"], "content": msg["content"]})
+
+    # Get or create conversation (metadata only, no messages stored)
     if conversation_id:
         try:
             conversation = AIChatbotConversation.objects.get(
@@ -451,21 +483,11 @@ def student_chat(request, chatbot_id):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    # Snapshot existing messages for LLM context (before appending user msg)
-    prior_messages = list(conversation.messages)
-
-    # Save user message inside a transaction with select_for_update to avoid race conditions
-    with transaction.atomic():
-        conv = AIChatbotConversation.objects.select_for_update().get(pk=conversation.pk)
-        conv.messages.append({
-            "role": "user",
-            "content": message,
-            "timestamp": int(time.time()),
-        })
-        conv.message_count += 1
-        if not conv.title:
-            conv.title = message[:100]
-        conv.save(update_fields=['messages', 'message_count', 'last_message_at', 'title'])
+    # Update conversation metadata (title, message_count) — no messages saved
+    conversation.message_count += 1
+    if not conversation.title:
+        conversation.title = message[:100]
+    conversation.save(update_fields=['message_count', 'last_message_at', 'title'])
 
     # Get AI config
     try:
@@ -476,43 +498,22 @@ def student_chat(request, chatbot_id):
             status=status.HTTP_403_FORBIDDEN,
         )
 
-    def sse_generator():
+    import json as _json
+
+    def sse_stream():
         try:
             gen = stream_chat_response(
                 chatbot=chatbot,
-                conversation_messages=prior_messages,
+                conversation_messages=sanitized_history,
                 user_message=message,
                 ai_config=ai_config,
             )
             for chunk in gen:
-                yield chunk
-
-        except Exception as exc:
-            logger.exception("Chat stream error")
-            yield f"data: {__import__('json').dumps({'type': 'error', 'error': 'An error occurred while generating the response.'})}\n\n"
-            return
-
-    # Wrapper that saves the response after streaming and yields conversation_id in done event
-    def sse_with_save():
-        full_content = ""
-        sources = []
-        import json as _json
-        try:
-            for chunk in sse_generator():
                 # Intercept the done event to inject conversation_id
                 if chunk.startswith("data: "):
                     try:
                         data = _json.loads(chunk[6:].strip())
-                        if data.get("type") == "content":
-                            full_content += data.get("content", "")
-                            yield chunk
-                            continue
-                        elif data.get("type") == "sources":
-                            sources = data.get("sources", [])
-                            yield chunk
-                            continue
-                        elif data.get("type") == "done":
-                            # Replace the done event with one that includes conversation_id
+                        if data.get("type") == "done":
                             done_data = {"type": "done", "conversation_id": str(conversation.pk)}
                             yield f"data: {_json.dumps(done_data)}\n\n"
                             continue
@@ -521,27 +522,20 @@ def student_chat(request, chatbot_id):
                 yield chunk
         except GeneratorExit:
             pass
-        finally:
-            # Save assistant message (even partial on disconnect)
-            if full_content:
-                try:
-                    with transaction.atomic():
-                        conv = AIChatbotConversation.objects.select_for_update().get(pk=conversation.pk)
-                        msgs = list(conv.messages)
-                        msgs.append({
-                            "role": "assistant",
-                            "content": full_content,
-                            "timestamp": int(time.time()),
-                            "sources": sources if sources else None,
-                        })
-                        conv.messages = msgs
-                        conv.message_count = len(msgs)
-                        conv.save(update_fields=['messages', 'message_count', 'last_message_at'])
-                except Exception:
-                    logger.exception("Failed to save assistant message on disconnect")
+        except Exception:
+            logger.exception("Chat stream error")
+            yield f"data: {_json.dumps({'type': 'error', 'error': 'An error occurred while generating the response.'})}\n\n"
+
+        # Increment message_count for the assistant response
+        try:
+            conversation.refresh_from_db(fields=['message_count'])
+            conversation.message_count += 1
+            conversation.save(update_fields=['message_count', 'last_message_at'])
+        except Exception:
+            logger.exception("Failed to update conversation message_count")
 
     response = StreamingHttpResponse(
-        sse_with_save(),
+        sse_stream(),
         content_type='text/event-stream',
     )
     response['Cache-Control'] = 'no-cache'

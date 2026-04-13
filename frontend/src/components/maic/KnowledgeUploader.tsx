@@ -13,6 +13,7 @@ import {
   AlertCircle,
   CheckCircle,
   Loader2,
+  Link,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { chatbotApi } from '../../services/openmaicService';
@@ -56,6 +57,9 @@ export function KnowledgeUploader({ chatbotId }: { chatbotId: string }) {
   const [showTextInput, setShowTextInput] = useState(false);
   const [textTitle, setTextTitle] = useState('');
   const [textContent, setTextContent] = useState('');
+  const [showUrlInput, setShowUrlInput] = useState(false);
+  const [urlValue, setUrlValue] = useState('');
+  const [urlTitle, setUrlTitle] = useState('');
   const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
 
   const inputRef = useRef<HTMLInputElement>(null);
@@ -202,6 +206,44 @@ export function KnowledgeUploader({ chatbotId }: { chatbotId: string }) {
     }
   }, [chatbotId, textTitle, textContent]);
 
+  // ── Add URL ──────────────────────────────────────────────────────────
+
+  const handleAddUrl = useCallback(async () => {
+    const url = urlValue.trim();
+    if (!url) {
+      setError('URL cannot be empty.');
+      return;
+    }
+    try {
+      new URL(url); // validate URL format
+    } catch {
+      setError('Please enter a valid URL (e.g. https://example.com).');
+      return;
+    }
+
+    const title = urlTitle.trim() || url;
+
+    setError(null);
+    setUploading(true);
+    try {
+      const res = await chatbotApi.addKnowledgeUrl(chatbotId, {
+        source_type: 'url',
+        url,
+        title,
+      });
+      setItems((prev) => [res.data, ...prev]);
+      setUrlValue('');
+      setUrlTitle('');
+      setShowUrlInput(false);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : 'Failed to add URL. Please try again.',
+      );
+    } finally {
+      setUploading(false);
+    }
+  }, [chatbotId, urlValue, urlTitle]);
+
   // ── Delete handler ───────────────────────────────────────────────────
 
   const handleDelete = useCallback(
@@ -271,17 +313,29 @@ export function KnowledgeUploader({ chatbotId }: { chatbotId: string }) {
         aria-hidden="true"
       />
 
-      {/* Add Text toggle */}
-      {!showTextInput && (
-        <button
-          type="button"
-          onClick={() => setShowTextInput(true)}
-          className="inline-flex items-center gap-1.5 text-sm font-medium text-primary-600 hover:text-primary-700 transition-colors"
-        >
-          <Plus className="h-4 w-4" aria-hidden="true" />
-          Add Text
-        </button>
-      )}
+      {/* Add Text / Add URL toggles */}
+      <div className="flex items-center gap-4">
+        {!showTextInput && (
+          <button
+            type="button"
+            onClick={() => { setShowTextInput(true); setShowUrlInput(false); }}
+            className="inline-flex items-center gap-1.5 text-sm font-medium text-primary-600 hover:text-primary-700 transition-colors"
+          >
+            <Plus className="h-4 w-4" aria-hidden="true" />
+            Add Text
+          </button>
+        )}
+        {!showUrlInput && (
+          <button
+            type="button"
+            onClick={() => { setShowUrlInput(true); setShowTextInput(false); }}
+            className="inline-flex items-center gap-1.5 text-sm font-medium text-primary-600 hover:text-primary-700 transition-colors"
+          >
+            <Link className="h-4 w-4" aria-hidden="true" />
+            Add URL
+          </button>
+        )}
+      </div>
 
       {/* Text input section */}
       {showTextInput && (
@@ -333,6 +387,64 @@ export function KnowledgeUploader({ chatbotId }: { chatbotId: string }) {
                 setShowTextInput(false);
                 setTextTitle('');
                 setTextContent('');
+              }}
+              className="rounded-lg px-3 py-1.5 text-sm font-medium text-gray-600 hover:text-gray-800 hover:bg-gray-100 transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* URL input section */}
+      {showUrlInput && (
+        <div className="rounded-lg border border-gray-200 bg-white p-4 space-y-3">
+          <input
+            type="text"
+            value={urlTitle}
+            onChange={(e) => setUrlTitle(e.target.value)}
+            placeholder="Title (optional)"
+            className={cn(
+              'block w-full rounded-lg border border-gray-300 bg-white px-3 py-2',
+              'text-sm text-gray-900 placeholder-gray-400',
+              'focus:border-primary-500 focus:ring-1 focus:ring-primary-500',
+            )}
+          />
+          <input
+            type="url"
+            value={urlValue}
+            onChange={(e) => setUrlValue(e.target.value)}
+            placeholder="https://example.com/article"
+            className={cn(
+              'block w-full rounded-lg border border-gray-300 bg-white px-3 py-2',
+              'text-sm text-gray-900 placeholder-gray-400',
+              'focus:border-primary-500 focus:ring-1 focus:ring-primary-500',
+            )}
+          />
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleAddUrl}
+              disabled={uploading || !urlValue.trim()}
+              className={cn(
+                'inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium text-white transition-colors',
+                'bg-primary-600 hover:bg-primary-700',
+                'disabled:opacity-50 disabled:cursor-not-allowed',
+              )}
+            >
+              {uploading ? (
+                <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+              ) : (
+                <Link className="h-4 w-4" aria-hidden="true" />
+              )}
+              Add URL
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setShowUrlInput(false);
+                setUrlValue('');
+                setUrlTitle('');
               }}
               className="rounded-lg px-3 py-1.5 text-sm font-medium text-gray-600 hover:text-gray-800 hover:bg-gray-100 transition-colors"
             >

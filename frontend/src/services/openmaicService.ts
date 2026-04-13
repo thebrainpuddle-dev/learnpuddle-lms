@@ -108,6 +108,9 @@ export const chatbotApi = {
   uploadKnowledge: (chatbotId: string, formData: FormData) =>
     api.post<AIChatbotKnowledge>(`/v1/teacher/chatbots/${chatbotId}/knowledge/`, formData),
 
+  addKnowledgeUrl: (chatbotId: string, data: { source_type: 'url'; url: string; title: string }) =>
+    api.post<AIChatbotKnowledge>(`/v1/teacher/chatbots/${chatbotId}/knowledge/`, data),
+
   deleteKnowledge: (chatbotId: string, knowledgeId: string) =>
     api.delete(`/v1/teacher/chatbots/${chatbotId}/knowledge/${knowledgeId}/`),
 

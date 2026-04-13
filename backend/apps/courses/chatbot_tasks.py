@@ -6,6 +6,7 @@ PDF/text -> chunks -> embeddings -> pgvector bulk insert.
 import hashlib
 import logging
 import os
+import re
 import tempfile
 from typing import Optional
 
@@ -67,6 +68,38 @@ def _extract_text(file_path: str) -> list[dict]:
     if text.strip():
         return [{"page": None, "text": text}]
     return []
+
+
+def _extract_text_from_url(url: str) -> str:
+    """
+    Fetch a web page and extract clean text from HTML.
+    Uses requests + BeautifulSoup for robust HTML-to-text conversion.
+    """
+    import requests as http_requests
+    from bs4 import BeautifulSoup
+
+    headers = {
+        'User-Agent': 'LearnPuddle-Bot/1.0 (knowledge ingestion)',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    }
+    resp = http_requests.get(url, headers=headers, timeout=30, allow_redirects=True)
+    resp.raise_for_status()
+
+    soup = BeautifulSoup(resp.text, 'html.parser')
+
+    # Remove script, style, nav, footer, header elements
+    for tag in soup.find_all(['script', 'style', 'nav', 'footer', 'header', 'noscript']):
+        tag.decompose()
+
+    text = soup.get_text(separator='\n')
+
+    # Collapse multiple blank lines into single blank line
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    # Strip leading/trailing whitespace from each line
+    lines = [line.strip() for line in text.splitlines()]
+    text = '\n'.join(lines)
+
+    return text.strip()
 
 
 def _chunk_text(
@@ -184,6 +217,10 @@ def ingest_chatbot_knowledge(self, knowledge_id: str):
                 )
         elif knowledge.source_type == 'text' and knowledge.raw_text:
             raw_chunks = _chunk_text(knowledge.raw_text)
+        elif knowledge.source_type == 'url' and knowledge.file_url:
+            url_text = _extract_text_from_url(knowledge.file_url)
+            if url_text:
+                raw_chunks = _chunk_text(url_text)
         elif knowledge.source_type == 'document' and knowledge.file_url:
             from django.core.files.storage import default_storage
             with default_storage.open(knowledge.file_url, 'rb') as remote_file:

@@ -5,7 +5,7 @@
 // and handles content / sources / done / error event types.
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, Bot, User, Loader2 } from 'lucide-react';
+import { Send, Bot, User, Loader2, Trash2 } from 'lucide-react';
 import { useChatbotStore } from '../../stores/chatbotStore';
 import { getAccessToken } from '../../utils/authSession';
 import api from '../../config/api';
@@ -20,9 +20,34 @@ const API_BASE_URL = api.defaults.baseURL ?? '';
 
 interface Props {
   chatbotId: string;
-  conversationId: string | null;
+  conversationId?: string | null;
   welcomeMessage: string;
-  onConversationCreated: (id: string) => void;
+  onConversationCreated?: (id: string) => void;
+}
+
+/** sessionStorage key for persisting chat messages per chatbot. */
+function storageKey(chatbotId: string) {
+  return `chatbot_messages_${chatbotId}`;
+}
+
+/** Load persisted messages from sessionStorage. */
+function loadMessages(chatbotId: string): ChatMessage[] {
+  try {
+    const raw = sessionStorage.getItem(storageKey(chatbotId));
+    if (raw) return JSON.parse(raw) as ChatMessage[];
+  } catch {
+    // corrupt data — ignore
+  }
+  return [];
+}
+
+/** Persist messages to sessionStorage. */
+function saveMessages(chatbotId: string, messages: ChatMessage[]) {
+  try {
+    sessionStorage.setItem(storageKey(chatbotId), JSON.stringify(messages));
+  } catch {
+    // storage full — ignore
+  }
 }
 
 /** Parse COMPLETE SSE lines into individual event objects. */
@@ -52,7 +77,9 @@ export function ChatbotChat({
   onConversationCreated,
 }: Props) {
   const [input, setInput] = useState('');
-  const [localMessages, setLocalMessages] = useState<ChatMessage[]>([]);
+  const [localMessages, setLocalMessages] = useState<ChatMessage[]>(() =>
+    loadMessages(chatbotId),
+  );
   const [sources, setSources] = useState<
     Map<number, Array<{ title: string; page?: number | null }>>
   >(new Map());
@@ -73,9 +100,9 @@ export function ChatbotChat({
   messageCountRef.current = localMessages.length;
 
   // Track current conversation id locally (may be created mid-stream)
-  const convIdRef = useRef<string | null>(conversationId);
+  const convIdRef = useRef<string | null>(conversationId ?? null);
   useEffect(() => {
-    convIdRef.current = conversationId;
+    convIdRef.current = conversationId ?? null;
   }, [conversationId]);
 
   // Abort any in-flight SSE stream on unmount
@@ -85,47 +112,16 @@ export function ChatbotChat({
     };
   }, []);
 
-  // Reset messages when conversation changes
+  // Reload messages from sessionStorage when chatbotId changes
   useEffect(() => {
-    setLocalMessages([]);
+    const persisted = loadMessages(chatbotId);
+    setLocalMessages(persisted);
     setSources(new Map());
     setError(null);
     setStreamingContent('');
     setStreaming(false);
-
-    // If switching to an existing conversation, fetch its messages
-    const controller = new AbortController();
-    if (conversationId && chatbotId) {
-      (async () => {
-        try {
-          const token = getAccessToken();
-          const res = await fetch(
-            `${API_BASE_URL}/v1/student/chatbots/${chatbotId}/conversations/${conversationId}/`,
-            {
-              headers: {
-                Authorization: `Bearer ${token}`,
-                'Content-Type': 'application/json',
-              },
-              signal: controller.signal,
-            },
-          );
-          if (res.ok) {
-            const data = await res.json();
-            if (data.messages && Array.isArray(data.messages)) {
-              setLocalMessages(data.messages);
-            }
-          }
-        } catch {
-          // silently fail — user can still send a new message
-        }
-      })();
-    }
-
-    return () => {
-      controller.abort();
-    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [conversationId, chatbotId]);
+  }, [chatbotId]);
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -133,6 +129,15 @@ export function ChatbotChat({
   }, [localMessages, streamingContent]);
 
   // ── Send message & handle SSE stream ──────────────────────────────
+
+  // Clear chat — wipes sessionStorage for this chatbot
+  const handleClearChat = useCallback(() => {
+    sessionStorage.removeItem(storageKey(chatbotId));
+    setLocalMessages([]);
+    setSources(new Map());
+    setError(null);
+    setStreamingContent('');
+  }, [chatbotId, setStreamingContent]);
 
   const sendMessage = useCallback(
     async (text: string) => {
@@ -153,7 +158,14 @@ export function ChatbotChat({
         timestamp: Date.now(),
       };
 
-      setLocalMessages((prev) => [...prev, userMsg]);
+      // Build the history array from existing messages + the new user message
+      const currentMessages = [...localMessages, userMsg];
+      const history = currentMessages.map((m) => ({
+        role: m.role,
+        content: m.content,
+      }));
+
+      setLocalMessages(currentMessages);
       setInput('');
       setError(null);
       setStreaming(true);
@@ -186,6 +198,7 @@ export function ChatbotChat({
             body: JSON.stringify({
               message: text.trim(),
               conversation_id: convIdRef.current,
+              history,
             }),
             signal: controller.signal,
           },
@@ -251,12 +264,9 @@ export function ChatbotChat({
                 break;
 
               case 'done': {
-                if (
-                  evt.conversation_id &&
-                  !convIdRef.current
-                ) {
+                if (evt.conversation_id && !convIdRef.current) {
                   convIdRef.current = evt.conversation_id;
-                  onConversationCreated(evt.conversation_id);
+                  onConversationCreated?.(evt.conversation_id);
                 }
                 break;
               }
@@ -284,6 +294,12 @@ export function ChatbotChat({
             return next;
           });
         }
+
+        // Persist messages to sessionStorage after successful response
+        setLocalMessages((prev) => {
+          saveMessages(chatbotId, prev);
+          return prev;
+        });
       } catch (err: unknown) {
         if ((err as Error).name !== 'AbortError') {
           setError((err as Error).message || 'Failed to send message');
@@ -296,7 +312,7 @@ export function ChatbotChat({
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [chatbotId, onConversationCreated],
+    [chatbotId, localMessages, onConversationCreated],
   );
 
   // Handle form submit
@@ -420,6 +436,21 @@ export function ChatbotChat({
           onSubmit={handleSubmit}
           className="flex items-end gap-2 max-w-2xl mx-auto"
         >
+          {/* Clear Chat button */}
+          {hasMessages && !isStreaming && (
+            <button
+              type="button"
+              onClick={handleClearChat}
+              className={cn(
+                'shrink-0 inline-flex items-center justify-center rounded-xl h-10 w-10',
+                'text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors',
+              )}
+              aria-label="Clear chat"
+              title="Clear chat"
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
+          )}
           <textarea
             ref={inputRef}
             value={input}
