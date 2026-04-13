@@ -1,8 +1,11 @@
 # Add tenant FK to AIChatbotKnowledge for proper tenant isolation,
 # add NOT NULL constraint to embedding column, and add tenant+chatbot index.
 
+import logging
 from django.db import migrations, models
 import django.db.models.deletion
+
+logger = logging.getLogger(__name__)
 
 
 def backfill_knowledge_tenant(apps, schema_editor):
@@ -63,17 +66,27 @@ class Migration(migrations.Migration):
             ),
         ),
 
-        # Step 5: Make embedding column NOT NULL
-        # (It was added via raw SQL without NOT NULL constraint)
-        migrations.RunSQL(
-            sql=(
-                "UPDATE ai_chatbot_chunks SET embedding = array_fill(0, ARRAY[1536])::vector "
-                "WHERE embedding IS NULL;"
-            ),
-            reverse_sql=migrations.RunSQL.noop,
-        ),
-        migrations.RunSQL(
-            sql="ALTER TABLE ai_chatbot_chunks ALTER COLUMN embedding SET NOT NULL;",
-            reverse_sql="ALTER TABLE ai_chatbot_chunks ALTER COLUMN embedding DROP NOT NULL;",
+        # Step 5: Make embedding column NOT NULL (if pgvector is installed)
+        migrations.RunPython(
+            lambda apps, se: _set_embedding_not_null(),
+            migrations.RunPython.noop,
         ),
     ]
+
+
+def _set_embedding_not_null():
+    from django.db import connection as conn
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SAVEPOINT emb_notnull;")
+        cursor.execute(
+            "UPDATE ai_chatbot_chunks SET embedding = array_fill(0, ARRAY[1536])::vector "
+            "WHERE embedding IS NULL;"
+        )
+        cursor.execute(
+            "ALTER TABLE ai_chatbot_chunks ALTER COLUMN embedding SET NOT NULL;"
+        )
+        cursor.execute("RELEASE SAVEPOINT emb_notnull;")
+    except Exception:
+        cursor.execute("ROLLBACK TO SAVEPOINT emb_notnull;")
+        logger.warning("Could not set embedding NOT NULL — pgvector not installed.")

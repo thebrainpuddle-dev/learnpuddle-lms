@@ -6,9 +6,16 @@ knowledge bases, and configurable guardrails.
 import uuid
 
 from django.db import models
-from pgvector.django import VectorField, HnswIndex
 
 from utils.tenant_manager import TenantManager
+
+try:
+    from pgvector.django import VectorField, HnswIndex
+    HAS_PGVECTOR = True
+except ImportError:
+    HAS_PGVECTOR = False
+    VectorField = None
+    HnswIndex = None
 
 # Shared embedding model constant — imported by chatbot_tasks.py and chatbot_rag_service.py
 EMBEDDING_MODEL = "text-embedding-3-small"
@@ -152,7 +159,8 @@ class AIChatbotChunk(models.Model):
     token_count = models.PositiveIntegerField(default=0)
     heading = models.CharField(max_length=512, blank=True, default='')
     page_number = models.PositiveIntegerField(null=True, blank=True)
-    embedding = VectorField(dimensions=1536)
+    # embedding column added via raw SQL migration (pgvector VectorField)
+    # Not declared as a Django field to avoid import errors when pgvector is not installed.
     metadata = models.JSONField(default=dict, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -165,13 +173,7 @@ class AIChatbotChunk(models.Model):
         ordering = ['knowledge', 'chunk_index']
         unique_together = [('knowledge', 'chunk_index')]
         indexes = [
-            HnswIndex(
-                name='chunk_embedding_hnsw_idx',
-                fields=['embedding'],
-                m=16,
-                ef_construction=128,
-                opclasses=['vector_cosine_ops'],
-            ),
+            # HNSW index created via raw SQL migration
             models.Index(fields=['tenant', 'chatbot']),
         ]
 

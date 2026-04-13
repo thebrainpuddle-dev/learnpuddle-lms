@@ -1,7 +1,25 @@
-# Improve HNSW index parameters for better recall with 1536-dim embeddings.
-# Increases ef_construction from 64 to 128 for higher recall at index time.
+# Improve HNSW index parameters — gracefully skips if pgvector is not installed.
 
-from django.db import migrations
+import logging
+from django.db import connection, migrations
+
+logger = logging.getLogger(__name__)
+
+
+def upgrade_hnsw(apps, schema_editor):
+    cursor = connection.cursor()
+    try:
+        cursor.execute("SAVEPOINT hnsw_upgrade;")
+        cursor.execute("DROP INDEX IF EXISTS chunk_embedding_hnsw_idx;")
+        cursor.execute(
+            "CREATE INDEX chunk_embedding_hnsw_idx "
+            "ON ai_chatbot_chunks USING hnsw (embedding vector_cosine_ops) "
+            "WITH (m = 16, ef_construction = 128);"
+        )
+        cursor.execute("RELEASE SAVEPOINT hnsw_upgrade;")
+    except Exception:
+        cursor.execute("ROLLBACK TO SAVEPOINT hnsw_upgrade;")
+        logger.warning("Could not upgrade HNSW index — pgvector not installed.")
 
 
 class Migration(migrations.Migration):
@@ -11,20 +29,5 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.RunSQL(
-            sql="DROP INDEX IF EXISTS chunk_embedding_hnsw_idx;",
-            reverse_sql=(
-                "CREATE INDEX chunk_embedding_hnsw_idx "
-                "ON ai_chatbot_chunks USING hnsw (embedding vector_cosine_ops) "
-                "WITH (m = 16, ef_construction = 64);"
-            ),
-        ),
-        migrations.RunSQL(
-            sql=(
-                "CREATE INDEX chunk_embedding_hnsw_idx "
-                "ON ai_chatbot_chunks USING hnsw (embedding vector_cosine_ops) "
-                "WITH (m = 16, ef_construction = 128);"
-            ),
-            reverse_sql="DROP INDEX IF EXISTS chunk_embedding_hnsw_idx;",
-        ),
+        migrations.RunPython(upgrade_hnsw, migrations.RunPython.noop),
     ]

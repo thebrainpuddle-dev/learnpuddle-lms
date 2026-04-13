@@ -2,9 +2,49 @@
 # Creates chatbot models with pgvector support and adds Content FKs.
 
 import uuid
+import logging
 from django.conf import settings
-from django.db import migrations, models
+from django.db import connection, migrations, models
 import django.db.models.deletion
+
+logger = logging.getLogger(__name__)
+
+
+def setup_pgvector(apps, schema_editor):
+    """Create pgvector extension, vector column, and HNSW index — all optional."""
+    cursor = connection.cursor()
+
+    # Try creating extension inside a savepoint
+    try:
+        cursor.execute("SAVEPOINT pgvector_ext;")
+        cursor.execute("CREATE EXTENSION IF NOT EXISTS vector;")
+        cursor.execute("RELEASE SAVEPOINT pgvector_ext;")
+    except Exception as exc:
+        cursor.execute("ROLLBACK TO SAVEPOINT pgvector_ext;")
+        logger.warning(f"pgvector not available: {exc}. RAG features will be disabled.")
+        return  # Skip vector column and index entirely
+
+    # Add vector column
+    try:
+        cursor.execute("SAVEPOINT pgvector_col;")
+        cursor.execute("ALTER TABLE ai_chatbot_chunks ADD COLUMN embedding vector(1536);")
+        cursor.execute("RELEASE SAVEPOINT pgvector_col;")
+    except Exception:
+        cursor.execute("ROLLBACK TO SAVEPOINT pgvector_col;")
+        logger.warning("Could not add vector column.")
+        return
+
+    # Add HNSW index
+    try:
+        cursor.execute("SAVEPOINT pgvector_idx;")
+        cursor.execute(
+            "CREATE INDEX chunk_embedding_hnsw_idx ON ai_chatbot_chunks "
+            "USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);"
+        )
+        cursor.execute("RELEASE SAVEPOINT pgvector_idx;")
+    except Exception:
+        cursor.execute("ROLLBACK TO SAVEPOINT pgvector_idx;")
+        logger.warning("Could not create HNSW index.")
 
 
 class Migration(migrations.Migration):
@@ -16,11 +56,7 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        # Enable pgvector extension
-        migrations.RunSQL(
-            "CREATE EXTENSION IF NOT EXISTS vector;",
-            reverse_sql="DROP EXTENSION IF EXISTS vector;",
-        ),
+        # pgvector setup is deferred to after table creation (see below)
 
         # AIChatbot
         migrations.CreateModel(
@@ -105,16 +141,8 @@ class Migration(migrations.Migration):
                 "unique_together": {("knowledge", "chunk_index")},
             },
         ),
-        # Add vector column via raw SQL (pgvector VectorField)
-        migrations.RunSQL(
-            "ALTER TABLE ai_chatbot_chunks ADD COLUMN embedding vector(1536);",
-            reverse_sql="ALTER TABLE ai_chatbot_chunks DROP COLUMN IF EXISTS embedding;",
-        ),
-        # HNSW index for vector similarity search
-        migrations.RunSQL(
-            "CREATE INDEX chunk_embedding_hnsw_idx ON ai_chatbot_chunks USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);",
-            reverse_sql="DROP INDEX IF EXISTS chunk_embedding_hnsw_idx;",
-        ),
+        # pgvector: extension + vector column + HNSW index (graceful skip)
+        migrations.RunPython(setup_pgvector, migrations.RunPython.noop),
         migrations.AddIndex(
             model_name="aichatbotchunk",
             index=models.Index(fields=["tenant", "chatbot"], name="ai_chatbot__tenant_chatbot_idx"),
