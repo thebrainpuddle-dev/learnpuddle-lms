@@ -89,6 +89,11 @@ class AIChatbotKnowledge(models.Model):
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tenant = models.ForeignKey(
+        'tenants.Tenant', on_delete=models.CASCADE,
+        related_name='ai_chatbot_knowledge',
+        help_text='Direct tenant FK for proper isolation (avoids join through chatbot)',
+    )
     chatbot = models.ForeignKey(
         AIChatbot, on_delete=models.CASCADE,
         related_name='knowledge_sources',
@@ -117,6 +122,7 @@ class AIChatbotKnowledge(models.Model):
         ordering = ['-created_at']
         indexes = [
             models.Index(fields=['chatbot', 'embedding_status']),
+            models.Index(fields=['tenant', 'chatbot']),
         ]
 
     def __str__(self):
@@ -163,7 +169,7 @@ class AIChatbotChunk(models.Model):
                 name='chunk_embedding_hnsw_idx',
                 fields=['embedding'],
                 m=16,
-                ef_construction=64,
+                ef_construction=128,
                 opclasses=['vector_cosine_ops'],
             ),
             models.Index(fields=['tenant', 'chatbot']),

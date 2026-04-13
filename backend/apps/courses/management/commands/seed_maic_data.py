@@ -813,6 +813,7 @@ class Command(BaseCommand):
                     chatbot=chatbot,
                     title=src["title"],
                     defaults={
+                        "tenant": tenant,
                         "source_type": src["source_type"],
                         "filename": src.get("filename", ""),
                         "raw_text": src.get("raw_text", ""),

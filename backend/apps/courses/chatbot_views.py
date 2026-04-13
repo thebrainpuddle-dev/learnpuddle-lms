@@ -45,6 +45,7 @@ class ChatbotChatThrottle(UserRateThrottle):
 
 MAX_UPLOAD_SIZE = 10 * 1024 * 1024  # 10MB
 ALLOWED_EXTENSIONS = {'.pdf', '.txt', '.md', '.docx'}
+MAX_MESSAGES_PER_CONVERSATION = 200
 
 
 # ─── Teacher: Chatbot CRUD ────────────────────────────────────────────
@@ -153,6 +154,7 @@ def teacher_knowledge_list_create(request, chatbot_id):
         content_hash = hashlib.sha256(raw_text.encode()).hexdigest()
 
         knowledge = AIChatbotKnowledge.objects.create(
+            tenant=request.tenant,
             chatbot=chatbot,
             source_type='text',
             title=title or 'Text Input',
@@ -190,6 +192,7 @@ def teacher_knowledge_list_create(request, chatbot_id):
         content_hash = hashlib.sha256(file.read()).hexdigest()
 
         knowledge = AIChatbotKnowledge.objects.create(
+            tenant=request.tenant,
             chatbot=chatbot,
             source_type='pdf' if ext == '.pdf' else 'document',
             title=title or file.name,
@@ -239,7 +242,7 @@ def teacher_knowledge_delete(request, chatbot_id, knowledge_id):
 @tenant_required
 @check_feature("feature_maic")
 def teacher_conversation_list(request, chatbot_id):
-    """List student conversations for a chatbot."""
+    """List student conversations for a chatbot (paginated, 50 per page)."""
     try:
         chatbot = AIChatbot.objects.get(pk=chatbot_id, creator=request.user)
     except AIChatbot.DoesNotExist:
@@ -249,8 +252,20 @@ def teacher_conversation_list(request, chatbot_id):
         chatbot=chatbot,
     ).select_related('student').order_by('-last_message_at')
 
-    serializer = AIChatbotConversationListSerializer(conversations, many=True)
-    return Response(serializer.data)
+    # Simple cursor pagination using page param
+    page = int(request.query_params.get('page', 1))
+    page_size = 50
+    start = (page - 1) * page_size
+    total = conversations.count()
+    page_qs = conversations[start:start + page_size]
+
+    serializer = AIChatbotConversationListSerializer(page_qs, many=True)
+    return Response({
+        "results": serializer.data,
+        "count": total,
+        "page": page,
+        "page_size": page_size,
+    })
 
 
 @api_view(["GET"])
@@ -427,6 +442,13 @@ def student_chat(request, chatbot_id):
             chatbot=chatbot,
             student=request.user,
             title=message[:100],
+        )
+
+    # Check message limit
+    if conversation.message_count >= MAX_MESSAGES_PER_CONVERSATION:
+        return Response(
+            {"error": "This conversation has reached its message limit. Please start a new conversation."},
+            status=status.HTTP_400_BAD_REQUEST,
         )
 
     # Snapshot existing messages for LLM context (before appending user msg)
