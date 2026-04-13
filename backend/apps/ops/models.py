@@ -1,3 +1,4 @@
+import datetime
 import uuid
 
 from django.db import models
@@ -223,7 +224,7 @@ class MaintenanceSchedule(models.Model):
     enabled = models.BooleanField(default=False)
     week_of_month = models.PositiveSmallIntegerField(default=1)
     day = models.CharField(max_length=16, choices=DAY_CHOICES, default="SUNDAY")
-    start_time = models.TimeField()
+    start_time = models.TimeField(default=datetime.time(1, 0))
     duration_minutes = models.PositiveIntegerField(default=180)
     timezone = models.CharField(max_length=64, default="Asia/Kolkata")
 

@@ -212,6 +212,8 @@ const adminSteps: TourStep[] = [
     path: '/admin/dashboard',
     selector: '[data-tour="admin-dashboard-activity"]',
     placement: 'right',
+    optional: true,
+    onMissing: 'skip',
   },
   {
     id: 'admin-dashboard-actions',
@@ -299,14 +301,6 @@ const adminSteps: TourStep[] = [
     waitMs: 7000,
   },
   {
-    id: 'admin-media',
-    title: 'Media Library',
-    description: 'Upload and manage reusable media assets for all courses.',
-    path: '/admin/media',
-    selector: '[data-tour="admin-media-grid"]',
-    placement: 'top',
-  },
-  {
     id: 'admin-teachers',
     title: 'Teacher Management',
     description: 'Search, bulk update, import, and manage teacher lifecycle in this workspace.',
@@ -333,14 +327,6 @@ const adminSteps: TourStep[] = [
     optional: true,
   },
   {
-    id: 'admin-announcements',
-    title: 'Announcements',
-    description: 'Publish school-wide or group-targeted updates from this broadcast panel.',
-    path: '/admin/announcements',
-    selector: '[data-tour="admin-announcements-compose"]',
-    placement: 'right',
-  },
-  {
     id: 'admin-analytics',
     title: 'Analytics',
     description: 'Analyze engagement, completion, and department-level trends here.',
@@ -360,9 +346,10 @@ const adminSteps: TourStep[] = [
     id: 'admin-security',
     title: 'Security Controls',
     description: 'Configure 2FA and SSO from the security section.',
-    path: '/admin/settings/security',
+    path: '/admin/settings?tab=security',
     selector: '[data-tour="security-2fa-section"]',
     placement: 'top',
+    waitMs: 5000,
   },
   {
     id: 'admin-replay',
@@ -398,6 +385,9 @@ const teacherSteps: TourStep[] = [
     path: '/teacher/dashboard',
     selector: '[data-tour="teacher-dashboard-continue"]',
     placement: 'top',
+    optional: true,
+    onMissing: 'skip',
+    waitMs: 3000,
   },
   {
     id: 'teacher-dashboard-deadlines',

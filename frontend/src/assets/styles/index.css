@@ -1,114 +1,215 @@
-/* src/assets/styles/index.css */
-
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-
 @layer base {
   :root {
-    /* Default colors (will be overridden by tenant theme) */
-    --color-primary-50: #f0f4f8;
-    --color-primary-100: #d9e2ec;
-    --color-primary-200: #bcccdc;
-    --color-primary-300: #9fb3c8;
-    --color-primary-400: #829ab1;
-    --color-primary-500: #1F4788;
-    --color-primary-600: #1a3d73;
-    --color-primary-700: #15335e;
-    --color-primary-800: #102849;
-    --color-primary-900: #0b1e34;
-    
-    --color-secondary-50: #f5f7fa;
-    --color-secondary-100: #e4e7eb;
-    --color-secondary-200: #cbd2d9;
-    --color-secondary-300: #9aa5b1;
-    --color-secondary-400: #7b8794;
-    --color-secondary-500: #2E5C8A;
-    --color-secondary-600: #274d75;
-    --color-secondary-700: #1f3e60;
-    --color-secondary-800: #182f4b;
-    --color-secondary-900: #112036;
-    
-    --font-family: 'Inter', system-ui, sans-serif;
+    /* ─── Tenant brand colors (overridden by ThemeProvider) ─────────── */
+    --color-brand-50: #FDF8EB;
+    --color-brand-100: #FAF0D5;
+    --color-brand-200: #F5E1AB;
+    --color-brand-300: #F0D281;
+    --color-brand-400: #EBC357;
+    --color-brand-500: #D4A843;
+    --color-brand-600: #B8892B;
+    --color-brand-700: #9C6E1F;
+    --color-brand-800: #805617;
+    --color-brand-900: #644312;
+
+    /* ─── Backward compat — map primary/secondary → brand ──────────── */
+    --color-primary-50: var(--color-brand-50);
+    --color-primary-100: var(--color-brand-100);
+    --color-primary-200: var(--color-brand-200);
+    --color-primary-300: var(--color-brand-300);
+    --color-primary-400: var(--color-brand-400);
+    --color-primary-500: var(--color-brand-500);
+    --color-primary-600: var(--color-brand-600);
+    --color-primary-700: var(--color-brand-700);
+    --color-primary-800: var(--color-brand-800);
+    --color-primary-900: var(--color-brand-900);
+
+    --color-secondary-50: #FAF7F2;
+    --color-secondary-100: #F5F0E8;
+    --color-secondary-200: #EDE8DF;
+    --color-secondary-300: #D4CFC6;
+    --color-secondary-400: #B0AAA0;
+    --color-secondary-500: #8A847A;
+    --color-secondary-600: #6B6B6B;
+    --color-secondary-700: #4D4D4D;
+    --color-secondary-800: #333333;
+    --color-secondary-900: #1A1A1A;
+
+    /* ─── Font ─────────────────────────────────────────────────────── */
+    --font-family: 'Inter', system-ui, -apple-system, sans-serif;
   }
-  
+
   * {
-    @apply border-gray-200;
+    @apply border-surface-border;
   }
-  
+
   body {
-    @apply bg-gray-50 text-gray-900;
+    @apply bg-surface text-content;
     font-family: var(--font-family);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
 }
 
 @layer components {
-  /* Custom component styles */
+  /* ─── Glassmorphism card ──────────────────────────────────────────── */
+  .glass-card {
+    @apply bg-white/70 backdrop-blur-[12px] rounded-2xl shadow-glass;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+  }
+
+  /* ─── Gradient buttons ───────────────────────────────────────────── */
+  .btn-gradient {
+    @apply inline-flex items-center justify-center font-medium rounded-xl px-4 py-2.5
+           text-white transition-all duration-200
+           hover:shadow-lg hover:-translate-y-0.5 active:translate-y-0;
+    background: linear-gradient(135deg, #D4A843, #B8892B);
+  }
+
+  .btn-gradient-success {
+    @apply btn-gradient;
+    background: linear-gradient(135deg, #28A745, #48C764);
+  }
+
+  .btn-gradient-danger {
+    @apply btn-gradient;
+    background: linear-gradient(135deg, #DC3545, #E25D6A);
+  }
+
+  /* ─── Backward compat component classes ──────────────────────────── */
   .btn-primary {
-    @apply bg-primary-600 hover:bg-primary-700 text-white font-medium py-2 px-4 rounded-lg transition-colors;
+    @apply bg-accent hover:bg-accent-dark text-white font-medium py-2.5 px-4 rounded-xl transition-all duration-200 hover:shadow-lg;
   }
-  
+
   .btn-secondary {
-    @apply bg-secondary-600 hover:bg-secondary-700 text-white font-medium py-2 px-4 rounded-lg transition-colors;
+    @apply bg-white border border-surface-border text-content hover:bg-surface-card-hover font-medium py-2.5 px-4 rounded-xl transition-colors;
   }
-  
+
   .btn-outline {
-    @apply border-2 border-primary-600 text-primary-600 hover:bg-primary-50 font-medium py-2 px-4 rounded-lg transition-colors;
+    @apply border-2 border-accent text-accent hover:bg-accent-50 font-medium py-2 px-4 rounded-xl transition-colors;
   }
-  
+
   .card {
-    @apply bg-white rounded-lg shadow-sm border border-gray-200 p-6;
+    @apply bg-surface-card rounded-2xl shadow-card border border-surface-border p-6 transition-shadow hover:shadow-card-hover;
   }
-  
+
   .input-field {
-    @apply w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent;
+    @apply w-full px-4 py-2.5 bg-white border border-surface-border rounded-xl
+           focus:ring-2 focus:ring-accent/20 focus:border-accent
+           text-content placeholder:text-content-muted transition-colors;
   }
-  
+
+  /* ─── Sidebar links (kept for backward compat) ─────────────────── */
   .sidebar-link {
-    @apply flex items-center px-4 py-3 text-gray-700 hover:bg-primary-50 hover:text-primary-700 rounded-lg transition-colors;
+    @apply flex items-center gap-3 px-3 py-2.5 text-sidebar-text rounded-xl transition-all duration-200
+           hover:bg-sidebar-hover hover:text-sidebar-text-active;
   }
-  
+
   .sidebar-link-active {
-    @apply bg-primary-100 text-primary-700 font-medium;
+    @apply bg-sidebar-active text-sidebar-text-active font-medium;
+  }
+
+  /* ─── Top nav link ─────────────────────────────────────────────── */
+  .topnav-link {
+    @apply relative flex items-center gap-2 px-3 py-2 text-sm font-medium text-content-secondary rounded-lg transition-all duration-200
+           hover:text-content hover:bg-surface-card-hover;
+  }
+
+  .topnav-link-active {
+    @apply text-accent-dark bg-accent-50;
+  }
+
+  .topnav-link-active::after {
+    content: '';
+    @apply absolute bottom-0 left-3 right-3 h-0.5 bg-accent rounded-full;
+  }
+
+  /* ─── Stat card with gradient icon ─────────────────────────────── */
+  .stat-card {
+    @apply bg-surface-card rounded-2xl shadow-card p-6;
+  }
+
+  .stat-icon {
+    @apply w-12 h-12 rounded-xl flex items-center justify-center text-white;
   }
 }
 
-/* Loading states */
+@layer utilities {
+  /* ─── Gradient text ──────────────────────────────────────────────── */
+  .text-gradient {
+    @apply bg-clip-text text-transparent;
+    background-image: linear-gradient(135deg, #D4A843, #B8892B);
+  }
+
+  /* ─── Teacher portal scrollbar ───────────────────────────────────── */
+  .tp-scrollbar::-webkit-scrollbar {
+    width: 4px;
+  }
+  .tp-scrollbar::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+  .tp-scrollbar::-webkit-scrollbar-thumb {
+    @apply bg-gray-200 rounded-full;
+  }
+  .tp-scrollbar::-webkit-scrollbar-thumb:hover {
+    @apply bg-gray-300;
+  }
+
+  /* ─── Teacher portal skeleton ────────────────────────────────────── */
+  .tp-skeleton {
+    @apply animate-shimmer rounded;
+    background-color: #F3F4F6;
+    background-image: linear-gradient(
+      90deg,
+      transparent,
+      rgba(255, 255, 255, 0.8),
+      transparent
+    );
+    background-size: 200% 100%;
+  }
+
+  /* ─── Custom scrollbar ───────────────────────────────────────────── */
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 6px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    @apply bg-surface-border rounded-full;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    @apply bg-content-muted;
+  }
+
+  /* ─── Dark scrollbar (for sidebar) ─────────────────────────────── */
+  .dark-scrollbar::-webkit-scrollbar {
+    width: 4px;
+  }
+  .dark-scrollbar::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+  .dark-scrollbar::-webkit-scrollbar-thumb {
+    @apply bg-slate-600 rounded-full;
+  }
+  .dark-scrollbar::-webkit-scrollbar-thumb:hover {
+    @apply bg-slate-500;
+  }
+}
+
+/* ─── Loading skeleton shimmer ─────────────────────────────────────── */
 .skeleton {
-  @apply animate-pulse bg-gray-200 rounded;
-}
-
-/* Scrollbar styling */
-.custom-scrollbar::-webkit-scrollbar {
-  width: 8px;
-}
-
-.custom-scrollbar::-webkit-scrollbar-track {
-  @apply bg-gray-100 rounded;
-}
-
-.custom-scrollbar::-webkit-scrollbar-thumb {
-  @apply bg-gray-400 rounded;
-}
-
-.custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  @apply bg-gray-500;
-}
-
-/* Toast animations */
-@keyframes slide-in {
-  from {
-    transform: translateX(100%);
-    opacity: 0;
-  }
-  to {
-    transform: translateX(0);
-    opacity: 1;
-  }
-}
-
-.animate-slide-in {
-  animation: slide-in 0.3s ease-out;
+  @apply animate-shimmer rounded;
+  background-color: #EDE8DF;
+  background-image: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.6),
+    transparent
+  );
+  background-size: 200% 100%;
 }

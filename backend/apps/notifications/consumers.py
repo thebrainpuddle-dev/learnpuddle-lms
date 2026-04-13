@@ -36,26 +36,30 @@ class NotificationConsumer(AsyncJsonWebsocketConsumer):
     async def connect(self):
         """Handle WebSocket connection."""
         self.user = self.scope.get("user", AnonymousUser())
-        
+
         if self.user.is_anonymous:
             logger.warning("Rejected anonymous WebSocket connection")
             await self.close(code=4001)
             return
-        
+
         # Store tenant for filtering
         self.tenant_id = self.user.tenant_id
-        
+
         # Create user-specific group name (includes tenant for extra isolation)
         self.group_name = f"notifications_{self.user.id}"
-        
+
         # Join user's notification group
         await self.channel_layer.group_add(
             self.group_name,
             self.channel_name
         )
-        
-        await self.accept()
-        
+
+        # Accept with the subprotocol that carried the JWT token.
+        # The WebSocket spec requires the server to echo back one of
+        # the client's proposed subprotocols for the handshake to succeed.
+        accepted_subprotocol = self.scope.get("accepted_subprotocol")
+        await self.accept(subprotocol=accepted_subprotocol)
+
         logger.info(f"WebSocket connected: user={self.user.id}")
         
         # Send initial unread count

@@ -1,13 +1,35 @@
 // src/pages/auth/ResetPasswordPage.tsx
 
-import React, { useState } from 'react';
+import React from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { Input } from '../../components/common/Input';
+import { z } from 'zod';
+import { LockClosedIcon, CheckCircleIcon } from '@heroicons/react/24/outline';
+
+import { useZodForm } from '../../hooks/useZodForm';
+import { FormField } from '../../components/common/FormField';
 import { Button } from '../../components/common/Button';
 import { useTenantStore } from '../../stores/tenantStore';
 import { authService } from '../../services/authService';
 import { usePageTitle } from '../../hooks/usePageTitle';
-import { LockClosedIcon, CheckCircleIcon } from '@heroicons/react/24/outline';
+
+// ─── Zod schema ──────────────────────────────────────────────────────────────
+
+const ResetPasswordSchema = z
+  .object({
+    password: z
+      .string()
+      .min(8, 'Password must be at least 8 characters')
+      .max(128),
+    confirmPassword: z.string().min(1, 'Please confirm your password'),
+  })
+  .refine((data) => data.password === data.confirmPassword, {
+    path: ['confirmPassword'],
+    message: 'Passwords do not match',
+  });
+
+type ResetPasswordData = z.infer<typeof ResetPasswordSchema>;
+
+// ─── Component ───────────────────────────────────────────────────────────────
 
 export const ResetPasswordPage: React.FC = () => {
   usePageTitle('Reset Password');
@@ -15,49 +37,32 @@ export const ResetPasswordPage: React.FC = () => {
   const [searchParams] = useSearchParams();
   const uid = searchParams.get('uid') || '';
   const token = searchParams.get('token') || '';
-
-  const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [success, setSuccess] = useState(false);
-  const [error, setError] = useState('');
+  const [success, setSuccess] = React.useState(false);
 
   const tenantName = theme?.name || 'School';
   const tenantInitial = tenantName.charAt(0).toUpperCase();
 
   const isInvalidLink = !uid || !token;
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
+  const form = useZodForm({
+    schema: ResetPasswordSchema,
+    defaultValues: { password: '', confirmPassword: '' },
+  });
 
-    if (password !== confirmPassword) {
-      setError('Passwords do not match');
-      return;
-    }
-
-    if (password.length < 8) {
-      setError('Password must be at least 8 characters');
-      return;
-    }
-
-    setLoading(true);
-
+  const onSubmit = form.handleSubmit(async (data: ResetPasswordData) => {
     try {
-      await authService.confirmPasswordReset(uid, token, password);
+      await authService.confirmPasswordReset(uid, token, data.password);
       setSuccess(true);
     } catch (err: any) {
-      const data = err.response?.data;
+      const errData = err.response?.data;
       const detail =
-        data?.error ||
-        data?.detail ||
-        (data?.details && data.details.join(' ')) ||
+        errData?.error ||
+        errData?.detail ||
+        (Array.isArray(errData?.details) && errData.details.join(' ')) ||
         'An error occurred. Please try again.';
-      setError(detail);
-    } finally {
-      setLoading(false);
+      form.setError('root', { type: 'server', message: detail });
     }
-  };
+  });
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-primary-50 to-secondary-50 flex items-center justify-center p-4">
@@ -117,35 +122,34 @@ export const ResetPasswordPage: React.FC = () => {
                 Enter your new password below.
               </p>
 
-              {error && (
+              {form.formState.errors.root?.message && (
                 <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg">
-                  <p className="text-sm text-red-600">{error}</p>
+                  <p className="text-sm text-red-600">
+                    {form.formState.errors.root.message}
+                  </p>
                 </div>
               )}
 
-              <form onSubmit={handleSubmit} className="space-y-6">
-                <Input
+              <form onSubmit={onSubmit} noValidate className="space-y-6">
+                <FormField
+                  control={form.control}
+                  name="password"
                   label="New Password"
                   type="password"
-                  name="password"
                   id="password"
                   autoComplete="new-password"
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
                   leftIcon={<LockClosedIcon className="h-5 w-5 text-gray-400" />}
                   placeholder="••••••••"
+                  helperText="Must be at least 8 characters"
                 />
 
-                <Input
+                <FormField
+                  control={form.control}
+                  name="confirmPassword"
                   label="Confirm New Password"
                   type="password"
-                  name="confirmPassword"
                   id="confirmPassword"
                   autoComplete="new-password"
-                  required
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
                   leftIcon={<LockClosedIcon className="h-5 w-5 text-gray-400" />}
                   placeholder="••••••••"
                 />
@@ -155,7 +159,7 @@ export const ResetPasswordPage: React.FC = () => {
                   variant="primary"
                   size="lg"
                   fullWidth
-                  loading={loading}
+                  loading={form.formState.isSubmitting}
                 >
                   Reset Password
                 </Button>

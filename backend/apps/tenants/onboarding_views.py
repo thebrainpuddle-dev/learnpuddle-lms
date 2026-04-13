@@ -14,6 +14,7 @@ from datetime import timedelta
 from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
+from django.utils.html import strip_tags
 from django.utils.text import slugify
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework import status
@@ -81,7 +82,7 @@ def tenant_signup(request):
     from apps.users.models import User
     
     # Validate required fields
-    school_name = request.data.get('school_name', '').strip()
+    school_name = strip_tags(request.data.get('school_name', '')).strip()
     admin_email = request.data.get('admin_email', '').strip().lower()
     admin_first_name = request.data.get('admin_first_name', '').strip()
     admin_last_name = request.data.get('admin_last_name', '').strip()
@@ -265,6 +266,7 @@ def available_plans(request):
         'feature_groups': 'Groups',
         'feature_certificates': 'Certificates',
         'feature_teacher_authoring': 'Teacher course authoring',
+        'feature_ai_studio': 'AI Lesson Builder',
     }
 
     def _storage_label(max_storage_mb: int) -> str:

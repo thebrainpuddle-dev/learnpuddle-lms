@@ -4,9 +4,13 @@
 // learn more: https://github.com/testing-library/jest-dom
 import '@testing-library/jest-dom';
 
+// Alias jest globals to vitest equivalents for CRA-era tests that use jest.fn(), jest.mock(), etc.
+// This is the standard migration shim — remove once all tests import from 'vitest' directly.
+(globalThis as any).jest = vi;
+
 // Tiptap packages ship ESM that CRA/Jest doesn't transpile from node_modules.
 // Mock these modules globally so tests can import pages/components that use RichTextEditor.
-jest.mock('@tiptap/react', () => {
+vi.mock('@tiptap/react', () => {
   const React = require('react');
   const createChain = () => {
     let chain: any;
@@ -25,13 +29,13 @@ jest.mock('@tiptap/react', () => {
   return {
     EditorContent: ({ className }: { className?: string }) =>
       React.createElement('div', { className, 'data-testid': 'rich-text-editor-content' }),
-    useEditor: jest.fn(() => ({
+    useEditor: vi.fn(() => ({
       getHTML: () => '<p></p>',
       getAttributes: () => ({}),
       isActive: () => false,
       chain: () => createChain(),
       commands: {
-        setContent: jest.fn(),
+        setContent: vi.fn(),
       },
       storage: {
         markdown: {
@@ -42,24 +46,24 @@ jest.mock('@tiptap/react', () => {
   };
 });
 
-jest.mock('@tiptap/starter-kit', () => {
+vi.mock('@tiptap/starter-kit', () => {
   const ext: any = { configure: () => ext };
   return { __esModule: true, default: ext };
 });
 
-jest.mock('@tiptap/extension-underline', () => ({ __esModule: true, default: {} }));
-jest.mock('@tiptap/extension-subscript', () => ({ __esModule: true, default: {} }));
-jest.mock('@tiptap/extension-superscript', () => ({ __esModule: true, default: {} }));
-jest.mock('@tiptap/extension-text-style', () => ({ TextStyle: {} }));
-jest.mock('@tiptap/markdown', () => ({ Markdown: {} }));
-jest.mock('@tiptap/core', () => ({ Extension: { create: () => ({}) } }));
+vi.mock('@tiptap/extension-underline', () => ({ __esModule: true, default: {} }));
+vi.mock('@tiptap/extension-subscript', () => ({ __esModule: true, default: {} }));
+vi.mock('@tiptap/extension-superscript', () => ({ __esModule: true, default: {} }));
+vi.mock('@tiptap/extension-text-style', () => ({ TextStyle: {} }));
+vi.mock('@tiptap/markdown', () => ({ Markdown: {} }));
+vi.mock('@tiptap/core', () => ({ Extension: { create: () => ({}) } }));
 
-jest.mock('@tiptap/extension-link', () => {
+vi.mock('@tiptap/extension-link', () => {
   const ext: any = { configure: () => ext };
   return { __esModule: true, default: ext };
 });
 
-jest.mock('@tiptap/extension-image', () => {
+vi.mock('@tiptap/extension-image', () => {
   const ext: any = {
     configure: () => ext,
     extend: () => ext,
@@ -67,14 +71,14 @@ jest.mock('@tiptap/extension-image', () => {
   return { __esModule: true, default: ext };
 });
 
-jest.mock('@tiptap/extension-placeholder', () => {
+vi.mock('@tiptap/extension-placeholder', () => {
   const ext: any = { configure: () => ext };
   return { __esModule: true, default: ext };
 });
 
-jest.mock('@tiptap/extension-code-block-lowlight', () => {
+vi.mock('@tiptap/extension-code-block-lowlight', () => {
   const ext: any = { configure: () => ext };
   return { __esModule: true, default: ext };
 });
 
-jest.mock('lowlight', () => ({ createLowlight: () => ({}) }));
+vi.mock('lowlight', () => ({ createLowlight: () => ({}) }));

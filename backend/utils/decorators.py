@@ -69,6 +69,34 @@ def teacher_or_admin(view_func):
     return wrapper
 
 
+def student_only(view_func):
+    """
+    Decorator to restrict access to students only.
+    """
+    @wraps(view_func)
+    def wrapper(request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            raise PermissionDenied("Authentication required")
+        if request.user.role != 'STUDENT':
+            raise PermissionDenied("Student access required")
+        return view_func(request, *args, **kwargs)
+    return wrapper
+
+
+def student_or_admin(view_func):
+    """
+    Decorator for views accessible by students and admins.
+    """
+    @wraps(view_func)
+    def wrapper(request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            raise PermissionDenied("Authentication required")
+        if request.user.role not in ['STUDENT', 'SCHOOL_ADMIN', 'SUPER_ADMIN']:
+            raise PermissionDenied("Student or admin access required")
+        return view_func(request, *args, **kwargs)
+    return wrapper
+
+
 def check_feature(feature_name):
     """
     Decorator that checks a tenant feature flag before allowing access.

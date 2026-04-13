@@ -10,28 +10,12 @@ from rest_framework.response import Response
 from rest_framework import status
 
 from utils.decorators import admin_only, tenant_required, check_feature
+from utils.responses import error_response
+from utils.helpers import course_assigned_teachers as _course_assigned_teachers
 
-from apps.users.models import User
 from apps.courses.models import Course
 from apps.progress.models import Assignment, AssignmentSubmission, QuizSubmission
 from apps.progress.completion_metrics import build_teacher_course_snapshots
-
-
-def _tenant_teachers_qs(tenant):
-    return User.objects.filter(
-        tenant=tenant,
-        role__in=["TEACHER", "HOD", "IB_COORDINATOR"],
-        is_active=True,
-    )
-
-
-def _course_assigned_teachers(course: Course):
-    teachers = _tenant_teachers_qs(course.tenant)
-    if course.assigned_to_all:
-        return teachers
-    return teachers.filter(
-        models.Q(teacher_groups__in=course.assigned_groups.all()) | models.Q(assigned_courses=course)
-    ).distinct()
 
 
 @api_view(["GET"])
@@ -48,9 +32,9 @@ def course_progress_report(request):
     """
     course_id = request.GET.get("course_id")
     if not course_id:
-        return Response({"error": "course_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+        return error_response("course_id is required", status_code=status.HTTP_400_BAD_REQUEST)
 
-    course = get_object_or_404(Course, id=course_id)
+    course = get_object_or_404(Course, id=course_id, tenant=request.tenant)
     teachers = _course_assigned_teachers(course)
 
     search = request.GET.get("search")
@@ -105,7 +89,7 @@ def assignment_status_report(request):
     """
     assignment_id = request.GET.get("assignment_id")
     if not assignment_id:
-        return Response({"error": "assignment_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+        return error_response("assignment_id is required", status_code=status.HTTP_400_BAD_REQUEST)
 
     assignment = get_object_or_404(Assignment, id=assignment_id, course__tenant=request.tenant)
     course = assignment.course
@@ -154,7 +138,7 @@ def assignment_status_report(request):
 @admin_only
 @tenant_required
 def list_courses_for_reports(request):
-    qs = Course.objects.filter(is_active=True).order_by("-created_at")
+    qs = Course.objects.filter(tenant=request.tenant, is_active=True).order_by("-created_at")
     return Response(
         [{"id": c.id, "title": c.title, "deadline": c.deadline} for c in qs[:200]],
         status=status.HTTP_200_OK,
@@ -177,13 +161,22 @@ def list_assignments_for_reports(request):
     )
 
 
+def _sanitize_csv_cell(val):
+    """Prefix values starting with formula-injection characters with a single quote."""
+    s = str(val) if val is not None else ""
+    if s and s[0] in ('=', '+', '-', '@', '\t', '\r'):
+        return "'" + s
+    return s
+
+
 def _rows_to_csv_response(rows: list[dict], filename: str) -> HttpResponse:
     if not rows:
         return HttpResponse("No data", content_type="text/csv")
     output = io.StringIO()
     writer = csv.DictWriter(output, fieldnames=rows[0].keys())
     writer.writeheader()
-    writer.writerows(rows)
+    for row in rows:
+        writer.writerow({k: _sanitize_csv_cell(v) for k, v in row.items()})
     resp = HttpResponse(output.getvalue(), content_type="text/csv")
     resp["Content-Disposition"] = f'attachment; filename="{filename}"'
     return resp
@@ -198,8 +191,8 @@ def course_progress_export(request):
     """Export course progress report as CSV."""
     course_id = request.GET.get("course_id")
     if not course_id:
-        return Response({"error": "course_id required"}, status=400)
-    course = get_object_or_404(Course, id=course_id)
+        return error_response("course_id required", status_code=400)
+    course = get_object_or_404(Course, id=course_id, tenant=request.tenant)
     teachers = _course_assigned_teachers(course)
     teacher_ids = list(teachers.values_list("id", flat=True))
     completion_snapshots = build_teacher_course_snapshots([course.id], teacher_ids)
@@ -225,7 +218,7 @@ def assignment_status_export(request):
     """Export assignment status report as CSV."""
     assignment_id = request.GET.get("assignment_id")
     if not assignment_id:
-        return Response({"error": "assignment_id required"}, status=400)
+        return error_response("assignment_id required", status_code=400)
     assignment = get_object_or_404(Assignment, id=assignment_id, course__tenant=request.tenant)
     teachers = _course_assigned_teachers(assignment.course)
 

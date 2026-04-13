@@ -170,6 +170,32 @@ def rich_text_image_path(tenant_id: str, filename: str) -> str:
 
 
 # -----------------------------------------------------------------------------
+# AI Studio — Interactive Lesson audio narration
+# -----------------------------------------------------------------------------
+def ai_studio_lesson_audio_prefix(tenant_id: str, lesson_id: str) -> str:
+    """Base prefix for interactive lesson TTS audio files."""
+    return f"course_content/tenant/{tenant_id}/ai_studio/lessons/{lesson_id}/audio"
+
+
+def ai_studio_lesson_scene_audio_path(tenant_id: str, lesson_id: str, scene_index: int) -> str:
+    """Path for a single scene's TTS audio file."""
+    return f"{ai_studio_lesson_audio_prefix(tenant_id, lesson_id)}/scene_{scene_index:03d}.mp3"
+
+
+# -----------------------------------------------------------------------------
+# AI Studio — Interactive Lesson scene images
+# -----------------------------------------------------------------------------
+def ai_studio_lesson_image_prefix(tenant_id: str, lesson_id: str) -> str:
+    """Base prefix for interactive lesson scene image files."""
+    return f"course_content/tenant/{tenant_id}/ai_studio/lessons/{lesson_id}/images"
+
+
+def ai_studio_lesson_scene_image_path(tenant_id: str, lesson_id: str, scene_index: int) -> str:
+    """Path for a single scene's generated image file."""
+    return f"{ai_studio_lesson_image_prefix(tenant_id, lesson_id)}/scene_{scene_index:03d}.jpg"
+
+
+# -----------------------------------------------------------------------------
 # Previews (thumbnails/previews for media items)
 # -----------------------------------------------------------------------------
 def preview_video_path(tenant_id: str, filename: str) -> str:

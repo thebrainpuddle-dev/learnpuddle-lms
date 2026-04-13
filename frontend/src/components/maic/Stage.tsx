@@ -1,0 +1,314 @@
+// src/components/maic/Stage.tsx
+//
+// Main container component for the MAIC AI Classroom player. Composes
+// SceneRenderer, Whiteboard, ChatPanel, SlideNavigator, StageToolbar,
+// AgentAvatar, AudioPlayer, SpotlightOverlay, SpeechSubtitles,
+// RoundtablePanel, ExportMenu, SceneSidebar, and keyboard shortcuts
+// into a unified interactive stage.
+
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import { useMAICStageStore } from '../../stores/maicStageStore';
+import { useMAICSettingsStore } from '../../stores/maicSettingsStore';
+import { usePlaybackEngine } from '../../hooks/usePlaybackEngine';
+import { useKeyboardShortcuts } from '../../hooks/useKeyboardShortcuts';
+import type { MAICPlayerRole } from '../../types/maic';
+import type { MAICSlideContent } from '../../types/maic-scenes';
+import { SceneRenderer } from './SceneRenderer';
+import { SlideRenderer } from './SlideRenderer';
+import { Whiteboard } from './Whiteboard';
+import { ChatPanel } from './ChatPanel';
+import { SlideNavigator } from './SlideNavigator';
+import { StageToolbar } from './StageToolbar';
+import { AgentAvatar } from './AgentAvatar';
+import { AudioPlayer } from './AudioPlayer';
+import { SpotlightOverlay } from './SpotlightOverlay';
+import { SpeechSubtitles } from './SpeechSubtitles';
+import { RoundtablePanel } from './RoundtablePanel';
+import { ExportMenu } from './ExportMenu';
+import { SceneSidebar } from './SceneSidebar';
+import { cn } from '../../lib/utils';
+
+interface StageProps {
+  role: MAICPlayerRole;
+}
+
+export const Stage: React.FC<StageProps> = ({ role }) => {
+  const slides = useMAICStageStore((s) => s.slides);
+  const currentSlideIndex = useMAICStageStore((s) => s.currentSlideIndex);
+  const agents = useMAICStageStore((s) => s.agents);
+  const speakingAgentId = useMAICStageStore((s) => s.speakingAgentId);
+  const viewMode = useMAICStageStore((s) => s.viewMode);
+  const isFullscreen = useMAICStageStore((s) => s.isFullscreen);
+  const setFullscreen = useMAICStageStore((s) => s.setFullscreen);
+  const classroomId = useMAICStageStore((s) => s.classroomId);
+  const scenes = useMAICStageStore((s) => s.scenes);
+  const currentSceneIndex = useMAICStageStore((s) => s.currentSceneIndex);
+  const speechText = useMAICStageStore((s) => s.speechText);
+  const discussionMode = useMAICStageStore((s) => s.discussionMode);
+  const setDiscussionMode = useMAICStageStore((s) => s.setDiscussionMode);
+  const nextScene = useMAICStageStore((s) => s.nextScene);
+  const goToScene = useMAICStageStore((s) => s.goToScene);
+
+  const showChatPanel = useMAICSettingsStore((s) => s.showChatPanel);
+  const setShowChatPanel = useMAICSettingsStore((s) => s.setShowChatPanel);
+  const showWhiteboard = useMAICSettingsStore((s) => s.showWhiteboard);
+  const setShowWhiteboard = useMAICSettingsStore((s) => s.setShowWhiteboard);
+  const audioVolume = useMAICSettingsStore((s) => s.audioVolume);
+  const setAudioVolume = useMAICSettingsStore((s) => s.setAudioVolume);
+
+  const [spotlightActive, setSpotlightActive] = useState(false);
+  const [laserActive, setLaserActive] = useState(false);
+  const [showSceneSidebar, setShowSceneSidebar] = useState(false);
+
+  // Playback engine
+  const {
+    playbackState,
+    isClassPlaying,
+    play,
+    pause,
+    resume,
+    loadScene,
+    startClass,
+    playFromCurrent,
+    stopClass,
+  } = usePlaybackEngine();
+
+  // Current scene & slide
+  const hasScenes = scenes.length > 0;
+  const currentScene = scenes[currentSceneIndex] || null;
+  const currentSlide = slides[currentSlideIndex] || null;
+
+  // Load scene actions when scene changes
+  useEffect(() => {
+    if (currentScene) {
+      loadScene(currentScene);
+    }
+  }, [currentScene, loadScene]);
+
+  const speakingAgent = useMemo(
+    () => (speakingAgentId ? agents.find((a) => a.id === speakingAgentId) || null : null),
+    [agents, speakingAgentId],
+  );
+
+  // Determine scene id for whiteboard
+  const sceneId = currentScene?.id || currentSlide?.id || 'default';
+
+  // Audio URL (from scene content or slide)
+  const audioUrl = currentScene?.content.type === 'slide'
+    ? (currentScene.content as MAICSlideContent).audioUrl
+    : currentSlide?.audioUrl;
+
+  // ─── Discussion ──────────────────────────────────────────────────────
+  const [discussionTopic, setDiscussionTopic] = useState('');
+  const [discussionAgentIds, setDiscussionAgentIds] = useState<string[]>([]);
+
+  const handleCloseDiscussion = useCallback(() => {
+    setDiscussionMode(null);
+    setDiscussionTopic('');
+    setDiscussionAgentIds([]);
+  }, [setDiscussionMode]);
+
+  const handleToggleDiscussion = useCallback(() => {
+    if (discussionMode) {
+      handleCloseDiscussion();
+    } else {
+      setDiscussionMode('roundtable');
+      setDiscussionTopic(currentScene?.title || 'Open Discussion');
+      setDiscussionAgentIds(agents.map((a) => a.id));
+    }
+  }, [discussionMode, handleCloseDiscussion, setDiscussionMode, currentScene, agents]);
+
+  // ─── Playback Controls ───────────────────────────────────────────────
+  const handlePlayPause = useCallback(() => {
+    if (playbackState === 'playing') {
+      pause();
+    } else if (playbackState === 'paused') {
+      resume();
+    } else if (isClassPlaying) {
+      playFromCurrent();
+    } else {
+      playFromCurrent();
+    }
+  }, [playbackState, isClassPlaying, pause, resume, playFromCurrent]);
+
+  const handlePrevScene = useCallback(() => {
+    if (currentSceneIndex > 0) {
+      goToScene(currentSceneIndex - 1);
+    }
+  }, [currentSceneIndex, goToScene]);
+
+  // ─── Fullscreen ──────────────────────────────────────────────────────
+  const toggleFullscreen = useCallback(() => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().then(() => setFullscreen(true)).catch(() => {});
+    } else {
+      document.exitFullscreen().then(() => setFullscreen(false)).catch(() => {});
+    }
+  }, [setFullscreen]);
+
+  // ─── Keyboard Shortcuts ──────────────────────────────────────────────
+  useKeyboardShortcuts({
+    onPlayPause: handlePlayPause,
+    onNextScene: nextScene,
+    onPrevScene: handlePrevScene,
+    onToggleFullscreen: toggleFullscreen,
+    onToggleChat: () => setShowChatPanel(!showChatPanel),
+    onToggleWhiteboard: () => setShowWhiteboard(!showWhiteboard),
+    onVolumeUp: () => setAudioVolume(Math.min(1, audioVolume + 0.1)),
+    onVolumeDown: () => setAudioVolume(Math.max(0, audioVolume - 0.1)),
+    onMute: () => setAudioVolume(audioVolume > 0 ? 0 : 0.8),
+    onToggleSceneSidebar: () => setShowSceneSidebar((v) => !v),
+    onToggleDiscussion: handleToggleDiscussion,
+    enabled: true,
+  });
+
+  // ─── Empty State ─────────────────────────────────────────────────────
+  if (slides.length === 0 && scenes.length === 0) {
+    return (
+      <div className="flex items-center justify-center h-full bg-gray-50 text-gray-400">
+        <p className="text-sm">No slides to display. Generate a classroom to begin.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className={cn(
+        'flex flex-col h-full w-full bg-gray-100 overflow-hidden',
+        isFullscreen && 'fixed inset-0 z-50',
+      )}
+      role="main"
+      aria-label="AI Classroom Stage"
+    >
+      {/* Top toolbar */}
+      <StageToolbar
+        role={role}
+        onLaserToggle={() => setLaserActive((v) => !v)}
+        laserActive={laserActive}
+        onDiscussionToggle={handleToggleDiscussion}
+        discussionActive={!!discussionMode}
+        onExport={() => {}}
+      />
+
+      {/* Main content area */}
+      <div className="flex flex-1 min-h-0 overflow-hidden relative">
+        {/* Scene sidebar (left) */}
+        {hasScenes && (
+          <SceneSidebar
+            visible={showSceneSidebar}
+            onClose={() => setShowSceneSidebar(false)}
+          />
+        )}
+
+        {/* Viewport */}
+        <div className="flex-1 relative flex items-center justify-center bg-gray-900 p-4 min-w-0">
+          {/* 16:9 aspect ratio container */}
+          <div className="relative w-full max-w-5xl aspect-video bg-white rounded-lg shadow-lg overflow-hidden">
+            {/* Scene-based rendering (preferred) */}
+            {hasScenes && currentScene ? (
+              <div className="absolute inset-0">
+                <SceneRenderer scene={currentScene} mode="playback" />
+              </div>
+            ) : (viewMode === 'slides' || viewMode === 'split') && currentSlide ? (
+              <div className={cn('absolute inset-0', viewMode === 'split' && 'w-1/2')}>
+                <SlideRenderer slide={currentSlide} />
+              </div>
+            ) : null}
+
+            {/* Whiteboard layer */}
+            {(viewMode === 'whiteboard' || viewMode === 'split' || showWhiteboard) && (
+              <div className={cn(
+                'absolute inset-0',
+                viewMode === 'split' && !hasScenes && 'left-1/2 w-1/2 border-l border-gray-300',
+              )}>
+                {viewMode === 'split' && !hasScenes && (
+                  <div className="absolute inset-0 bg-white" />
+                )}
+                <Whiteboard sceneId={sceneId} readonly={role === 'student'} />
+              </div>
+            )}
+
+            {/* Whiteboard overlay for teacher annotations on slides */}
+            {!showWhiteboard && viewMode === 'slides' && role === 'teacher' && !hasScenes && (
+              <Whiteboard sceneId={sceneId} readonly={false} />
+            )}
+
+            {/* Spotlight / Laser overlay */}
+            <SpotlightOverlay
+              active={spotlightActive}
+              onToggle={() => setSpotlightActive(false)}
+              laserActive={laserActive}
+            />
+
+            {/* Start Class overlay — shows when class hasn't started */}
+            {hasScenes && playbackState === 'idle' && !isClassPlaying && (
+              <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+                <button
+                  onClick={startClass}
+                  className="group flex flex-col items-center gap-3 px-8 py-6 rounded-2xl bg-white/95 shadow-xl hover:shadow-2xl transition-all hover:scale-105"
+                >
+                  <div className="flex items-center justify-center h-16 w-16 rounded-full bg-indigo-600 group-hover:bg-indigo-700 transition-colors shadow-lg">
+                    <svg className="h-8 w-8 text-white ml-1" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M8 5v14l11-7z" />
+                    </svg>
+                  </div>
+                  <span className="text-lg font-semibold text-gray-900">Start Class</span>
+                  <span className="text-xs text-gray-500">
+                    {scenes.length} scenes &middot; {agents.length} agents
+                  </span>
+                </button>
+              </div>
+            )}
+
+            {/* Speech subtitles */}
+            <SpeechSubtitles
+              text={speechText}
+              agentName={speakingAgent?.name}
+              agentColor={speakingAgent?.color}
+            />
+
+            {/* Discussion panel overlay */}
+            {discussionMode && (
+              <RoundtablePanel
+                sessionType={discussionMode}
+                topic={discussionTopic || currentScene?.title || 'Discussion'}
+                agentIds={discussionAgentIds.length > 0 ? discussionAgentIds : agents.map((a) => a.id)}
+                onClose={handleCloseDiscussion}
+              />
+            )}
+          </div>
+
+          {/* Speaking agent avatar (bottom-left) */}
+          {speakingAgent && (
+            <div className="absolute bottom-6 left-6 flex items-center gap-2 bg-black/60 backdrop-blur-sm rounded-full pl-1 pr-3 py-1">
+              <AgentAvatar agent={speakingAgent} isSpeaking size="sm" />
+              <span className="text-xs text-white font-medium">
+                {speakingAgent.name}
+              </span>
+            </div>
+          )}
+
+          {/* Export menu (teacher only) */}
+          {role === 'teacher' && classroomId && (
+            <div className="absolute top-2 right-2 z-20">
+              <ExportMenu classroomId={classroomId} />
+            </div>
+          )}
+        </div>
+
+        {/* Chat panel (right sidebar) */}
+        {showChatPanel && classroomId && (
+          <div className="hidden md:flex w-80 shrink-0">
+            <ChatPanel role={role} classroomId={classroomId} />
+          </div>
+        )}
+      </div>
+
+      {/* Bottom navigation bar */}
+      <SlideNavigator />
+
+      {/* Headless audio player */}
+      <AudioPlayer audioUrl={audioUrl} />
+    </div>
+  );
+};

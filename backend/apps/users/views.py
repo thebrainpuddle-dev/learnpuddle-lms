@@ -13,6 +13,8 @@ from .serializers import (
     UserSerializer, LoginSerializer, RegisterTeacherSerializer,
     ChangePasswordSerializer
 )
+import secrets
+from django.core.cache import cache
 from .tokens import get_tokens_for_user
 from apps.notifications.email_utils import build_tenant_url, build_bucket_headers, send_templated_email
 from utils.decorators import admin_only, tenant_required, check_tenant_limit
@@ -70,10 +72,17 @@ def login_view(request):
                 )
         else:
             if user.role != 'SUPER_ADMIN' and user.tenant_id != request_tenant.id:
-                return Response(
-                    {'error': 'Invalid credentials for this school portal'},
-                    status=status.HTTP_403_FORBIDDEN,
-                )
+                host = request.get_host().split(':')[0].lower()
+                if host in ('localhost', '127.0.0.1'):
+                    # Dev mode: allow login and switch to user's actual tenant
+                    from utils.tenant_middleware import set_current_tenant
+                    set_current_tenant(user.tenant)
+                    request.tenant = user.tenant
+                else:
+                    return Response(
+                        {'error': 'Invalid credentials for this school portal'},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
     
     # Check if 2FA is required
     from django_otp.plugins.otp_totp.models import TOTPDevice
@@ -81,10 +90,12 @@ def login_view(request):
     
     if totp_device:
         # User has 2FA enabled - don't issue tokens yet
+        challenge_token = secrets.token_urlsafe(32)
+        cache.set(f'2fa_challenge:{challenge_token}', str(user.id), timeout=300)
         log_audit('LOGIN_2FA_REQUIRED', 'User', target_id=str(user.id), target_repr=str(user), request=request, actor=user)
         return Response({
             'requires_2fa': True,
-            'user_id': str(user.id),
+            'challenge_token': challenge_token,
             'message': 'Please enter your 2FA code',
         }, status=status.HTTP_200_OK)
     

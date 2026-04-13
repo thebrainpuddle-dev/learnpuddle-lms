@@ -35,8 +35,11 @@ def get_tenant_from_request(request):
     if not host:
         raise PermissionDenied("Invalid host header")
 
-    if host in {"localhost", "127.0.0.1"}:
-        subdomain = "demo"
+    if host in {"localhost", "127.0.0.1"} or host.endswith(".localhost"):
+        # Dev mode: honour explicit subdomain header, then URL subdomain, fall back to "demo"
+        header_subdomain = request.META.get("HTTP_X_TENANT_SUBDOMAIN", "").strip().lower()
+        url_subdomain = host.removesuffix(".localhost") if host.endswith(".localhost") else ""
+        subdomain = header_subdomain or url_subdomain or "demo"
         try:
             return Tenant.objects.get(subdomain=subdomain, is_active=True)
         except Tenant.DoesNotExist:

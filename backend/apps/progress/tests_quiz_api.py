@@ -60,6 +60,7 @@ class QuizApiTestCase(TestCase):
             is_active=True,
         )
         self.assignment = Assignment.objects.create(
+            tenant=self.tenant,
             course=self.course,
             module=self.module,
             content=self.content,
@@ -69,8 +70,9 @@ class QuizApiTestCase(TestCase):
             generation_source="VIDEO_AUTO",
             generation_metadata={},
         )
-        self.quiz = Quiz.objects.create(assignment=self.assignment, is_auto_generated=True)
+        self.quiz = Quiz.objects.create(tenant=self.tenant, assignment=self.assignment, is_auto_generated=True)
         self.q1 = QuizQuestion.objects.create(
+            tenant=self.tenant,
             quiz=self.quiz,
             order=1,
             question_type="MCQ",
@@ -81,6 +83,7 @@ class QuizApiTestCase(TestCase):
             points=1,
         )
         self.q2 = QuizQuestion.objects.create(
+            tenant=self.tenant,
             quiz=self.quiz,
             order=2,
             question_type="MCQ",
@@ -91,6 +94,7 @@ class QuizApiTestCase(TestCase):
             points=2,
         )
         self.q3 = QuizQuestion.objects.create(
+            tenant=self.tenant,
             quiz=self.quiz,
             order=3,
             question_type="TRUE_FALSE",
@@ -101,6 +105,7 @@ class QuizApiTestCase(TestCase):
             points=1,
         )
         self.q4 = QuizQuestion.objects.create(
+            tenant=self.tenant,
             quiz=self.quiz,
             order=4,
             question_type="SHORT_ANSWER",

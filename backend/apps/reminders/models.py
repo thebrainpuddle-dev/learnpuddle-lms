@@ -3,6 +3,8 @@ import uuid
 from django.db import models
 from django.db.models import Q
 
+from utils.tenant_manager import TenantManager
+
 
 class ReminderCampaign(models.Model):
     REMINDER_TYPE_CHOICES = [
@@ -32,6 +34,10 @@ class ReminderCampaign(models.Model):
     automation_key = models.CharField(max_length=120, blank=True, default="")
 
     created_at = models.DateTimeField(auto_now_add=True)
+
+    # TenantManager auto-filters by current tenant (set via TenantMiddleware).
+    objects = TenantManager()
+    all_objects = models.Manager()
 
     class Meta:
         db_table = "reminder_campaigns"
@@ -70,3 +76,11 @@ class ReminderDelivery(models.Model):
         db_table = "reminder_deliveries"
         unique_together = [("campaign", "teacher")]
         ordering = ["-created_at"]
+        indexes = [
+            # For filtering deliveries within a campaign by status
+            models.Index(fields=["campaign", "status"], name="rem_del_camp_status_idx"),
+            # For looking up a teacher's reminder delivery history
+            models.Index(fields=["teacher", "status"], name="rem_del_tch_status_idx"),
+            # For batch processing pending/failed deliveries by age
+            models.Index(fields=["status", "created_at"], name="rem_del_stat_created_idx"),
+        ]

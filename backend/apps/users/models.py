@@ -24,6 +24,7 @@ class User(AbstractUser):
         ('TEACHER', 'Teacher'),
         ('HOD', 'Head of Department'),
         ('IB_COORDINATOR', 'IB Coordinator'),
+        ('STUDENT', 'Student'),
     ]
     
     # Override username to not be required
@@ -47,6 +48,25 @@ class User(AbstractUser):
     # Role and permissions
     role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='TEACHER')
     
+    # Student-specific fields
+    student_id = models.CharField(max_length=50, blank=True, default='', help_text="School-assigned Student ID")
+    grade_level = models.CharField(max_length=50, blank=True, default='', help_text="e.g. Grade 9, Year 11")
+    section = models.CharField(max_length=50, blank=True, default='', help_text="e.g. Section A, Room 201")
+    parent_email = models.EmailField(blank=True, default='', help_text="Parent/guardian contact email")
+    enrollment_date = models.DateField(null=True, blank=True, help_text="Student enrollment date")
+
+    # ─── Academic Structure FKs (coexist with legacy text fields) ─────────
+    grade_fk = models.ForeignKey(
+        'academics.Grade', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='students',
+        help_text="Student's current grade (FK to academic Grade model)",
+    )
+    section_fk = models.ForeignKey(
+        'academics.Section', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='students',
+        help_text="Student's current section (FK to academic Section model)",
+    )
+
     # Teacher-specific fields
     employee_id = models.CharField(max_length=50, blank=True, help_text="School-assigned Teacher ID")
     subjects = models.JSONField(default=list, blank=True, help_text="List of subjects taught e.g. ['Mathematics', 'Physics']")
@@ -104,6 +124,10 @@ class User(AbstractUser):
             models.Index(fields=['tenant', 'is_active']),
             models.Index(fields=['is_deleted']),
             models.Index(fields=['tenant', 'is_deleted']),
+            models.Index(fields=['tenant', 'grade_fk']),
+            models.Index(fields=['tenant', 'section_fk']),
+            models.Index(fields=['student_id']),
+            models.Index(fields=['employee_id']),
         ]
     
     def __str__(self):
@@ -119,6 +143,10 @@ class User(AbstractUser):
     @property
     def is_teacher(self):
         return self.role == 'TEACHER'
+
+    @property
+    def is_student(self):
+        return self.role == 'STUDENT'
 
     def delete(self, using=None, keep_parents=False, deleted_by=None):
         """

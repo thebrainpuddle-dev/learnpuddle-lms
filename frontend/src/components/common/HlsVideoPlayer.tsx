@@ -32,10 +32,17 @@ export const HlsVideoPlayer: React.FC<HlsVideoPlayerProps> = ({
     const isHls = src.includes('.m3u8');
 
     if (isHls && Hls.isSupported()) {
+      // Derive tenant subdomain for X-Tenant-Subdomain header
+      const hostname = window.location.hostname;
+      const tenantSubdomain = hostname.endsWith('.localhost')
+        ? hostname.replace('.localhost', '')
+        : sessionStorage.getItem('tenant_subdomain') || localStorage.getItem('tenant_subdomain') || '';
+
       const hls = new Hls({
-        xhrSetup: (xhr) => {
+        xhrSetup: (xhr, url) => {
           const token = getAccessToken();
           if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+          if (tenantSubdomain) xhr.setRequestHeader('X-Tenant-Subdomain', tenantSubdomain);
         },
         maxBufferLength: 30,
         maxMaxBufferLength: 60,
@@ -47,8 +54,9 @@ export const HlsVideoPlayer: React.FC<HlsVideoPlayerProps> = ({
       });
       hls.on(Hls.Events.ERROR, (_event, data) => {
         if (data.fatal) {
+          console.error('[HLS] Fatal error:', data.type, data.details, data.response);
           if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-            setError('Network error — could not load video. Please check your connection.');
+            setError(`Network error — could not load video (${data.details}).`);
           } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
             hls.recoverMediaError();
           } else {

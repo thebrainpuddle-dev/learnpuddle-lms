@@ -1,7 +1,7 @@
 // src/pages/student/StudentChatbotsPage.tsx
 //
-// Browse page for student-facing AI chatbots. Displays a searchable grid of
-// read-only ChatbotCards; clicking one navigates to the chat interface.
+// Browse page for student-facing AI chatbots. Displays a searchable grid
+// filtered by the student's section enrollment (handled by backend).
 
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -40,25 +40,27 @@ export function StudentChatbotsPage() {
       <div>
         <h1 className="text-2xl font-bold text-gray-900">AI Chatbots</h1>
         <p className="mt-1 text-sm text-gray-500">
-          Browse AI chatbots created by your teachers and start a conversation.
+          Chat with AI tutors created by your teachers to help you learn.
         </p>
       </div>
 
       {/* Search */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-        <div className="relative flex-1 max-w-sm">
-          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-            <Search className="h-4 w-4 text-gray-400" />
+      {chatbots.length > 0 && (
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          <div className="relative flex-1 max-w-sm">
+            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+              <Search className="h-4 w-4 text-gray-400" />
+            </div>
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search chatbots..."
+              className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-indigo-500 focus:border-indigo-500"
+            />
           </div>
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search chatbots..."
-            className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-indigo-500 focus:border-indigo-500"
-          />
         </div>
-      </div>
+      )}
 
       {/* Error */}
       {error && (
@@ -82,7 +84,7 @@ export function StudentChatbotsPage() {
           <p className="mt-2 text-sm text-gray-500">
             {search.trim()
               ? 'Try a different search term.'
-              : 'Check back later for new AI chatbots from your teachers.'}
+              : 'Your teachers haven\'t created any chatbots for your section yet.'}
           </p>
         </div>
       ) : (

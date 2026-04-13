@@ -25,6 +25,8 @@ from apps.progress.models import (
     QuizSubmission,
 )
 from utils.decorators import tenant_required, teacher_or_admin
+from utils.course_access import is_teacher_assigned_to_course as _teacher_assigned_to_course
+from utils.responses import error_response
 
 from .teacher_serializers import (
     TeacherProgressSerializer,
@@ -35,18 +37,6 @@ from .teacher_serializers import (
 
 def _utcnow():
     return datetime.now(timezone.utc)
-
-
-def _teacher_assigned_to_course(user, course: Course) -> bool:
-    if user.role in ["SCHOOL_ADMIN", "SUPER_ADMIN"]:
-        return True
-    if course.assigned_to_all:
-        return True
-    if course.assigned_teachers.filter(id=user.id).exists():
-        return True
-    if course.assigned_groups.filter(id__in=user.teacher_groups.values_list("id", flat=True)).exists():
-        return True
-    return False
 
 
 def _teacher_assigned_courses_qs(request, with_prefetch=False):
@@ -85,12 +75,10 @@ def _ensure_content_unlocked(request, course: Course, content: Content):
         return None
     lock_state = get_content_lock_state(course, str(content.id), request.user.id)
     if lock_state.is_locked:
-        return Response(
-            {
-                "error": lock_state.lock_reason or "This lesson is locked.",
-                "code": "CONTENT_LOCKED",
-            },
-            status=status.HTTP_400_BAD_REQUEST,
+        return error_response(
+            lock_state.lock_reason or "This lesson is locked.",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code="CONTENT_LOCKED",
         )
     return None
 
@@ -230,9 +218,9 @@ def teacher_claim_quest(request, quest_key: str):
     try:
         summary = claim_quest_reward(request.user, courses, quest_key)
     except ValueError as exc:
-        return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return error_response(str(exc), status_code=status.HTTP_400_BAD_REQUEST)
     except PermissionError as exc:
-        return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return error_response(str(exc), status_code=status.HTTP_400_BAD_REQUEST)
     return Response(summary, status=status.HTTP_200_OK)
 
 
@@ -251,7 +239,7 @@ def progress_start(request, content_id):
     )
     course = content.module.course
     if not _teacher_assigned_to_course(request.user, course):
-        return Response({"error": "Not assigned to this course"}, status=status.HTTP_403_FORBIDDEN)
+        return error_response("Not assigned to this course", status_code=status.HTTP_403_FORBIDDEN)
     lock_response = _ensure_content_unlocked(request, course, content)
     if lock_response:
         return lock_response
@@ -260,7 +248,7 @@ def progress_start(request, content_id):
         teacher=request.user,
         course=course,
         content=content,
-        defaults={"status": "IN_PROGRESS", "started_at": _utcnow()},
+        defaults={"tenant": request.tenant, "status": "IN_PROGRESS", "started_at": _utcnow()},
     )
     if obj.status == "NOT_STARTED":
         obj.status = "IN_PROGRESS"
@@ -285,7 +273,7 @@ def progress_update(request, content_id):
     )
     course = content.module.course
     if not _teacher_assigned_to_course(request.user, course):
-        return Response({"error": "Not assigned to this course"}, status=status.HTTP_403_FORBIDDEN)
+        return error_response("Not assigned to this course", status_code=status.HTTP_403_FORBIDDEN)
     lock_response = _ensure_content_unlocked(request, course, content)
     if lock_response:
         return lock_response
@@ -294,7 +282,7 @@ def progress_update(request, content_id):
         teacher=request.user,
         course=course,
         content=content,
-        defaults={"status": "IN_PROGRESS", "started_at": _utcnow()},
+        defaults={"tenant": request.tenant, "status": "IN_PROGRESS", "started_at": _utcnow()},
     )
 
     video_seconds = request.data.get("video_progress_seconds")
@@ -304,9 +292,9 @@ def progress_update(request, content_id):
         try:
             video_seconds = int(video_seconds)
         except (TypeError, ValueError):
-            return Response({"error": "video_progress_seconds must be an integer"}, status=status.HTTP_400_BAD_REQUEST)
+            return error_response("video_progress_seconds must be an integer", status_code=status.HTTP_400_BAD_REQUEST)
         if video_seconds < 0:
-            return Response({"error": "video_progress_seconds cannot be negative"}, status=status.HTTP_400_BAD_REQUEST)
+            return error_response("video_progress_seconds cannot be negative", status_code=status.HTTP_400_BAD_REQUEST)
         obj.video_progress_seconds = video_seconds
         
         # Auto-calculate progress_percentage from video duration
@@ -325,9 +313,9 @@ def progress_update(request, content_id):
         try:
             progress_pct = float(progress_pct)
         except (TypeError, ValueError):
-            return Response({"error": "progress_percentage must be a number"}, status=status.HTTP_400_BAD_REQUEST)
+            return error_response("progress_percentage must be a number", status_code=status.HTTP_400_BAD_REQUEST)
         if progress_pct < 0 or progress_pct > 100:
-            return Response({"error": "progress_percentage must be between 0 and 100"}, status=status.HTTP_400_BAD_REQUEST)
+            return error_response("progress_percentage must be between 0 and 100", status_code=status.HTTP_400_BAD_REQUEST)
         obj.progress_percentage = progress_pct
 
     if obj.status == "NOT_STARTED":
@@ -358,7 +346,7 @@ def progress_complete(request, content_id):
     )
     course = content.module.course
     if not _teacher_assigned_to_course(request.user, course):
-        return Response({"error": "Not assigned to this course"}, status=status.HTTP_403_FORBIDDEN)
+        return error_response("Not assigned to this course", status_code=status.HTTP_403_FORBIDDEN)
     lock_response = _ensure_content_unlocked(request, course, content)
     if lock_response:
         return lock_response
@@ -367,16 +355,16 @@ def progress_complete(request, content_id):
     if content.content_type == "VIDEO":
         asset = getattr(content, "video_asset", None)
         if not asset or asset.status != "READY":
-            return Response(
-                {"error": "Video is not ready yet. Please wait for processing to complete."},
-                status=status.HTTP_400_BAD_REQUEST,
+            return error_response(
+                "Video is not ready yet. Please wait for processing to complete.",
+                status_code=status.HTTP_400_BAD_REQUEST,
             )
 
     obj, _created = TeacherProgress.objects.get_or_create(
         teacher=request.user,
         course=course,
         content=content,
-        defaults={"status": "COMPLETED", "started_at": _utcnow(), "completed_at": _utcnow(), "progress_percentage": 100},
+        defaults={"tenant": request.tenant, "status": "COMPLETED", "started_at": _utcnow(), "completed_at": _utcnow(), "progress_percentage": 100},
     )
     obj.status = "COMPLETED"
     obj.progress_percentage = 100
@@ -458,7 +446,7 @@ def assignment_submit(request, assignment_id):
         course__is_active=True,
     )
     if not _teacher_assigned_to_course(request.user, assignment.course):
-        return Response({"error": "Not assigned to this course"}, status=status.HTTP_403_FORBIDDEN)
+        return error_response("Not assigned to this course", status_code=status.HTTP_403_FORBIDDEN)
 
     submission_text = request.data.get("submission_text", "")
     file_url = request.data.get("file_url", "")
@@ -466,7 +454,7 @@ def assignment_submit(request, assignment_id):
     obj, _created = AssignmentSubmission.objects.get_or_create(
         assignment=assignment,
         teacher=request.user,
-        defaults={"submission_text": submission_text, "file_url": file_url, "status": "SUBMITTED"},
+        defaults={"tenant": request.tenant, "submission_text": submission_text, "file_url": file_url, "status": "SUBMITTED"},
     )
     obj.submission_text = submission_text
     obj.file_url = file_url
@@ -488,7 +476,7 @@ def assignment_submission_detail(request, assignment_id):
         course__tenant=request.tenant,
     )
     if not _teacher_assigned_to_course(request.user, assignment.course):
-        return Response({"error": "Not assigned to this course"}, status=status.HTTP_403_FORBIDDEN)
+        return error_response("Not assigned to this course", status_code=status.HTTP_403_FORBIDDEN)
 
     submission = get_object_or_404(AssignmentSubmission, assignment=assignment, teacher=request.user)
     return Response(TeacherAssignmentSubmissionSerializer(submission).data, status=status.HTTP_200_OK)
@@ -512,11 +500,11 @@ def quiz_detail(request, assignment_id):
         course__is_active=True,
     )
     if not _teacher_assigned_to_course(request.user, assignment.course):
-        return Response({"error": "Not assigned to this course"}, status=status.HTTP_403_FORBIDDEN)
+        return error_response("Not assigned to this course", status_code=status.HTTP_403_FORBIDDEN)
 
     quiz = getattr(assignment, "quiz", None)
     if not quiz:
-        return Response({"error": "Quiz not found for assignment"}, status=status.HTTP_404_NOT_FOUND)
+        return error_response("Quiz not found for assignment", status_code=status.HTTP_404_NOT_FOUND)
 
     submission = QuizSubmission.objects.filter(quiz=quiz, teacher=request.user).first()
 
@@ -582,32 +570,32 @@ def quiz_submit(request, assignment_id):
         course__is_active=True,
     )
     if not _teacher_assigned_to_course(request.user, assignment.course):
-        return Response({"error": "Not assigned to this course"}, status=status.HTTP_403_FORBIDDEN)
+        return error_response("Not assigned to this course", status_code=status.HTTP_403_FORBIDDEN)
 
     quiz = getattr(assignment, "quiz", None)
     if not quiz:
-        return Response({"error": "Quiz not found for assignment"}, status=status.HTTP_404_NOT_FOUND)
+        return error_response("Quiz not found for assignment", status_code=status.HTTP_404_NOT_FOUND)
 
     answers = request.data.get("answers") or {}
     if not isinstance(answers, dict):
-        return Response({"error": "answers must be an object"}, status=status.HTTP_400_BAD_REQUEST)
+        return error_response("answers must be an object", status_code=status.HTTP_400_BAD_REQUEST)
 
     # Limit answers payload size: max 200 keys, each value must be a flat dict
     max_answers = 200
     if len(answers) > max_answers:
-        return Response({"error": f"Too many answers (max {max_answers})"}, status=status.HTTP_400_BAD_REQUEST)
+        return error_response(f"Too many answers (max {max_answers})", status_code=status.HTTP_400_BAD_REQUEST)
     for key, val in answers.items():
         if not isinstance(val, dict):
-            return Response({"error": f"Each answer must be an object, got {type(val).__name__} for '{key}'"}, status=status.HTTP_400_BAD_REQUEST)
+            return error_response(f"Each answer must be an object, got {type(val).__name__} for '{key}'", status_code=status.HTTP_400_BAD_REQUEST)
         # Reject nested objects. Allow option_indices as a flat list for multi-select MCQ.
         for inner_key, inner_val in val.items():
             if isinstance(inner_val, dict):
-                return Response({"error": "Answer values cannot contain nested objects"}, status=status.HTTP_400_BAD_REQUEST)
+                return error_response("Answer values cannot contain nested objects", status_code=status.HTTP_400_BAD_REQUEST)
             if isinstance(inner_val, list):
                 if inner_key != "option_indices":
-                    return Response({"error": "Only option_indices may be an array value"}, status=status.HTTP_400_BAD_REQUEST)
+                    return error_response("Only option_indices may be an array value", status_code=status.HTTP_400_BAD_REQUEST)
                 if any(isinstance(v, (dict, list)) for v in inner_val):
-                    return Response({"error": "option_indices must be a flat array"}, status=status.HTTP_400_BAD_REQUEST)
+                    return error_response("option_indices must be a flat array", status_code=status.HTTP_400_BAD_REQUEST)
 
     # Auto-grade objective questions; track whether manual review is needed for short-answer
     all_questions = list(quiz.questions.all())
@@ -664,7 +652,7 @@ def quiz_submit(request, assignment_id):
     obj, _created = QuizSubmission.objects.get_or_create(
         quiz=quiz,
         teacher=request.user,
-        defaults={"answers": answers},
+        defaults={"tenant": request.tenant, "answers": answers},
     )
     obj.answers = answers
 
@@ -744,9 +732,9 @@ def course_certificate(request, course_id):
     # Check if tenant has certificates feature enabled
     tenant = request.tenant
     if not getattr(tenant, 'feature_certificates', False):
-        return Response(
-            {"error": "Certificates are not enabled for your organization."},
-            status=status.HTTP_403_FORBIDDEN
+        return error_response(
+            "Certificates are not enabled for your organization.",
+            status_code=status.HTTP_403_FORBIDDEN,
         )
     
     # Get the course
@@ -760,10 +748,7 @@ def course_certificate(request, course_id):
     
     # Check if teacher is assigned to the course
     if not _teacher_assigned_to_course(request.user, course):
-        return Response(
-            {"error": "You are not assigned to this course."},
-            status=status.HTTP_403_FORBIDDEN
-        )
+        return error_response("You are not assigned to this course.", status_code=status.HTTP_403_FORBIDDEN)
     
     # Get course progress
     progress = TeacherProgress.objects.filter(
@@ -779,10 +764,7 @@ def course_certificate(request, course_id):
         from apps.courses.models import Content
         total_contents = Content.objects.filter(module__course=course, is_active=True).count()
         if total_contents == 0:
-            return Response(
-                {"error": "This course has no content to complete."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            return error_response("This course has no content to complete.", status_code=status.HTTP_400_BAD_REQUEST)
         
         completed_contents = TeacherProgress.objects.filter(
             teacher=request.user,
@@ -810,9 +792,9 @@ def course_certificate(request, course_id):
     
     # Check if course is completed (100% or close to it)
     if progress_percentage < 99.9:
-        return Response(
-            {"error": f"You have not completed this course yet. Progress: {progress_percentage:.1f}%"},
-            status=status.HTTP_400_BAD_REQUEST
+        return error_response(
+            f"You have not completed this course yet. Progress: {progress_percentage:.1f}%",
+            status_code=status.HTTP_400_BAD_REQUEST,
         )
     
     # Get tenant logo path if available
@@ -846,3 +828,153 @@ def course_certificate(request, course_id):
     )
     
     return response
+
+
+# ---------------------------------------------------------------------------
+# Competency Dashboard
+# ---------------------------------------------------------------------------
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+@teacher_or_admin
+@tenant_required
+def teacher_competency_dashboard(request):
+    """
+    Aggregated competency dashboard for the current teacher.
+
+    Returns skills grouped by category with averages, gaps, and
+    recommended courses to close skill gaps.
+    """
+    from apps.progress.skills_models import CourseSkill, TeacherSkill
+
+    user = request.user
+    tenant = request.tenant
+
+    # Fetch teacher's skills with related Skill data
+    teacher_skills = list(
+        TeacherSkill.objects.filter(teacher=user, tenant=tenant)
+        .select_related("skill")
+        .order_by("skill__category", "skill__name")
+    )
+
+    if not teacher_skills:
+        return Response({
+            "overall_score": 0,
+            "total_skills": 0,
+            "total_gaps": 0,
+            "categories": [],
+            "skills": [],
+            "recommendations": [],
+        })
+
+    # Build per-skill data and category aggregation
+    category_map: dict = {}  # category -> {skills, sum_current, sum_target, gaps}
+    all_skills_data = []
+    gap_skill_ids = set()
+
+    for ts in teacher_skills:
+        skill = ts.skill
+        cat = skill.category or "Uncategorised"
+
+        entry = {
+            "id": str(ts.id),
+            "skill_id": str(skill.id),
+            "name": skill.name,
+            "category": cat,
+            "current_level": ts.current_level,
+            "target_level": ts.target_level,
+            "has_gap": ts.has_gap,
+            "gap_size": ts.gap_size,
+            "last_assessed": ts.last_assessed.isoformat() if ts.last_assessed else None,
+        }
+        all_skills_data.append(entry)
+
+        if cat not in category_map:
+            category_map[cat] = {
+                "category": cat,
+                "count": 0,
+                "sum_current": 0,
+                "sum_target": 0,
+                "gaps": 0,
+            }
+        bucket = category_map[cat]
+        bucket["count"] += 1
+        bucket["sum_current"] += ts.current_level
+        bucket["sum_target"] += ts.target_level
+        if ts.has_gap:
+            bucket["gaps"] += 1
+            gap_skill_ids.add(ts.skill_id)
+
+    # Category summaries
+    categories = []
+    for bucket in category_map.values():
+        count = bucket["count"]
+        avg_current = round(bucket["sum_current"] / count, 1) if count else 0
+        avg_target = round(bucket["sum_target"] / count, 1) if count else 0
+        categories.append({
+            "category": bucket["category"],
+            "skill_count": count,
+            "avg_current": avg_current,
+            "avg_target": avg_target,
+            "gap_count": bucket["gaps"],
+        })
+
+    # Overall competency score: average of (current / target) across all skills
+    ratios = []
+    for ts in teacher_skills:
+        if ts.target_level > 0:
+            ratios.append(min(ts.current_level / ts.target_level, 1.0))
+    overall_score = round((sum(ratios) / len(ratios)) * 100, 1) if ratios else 0
+
+    # Recommendations: courses that teach skills where teacher has gaps
+    recommendations = []
+    if gap_skill_ids:
+        assigned_courses = set(
+            _teacher_assigned_courses_qs(request).values_list("id", flat=True)
+        )
+        course_skills = (
+            CourseSkill.objects.filter(
+                skill_id__in=gap_skill_ids,
+                course__tenant=tenant,
+                course__is_active=True,
+                course__is_published=True,
+            )
+            .select_related("course", "skill")
+        )
+
+        # Build lookup: skill_id → teacher's current/target
+        ts_lookup = {ts.skill_id: ts for ts in teacher_skills}
+
+        seen = set()
+        for cs in course_skills:
+            key = (cs.course_id, cs.skill_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            ts = ts_lookup.get(cs.skill_id)
+            if not ts:
+                continue
+            recommendations.append({
+                "course_id": str(cs.course_id),
+                "course_title": cs.course.title,
+                "skill_name": cs.skill.name,
+                "skill_category": cs.skill.category,
+                "level_taught": cs.level_taught,
+                "current_level": ts.current_level,
+                "target_level": ts.target_level,
+                "is_assigned": cs.course_id in assigned_courses,
+            })
+
+        # Sort: assigned courses first, then by gap size descending
+        recommendations.sort(
+            key=lambda r: (not r["is_assigned"], -(r["target_level"] - r["current_level"])),
+        )
+
+    return Response({
+        "overall_score": overall_score,
+        "total_skills": len(teacher_skills),
+        "total_gaps": len(gap_skill_ids),
+        "categories": categories,
+        "skills": all_skills_data,
+        "recommendations": recommendations[:20],
+    })

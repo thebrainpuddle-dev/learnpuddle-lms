@@ -1,15 +1,23 @@
 # backend/docker-compose.yml
+# Local development only — not for production use.
+# If recreating from scratch, remove the postgres_data volume first:
+#   docker compose down -v && docker compose up -d
 services:
   db:
-    image: postgres:15
+    image: pgvector/pgvector:pg15
     environment:
-      POSTGRES_DB: lms_db
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: your_password
+      POSTGRES_DB: ${DB_NAME:-learnpuddle_db}
+      POSTGRES_USER: ${DB_USER:-learnpuddle}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-dev_password_change_me}
     ports:
       - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-learnpuddle}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   redis:
     image: redis:7-alpine

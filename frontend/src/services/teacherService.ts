@@ -158,7 +158,7 @@ export interface TeacherCourseDetail {
     contents: Array<{
       id: string;
       title: string;
-      content_type: 'VIDEO' | 'DOCUMENT' | 'LINK' | 'TEXT';
+      content_type: 'VIDEO' | 'DOCUMENT' | 'LINK' | 'TEXT' | 'AI_CLASSROOM' | 'CHATBOT';
       order: number;
       file_url?: string;
       hls_url?: string;
@@ -208,6 +208,46 @@ export interface TeacherAssignmentSubmission {
   feedback: string;
   submitted_at: string;
   updated_at: string;
+}
+
+export interface CompetencySkill {
+  id: string;
+  skill_id: string;
+  name: string;
+  category: string;
+  current_level: number;
+  target_level: number;
+  has_gap: boolean;
+  gap_size: number;
+  last_assessed: string | null;
+}
+
+export interface CompetencyCategory {
+  category: string;
+  skill_count: number;
+  avg_current: number;
+  avg_target: number;
+  gap_count: number;
+}
+
+export interface CompetencyRecommendation {
+  course_id: string;
+  course_title: string;
+  skill_name: string;
+  skill_category: string;
+  level_taught: number;
+  current_level: number;
+  target_level: number;
+  is_assigned: boolean;
+}
+
+export interface CompetencyDashboard {
+  overall_score: number;
+  total_skills: number;
+  total_gaps: number;
+  categories: CompetencyCategory[];
+  skills: CompetencySkill[];
+  recommendations: CompetencyRecommendation[];
 }
 
 export const teacherService = {
@@ -317,5 +357,10 @@ export const teacherService = {
   async claimQuestReward(questKey: string) {
     const res = await api.post(`/teacher/gamification/quests/${questKey}/claim/`);
     return res.data as TeacherGamificationSummary;
+  },
+
+  async getCompetencyDashboard(): Promise<CompetencyDashboard> {
+    const res = await api.get('/teacher/competency/');
+    return res.data;
   },
 };

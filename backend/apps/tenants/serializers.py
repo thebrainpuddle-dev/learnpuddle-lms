@@ -24,6 +24,10 @@ class TenantThemeSerializer(serializers.ModelSerializer):
             "is_active",
             "is_trial",
             "trial_end_date",
+            "white_label",
+            "login_bg_image",
+            "welcome_message",
+            "school_motto",
         ]
 
     def get_logo_url(self, obj: Tenant):

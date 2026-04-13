@@ -62,8 +62,7 @@ def reminder_preview(request):
     assignment = None
 
     if reminder_type == "COURSE_DEADLINE":
-        # Note: Course uses TenantSoftDeleteManager - no need for tenant= filter
-        course = get_object_or_404(Course, id=data.get("course_id"))
+        course = get_object_or_404(Course, id=data.get("course_id"), tenant=request.tenant)
         recipients = recipients_for_course_deadline(course)
     elif reminder_type == "ASSIGNMENT_DUE":
         # Assignment doesn't use TenantManager, so course__tenant is needed for FK traversal
@@ -137,16 +136,16 @@ def reminder_send(request):
             if not course_id:
                 return Response({"error": "course_id is required for COURSE_DEADLINE reminders"}, status=status.HTTP_400_BAD_REQUEST)
             
-            # Explicitly query with tenant filter to avoid TenantManager issues
+            # Explicitly query with tenant filter
             try:
-                course = Course.objects.filter(id=course_id).first()
+                course = Course.objects.filter(id=course_id, tenant=request.tenant).first()
                 if not course:
                     logger.warning(f"[REMINDER_SEND] Course not found: {course_id}")
                     return Response({"error": f"Course not found: {course_id}"}, status=status.HTTP_404_NOT_FOUND)
                 logger.info(f"[REMINDER_SEND] Found course: {course.title}")
             except Exception as e:
-                logger.exception(f"[REMINDER_SEND] Error fetching course: {e}")
-                return Response({"error": f"Error fetching course: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                logger.exception("[REMINDER_SEND] Error fetching course")
+                return Response({"error": "An internal error occurred"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
             
             recipients = recipients_for_course_deadline(course)
             
@@ -160,8 +159,8 @@ def reminder_send(request):
                 if not assignment:
                     return Response({"error": f"Assignment not found: {assignment_id}"}, status=status.HTTP_404_NOT_FOUND)
             except Exception as e:
-                logger.exception(f"[REMINDER_SEND] Error fetching assignment: {e}")
-                return Response({"error": f"Error fetching assignment: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                logger.exception("[REMINDER_SEND] Error fetching assignment")
+                return Response({"error": "An internal error occurred"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
             
             recipients = recipients_for_assignment_due(assignment)
         else:
@@ -203,7 +202,7 @@ def reminder_send(request):
             logger.info(f"[REMINDER_SEND] Campaign created: {campaign.id}")
         except Exception as e:
             logger.exception("[REMINDER_SEND] Failed to create campaign")
-            return Response({"error": f"Failed to create campaign: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({"error": "An internal error occurred"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         dispatch = dispatch_campaign(campaign, recipient_list)
         sent = dispatch.sent
@@ -218,8 +217,8 @@ def reminder_send(request):
         return Response(response_data, status=status.HTTP_200_OK)
         
     except Exception as e:
-        logger.exception(f"[REMINDER_SEND] Unexpected error: {e}\n{traceback.format_exc()}")
-        return Response({"error": f"Unexpected error: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        logger.exception("[REMINDER_SEND] Unexpected error")
+        return Response({"error": "An internal error occurred"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(["GET"])

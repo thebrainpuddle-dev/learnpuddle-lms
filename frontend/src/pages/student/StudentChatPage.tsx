@@ -10,15 +10,6 @@ import { usePageTitle } from '../../hooks/usePageTitle';
 import { chatbotStudentApi } from '../../services/openmaicService';
 import { ChatbotChat } from '../../components/maic/ChatbotChat';
 import type { AIChatbot } from '../../types/chatbot';
-import { cn } from '../../lib/utils';
-
-// ─── Persona Badge Config ────────────────────────────────────────────────────
-
-const presetBadge: Record<string, { label: string; classes: string }> = {
-  tutor: { label: 'Tutor', classes: 'bg-blue-100 text-blue-700' },
-  reference: { label: 'Reference', classes: 'bg-purple-100 text-purple-700' },
-  open: { label: 'Open', classes: 'bg-green-100 text-green-700' },
-};
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
@@ -40,16 +31,14 @@ export function StudentChatPage() {
 
   if (!chatbotId) return null;
 
-  const badge = presetBadge[chatbot?.persona_preset ?? 'open'] ?? presetBadge.open;
-
   return (
-    <div className="flex flex-col h-[calc(100vh-4rem)] overflow-hidden rounded-xl border border-gray-200 bg-white">
+    <div className="flex flex-col h-[calc(100vh-4rem)] overflow-hidden rounded-xl border border-gray-200/80 bg-white shadow-sm">
       {/* ── Header ──────────────────────────────────────────────────── */}
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-200 bg-gray-50">
+      <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-100 bg-white">
         <button
           type="button"
           onClick={() => navigate('/student/chatbots')}
-          className="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700"
+          className="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 transition-colors"
         >
           <ChevronLeft className="h-3.5 w-3.5" />
           All Chatbots
@@ -61,19 +50,13 @@ export function StudentChatPage() {
             <span className="text-sm text-gray-400">Loading...</span>
           </div>
         ) : chatbot ? (
-          <div className="flex items-center gap-2 ml-2">
-            <Bot className="h-5 w-5 text-indigo-500 shrink-0" />
+          <div className="flex items-center gap-2.5 ml-2">
+            <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-indigo-500 to-indigo-600 flex items-center justify-center shadow-sm shadow-indigo-200">
+              <Bot className="h-3.5 w-3.5 text-white" />
+            </div>
             <h2 className="text-sm font-semibold text-gray-900 truncate">
               {chatbot.name}
             </h2>
-            <span
-              className={cn(
-                'inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium',
-                badge.classes,
-              )}
-            >
-              {badge.label}
-            </span>
           </div>
         ) : (
           <span className="text-sm text-gray-400 ml-2">Chatbot not found</span>

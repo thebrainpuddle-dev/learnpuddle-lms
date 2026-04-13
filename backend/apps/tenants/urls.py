@@ -1,6 +1,7 @@
 from django.urls import path
 
 from . import views, domain_views, gdpr_views
+from apps.courses import maic_views as maic_views_ref
 
 app_name = "tenants"
 
@@ -11,6 +12,7 @@ urlpatterns = [
     path("stats/", views.tenant_stats_view, name="tenant_stats"),
     path("analytics/", views.tenant_analytics_view, name="tenant_analytics"),
     path("settings/", views.tenant_settings_view, name="tenant_settings"),
+    path("settings/ai/", maic_views_ref.tenant_ai_config_view, name="tenant_ai_settings"),
     
     # Custom domain management
     path("domain/", domain_views.domain_status, name="domain_status"),

@@ -1,18 +1,43 @@
 # docker-compose.staging.yml
-# Staging deployment — mirrors production with staging-specific settings
-# Deployed automatically on push to `develop` branch
+# Staging deployment — mirrors production with staging-specific overrides.
+# Deployed automatically on push to `develop` branch.
 #
 # Run with: docker compose -f docker-compose.staging.yml up -d
 #
 # Required .env.staging vars:
-#   SECRET_KEY, DB_PASSWORD
+#   SECRET_KEY, DB_PASSWORD, REDIS_PASSWORD, FLOWER_PASSWORD
 # Optional:
 #   STAGING_DOMAIN (default: staging.learnpuddle.com)
+#
+# ┌─────────────────────────────────────────────────────────────────────────┐
+# │ KEY DIFFERENCES FROM PRODUCTION (docker-compose.prod.yml):             │
+# │                                                                        │
+# │  1. DEBUG=False but LOG_LEVEL=DEBUG  — production-like behaviour with  │
+# │     verbose logging so issues surface during QA.                       │
+# │  2. Database name: learnpuddle_staging (isolated from prod data).      │
+# │  3. Relaxed resource limits — staging runs on smaller infrastructure.  │
+# │  4. Django Debug Toolbar enabled via ENABLE_DEBUG_TOOLBAR=True for     │
+# │     API request profiling (SQL queries, cache hits, etc.).             │
+# │  5. Email backend: console (no real emails sent).                      │
+# │  6. HSTS disabled (SECURE_HSTS_SECONDS=0).                            │
+# │  7. Fewer Gunicorn workers and Celery concurrency.                     │
+# │  8. Redis: no AOF persistence, lower maxmemory.                        │
+# │  9. Separate Docker volumes (*_staging_*) to avoid conflicts.          │
+# │ 10. Sentry environment tagged as "staging".                            │
+# └─────────────────────────────────────────────────────────────────────────┘
+
+# Default logging config — all services use this via YAML anchors.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
 
 services:
   # ── Database ─────────────────────────────────────────────────────────
+  # Diff from prod: separate DB name (learnpuddle_staging), lower resource limits.
   db:
-    image: postgres:15-alpine
+    image: pgvector/pgvector:pg15
     restart: always
     environment:
       POSTGRES_DB: ${DB_NAME:-learnpuddle_staging}
@@ -27,6 +52,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    logging: *default-logging
+    # Relaxed: prod uses 1G / 1.0 CPU
     deploy:
       resources:
         limits:
@@ -34,17 +61,24 @@ services:
           cpus: "0.5"
 
   # ── Redis (Celery broker + cache) ────────────────────────────────────
+  # Diff from prod: lower maxmemory (128mb vs 256mb), no AOF persistence.
   redis:
     image: redis:7-alpine
     restart: always
-    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD:?Set REDIS_PASSWORD}
+      --maxmemory 128mb
+      --maxmemory-policy allkeys-lru
     networks:
       - backend
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:?Set REDIS_PASSWORD}", "ping"]
       interval: 10s
       timeout: 3s
       retries: 5
+    logging: *default-logging
+    # Relaxed: prod uses 512M / 0.5 CPU
     deploy:
       resources:
         limits:
@@ -52,6 +86,13 @@ services:
           cpus: "0.25"
 
   # ── Django API (gunicorn) ────────────────────────────────────────────
+  # Diff from prod:
+  #   - DEBUG=False (production-like) but LOG_LEVEL=DEBUG for verbose output
+  #   - ENABLE_DEBUG_TOOLBAR=True for API profiling via Django Debug Toolbar
+  #   - Fewer workers (2 vs 3), lower max-requests
+  #   - Console email backend (no real emails)
+  #   - No HSTS, no session/CSRF cookie domain pinning
+  #   - Database: learnpuddle_staging
   web:
     build:
       context: ./backend
@@ -75,27 +116,43 @@ services:
       redis:
         condition: service_healthy
     environment:
-      - DEBUG=True  # Enable debug for staging to catch issues
+      # DEBUG=False for production-like behaviour; use LOG_LEVEL for verbosity.
+      - DEBUG=False
       - SECRET_KEY=${SECRET_KEY:?Set SECRET_KEY}
       - DB_NAME=${DB_NAME:-learnpuddle_staging}
       - DB_USER=${DB_USER:-learnpuddle}
       - DB_PASSWORD=${DB_PASSWORD:?Set DB_PASSWORD}
       - DB_HOST=db
       - DB_PORT=5432
-      - REDIS_URL=redis://redis:6379/1
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - ALLOWED_HOSTS=.${STAGING_DOMAIN:-staging.learnpuddle.com},localhost
-      - CSRF_TRUSTED_ORIGINS=https://*.${STAGING_DOMAIN:-staging.learnpuddle.com}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD}@redis:6379/1
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD}@redis:6379/0
+      - ALLOWED_HOSTS=.${STAGING_DOMAIN:-staging.learnpuddle.com},${STAGING_DOMAIN:-staging.learnpuddle.com},localhost
+      - CSRF_TRUSTED_ORIGINS=https://*.${STAGING_DOMAIN:-staging.learnpuddle.com},https://${STAGING_DOMAIN:-staging.learnpuddle.com}
       - CORS_ALLOWED_ORIGIN_REGEX=https://.*\.${STAGING_DOMAIN:-staging.learnpuddle.com}
       - SECURE_SSL_REDIRECT=False
-      - SECURE_HSTS_SECONDS=0  # No HSTS in staging
+      - SECURE_HSTS_SECONDS=0
       - PLATFORM_DOMAIN=${STAGING_DOMAIN:-staging.learnpuddle.com}
       - PLATFORM_NAME=${PLATFORM_NAME:-LearnPuddle (Staging)}
-      - EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend  # Console emails in staging
+      # Console emails — no real emails are sent in staging.
+      - EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend
+      # Verbose logging for debugging without enabling DEBUG mode.
+      - LOG_LEVEL=DEBUG
+      - LOG_JSON=True
+      # Django Debug Toolbar — enable for SQL/cache/request profiling.
+      # The toolbar only activates when INTERNAL_IPS includes the requester
+      # and the view returns HTML. API responses are unaffected.
+      - ENABLE_DEBUG_TOOLBAR=True
+      - INTERNAL_IPS=127.0.0.1,172.0.0.0/8
       - SENTRY_DSN=${SENTRY_DSN:-}
       - SENTRY_ENVIRONMENT=staging
-      - LOG_LEVEL=DEBUG  # Verbose logging in staging
-      - LOG_JSON=True
+      - STORAGE_BACKEND=${STORAGE_BACKEND:-local}
+      - STORAGE_ACCESS_KEY=${STORAGE_ACCESS_KEY:-}
+      - STORAGE_SECRET_KEY=${STORAGE_SECRET_KEY:-}
+      - STORAGE_BUCKET=${STORAGE_BUCKET:-}
+      - STORAGE_REGION=${STORAGE_REGION:-}
+      - STORAGE_ENDPOINT=${STORAGE_ENDPOINT:-}
+      - CDN_DOMAIN=${CDN_DOMAIN:-}
+      - JWT_SIGNING_KEY=${JWT_SIGNING_KEY:-${SECRET_KEY}}
     volumes:
       - media_staging_data:/app/media
       - static_staging_data:/app/staticfiles
@@ -112,53 +169,16 @@ services:
       timeout: 7s
       retries: 4
       start_period: 20s
+    logging: *default-logging
+    # Relaxed: prod uses 1G / 1.5 CPU
     deploy:
       resources:
         limits:
           memory: 512M
           cpus: "0.5"
 
-  # ── Celery worker ───────────────────────────────────────────────────
-  worker:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    restart: always
-    command: celery -A config worker -l info --concurrency=1
-    depends_on:
-      web:
-        condition: service_healthy
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    environment:
-      - DEBUG=True
-      - SECRET_KEY=${SECRET_KEY}
-      - SECURE_SSL_REDIRECT=False
-      - DB_NAME=${DB_NAME:-learnpuddle_staging}
-      - DB_USER=${DB_USER:-learnpuddle}
-      - DB_PASSWORD=${DB_PASSWORD}
-      - DB_HOST=db
-      - DB_PORT=5432
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - PLATFORM_DOMAIN=${STAGING_DOMAIN:-staging.learnpuddle.com}
-      - EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend
-      - SENTRY_DSN=${SENTRY_DSN:-}
-      - SENTRY_ENVIRONMENT=staging
-    volumes:
-      - media_staging_data:/app/media
-    networks:
-      - backend
-    healthcheck:
-      disable: true
-    deploy:
-      resources:
-        limits:
-          memory: 1G
-          cpus: "0.5"
-
   # ── ASGI server (Daphne for WebSockets) ───────────────────────────────
+  # Diff from prod: lower resource limits.
   asgi:
     build:
       context: ./backend
@@ -173,16 +193,19 @@ services:
       redis:
         condition: service_healthy
     environment:
-      - DEBUG=True
+      - DEBUG=False
       - SECRET_KEY=${SECRET_KEY}
+      - SECURE_SSL_REDIRECT=False
       - DB_NAME=${DB_NAME:-learnpuddle_staging}
       - DB_USER=${DB_USER:-learnpuddle}
       - DB_PASSWORD=${DB_PASSWORD}
       - DB_HOST=db
       - DB_PORT=5432
-      - REDIS_URL=redis://redis:6379/1
-      - CELERY_BROKER_URL=redis://redis:6379/0
+      - REDIS_URL=redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD}@redis:6379/1
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD}@redis:6379/0
       - PLATFORM_DOMAIN=${STAGING_DOMAIN:-staging.learnpuddle.com}
+      - ALLOWED_HOSTS=.${STAGING_DOMAIN:-staging.learnpuddle.com},localhost
+      - LOG_LEVEL=DEBUG
     networks:
       - backend
       - frontend
@@ -196,19 +219,22 @@ services:
       timeout: 7s
       retries: 5
       start_period: 25s
+    logging: *default-logging
+    # Relaxed: prod uses 512M / 0.5 CPU
     deploy:
       resources:
         limits:
           memory: 256M
           cpus: "0.25"
 
-  # ── Celery beat ─────────────────────────────────────────────────────
-  beat:
+  # ── Celery worker ───────────────────────────────────────────────────
+  # Diff from prod: concurrency=1 (vs 2), lower resource limits, console email.
+  worker:
     build:
       context: ./backend
       dockerfile: Dockerfile
     restart: always
-    command: celery -A config beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    command: celery -A config worker -l info --concurrency=1
     depends_on:
       web:
         condition: service_healthy
@@ -217,18 +243,82 @@ services:
       redis:
         condition: service_healthy
     environment:
-      - DEBUG=True
+      - DEBUG=False
+      - SECRET_KEY=${SECRET_KEY}
+      - SECURE_SSL_REDIRECT=False
+      - DB_NAME=${DB_NAME:-learnpuddle_staging}
+      - DB_USER=${DB_USER:-learnpuddle}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_HOST=db
+      - DB_PORT=5432
+      - REDIS_URL=redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD}@redis:6379/1
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD}@redis:6379/0
+      - PLATFORM_DOMAIN=${STAGING_DOMAIN:-staging.learnpuddle.com}
+      - EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend
+      - STORAGE_BACKEND=${STORAGE_BACKEND:-local}
+      - STORAGE_ACCESS_KEY=${STORAGE_ACCESS_KEY:-}
+      - STORAGE_SECRET_KEY=${STORAGE_SECRET_KEY:-}
+      - STORAGE_BUCKET=${STORAGE_BUCKET:-}
+      - STORAGE_REGION=${STORAGE_REGION:-}
+      - STORAGE_ENDPOINT=${STORAGE_ENDPOINT:-}
+      - SENTRY_DSN=${SENTRY_DSN:-}
+      - SENTRY_ENVIRONMENT=staging
+      - LOG_LEVEL=DEBUG
+    volumes:
+      - media_staging_data:/app/media
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A config inspect ping --timeout=5 2>&1 | grep -q pong || exit 1"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
+    logging: *default-logging
+    # Relaxed: prod uses 2G / 2.0 CPU
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "0.5"
+
+  # ── Celery beat ─────────────────────────────────────────────────────
+  # Diff from prod: healthcheck enabled (was disabled), lower resources.
+  beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: always
+    command: celery -A config beat -l info --pidfile=/tmp/celerybeat.pid --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    depends_on:
+      web:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - DEBUG=False
       - SECRET_KEY=${SECRET_KEY}
       - DB_NAME=${DB_NAME:-learnpuddle_staging}
       - DB_USER=${DB_USER:-learnpuddle}
       - DB_PASSWORD=${DB_PASSWORD}
       - DB_HOST=db
       - DB_PORT=5432
-      - CELERY_BROKER_URL=redis://redis:6379/0
+      - REDIS_URL=redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD}@redis:6379/1
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD}@redis:6379/0
+      - SENTRY_DSN=${SENTRY_DSN:-}
+      - SENTRY_ENVIRONMENT=staging
     networks:
       - backend
     healthcheck:
-      disable: true
+      test: ["CMD-SHELL", "test -f /tmp/celerybeat.pid && kill -0 $(cat /tmp/celerybeat.pid) || exit 1"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
+    logging: *default-logging
+    # Relaxed: prod uses 256M / 0.25 CPU
     deploy:
       resources:
         limits:
@@ -236,6 +326,7 @@ services:
           cpus: "0.1"
 
   # ── Flower (Celery monitoring UI) ───────────────────────────────────
+  # Diff from prod: healthcheck enabled (was disabled), lower resources.
   flower:
     build:
       context: ./backend
@@ -248,24 +339,30 @@ services:
       redis:
         condition: service_healthy
     environment:
-      - DEBUG=True
+      - DEBUG=False
       - SECRET_KEY=${SECRET_KEY}
       - DB_NAME=${DB_NAME:-learnpuddle_staging}
       - DB_USER=${DB_USER:-learnpuddle}
       - DB_PASSWORD=${DB_PASSWORD}
       - DB_HOST=db
       - DB_PORT=5432
-      - REDIS_URL=redis://redis:6379/1
-      - CELERY_BROKER_URL=redis://redis:6379/0
+      - REDIS_URL=redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD}@redis:6379/1
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD}@redis:6379/0
       - PLATFORM_DOMAIN=${STAGING_DOMAIN:-staging.learnpuddle.com}
-      - FLOWER_BASIC_AUTH=${FLOWER_USER:-admin}:${FLOWER_PASSWORD:-staging123}
+      - FLOWER_BASIC_AUTH=${FLOWER_USER:-admin}:${FLOWER_PASSWORD:?Set FLOWER_PASSWORD}
     networks:
       - backend
       - frontend
     expose:
       - "5555"
     healthcheck:
-      disable: true
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:5555/flower/healthcheck', timeout=5)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    logging: *default-logging
+    # Relaxed: prod uses 256M / 0.25 CPU
     deploy:
       resources:
         limits:
@@ -315,6 +412,8 @@ services:
       timeout: 7s
       retries: 5
       start_period: 15s
+    logging: *default-logging
+    # Relaxed: prod uses 256M / 0.5 CPU
     deploy:
       resources:
         limits:
@@ -328,6 +427,7 @@ services:
       - certbot_staging_conf:/etc/letsencrypt
       - certbot_staging_www:/var/www/certbot
     entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;'"
+    logging: *default-logging
 
 networks:
   backend:

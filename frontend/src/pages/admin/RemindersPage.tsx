@@ -1,390 +1,80 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { useMutation, useQuery } from '@tanstack/react-query';
-import { Button } from '../../components/common/Button';
-import { Input } from '../../components/common/Input';
-import { useToast } from '../../components/common';
-import { adminReportsService } from '../../services/adminReportsService';
-import { adminRemindersService } from '../../services/adminRemindersService';
-import { adminTeachersService } from '../../services/adminTeachersService';
-import { PaperAirplaneIcon, EyeIcon, ClockIcon, MagnifyingGlassIcon, XMarkIcon, LockClosedIcon } from '@heroicons/react/24/outline';
+import React, { useState, useCallback } from 'react';
 import { usePageTitle } from '../../hooks/usePageTitle';
+import { RulesSection } from '../../components/reminders/RulesSection';
+import { ManualSendSection } from '../../components/reminders/ManualSendSection';
+import { HistorySection } from '../../components/reminders/HistorySection';
+import {
+  CpuChipIcon,
+  PaperAirplaneIcon,
+  ClockIcon,
+} from '@heroicons/react/24/outline';
 
-// Debounce hook
-function useDebounce<T>(value: T, delay: number): T {
-  const [debouncedValue, setDebouncedValue] = useState<T>(value);
-  useEffect(() => {
-    const handler = setTimeout(() => setDebouncedValue(value), delay);
-    return () => clearTimeout(handler);
-  }, [value, delay]);
-  return debouncedValue;
+// ─── Types ──────────────────────────────────────────────────────────────────
+
+type Tab = 'rules' | 'manual' | 'history';
+
+interface TabConfig {
+  id: Tab;
+  label: string;
+  icon: React.ElementType;
 }
 
-type ReminderType = 'ASSIGNMENT_DUE' | 'CUSTOM';
+const TABS: TabConfig[] = [
+  { id: 'rules', label: 'Rules', icon: CpuChipIcon },
+  { id: 'manual', label: 'Manual Send', icon: PaperAirplaneIcon },
+  { id: 'history', label: 'History', icon: ClockIcon },
+];
+
+// ─── Component ──────────────────────────────────────────────────────────────
 
 export const RemindersPage: React.FC = () => {
   usePageTitle('Reminders');
-  const toast = useToast();
-  const [reminderType, setReminderType] = useState<ReminderType>('CUSTOM');
-  const [assignmentId, setAssignmentId] = useState('');
-  const [deadlineOverride, setDeadlineOverride] = useState('');
-  const [subject, setSubject] = useState('');
-  const [message, setMessage] = useState('');
-  const [selectedTeacherIds, setSelectedTeacherIds] = useState<string[]>([]);
-  const [teacherSearch, setTeacherSearch] = useState('');
-  const debouncedTeacherSearch = useDebounce(teacherSearch, 300);
+  const [activeTab, setActiveTab] = useState<Tab>('rules');
+  const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
 
-  const teacherIds = selectedTeacherIds.length > 0 ? selectedTeacherIds : undefined;
-
-  const { data: assignments } = useQuery({
-    queryKey: ['reportAssignments'],
-    queryFn: () => adminReportsService.listAssignments(),
-  });
-
-  const automationStatusQuery = useQuery({
-    queryKey: ['remindersAutomationStatus'],
-    queryFn: adminRemindersService.automationStatus,
-  });
-
-  const { data: teachers } = useQuery({
-    queryKey: ['adminTeachersReminders', debouncedTeacherSearch],
-    queryFn: () => adminTeachersService.listTeachers({ search: debouncedTeacherSearch || undefined }),
-  });
-
-  const availableTeachers = useMemo(() => {
-    const selected = new Set(selectedTeacherIds);
-    return (teachers ?? []).filter((t) => !selected.has(t.id));
-  }, [teachers, selectedTeacherIds]);
-
-  const selectedTeachers = useMemo(() => {
-    return (teachers ?? []).filter((t) => selectedTeacherIds.includes(t.id));
-  }, [teachers, selectedTeacherIds]);
-
-  const previewMutation = useMutation({
-    mutationFn: () =>
-      adminRemindersService.preview({
-        reminder_type: reminderType,
-        assignment_id: reminderType === 'ASSIGNMENT_DUE' ? assignmentId : undefined,
-        deadline_override: reminderType === 'ASSIGNMENT_DUE' ? (deadlineOverride || undefined) : undefined,
-        subject: subject || undefined,
-        message: message || undefined,
-        teacher_ids: teacherIds,
-      }),
-    onSuccess: (data) => {
-      toast.info('Preview ready', `${data.recipient_count} recipient(s) will receive this reminder.`);
-    },
-    onError: (error: any) => {
-      console.error('Preview error:', error);
-      let message = 'Could not generate preview. Please try again.';
-      if (error?.response?.data?.error) {
-        message = error.response.data.error;
-      } else if (error?.response?.data?.detail) {
-        message = error.response.data.detail;
-      } else if (error?.message) {
-        message = error.message;
-      }
-      toast.error('Preview failed', message);
-    },
-  });
-
-  const sendMutation = useMutation({
-    mutationFn: () =>
-      adminRemindersService.send({
-        reminder_type: reminderType,
-        assignment_id: reminderType === 'ASSIGNMENT_DUE' ? assignmentId : undefined,
-        deadline_override: reminderType === 'ASSIGNMENT_DUE' ? (deadlineOverride || undefined) : undefined,
-        subject: subject || undefined,
-        message: message || undefined,
-        teacher_ids: teacherIds,
-      }),
-    onSuccess: (data) => {
-      toast.success(
-        'Reminders sent!',
-        `Successfully sent to ${data.sent} recipient(s).${data.failed > 0 ? ` ${data.failed} failed.` : ''}`
-      );
-      // refresh history
-      historyQuery.refetch();
-    },
-    onError: (error: any) => {
-      console.error('Reminder send error:', error);
-      let message = 'Could not send reminders. Please try again.';
-      if (error?.response?.data?.error) {
-        message = error.response.data.error;
-      } else if (error?.response?.data?.detail) {
-        message = error.response.data.detail;
-      } else if (error?.message) {
-        message = error.message;
-      }
-      toast.error('Send failed', message);
-    },
-  });
-
-  const historyQuery = useQuery({
-    queryKey: ['remindersHistory'],
-    queryFn: adminRemindersService.history,
-  });
-
-  const canPreview =
-    reminderType === 'CUSTOM' ||
-    (reminderType === 'ASSIGNMENT_DUE' && !!assignmentId);
+  const handleReminderSent = useCallback(() => {
+    // Bump the key so HistorySection refetches when user switches to History tab
+    setHistoryRefreshKey((k) => k + 1);
+  }, []);
 
   return (
     <div className="space-y-6">
+      {/* Header */}
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Reminders</h1>
-        <p className="mt-1 text-sm text-gray-500">Send bulk or targeted email reminders and track history.</p>
+        <p className="mt-1 text-sm text-gray-500">
+          Configure automated reminder rules, send manual reminders, and review history.
+        </p>
       </div>
 
-      <div className="card border border-amber-200 bg-amber-50/60">
-        <div className="flex items-start gap-3">
-          <LockClosedIcon className="h-5 w-5 text-amber-700 mt-0.5" />
-          <div className="space-y-1">
-            <h2 className="text-sm font-semibold text-amber-900">Course Deadline Reminders Are Automated</h2>
-            <p className="text-sm text-amber-800">
-              Manual course-deadline sends are locked. The scheduler automatically targets enrolled teachers who have not completed each course.
-            </p>
-            <p className="text-xs text-amber-700">
-              Lead days: {automationStatusQuery.data?.lead_days?.join(', ') || '7, 3, 1, 0'}.
-              {' '}Upcoming courses in window: {automationStatusQuery.data?.upcoming_courses_count ?? 0}.
-            </p>
-            <p className="text-xs text-amber-700">
-              Last automated run: {automationStatusQuery.data?.last_run_at ? new Date(automationStatusQuery.data.last_run_at).toLocaleString() : 'No run yet'}.
-            </p>
-          </div>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Composer */}
-        <div data-tour="admin-reminders-composer" className="card space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label htmlFor="reminder-type" className="block text-sm font-medium text-gray-700 mb-1">Type</label>
-              <select
-                id="reminder-type"
-                name="reminder_type"
-                value={reminderType}
-                onChange={(e) => setReminderType(e.target.value as ReminderType)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+      {/* Tabs */}
+      <div className="border-b border-gray-200">
+        <nav className="-mb-px flex gap-6" aria-label="Reminder sections">
+          {TABS.map((tab) => {
+            const isActive = activeTab === tab.id;
+            const Icon = tab.icon;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`flex items-center gap-2 pb-3 px-1 text-sm font-medium border-b-2 transition-colors ${
+                  isActive
+                    ? 'border-primary-600 text-primary-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                }`}
               >
-                <option value="ASSIGNMENT_DUE">Assignment due</option>
-                <option value="CUSTOM">Custom</option>
-              </select>
-            </div>
-
-            {reminderType === 'ASSIGNMENT_DUE' && (
-              <div>
-              <label htmlFor="reminder-deadline-override" className="block text-sm font-medium text-gray-700 mb-1">
-                <ClockIcon className="h-4 w-4 inline mr-1" />
-                Deadline override (optional)
-              </label>
-              <input
-                id="reminder-deadline-override"
-                name="deadline_override"
-                type="datetime-local"
-                autoComplete="off"
-                value={deadlineOverride}
-                onChange={(e) => setDeadlineOverride(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-              />
-              </div>
-            )}
-          </div>
-
-          {reminderType === 'ASSIGNMENT_DUE' && (
-            <div>
-              <label htmlFor="reminder-assignment" className="block text-sm font-medium text-gray-700 mb-1">Assignment</label>
-              <select
-                id="reminder-assignment"
-                name="assignment_id"
-                value={assignmentId}
-                onChange={(e) => setAssignmentId(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-              >
-                <option value="">Select an assignment…</option>
-                {(assignments ?? []).map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.title}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-
-          <Input
-            id="reminder-subject"
-            name="subject"
-            label="Subject (optional)"
-            autoComplete="off"
-            value={subject}
-            onChange={(e) => setSubject(e.target.value)}
-          />
-          <div>
-            <label htmlFor="reminder-message" className="block text-sm font-medium text-gray-700 mb-1">Message (optional)</label>
-            <textarea
-              id="reminder-message"
-              name="message"
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              rows={4}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-              placeholder="Add a custom note. The system will prepend the core reminder text."
-            />
-          </div>
-
-          {/* Target specific teachers (optional) */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Target specific teachers (optional)
-            </label>
-            <p className="text-xs text-gray-500 mb-2">
-              Leave empty to target all relevant teachers. For custom reminders, that means everyone.
-            </p>
-
-            {/* Selected teachers */}
-            {selectedTeacherIds.length > 0 && (
-              <div className="flex flex-wrap gap-2 mb-2">
-                {selectedTeachers.map((t) => (
-                  <span
-                    key={t.id}
-                    className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium bg-primary-100 text-primary-800 rounded-full"
-                  >
-                    {t.first_name} {t.last_name}
-                    <button
-                      type="button"
-                      onClick={() => setSelectedTeacherIds((prev) => prev.filter((id) => id !== t.id))}
-                      className="hover:text-primary-600"
-                    >
-                      <XMarkIcon className="h-3 w-3" />
-                    </button>
-                  </span>
-                ))}
-                <button
-                  type="button"
-                  onClick={() => setSelectedTeacherIds([])}
-                  className="text-xs text-gray-500 hover:text-gray-700 underline"
-                >
-                  Clear all
-                </button>
-              </div>
-            )}
-
-            {/* Search and add teachers */}
-            <Input
-              id="reminder-teacher-search"
-              name="teacher_search"
-              value={teacherSearch}
-              onChange={(e) => setTeacherSearch(e.target.value)}
-              placeholder="Search teachers to add…"
-              autoComplete="off"
-              leftIcon={<MagnifyingGlassIcon className="h-5 w-5" />}
-            />
-            {debouncedTeacherSearch && availableTeachers.length > 0 && (
-              <div className="mt-1 max-h-32 overflow-y-auto border border-gray-200 rounded-lg bg-white">
-                {availableTeachers.slice(0, 10).map((t) => (
-                  <button
-                    key={t.id}
-                    type="button"
-                    onClick={() => {
-                      setSelectedTeacherIds((prev) => [...prev, t.id]);
-                      setTeacherSearch('');
-                    }}
-                    className="w-full text-left px-3 py-2 hover:bg-gray-50 border-b last:border-b-0 text-sm"
-                  >
-                    <div className="font-medium text-gray-900">
-                      {t.first_name} {t.last_name}
-                    </div>
-                    <div className="text-xs text-gray-500">{t.email}</div>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end">
-            <Button
-              variant="outline"
-              onClick={() => previewMutation.mutate()}
-              disabled={!canPreview}
-              loading={previewMutation.isPending}
-            >
-              <EyeIcon className="h-4 w-4 mr-2" />
-              Preview
-            </Button>
-            <Button
-              variant="primary"
-              onClick={() => sendMutation.mutate()}
-              disabled={!canPreview}
-              loading={sendMutation.isPending}
-            >
-              <PaperAirplaneIcon className="h-4 w-4 mr-2" />
-              Send
-            </Button>
-          </div>
-        </div>
-
-        {/* Preview + History */}
-        <div className="space-y-6">
-          <div data-tour="admin-reminders-history" className="card">
-            <h2 className="text-lg font-semibold text-gray-900 mb-3">Preview</h2>
-            {!previewMutation.data ? (
-              <div className="text-sm text-gray-500">Click Preview to see recipients and final email content.</div>
-            ) : (
-              <div className="space-y-3 text-sm">
-                <div>
-                  <div className="text-gray-500">Recipients</div>
-                  <div className="font-medium text-gray-900">{previewMutation.data.recipient_count}</div>
-                </div>
-                <div>
-                  <div className="text-gray-500">Subject</div>
-                  <div className="font-medium text-gray-900">{previewMutation.data.resolved_subject}</div>
-                </div>
-                <div>
-                  <div className="text-gray-500">Message</div>
-                  <pre className="whitespace-pre-wrap bg-gray-50 border border-gray-200 rounded-lg p-3 text-gray-800">
-                    {previewMutation.data.resolved_message}
-                  </pre>
-                </div>
-                <div>
-                  <div className="text-gray-500 mb-1">Sample recipients</div>
-                  <ul className="space-y-1">
-                    {previewMutation.data.recipients_preview.map((r) => (
-                      <li key={r.id} className="text-gray-800">
-                        {r.name} — <span className="text-gray-500">{r.email}</span>
-                      </li>
-                    ))}
-                    {previewMutation.data.recipients_preview.length === 0 && (
-                      <li className="text-gray-500">No recipients matched.</li>
-                    )}
-                  </ul>
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="card">
-            <h2 className="text-lg font-semibold text-gray-900 mb-3">History</h2>
-            {historyQuery.isLoading ? (
-              <div className="text-sm text-gray-500">Loading…</div>
-            ) : (historyQuery.data?.results.length || 0) === 0 ? (
-              <div className="text-sm text-gray-500">No reminders sent yet.</div>
-            ) : (
-              <div className="space-y-3">
-                {historyQuery.data?.results.slice(0, 10).map((c) => (
-                  <div key={c.id} className="border border-gray-200 rounded-lg p-3">
-                    <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-                      <div className="font-medium text-gray-900">{c.subject}</div>
-                      <div className="text-xs text-gray-500">{new Date(c.created_at).toLocaleString()}</div>
-                    </div>
-                    <div className="text-xs text-gray-600 mt-1">
-                      {c.reminder_type} • sent: {c.sent_count} • failed: {c.failed_count}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
+                <Icon className="h-4 w-4" />
+                {tab.label}
+              </button>
+            );
+          })}
+        </nav>
       </div>
+
+      {/* Tab content */}
+      {activeTab === 'rules' && <RulesSection />}
+      {activeTab === 'manual' && <ManualSendSection onSent={handleReminderSent} />}
+      {activeTab === 'history' && <HistorySection refreshKey={historyRefreshKey} />}
     </div>
   );
 };

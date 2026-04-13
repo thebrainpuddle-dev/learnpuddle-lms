@@ -1,8 +1,10 @@
 import logging
+from datetime import timedelta
 
 from celery import shared_task
 from django.conf import settings
 from django.core.mail import send_mail
+from django.utils import timezone
 
 from .email_utils import (
     send_templated_email,
@@ -326,3 +328,52 @@ def send_notification_email(self, notification_id: str):
             notification_id, teacher.email, exc,
         )
         raise self.retry(exc=exc)
+
+
+# ---------------------------------------------------------------------------
+# Notification archival / TTL tasks
+# ---------------------------------------------------------------------------
+
+@shared_task(name="notifications.archive_old_notifications")
+def archive_old_notifications():
+    """
+    Archive notifications that are older than 90 days.
+
+    Scheduled daily at 03:00 UTC via Celery Beat.
+    Uses ``all_objects`` to bypass the ``ActiveNotificationManager`` filter so
+    that already-archived rows are not re-stamped and only truly un-archived
+    old rows are touched.
+    """
+    from .models import Notification
+
+    cutoff = timezone.now() - timedelta(days=90)
+    now = timezone.now()
+    count = (
+        Notification.all_objects
+        .filter(created_at__lt=cutoff, archived_at__isnull=True)
+        .update(is_archived=True, archived_at=now)
+    )
+    logger.info("archive_old_notifications: archived %d notifications older than 90 days", count)
+    return {"archived": count}
+
+
+@shared_task(name="notifications.delete_archived_notifications")
+def delete_archived_notifications():
+    """
+    Hard-delete notifications that were archived more than 30 days ago.
+
+    This gives a 30-day grace window after archival (120-day total lifecycle).
+    Scheduled weekly on Sundays at 04:00 UTC via Celery Beat.
+    Uses ``all_objects`` to bypass the ``ActiveNotificationManager`` filter so
+    that archived rows are reachable.
+    """
+    from .models import Notification
+
+    cutoff = timezone.now() - timedelta(days=30)
+    count, _ = (
+        Notification.all_objects
+        .filter(archived_at__lt=cutoff)
+        .delete()
+    )
+    logger.info("delete_archived_notifications: hard-deleted %d archived notifications", count)
+    return {"deleted": count}

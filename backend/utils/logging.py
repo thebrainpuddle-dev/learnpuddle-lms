@@ -5,7 +5,7 @@ Structured JSON logging configuration with contextual fields.
 This module provides:
 1. JSON-formatted log output for easy parsing by log aggregators
 2. Automatic inclusion of request context (request_id, tenant_id, user_id)
-3. Thread-local storage for passing context through the call stack
+3. Context-var storage for passing context through the call stack (ASGI-safe)
 
 Usage in views/services:
     import logging
@@ -27,13 +27,24 @@ The JSON output will include:
 """
 
 import logging
-import threading
+import contextvars
 from datetime import datetime, timezone
 from pythonjsonlogger import jsonlogger
 
 
-# Thread-local storage for request context
-_request_context = threading.local()
+# Context-var storage for request context (safe for both WSGI and ASGI).
+# threading.local() leaks state across async tasks in ASGI/Channels because
+# multiple coroutines share the same OS thread.  contextvars.ContextVar is
+# coroutine-aware and automatically scoped per-task.
+_ctx_request_id: contextvars.ContextVar = contextvars.ContextVar(
+    'log_request_id', default=None
+)
+_ctx_tenant_id: contextvars.ContextVar = contextvars.ContextVar(
+    'log_tenant_id', default=None
+)
+_ctx_user_id: contextvars.ContextVar = contextvars.ContextVar(
+    'log_user_id', default=None
+)
 
 
 def set_request_context(request_id=None, tenant_id=None, user_id=None):
@@ -41,9 +52,9 @@ def set_request_context(request_id=None, tenant_id=None, user_id=None):
     Set the current request context for logging.
     Called by middleware at the start of each request.
     """
-    _request_context.request_id = request_id
-    _request_context.tenant_id = tenant_id
-    _request_context.user_id = user_id
+    _ctx_request_id.set(request_id)
+    _ctx_tenant_id.set(tenant_id)
+    _ctx_user_id.set(user_id)
 
 
 def clear_request_context():
@@ -51,17 +62,17 @@ def clear_request_context():
     Clear the request context after request completes.
     Called by middleware at the end of each request.
     """
-    _request_context.request_id = None
-    _request_context.tenant_id = None
-    _request_context.user_id = None
+    _ctx_request_id.set(None)
+    _ctx_tenant_id.set(None)
+    _ctx_user_id.set(None)
 
 
 def get_request_context():
     """Get the current request context."""
     return {
-        'request_id': getattr(_request_context, 'request_id', None),
-        'tenant_id': getattr(_request_context, 'tenant_id', None),
-        'user_id': getattr(_request_context, 'user_id', None),
+        'request_id': _ctx_request_id.get(),
+        'tenant_id': _ctx_tenant_id.get(),
+        'user_id': _ctx_user_id.get(),
     }
 
 
@@ -92,7 +103,7 @@ class ContextualJsonFormatter(jsonlogger.JsonFormatter):
         log_record['level'] = record.levelname
         log_record['logger'] = record.name
         
-        # Add request context from thread-local storage
+        # Add request context from context-var storage (ASGI-safe)
         context = get_request_context()
         log_record['request_id'] = context['request_id']
         log_record['tenant_id'] = context['tenant_id']

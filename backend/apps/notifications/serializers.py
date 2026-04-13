@@ -19,7 +19,9 @@ class NotificationSerializer(serializers.ModelSerializer):
             'assignment_title',
             'is_read',
             'is_actionable',
+            'is_archived',
             'read_at',
+            'archived_at',
             'created_at',
         ]
         read_only_fields = ['id', 'created_at']

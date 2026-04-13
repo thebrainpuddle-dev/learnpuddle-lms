@@ -1,6 +1,8 @@
 import re
 import uuid
 import logging
+from urllib.parse import urlparse
+
 import requests
 
 from celery import chain, group
@@ -92,7 +94,7 @@ def upload_video_content(request, course_id, module_id):
     if denied:
         return denied
 
-    course_qs = Course.objects.filter(id=course_id)
+    course_qs = Course.objects.filter(id=course_id, tenant=request.tenant)
     if _is_teacher_authoring_user(request):
         course_qs = course_qs.filter(created_by=request.user)
     course = get_object_or_404(course_qs)
@@ -216,7 +218,7 @@ def video_status(request, course_id, module_id, content_id):
     if denied:
         return denied
 
-    course_qs = Course.objects.filter(id=course_id)
+    course_qs = Course.objects.filter(id=course_id, tenant=request.tenant)
     if _is_teacher_authoring_user(request):
         course_qs = course_qs.filter(created_by=request.user)
     course = get_object_or_404(course_qs)
@@ -277,7 +279,7 @@ def video_status(request, course_id, module_id, content_id):
 @admin_only
 @tenant_required
 def regenerate_transcript(request, course_id, module_id, content_id):
-    course = get_object_or_404(Course, id=course_id)
+    course = get_object_or_404(Course, id=course_id, tenant=request.tenant)
     module = get_object_or_404(Module, id=module_id, course=course)
     content = get_object_or_404(Content, id=content_id, module=module, content_type="VIDEO")
     asset = getattr(content, "video_asset", None)
@@ -295,7 +297,7 @@ def regenerate_transcript(request, course_id, module_id, content_id):
 @admin_only
 @tenant_required
 def regenerate_assignments(request, course_id, module_id, content_id):
-    course = get_object_or_404(Course, id=course_id)
+    course = get_object_or_404(Course, id=course_id, tenant=request.tenant)
     module = get_object_or_404(Module, id=module_id, course=course)
     content = get_object_or_404(Content, id=content_id, module=module, content_type="VIDEO")
     asset = getattr(content, "video_asset", None)
@@ -322,49 +324,120 @@ def hls_playlist_view(request, content_id):
     
     This solves 403 errors when HLS.js tries to fetch segments from private S3 buckets.
     """
-    content = get_object_or_404(Content, id=content_id, content_type="VIDEO")
-    
-    # Verify the content belongs to the current tenant
-    if content.module.course.tenant_id != request.tenant.id:
-        return Response({"error": "Access denied"}, status=status.HTTP_403_FORBIDDEN)
+    content = get_object_or_404(
+        Content, id=content_id, content_type="VIDEO",
+        module__course__tenant=request.tenant,
+    )
     
     asset = getattr(content, "video_asset", None)
     if not asset or not asset.hls_master_url:
         return Response({"error": "HLS playlist not available"}, status=status.HTTP_404_NOT_FOUND)
     
-    # Get the original m3u8 URL (signed for fetching)
-    original_m3u8_url = sign_url(asset.hls_master_url, expires_in=300)
-    
-    try:
-        # Fetch the original m3u8 content
-        resp = requests.get(original_m3u8_url, timeout=10)
-        resp.raise_for_status()
-        m3u8_content = resp.text
-    except requests.RequestException as e:
-        logger.error(f"Failed to fetch m3u8 for content {content_id}: {e}")
-        return Response({"error": "Failed to fetch playlist"}, status=status.HTTP_502_BAD_GATEWAY)
-    
-    # Determine the base path for segments (same directory as master.m3u8)
-    hls_base_path = asset.hls_master_url.rsplit("/", 1)[0] + "/"
-    
-    # Replace segment references with signed URLs
-    modified_m3u8 = []
-    for line in m3u8_content.splitlines():
-        line = line.strip()
-        if line and not line.startswith("#") and line.endswith(".ts"):
-            # This is a segment reference, sign it
-            segment_path = hls_base_path + line
-            modified_m3u8.append(sign_url(segment_path, expires_in=14400))
-        else:
-            modified_m3u8.append(line)
+    storage_backend = getattr(settings, "STORAGE_BACKEND", "local").lower()
+
+    if storage_backend != "s3":
+        # ── Local storage: read m3u8 from disk, serve segments as local URLs ──
+        import os
+        hls_url = asset.hls_master_url
+        # Strip leading /media/ to get the filesystem-relative path
+        rel_path = hls_url.lstrip("/")
+        if rel_path.startswith("media/"):
+            rel_path = rel_path[len("media/"):]
+        m3u8_path = os.path.join(settings.MEDIA_ROOT, rel_path)
+
+        if not os.path.isfile(m3u8_path):
+            logger.error(f"Local m3u8 not found: {m3u8_path}")
+            return Response({"error": "HLS playlist not found on disk"}, status=status.HTTP_404_NOT_FOUND)
+
+        with open(m3u8_path, "r") as f:
+            m3u8_content = f.read()
+
+        # Build base URL for segments (same directory as master.m3u8)
+        hls_base_url = hls_url.rsplit("/", 1)[0] + "/"
+        modified_m3u8 = []
+        for line in m3u8_content.splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and line.endswith(".ts"):
+                modified_m3u8.append(hls_base_url + line)
+            else:
+                modified_m3u8.append(line)
+    else:
+        # ── S3 storage: fetch m3u8 via HTTP, rewrite with signed segment URLs ──
+        original_m3u8_url = sign_url(asset.hls_master_url, expires_in=300)
+
+        try:
+            resp = requests.get(original_m3u8_url, timeout=10)
+            resp.raise_for_status()
+            m3u8_content = resp.text
+        except requests.RequestException as e:
+            logger.error(f"Failed to fetch m3u8 for content {content_id}: {e}")
+            return Response({"error": "Failed to fetch playlist"}, status=status.HTTP_502_BAD_GATEWAY)
+
+        hls_base_path = asset.hls_master_url.rsplit("/", 1)[0] + "/"
+        modified_m3u8 = []
+        for line in m3u8_content.splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and line.endswith(".ts"):
+                segment_path = hls_base_path + line
+                modified_m3u8.append(sign_url(segment_path, expires_in=14400))
+            else:
+                modified_m3u8.append(line)
     
     modified_content = "\n".join(modified_m3u8)
     
-    return HttpResponse(
+    # ── CORS origin validation ──────────────────────────────────────────
+    # Restrict Access-Control-Allow-Origin to the requesting tenant's
+    # subdomain origin instead of wildcard "*".  The wildcard leaked signed
+    # S3 segment URLs to any origin, allowing third-party sites to
+    # embed/steal private video content.
+    #
+    # NOTE on preflight (OPTIONS): Django's corsheaders middleware (see
+    # config/settings.py CORS_ALLOWED_ORIGIN_REGEXES) handles OPTIONS
+    # preflight requests *before* this view runs and validates origins
+    # against the same tenant subdomain regex.  This view only handles
+    # GET, so the manual CORS headers below apply to the actual response.
+    # They are intentionally consistent with the middleware's behaviour.
+    #
+    # NOTE on nginx: HLS playlists are served through this Django view
+    # (not as nginx static files), so no CORS headers are needed in
+    # nginx/nginx.conf for HLS.  The /api/ location block proxies to
+    # Django where both the middleware and this view handle CORS.
+    tenant_subdomain = getattr(request.tenant, "subdomain", "")
+    platform_domain = getattr(settings, "PLATFORM_DOMAIN", "")
+    allowed_origin = None
+
+    if tenant_subdomain and platform_domain:
+        allowed_origin = f"https://{tenant_subdomain}.{platform_domain}"
+    else:
+        # Fallback: accept the Origin header only if its hostname matches
+        # the request host *exactly* (not a suffix match, which would let
+        # evil-learnpuddle.com pass).
+        origin = request.headers.get("Origin", "")
+        if origin:
+            parsed = urlparse(origin)
+            request_host = request.get_host()  # may include port
+            origin_host = parsed.hostname or ""
+            # Compare hostname exactly; strip port from request_host for
+            # comparison since Origin never includes default ports.
+            request_hostname = request_host.split(":")[0]
+            if origin_host == request_hostname:
+                allowed_origin = origin
+
+    response = HttpResponse(
         modified_content,
         content_type="application/vnd.apple.mpegurl",
         headers={
             "Cache-Control": "no-cache, no-store, must-revalidate",
-            "Access-Control-Allow-Origin": "*",
-        }
+            "Vary": "Origin",
+        },
     )
+
+    # Only set CORS headers when we have a validated origin.  An empty or
+    # missing origin means we cannot determine legitimacy — omit the
+    # Access-Control-Allow-Origin header entirely so the browser blocks
+    # any cross-origin usage by default.
+    if allowed_origin:
+        response["Access-Control-Allow-Origin"] = allowed_origin
+        response["Access-Control-Allow-Credentials"] = "true"
+
+    return response

@@ -4,10 +4,12 @@ Teacher chatbot CRUD + student chatbot chat endpoints.
 All endpoints gated by @check_feature("feature_maic").
 """
 import hashlib
+import json
 import logging
 import os
 
 from django.core.files.storage import default_storage
+from django.db import models
 from django.db.models import Count, Q, Sum
 from django.http import StreamingHttpResponse
 from rest_framework import status
@@ -44,6 +46,51 @@ class ChatbotChatThrottle(UserRateThrottle):
 MAX_UPLOAD_SIZE = 10 * 1024 * 1024  # 10MB
 ALLOWED_EXTENSIONS = {'.pdf', '.txt', '.md', '.docx'}
 MAX_MESSAGES_PER_CONVERSATION = 200
+MAX_HISTORY_FROM_CLIENT = 40  # hard cap on history messages from client
+
+
+def _sanitize_history(history) -> list[dict]:
+    """Validate, sanitize, and cap history length from client."""
+    if not isinstance(history, list):
+        return []
+    sanitized = []
+    for msg in history[-MAX_HISTORY_FROM_CLIENT:]:
+        if (isinstance(msg, dict)
+                and msg.get("role") in ("user", "assistant")
+                and isinstance(msg.get("content"), str)
+                and msg["content"].strip()):
+            sanitized.append({
+                "role": msg["role"],
+                "content": msg["content"][:8000],  # cap individual message length
+            })
+    return sanitized
+
+
+def _build_sse_response(chatbot, message, history, ai_config, log_prefix="Chat"):
+    """Build a StreamingHttpResponse for SSE chat. Shared by teacher preview and student chat."""
+    def sse_stream():
+        try:
+            gen = stream_chat_response(
+                chatbot=chatbot,
+                conversation_messages=history,
+                user_message=message,
+                ai_config=ai_config,
+            )
+            for chunk in gen:
+                yield chunk
+        except GeneratorExit:
+            pass
+        except Exception:
+            logger.exception(f"{log_prefix} stream error")
+            yield f"data: {json.dumps({'type': 'error', 'error': 'An error occurred while generating the response.'})}\n\n"
+
+    response = StreamingHttpResponse(
+        sse_stream(),
+        content_type='text/event-stream',
+    )
+    response['Cache-Control'] = 'no-cache'
+    response['X-Accel-Buffering'] = 'no'
+    return response
 
 
 # ─── Teacher: Chatbot CRUD ────────────────────────────────────────────
@@ -59,7 +106,7 @@ def teacher_chatbot_list_create(request):
         chatbots = AIChatbot.objects.filter(creator=request.user).annotate(
             _knowledge_count=Count('knowledge_sources', distinct=True),
             _conversation_count=Count('conversations', distinct=True),
-        )
+        ).prefetch_related('sections__grade')
         serializer = AIChatbotSerializer(chatbots, many=True)
         return Response(serializer.data)
 
@@ -81,10 +128,29 @@ def teacher_chatbot_list_create(request):
             status=status.HTTP_403_FORBIDDEN,
         )
 
+    section_ids = serializer.validated_data.pop('section_ids', [])
+
+    # Default persona_preset to 'study_buddy' if not provided
+    if 'persona_preset' not in serializer.validated_data or not serializer.validated_data.get('persona_preset'):
+        serializer.validated_data['persona_preset'] = 'study_buddy'
+
     chatbot = serializer.save(
         tenant=request.tenant,
         creator=request.user,
     )
+
+    # Set sections (validate they belong to teacher's assignments)
+    if section_ids:
+        _set_chatbot_sections(chatbot, section_ids, request.user, request.tenant)
+        # Trigger auto-ingestion of course content for assigned sections
+        from apps.courses.chatbot_auto_ingest import auto_ingest_course_content
+        auto_ingest_course_content.delay(str(chatbot.pk))
+
+    chatbot = AIChatbot.objects.filter(pk=chatbot.pk).annotate(
+        _knowledge_count=Count('knowledge_sources', distinct=True),
+        _conversation_count=Count('conversations', distinct=True),
+    ).prefetch_related('sections__grade').first()
+
     return Response(
         AIChatbotSerializer(chatbot).data,
         status=status.HTTP_201_CREATED,
@@ -99,7 +165,9 @@ def teacher_chatbot_list_create(request):
 def teacher_chatbot_detail(request, chatbot_id):
     """GET/PATCH/DELETE a specific chatbot."""
     try:
-        chatbot = AIChatbot.objects.get(pk=chatbot_id, creator=request.user)
+        chatbot = AIChatbot.objects.prefetch_related('sections__grade').get(
+            pk=chatbot_id, creator=request.user,
+        )
     except AIChatbot.DoesNotExist:
         return Response({"error": "Chatbot not found"}, status=status.HTTP_404_NOT_FOUND)
 
@@ -109,13 +177,135 @@ def teacher_chatbot_detail(request, chatbot_id):
     if request.method == "PATCH":
         serializer = AIChatbotCreateSerializer(chatbot, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
+
+        section_ids = serializer.validated_data.pop('section_ids', None)
         serializer.save()
+
+        # Update sections if provided
+        if section_ids is not None:
+            _set_chatbot_sections(chatbot, section_ids, request.user, request.tenant)
+            from apps.courses.chatbot_auto_ingest import auto_ingest_course_content
+            auto_ingest_course_content.delay(str(chatbot.pk))
+
+        chatbot.refresh_from_db()
+        chatbot = AIChatbot.objects.filter(pk=chatbot.pk).prefetch_related(
+            'sections__grade',
+        ).first()
         return Response(AIChatbotSerializer(chatbot).data)
 
     # DELETE — soft deactivate
     chatbot.is_active = False
     chatbot.save(update_fields=['is_active', 'updated_at'])
     return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+def _set_chatbot_sections(chatbot, section_ids, teacher, tenant):
+    """Validate and set sections for a chatbot based on teacher's assignments."""
+    from apps.academics.models import Section, TeachingAssignment
+
+    # Get sections the teacher is assigned to
+    teacher_section_ids = set(
+        TeachingAssignment.objects.filter(
+            tenant=tenant,
+            teacher=teacher,
+        ).values_list('sections__id', flat=True)
+    )
+
+    # Filter to only sections the teacher has access to
+    valid_ids = [sid for sid in section_ids if sid in teacher_section_ids]
+
+    # Also verify sections belong to this tenant
+    valid_sections = Section.objects.filter(
+        pk__in=valid_ids,
+        tenant=tenant,
+    )
+    chatbot.sections.set(valid_sections)
+
+
+# ─── Teacher: Clone Chatbot ──────────────────────────────────────────
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@teacher_or_admin
+@tenant_required
+@check_feature("feature_maic")
+def teacher_chatbot_clone(request, chatbot_id):
+    """Clone a chatbot (copies config + sections, not knowledge)."""
+    try:
+        original = AIChatbot.objects.prefetch_related('sections').get(
+            pk=chatbot_id, creator=request.user,
+        )
+    except AIChatbot.DoesNotExist:
+        return Response({"error": "Chatbot not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    # Check limit
+    try:
+        ai_config = TenantAIConfig.objects.get(tenant=request.tenant)
+        limit = ai_config.max_chatbots_per_teacher
+    except TenantAIConfig.DoesNotExist:
+        limit = 10
+
+    current_count = AIChatbot.objects.filter(creator=request.user).count()
+    if current_count >= limit:
+        return Response(
+            {"error": f"You can create up to {limit} chatbots."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    clone = AIChatbot.objects.create(
+        tenant=request.tenant,
+        creator=request.user,
+        name=f"{original.name} (Copy)",
+        avatar_url=original.avatar_url,
+        persona_preset=original.persona_preset,
+        persona_description=original.persona_description,
+        custom_rules=original.custom_rules,
+        block_off_topic=original.block_off_topic,
+        welcome_message=original.welcome_message,
+    )
+    clone.sections.set(original.sections.all())
+
+    clone = AIChatbot.objects.filter(pk=clone.pk).annotate(
+        _knowledge_count=Count('knowledge_sources', distinct=True),
+        _conversation_count=Count('conversations', distinct=True),
+    ).prefetch_related('sections__grade').first()
+
+    return Response(AIChatbotSerializer(clone).data, status=status.HTTP_201_CREATED)
+
+
+# ─── Teacher: Sections for picker ─────────────────────────────────────
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+@teacher_or_admin
+@tenant_required
+@check_feature("feature_maic")
+def teacher_my_sections(request):
+    """Return sections this teacher is assigned to (for the chatbot section picker)."""
+    from apps.academics.models import TeachingAssignment
+
+    section_ids = TeachingAssignment.objects.filter(
+        tenant=request.tenant,
+        teacher=request.user,
+    ).values_list('sections__id', flat=True).distinct()
+
+    from apps.academics.models import Section
+    sections = Section.objects.filter(
+        pk__in=section_ids,
+        tenant=request.tenant,
+    ).select_related('grade').order_by('grade__order', 'name')
+
+    data = [
+        {
+            'id': str(s.pk),
+            'name': s.name,
+            'grade_name': s.grade.name,
+            'grade_short_code': s.grade.short_code,
+            'academic_year': s.academic_year,
+        }
+        for s in sections
+    ]
+    return Response(data)
 
 
 # ─── Teacher: Knowledge CRUD ──────────────────────────────────────────
@@ -134,7 +324,7 @@ def teacher_knowledge_list_create(request, chatbot_id):
         return Response({"error": "Chatbot not found"}, status=status.HTTP_404_NOT_FOUND)
 
     if request.method == "GET":
-        sources = AIChatbotKnowledge.objects.filter(chatbot=chatbot)
+        sources = AIChatbotKnowledge.all_objects.filter(chatbot=chatbot).order_by('-is_auto', '-created_at')
         serializer = AIChatbotKnowledgeSerializer(sources, many=True)
         return Response(serializer.data)
 
@@ -151,7 +341,7 @@ def teacher_knowledge_list_create(request, chatbot_id):
             )
         content_hash = hashlib.sha256(raw_text.encode()).hexdigest()
 
-        knowledge = AIChatbotKnowledge.objects.create(
+        knowledge = AIChatbotKnowledge.all_objects.create(
             tenant=request.tenant,
             chatbot=chatbot,
             source_type='text',
@@ -173,7 +363,7 @@ def teacher_knowledge_list_create(request, chatbot_id):
             )
         content_hash = hashlib.sha256(url.encode()).hexdigest()
 
-        knowledge = AIChatbotKnowledge.objects.create(
+        knowledge = AIChatbotKnowledge.all_objects.create(
             tenant=request.tenant,
             chatbot=chatbot,
             source_type='url',
@@ -211,7 +401,7 @@ def teacher_knowledge_list_create(request, chatbot_id):
         file.seek(0)
         content_hash = hashlib.sha256(file.read()).hexdigest()
 
-        knowledge = AIChatbotKnowledge.objects.create(
+        knowledge = AIChatbotKnowledge.all_objects.create(
             tenant=request.tenant,
             chatbot=chatbot,
             source_type='pdf' if ext == '.pdf' else 'document',
@@ -239,9 +429,15 @@ def teacher_knowledge_delete(request, chatbot_id, knowledge_id):
     """Delete a knowledge source and its chunks."""
     try:
         chatbot = AIChatbot.objects.get(pk=chatbot_id, creator=request.user)
-        knowledge = AIChatbotKnowledge.objects.get(pk=knowledge_id, chatbot=chatbot)
+        knowledge = AIChatbotKnowledge.all_objects.get(pk=knowledge_id, chatbot=chatbot)
     except (AIChatbot.DoesNotExist, AIChatbotKnowledge.DoesNotExist):
         return Response({"error": "Not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    if knowledge.is_auto:
+        return Response(
+            {"error": "Auto-ingested sources cannot be deleted. They come from your course content."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
     # Delete file from storage
     if knowledge.file_url:
@@ -252,6 +448,23 @@ def teacher_knowledge_delete(request, chatbot_id, knowledge_id):
 
     knowledge.delete()  # CASCADE deletes chunks
     return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@teacher_or_admin
+@tenant_required
+@check_feature("feature_maic")
+def teacher_chatbot_refresh_sources(request, chatbot_id):
+    """Re-sync auto-ingested sources from course content."""
+    try:
+        chatbot = AIChatbot.objects.get(pk=chatbot_id, creator=request.user)
+    except AIChatbot.DoesNotExist:
+        return Response({"error": "Chatbot not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    from apps.courses.chatbot_auto_ingest import auto_ingest_course_content
+    auto_ingest_course_content.delay(str(chatbot.pk))
+    return Response({"status": "Refresh started. New sources will appear shortly."})
 
 
 # ─── Teacher: Conversations (read-only) ───────────────────────────────
@@ -331,6 +544,42 @@ def teacher_chatbot_analytics(request, chatbot_id):
     })
 
 
+# ─── Teacher: Chat Preview ────────────────────────────────────────────
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@throttle_classes([ChatbotChatThrottle])
+@teacher_or_admin
+@tenant_required
+@check_feature("feature_maic")
+def teacher_chat_preview(request, chatbot_id):
+    """
+    Teacher chat preview — lets the creator test their own chatbot.
+    Uses the same SSE streaming logic as the student chat endpoint,
+    but verifies ownership (creator) instead of section enrollment.
+    No conversation persistence — messages are temporary.
+    """
+    try:
+        chatbot = AIChatbot.objects.get(pk=chatbot_id, creator=request.user)
+    except AIChatbot.DoesNotExist:
+        return Response({"error": "Chatbot not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    message = request.data.get("message", "").strip()
+    if not message:
+        return Response({"error": "message is required"}, status=status.HTTP_400_BAD_REQUEST)
+    if len(message) > 4000:
+        return Response({"error": "Message too long (max 4000 characters)"}, status=status.HTTP_400_BAD_REQUEST)
+
+    sanitized_history = _sanitize_history(request.data.get("history", []))
+
+    try:
+        ai_config = TenantAIConfig.objects.get(tenant=request.tenant)
+    except TenantAIConfig.DoesNotExist:
+        return Response({"error": "AI provider not configured"}, status=status.HTTP_403_FORBIDDEN)
+
+    return _build_sse_response(chatbot, message, sanitized_history, ai_config, "Teacher preview")
+
+
 # ─── Student: Chatbot Access ──────────────────────────────────────────
 
 @api_view(["GET"])
@@ -339,29 +588,20 @@ def teacher_chatbot_analytics(request, chatbot_id):
 @tenant_required
 @check_feature("feature_maic")
 def student_chatbot_list(request):
-    """List chatbots available to this student (via course assignments)."""
-    from apps.courses.models import Course
+    """List chatbots available to this student (via section enrollment)."""
+    # Get student's section
+    student_section_id = getattr(request.user, 'section_fk_id', None)
 
-    # Find courses assigned to this student
-    student_course_ids = Course.objects.filter(
-        assigned_students=request.user,
-        is_active=True,
-        is_published=True,
-    ).values_list('id', flat=True)
+    if not student_section_id:
+        return Response([])
 
-    # Find teachers assigned to those courses
-    teacher_ids = Course.objects.filter(
-        id__in=student_course_ids,
-    ).values_list('assigned_teachers', flat=True).distinct()
-
-    # Get active chatbots from those teachers
+    # Get active chatbots linked to the student's section
     chatbots = AIChatbot.objects.filter(
-        creator_id__in=teacher_ids,
+        sections__id=student_section_id,
         is_active=True,
     ).annotate(
         _knowledge_count=Count('knowledge_sources', distinct=True),
-        _conversation_count=Count('conversations', distinct=True),
-    )
+    ).prefetch_related('sections__grade').distinct()
 
     serializer = AIChatbotStudentSerializer(chatbots, many=True)
     return Response(serializer.data)
@@ -436,31 +676,15 @@ def student_chat(request, chatbot_id):
 
     message = request.data.get("message", "").strip()
     conversation_id = request.data.get("conversation_id")
-    # Client sends chat history from sessionStorage (list of {role, content} dicts)
-    history = request.data.get("history", [])
 
     if not message:
-        return Response(
-            {"error": "message is required"},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-
+        return Response({"error": "message is required"}, status=status.HTTP_400_BAD_REQUEST)
     if len(message) > 4000:
-        return Response(
-            {"error": "Message too long"},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
+        return Response({"error": "Message too long (max 4000 characters)"}, status=status.HTTP_400_BAD_REQUEST)
 
-    # Validate history format
-    if not isinstance(history, list):
-        history = []
-    # Sanitize: keep only role and content keys, filter invalid entries
-    sanitized_history = []
-    for msg in history:
-        if isinstance(msg, dict) and msg.get("role") in ("user", "assistant") and msg.get("content"):
-            sanitized_history.append({"role": msg["role"], "content": msg["content"]})
+    sanitized_history = _sanitize_history(request.data.get("history", []))
 
-    # Get or create conversation (metadata only, no messages stored)
+    # Get or create conversation (metadata only, no messages stored server-side)
     if conversation_id:
         try:
             conversation = AIChatbotConversation.objects.get(
@@ -476,29 +700,24 @@ def student_chat(request, chatbot_id):
             title=message[:100],
         )
 
-    # Check message limit
     if conversation.message_count >= MAX_MESSAGES_PER_CONVERSATION:
         return Response(
-            {"error": "This conversation has reached its message limit. Please start a new conversation."},
+            {"error": "This conversation has reached its message limit. Please start a new one."},
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    # Update conversation metadata (title, message_count) — no messages saved
+    # Increment for user message
     conversation.message_count += 1
     if not conversation.title:
         conversation.title = message[:100]
     conversation.save(update_fields=['message_count', 'last_message_at', 'title'])
 
-    # Get AI config
     try:
         ai_config = TenantAIConfig.objects.get(tenant=request.tenant)
     except TenantAIConfig.DoesNotExist:
-        return Response(
-            {"error": "AI provider not configured"},
-            status=status.HTTP_403_FORBIDDEN,
-        )
+        return Response({"error": "AI provider not configured"}, status=status.HTTP_403_FORBIDDEN)
 
-    import json as _json
+    conv_pk = str(conversation.pk)
 
     def sse_stream():
         try:
@@ -509,13 +728,12 @@ def student_chat(request, chatbot_id):
                 ai_config=ai_config,
             )
             for chunk in gen:
-                # Intercept the done event to inject conversation_id
+                # Intercept done event to inject conversation_id
                 if chunk.startswith("data: "):
                     try:
-                        data = _json.loads(chunk[6:].strip())
+                        data = json.loads(chunk[6:].strip())
                         if data.get("type") == "done":
-                            done_data = {"type": "done", "conversation_id": str(conversation.pk)}
-                            yield f"data: {_json.dumps(done_data)}\n\n"
+                            yield f"data: {json.dumps({'type': 'done', 'conversation_id': conv_pk})}\n\n"
                             continue
                     except (ValueError, KeyError):
                         pass
@@ -523,16 +741,16 @@ def student_chat(request, chatbot_id):
         except GeneratorExit:
             pass
         except Exception:
-            logger.exception("Chat stream error")
-            yield f"data: {_json.dumps({'type': 'error', 'error': 'An error occurred while generating the response.'})}\n\n"
+            logger.exception("Student chat stream error")
+            yield f"data: {json.dumps({'type': 'error', 'error': 'An error occurred while generating the response.'})}\n\n"
 
-        # Increment message_count for the assistant response
+        # Increment for assistant response
         try:
-            conversation.refresh_from_db(fields=['message_count'])
-            conversation.message_count += 1
-            conversation.save(update_fields=['message_count', 'last_message_at'])
+            AIChatbotConversation.objects.filter(pk=conv_pk).update(
+                message_count=models.F('message_count') + 1,
+            )
         except Exception:
-            logger.exception("Failed to update conversation message_count")
+            logger.debug("Failed to increment conversation message_count", exc_info=True)
 
     response = StreamingHttpResponse(
         sse_stream(),
@@ -544,23 +762,22 @@ def student_chat(request, chatbot_id):
 
 
 def _verify_student_chatbot_access(request, chatbot_id):
-    """Verify student has access to chatbot via course assignments."""
-    from apps.courses.models import Course
-
+    """Verify student has access to chatbot via section enrollment."""
     try:
         chatbot = AIChatbot.objects.get(pk=chatbot_id, is_active=True)
     except AIChatbot.DoesNotExist:
         return Response({"error": "Chatbot not found"}, status=status.HTTP_404_NOT_FOUND)
 
-    # Check: student shares at least one active course with chatbot creator
-    shared_course = Course.objects.filter(
-        assigned_students=request.user,
-        assigned_teachers=chatbot.creator,
-        is_active=True,
-        is_published=True,
-    ).exists()
+    # Check: student's section is in chatbot's sections
+    student_section_id = getattr(request.user, 'section_fk_id', None)
+    if not student_section_id:
+        return Response(
+            {"error": "You don't have access to this chatbot"},
+            status=status.HTTP_403_FORBIDDEN,
+        )
 
-    if not shared_course:
+    has_access = chatbot.sections.filter(pk=student_section_id).exists()
+    if not has_access:
         return Response(
             {"error": "You don't have access to this chatbot"},
             status=status.HTTP_403_FORBIDDEN,

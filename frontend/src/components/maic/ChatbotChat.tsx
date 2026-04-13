@@ -3,10 +3,18 @@
 // SSE-streaming chat component. Sends messages via fetch() + ReadableStream
 // (not EventSource) so JWT headers can be attached. Parses SSE "data:" lines
 // and handles content / sources / done / error event types.
+//
+// Features:
+// - Rich source citation cards with heading + snippet
+// - Suggested quick prompts below welcome message
+// - SessionStorage persistence scoped per user + tenant + mode + chatbot
 
-import { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, Bot, User, Loader2, Trash2 } from 'lucide-react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import {
+  Send, Bot, User, Loader2, Trash2, BookOpen, ChevronDown, Sparkles,
+} from 'lucide-react';
 import { useChatbotStore } from '../../stores/chatbotStore';
+import { useAuthStore } from '../../stores/authStore';
 import { getAccessToken } from '../../utils/authSession';
 import api from '../../config/api';
 import type { ChatMessage, ChatSSEEvent } from '../../types/chatbot';
@@ -16,6 +24,15 @@ import { cn } from '../../lib/utils';
 // hit the same backend as every other API call.
 const API_BASE_URL = api.defaults.baseURL ?? '';
 
+// ─── Suggested Prompts ──────────────────────────────────────────────────────
+
+const SUGGESTED_PROMPTS = [
+  'Summarize the key concepts',
+  'Create a practice quiz for me',
+  'Explain in simpler terms',
+  'What should I study for the exam?',
+];
+
 // ─── Props ──────────────────────────────────────────────────────────────────
 
 interface Props {
@@ -23,17 +40,50 @@ interface Props {
   conversationId?: string | null;
   welcomeMessage: string;
   onConversationCreated?: (id: string) => void;
+  suggestedPrompts?: string[];
+  /** When 'preview', hits the teacher chat endpoint instead of the student one. */
+  mode?: 'student' | 'preview';
 }
 
-/** sessionStorage key for persisting chat messages per chatbot. */
-function storageKey(chatbotId: string) {
-  return `chatbot_messages_${chatbotId}`;
+interface ChatStorageScope {
+  chatbotId: string;
+  mode: 'student' | 'preview';
+  userId?: string | null;
+  tenantSubdomain?: string | null;
+}
+
+interface PersistedConversationMeta {
+  conversationId: string | null;
+}
+
+const CHAT_MESSAGES_KEY_PREFIX = 'chatbot_messages_v2';
+const CHAT_META_KEY_PREFIX = 'chatbot_meta_v2';
+
+function normalizeScopeValue(value: string | null | undefined, fallback: string) {
+  const trimmed = value?.trim();
+  if (!trimmed) return fallback;
+  return trimmed.replace(/[^a-zA-Z0-9._-]/g, '_');
+}
+
+function getStoredTenantSubdomain() {
+  return sessionStorage.getItem('tenant_subdomain') || localStorage.getItem('tenant_subdomain');
+}
+
+function getScopedStorageKey(prefix: string, scope: ChatStorageScope) {
+  const userSegment = normalizeScopeValue(scope.userId, 'anonymous');
+  const tenantSegment = normalizeScopeValue(
+    scope.tenantSubdomain ?? getStoredTenantSubdomain(),
+    'unknown-tenant',
+  );
+  const modeSegment = normalizeScopeValue(scope.mode, 'student');
+  const chatbotSegment = normalizeScopeValue(scope.chatbotId, 'unknown-chatbot');
+  return `${prefix}:${tenantSegment}:${userSegment}:${modeSegment}:${chatbotSegment}`;
 }
 
 /** Load persisted messages from sessionStorage. */
-function loadMessages(chatbotId: string): ChatMessage[] {
+function loadMessages(scope: ChatStorageScope): ChatMessage[] {
   try {
-    const raw = sessionStorage.getItem(storageKey(chatbotId));
+    const raw = sessionStorage.getItem(getScopedStorageKey(CHAT_MESSAGES_KEY_PREFIX, scope));
     if (raw) return JSON.parse(raw) as ChatMessage[];
   } catch {
     // corrupt data — ignore
@@ -42,11 +92,47 @@ function loadMessages(chatbotId: string): ChatMessage[] {
 }
 
 /** Persist messages to sessionStorage. */
-function saveMessages(chatbotId: string, messages: ChatMessage[]) {
+function saveMessages(scope: ChatStorageScope, messages: ChatMessage[]) {
+  const key = getScopedStorageKey(CHAT_MESSAGES_KEY_PREFIX, scope);
   try {
-    sessionStorage.setItem(storageKey(chatbotId), JSON.stringify(messages));
+    if (messages.length === 0) {
+      sessionStorage.removeItem(key);
+      return;
+    }
+    sessionStorage.setItem(key, JSON.stringify(messages));
   } catch {
     // storage full — ignore
+  }
+}
+
+function loadConversationMeta(scope: ChatStorageScope): PersistedConversationMeta | null {
+  try {
+    const raw = sessionStorage.getItem(getScopedStorageKey(CHAT_META_KEY_PREFIX, scope));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as PersistedConversationMeta;
+    if (!parsed || typeof parsed.conversationId === 'undefined') return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function saveConversationMeta(scope: ChatStorageScope, meta: PersistedConversationMeta) {
+  try {
+    sessionStorage.setItem(
+      getScopedStorageKey(CHAT_META_KEY_PREFIX, scope),
+      JSON.stringify(meta),
+    );
+  } catch {
+    // storage full — ignore
+  }
+}
+
+function clearConversationMeta(scope: ChatStorageScope) {
+  try {
+    sessionStorage.removeItem(getScopedStorageKey(CHAT_META_KEY_PREFIX, scope));
+  } catch {
+    // storage blocked — ignore
   }
 }
 
@@ -68,6 +154,77 @@ function parseSSELines(completePart: string): ChatSSEEvent[] {
   return events;
 }
 
+// ─── Source Citation Card ────────────────────────────────────────────────────
+
+function SourceCitation({
+  source,
+}: {
+  source: { title: string; page?: number | null; heading?: string; snippet?: string; is_auto?: boolean };
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const hasSnippet = Boolean(source.snippet);
+
+  return (
+    <button
+      type="button"
+      onClick={() => hasSnippet && setExpanded(!expanded)}
+      className={cn(
+        'w-full text-left rounded-lg border px-3 py-2.5 text-xs transition-all duration-200',
+        'hover:shadow-sm',
+        hasSnippet ? 'cursor-pointer' : 'cursor-default',
+        source.is_auto
+          ? 'border-teal-200/80 bg-gradient-to-r from-teal-50/80 to-teal-50/30 hover:border-teal-300'
+          : 'border-indigo-200/80 bg-gradient-to-r from-indigo-50/80 to-indigo-50/30 hover:border-indigo-300',
+      )}
+    >
+      <div className="flex items-start gap-2.5">
+        <div
+          className={cn(
+            'shrink-0 mt-0.5 flex h-5 w-5 items-center justify-center rounded',
+            source.is_auto ? 'bg-teal-100' : 'bg-indigo-100',
+          )}
+        >
+          <BookOpen
+            className={cn(
+              'h-3 w-3',
+              source.is_auto ? 'text-teal-600' : 'text-indigo-600',
+            )}
+            aria-hidden="true"
+          />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="font-medium text-gray-800 truncate leading-5">
+            {source.title}
+            {source.page != null && (
+              <span className="ml-1.5 rounded bg-gray-100 px-1 py-px text-[10px] text-gray-500 font-normal">
+                p.{source.page}
+              </span>
+            )}
+          </p>
+          {source.heading && (
+            <p className="text-gray-500 mt-0.5 truncate text-[11px]">{source.heading}</p>
+          )}
+          {hasSnippet && expanded && (
+            <p className="text-gray-500 mt-1.5 whitespace-pre-wrap break-words leading-relaxed border-t border-gray-100 pt-1.5">
+              {source.snippet}
+            </p>
+          )}
+        </div>
+        {hasSnippet && (
+          <span className="shrink-0 p-0.5 text-gray-400">
+            <ChevronDown
+              className={cn(
+                'h-3.5 w-3.5 transition-transform duration-200',
+                expanded && 'rotate-180',
+              )}
+            />
+          </span>
+        )}
+      </div>
+    </button>
+  );
+}
+
 // ─── Component ──────────────────────────────────────────────────────────────
 
 export function ChatbotChat({
@@ -75,14 +232,13 @@ export function ChatbotChat({
   conversationId,
   welcomeMessage,
   onConversationCreated,
+  suggestedPrompts = SUGGESTED_PROMPTS,
+  mode = 'student',
 }: Props) {
   const [input, setInput] = useState('');
   const [localMessages, setLocalMessages] = useState<ChatMessage[]>(() =>
     loadMessages(chatbotId),
   );
-  const [sources, setSources] = useState<
-    Map<number, Array<{ title: string; page?: number | null }>>
-  >(new Map());
   const [error, setError] = useState<string | null>(null);
 
   const {
@@ -116,7 +272,6 @@ export function ChatbotChat({
   useEffect(() => {
     const persisted = loadMessages(chatbotId);
     setLocalMessages(persisted);
-    setSources(new Map());
     setError(null);
     setStreamingContent('');
     setStreaming(false);
@@ -134,7 +289,6 @@ export function ChatbotChat({
   const handleClearChat = useCallback(() => {
     sessionStorage.removeItem(storageKey(chatbotId));
     setLocalMessages([]);
-    setSources(new Map());
     setError(null);
     setStreamingContent('');
   }, [chatbotId, setStreamingContent]);
@@ -183,18 +337,37 @@ export function ChatbotChat({
       abortRef.current = controller;
 
       let accumulated = '';
-      let streamSources: Array<{ title: string; page?: number | null }> | null =
-        null;
+      let streamSources: ChatMessage['sources'] | null = null;
 
       try {
+        const chatPath = mode === 'preview'
+          ? `/v1/teacher/chatbots/${chatbotId}/chat/`
+          : `/v1/student/chatbots/${chatbotId}/chat/`;
+        // Build headers — include tenant subdomain for dev mode (axios interceptor
+        // does this automatically, but fetch() bypasses axios).
+        const fetchHeaders: Record<string, string> = {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        };
+        const hostname = window.location.hostname;
+        if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname.endsWith('.localhost')) {
+          const urlSubdomain = hostname.endsWith('.localhost')
+            ? hostname.replace('.localhost', '')
+            : null;
+          const subdomain =
+            urlSubdomain ||
+            sessionStorage.getItem('tenant_subdomain') ||
+            localStorage.getItem('tenant_subdomain');
+          if (subdomain) {
+            fetchHeaders['X-Tenant-Subdomain'] = subdomain;
+          }
+        }
+
         const res = await fetch(
-          `${API_BASE_URL}/v1/student/chatbots/${chatbotId}/chat/`,
+          `${API_BASE_URL}${chatPath}`,
           {
             method: 'POST',
-            headers: {
-              Authorization: `Bearer ${token}`,
-              'Content-Type': 'application/json',
-            },
+            headers: fetchHeaders,
             body: JSON.stringify({
               message: text.trim(),
               conversation_id: convIdRef.current,
@@ -273,6 +446,15 @@ export function ChatbotChat({
 
               case 'error':
                 setError(evt.error ?? 'An error occurred');
+                // Remove empty assistant placeholder on SSE error
+                setLocalMessages((prev) => {
+                  const updated = [...prev];
+                  const last = updated[updated.length - 1];
+                  if (last && last.role === 'assistant' && !last.content) {
+                    updated.pop();
+                  }
+                  return updated;
+                });
                 break;
             }
           }
@@ -288,11 +470,6 @@ export function ChatbotChat({
             }
             return updated;
           });
-          setSources((prev) => {
-            const next = new Map(prev);
-            next.set(messageCountRef.current, streamSources!);
-            return next;
-          });
         }
 
         // Persist messages to sessionStorage after successful response
@@ -302,7 +479,18 @@ export function ChatbotChat({
         });
       } catch (err: unknown) {
         if ((err as Error).name !== 'AbortError') {
-          setError((err as Error).message || 'Failed to send message');
+          const errMsg = (err as Error).message || 'Failed to send message';
+          setError(errMsg);
+
+          // Remove the empty assistant placeholder on error
+          setLocalMessages((prev) => {
+            const updated = [...prev];
+            const last = updated[updated.length - 1];
+            if (last && last.role === 'assistant' && !last.content) {
+              updated.pop();
+            }
+            return updated;
+          });
         }
       } finally {
         streamingRef.current = false;
@@ -312,8 +500,23 @@ export function ChatbotChat({
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [chatbotId, localMessages, onConversationCreated],
+    [chatbotId, localMessages, onConversationCreated, mode],
   );
+
+  // Retry: re-send the last user message after an error
+  const handleRetry = useCallback(() => {
+    const lastUserMsg = [...localMessages].reverse().find((m) => m.role === 'user');
+    if (lastUserMsg) {
+      // Remove the failed user message so sendMessage re-adds it
+      setLocalMessages((prev) => {
+        const idx = prev.lastIndexOf(lastUserMsg);
+        if (idx >= 0) return [...prev.slice(0, idx), ...prev.slice(idx + 1)];
+        return prev;
+      });
+      setError(null);
+      sendMessage(lastUserMsg.content);
+    }
+  }, [localMessages, sendMessage]);
 
   // Handle form submit
   const handleSubmit = (e: React.FormEvent) => {
@@ -334,18 +537,47 @@ export function ChatbotChat({
   const hasMessages = localMessages.length > 0;
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full bg-gradient-to-b from-gray-50/50 to-white">
       {/* ── Messages area ──────────────────────────────────────────── */}
-      <div className="flex-1 overflow-y-auto px-4 py-6 space-y-4">
+      <div className="flex-1 overflow-y-auto px-4 py-6 space-y-5">
         {/* Welcome message when no conversation started */}
         {!hasMessages && (
-          <div className="flex items-start gap-3 max-w-2xl mx-auto mt-8">
-            <div className="shrink-0 h-8 w-8 rounded-full bg-indigo-100 flex items-center justify-center">
-              <Bot className="h-4 w-4 text-indigo-600" />
+          <div className="max-w-2xl mx-auto mt-12 space-y-6">
+            <div className="flex flex-col items-center text-center space-y-3">
+              <div className="relative">
+                <div className="h-14 w-14 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-200">
+                  <Bot className="h-7 w-7 text-white" />
+                </div>
+                <span className="absolute -bottom-0.5 -right-0.5 h-4 w-4 rounded-full bg-emerald-400 border-2 border-white" />
+              </div>
+              <div className="rounded-2xl bg-white border border-gray-100 shadow-sm px-5 py-4 text-sm text-gray-600 max-w-md leading-relaxed">
+                {welcomeMessage}
+              </div>
             </div>
-            <div className="rounded-2xl rounded-tl-sm bg-gray-100 px-4 py-3 text-sm text-gray-700 max-w-prose">
-              {welcomeMessage}
-            </div>
+
+            {/* Suggested prompts */}
+            {suggestedPrompts.length > 0 && (
+              <div className="flex flex-wrap justify-center gap-2">
+                {suggestedPrompts.map((prompt) => (
+                  <button
+                    key={prompt}
+                    type="button"
+                    onClick={() => sendMessage(prompt)}
+                    disabled={isStreaming}
+                    className={cn(
+                      'group rounded-full border border-gray-200 bg-white px-4 py-2 text-xs font-medium',
+                      'text-gray-600 shadow-sm',
+                      'hover:border-indigo-300 hover:text-indigo-600 hover:shadow-md hover:shadow-indigo-100/50',
+                      'active:scale-[0.97]',
+                      'transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed',
+                    )}
+                  >
+                    <Sparkles className="inline h-3 w-3 mr-1.5 text-gray-400 group-hover:text-indigo-400 transition-colors" />
+                    {prompt}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -361,15 +593,17 @@ export function ChatbotChat({
             <div
               key={idx}
               className={cn(
-                'flex items-start gap-3 max-w-2xl',
+                'flex items-start gap-3 max-w-2xl animate-in fade-in slide-in-from-bottom-2 duration-300',
                 isUser ? 'ml-auto flex-row-reverse' : 'mr-auto',
               )}
             >
               {/* Avatar */}
               <div
                 className={cn(
-                  'shrink-0 h-8 w-8 rounded-full flex items-center justify-center',
-                  isUser ? 'bg-indigo-600' : 'bg-indigo-100',
+                  'shrink-0 h-8 w-8 rounded-xl flex items-center justify-center shadow-sm',
+                  isUser
+                    ? 'bg-gradient-to-br from-indigo-500 to-indigo-700'
+                    : 'bg-white border border-gray-200',
                 )}
               >
                 {isUser ? (
@@ -379,39 +613,37 @@ export function ChatbotChat({
                 )}
               </div>
 
-              {/* Bubble */}
-              <div className="space-y-1 min-w-0">
+              {/* Bubble + sources */}
+              <div className="space-y-2 min-w-0">
                 <div
                   className={cn(
                     'rounded-2xl px-4 py-3 text-sm whitespace-pre-wrap break-words max-w-prose',
                     isUser
-                      ? 'bg-indigo-600 text-white rounded-tr-sm'
-                      : 'bg-gray-100 text-gray-700 rounded-tl-sm',
+                      ? 'bg-gradient-to-br from-indigo-600 to-indigo-700 text-white rounded-tr-md shadow-sm shadow-indigo-200'
+                      : 'bg-white border border-gray-100 text-gray-700 rounded-tl-md shadow-sm',
                   )}
                 >
                   {msg.content || (isLastAssistant ? '' : '\u200B')}
 
                   {/* Typing indicator */}
                   {isLastAssistant && !msg.content && (
-                    <span className="inline-flex gap-1 items-center">
-                      <span className="h-1.5 w-1.5 rounded-full bg-gray-400 animate-bounce [animation-delay:0ms]" />
-                      <span className="h-1.5 w-1.5 rounded-full bg-gray-400 animate-bounce [animation-delay:150ms]" />
-                      <span className="h-1.5 w-1.5 rounded-full bg-gray-400 animate-bounce [animation-delay:300ms]" />
+                    <span className="inline-flex gap-1.5 items-center px-1 py-0.5">
+                      <span className="h-2 w-2 rounded-full bg-indigo-400/70 animate-bounce [animation-delay:0ms] [animation-duration:0.8s]" />
+                      <span className="h-2 w-2 rounded-full bg-indigo-400/70 animate-bounce [animation-delay:150ms] [animation-duration:0.8s]" />
+                      <span className="h-2 w-2 rounded-full bg-indigo-400/70 animate-bounce [animation-delay:300ms] [animation-duration:0.8s]" />
                     </span>
                   )}
                 </div>
 
-                {/* Source citations */}
+                {/* Source citation cards */}
                 {msg.sources && msg.sources.length > 0 && (
-                  <div className="flex flex-wrap gap-1 pl-1">
+                  <div className="space-y-1.5 max-w-prose">
+                    <p className="flex items-center gap-1.5 text-[11px] font-semibold text-gray-400 uppercase tracking-wider pl-1">
+                      <BookOpen className="h-3 w-3" />
+                      Sources ({msg.sources.length})
+                    </p>
                     {msg.sources.map((src, si) => (
-                      <span
-                        key={si}
-                        className="inline-flex items-center rounded-full bg-indigo-50 px-2 py-0.5 text-[11px] font-medium text-indigo-600"
-                      >
-                        {src.title}
-                        {src.page != null && ` (p.${src.page})`}
-                      </span>
+                      <SourceCitation key={si} source={src} />
                     ))}
                   </div>
                 )}
@@ -420,10 +652,20 @@ export function ChatbotChat({
           );
         })}
 
-        {/* Error message */}
+        {/* Error message with retry */}
         {error && (
-          <div className="max-w-2xl mx-auto rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">
-            {error}
+          <div className="max-w-2xl mx-auto flex items-center gap-3 rounded-xl bg-red-50 border border-red-100 px-4 py-3 text-sm text-red-700 shadow-sm">
+            <span className="shrink-0 h-5 w-5 rounded-full bg-red-100 flex items-center justify-center">
+              <span className="h-2 w-2 rounded-full bg-red-500" />
+            </span>
+            <span className="flex-1">{error}</span>
+            <button
+              type="button"
+              onClick={handleRetry}
+              className="shrink-0 px-3 py-1 rounded-lg text-xs font-medium bg-red-100 text-red-700 hover:bg-red-200 transition-colors"
+            >
+              Retry
+            </button>
           </div>
         )}
 
@@ -431,10 +673,15 @@ export function ChatbotChat({
       </div>
 
       {/* ── Input area ─────────────────────────────────────────────── */}
-      <div className="border-t border-gray-200 px-4 py-3 bg-white">
+      <div className="px-4 py-3 bg-gradient-to-t from-white via-white to-white/80 backdrop-blur-sm">
         <form
           onSubmit={handleSubmit}
-          className="flex items-end gap-2 max-w-2xl mx-auto"
+          className={cn(
+            'flex items-end gap-2 max-w-2xl mx-auto',
+            'rounded-2xl border border-gray-200 bg-white shadow-sm',
+            'focus-within:border-indigo-300 focus-within:shadow-md focus-within:shadow-indigo-100/50',
+            'transition-all duration-200 px-2 py-1.5',
+          )}
         >
           {/* Clear Chat button */}
           {hasMessages && !isStreaming && (
@@ -442,8 +689,8 @@ export function ChatbotChat({
               type="button"
               onClick={handleClearChat}
               className={cn(
-                'shrink-0 inline-flex items-center justify-center rounded-xl h-10 w-10',
-                'text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors',
+                'shrink-0 inline-flex items-center justify-center rounded-xl h-9 w-9',
+                'text-gray-400 hover:text-red-500 hover:bg-red-50 transition-all duration-200',
               )}
               aria-label="Clear chat"
               title="Clear chat"
@@ -456,12 +703,13 @@ export function ChatbotChat({
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Type a message..."
+            placeholder="Ask anything about your course..."
             rows={1}
             disabled={isStreaming}
             className={cn(
-              'flex-1 resize-none rounded-xl border border-gray-300 px-4 py-2.5 text-sm',
-              'focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500',
+              'flex-1 resize-none border-0 bg-transparent px-2 py-2 text-sm',
+              'focus:ring-0 focus:outline-none',
+              'placeholder:text-gray-400',
               'disabled:opacity-50 disabled:cursor-not-allowed',
               'max-h-32 overflow-y-auto',
             )}
@@ -470,9 +718,11 @@ export function ChatbotChat({
             type="submit"
             disabled={!input.trim() || isStreaming}
             className={cn(
-              'shrink-0 inline-flex items-center justify-center rounded-xl h-10 w-10',
-              'bg-indigo-600 text-white transition-colors',
-              'hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed',
+              'shrink-0 inline-flex items-center justify-center rounded-xl h-9 w-9',
+              'bg-indigo-600 text-white transition-all duration-200',
+              'hover:bg-indigo-700 hover:shadow-md hover:shadow-indigo-200',
+              'active:scale-95',
+              'disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:shadow-none',
             )}
             aria-label="Send message"
           >
@@ -483,6 +733,9 @@ export function ChatbotChat({
             )}
           </button>
         </form>
+        <p className="text-center text-[10px] text-gray-400 mt-2">
+          AI responses may not always be accurate. Verify important information.
+        </p>
       </div>
     </div>
   );

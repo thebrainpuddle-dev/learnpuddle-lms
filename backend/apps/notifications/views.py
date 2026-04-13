@@ -9,6 +9,8 @@ from apps.users.models import User
 from apps.courses.models import TeacherGroup
 from utils.decorators import teacher_or_admin, admin_only, tenant_required
 from utils.audit import log_audit
+from utils.responses import error_response
+from utils.helpers import tenant_teachers_qs
 from .models import Notification
 from .serializers import NotificationSerializer
 
@@ -93,7 +95,7 @@ def notification_mark_read(request, notification_id):
             notification.save(update_fields=['is_read', 'read_at'])
         return Response(NotificationSerializer(notification).data, status=status.HTTP_200_OK)
     except Notification.DoesNotExist:
-        return Response({'error': 'Notification not found'}, status=status.HTTP_404_NOT_FOUND)
+        return error_response('Notification not found', status_code=status.HTTP_404_NOT_FOUND)
 
 
 @api_view(['POST'])
@@ -107,7 +109,7 @@ def notification_bulk_mark_read(request):
     """
     ids = request.data.get('ids', [])
     if not ids or not isinstance(ids, list):
-        return Response({'error': 'ids must be a non-empty list'}, status=status.HTTP_400_BAD_REQUEST)
+        return error_response('ids must be a non-empty list', status_code=status.HTTP_400_BAD_REQUEST)
     
     now = timezone.now()
     updated = Notification.objects.filter(
@@ -136,6 +138,62 @@ def notification_mark_all_read(request):
     ).update(is_read=True, read_at=now)
     
     return Response({'marked_read': updated}, status=status.HTTP_200_OK)
+
+
+# ============================================================================
+# Archive endpoints
+# ============================================================================
+
+@api_view(['PATCH'])
+@permission_classes([IsAuthenticated])
+@teacher_or_admin
+@tenant_required
+def notification_archive(request, notification_id):
+    """
+    Archive a single notification (PATCH).
+    Sets is_archived=True and archived_at to the current time.
+    """
+    try:
+        notification = Notification.all_objects.get(
+            id=notification_id,
+            teacher=request.user,
+            tenant=request.tenant,
+        )
+    except Notification.DoesNotExist:
+        return error_response('Notification not found', status_code=status.HTTP_404_NOT_FOUND)
+
+    if notification.is_archived:
+        return Response(NotificationSerializer(notification).data, status=status.HTTP_200_OK)
+
+    now = timezone.now()
+    notification.is_archived = True
+    notification.archived_at = now
+    notification.save(update_fields=['is_archived', 'archived_at'])
+    return Response(NotificationSerializer(notification).data, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+@teacher_or_admin
+@tenant_required
+def notification_bulk_archive(request):
+    """
+    Archive multiple notifications by IDs.
+    POST body: {"ids": ["uuid", ...]}
+    """
+    ids = request.data.get('ids', [])
+    if not ids or not isinstance(ids, list):
+        return error_response('ids must be a non-empty list', status_code=status.HTTP_400_BAD_REQUEST)
+
+    now = timezone.now()
+    updated = Notification.all_objects.filter(
+        id__in=ids,
+        teacher=request.user,
+        tenant=request.tenant,
+        is_archived=False,
+    ).update(is_archived=True, archived_at=now)
+
+    return Response({'archived': updated}, status=status.HTTP_200_OK)
 
 
 # ============================================================================
@@ -199,16 +257,10 @@ def announcement_list_create(request):
     group_ids = request.data.get('group_ids', [])
     
     if not title or not message:
-        return Response(
-            {'error': 'Title and message are required'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-    
+        return error_response('Title and message are required', status_code=status.HTTP_400_BAD_REQUEST)
+
     if len(title) > 255:
-        return Response(
-            {'error': 'Title must be 255 characters or less'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
+        return error_response('Title must be 255 characters or less', status_code=status.HTTP_400_BAD_REQUEST)
     
     # Determine target teachers
     if target == 'groups' and group_ids:
@@ -217,25 +269,16 @@ def announcement_list_create(request):
             id__in=group_ids,
             tenant=tenant
         )
-        teachers = User.objects.filter(
-            tenant=tenant,
-            is_active=True,
+        teachers = tenant_teachers_qs(tenant).filter(
             teacher_groups__in=groups
         ).distinct()
     else:
         # All active teachers in tenant
-        teachers = User.objects.filter(
-            tenant=tenant,
-            is_active=True,
-            role__in=['TEACHER', 'HOD', 'IB_COORDINATOR']
-        )
+        teachers = tenant_teachers_qs(tenant)
     
     teacher_count = teachers.count()
     if teacher_count == 0:
-        return Response(
-            {'error': 'No teachers found to send announcement'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
+        return error_response('No teachers found to send announcement', status_code=status.HTTP_400_BAD_REQUEST)
     
     # Create notifications for each teacher
     notifications = []
@@ -283,10 +326,7 @@ def announcement_delete(request, announcement_id):
             notification_type='ANNOUNCEMENT'
         )
     except Notification.DoesNotExist:
-        return Response(
-            {'error': 'Announcement not found'},
-            status=status.HTTP_404_NOT_FOUND
-        )
+        return error_response('Announcement not found', status_code=status.HTTP_404_NOT_FOUND)
     
     # Delete all notifications with same title, message, and exact creation time
     # bulk_create sets the same auto_now_add timestamp for all notifications in a batch

@@ -3,8 +3,8 @@ Unified LLM service supporting OpenRouter (cloud) and Ollama (local) with
 automatic fallback.
 
 Priority order (configurable via LLM_PROVIDER setting):
-  1. OpenRouter  -- uses native `models` array for built-in failover across
-                    free/cheap models (Qwen3, DeepSeek, etc.)
+  1. OpenRouter  -- DeepSeek V3.2 (primary, $0.14/1M input) with automatic
+                    failover to free models (Qwen3, Nemotron) via `models` array
   2. Ollama      -- local self-hosted model (Mistral by default)
   3. None        -- caller is responsible for deterministic fallback
 
@@ -62,7 +62,7 @@ def _call_openrouter(
         return None
 
     base_url = getattr(conf, "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
-    default_model = getattr(conf, "OPENROUTER_DEFAULT_MODEL", "qwen/qwen3-30b-a3b:free")
+    default_model = getattr(conf, "OPENROUTER_DEFAULT_MODEL", "deepseek/deepseek-chat-v3-0324")
 
     # Build fallback model list
     fallback_raw = getattr(conf, "OPENROUTER_FALLBACK_MODELS", "")

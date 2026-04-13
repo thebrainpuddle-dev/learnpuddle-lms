@@ -36,12 +36,20 @@ def cal_webhook(request):
     Receive Cal.com webhook events for demo bookings.
     Handles: BOOKING_CREATED, BOOKING_CANCELLED, BOOKING_RESCHEDULED
     """
+    # Fail-closed: REJECT all requests when the webhook secret is not configured.
+    # Previously this was fail-open: if CAL_WEBHOOK_SECRET was empty, signature
+    # verification was skipped entirely, allowing anyone to trigger webhooks.
     cal_secret = getattr(settings, "CAL_WEBHOOK_SECRET", "")
-    if cal_secret:
-        signature = request.headers.get("X-Cal-Signature-256", "")
-        if not _verify_cal_signature(request.body, signature):
-            logger.warning("cal_webhook: invalid signature")
-            return Response({"error": "Invalid signature"}, status=status.HTTP_403_FORBIDDEN)
+    if not cal_secret:
+        logger.error("cal_webhook: CAL_WEBHOOK_SECRET not configured — rejecting request")
+        return Response(
+            {"error": "Webhook not configured"},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    signature = request.headers.get("X-Cal-Signature-256", "")
+    if not _verify_cal_signature(request.body, signature):
+        logger.warning("cal_webhook: invalid signature")
+        return Response({"error": "Invalid signature"}, status=status.HTTP_403_FORBIDDEN)
 
     try:
         payload = request.data if isinstance(request.data, dict) else json.loads(request.body)

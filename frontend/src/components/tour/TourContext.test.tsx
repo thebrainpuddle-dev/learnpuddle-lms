@@ -157,14 +157,14 @@ describe('TourContext', () => {
         id: 'route-step',
         title: 'Route step',
         description: 'Navigate to another route.',
-        path: '/admin/reports',
+        path: '/admin/analytics',
       },
     ];
 
     renderTour('/admin/dashboard');
 
     await waitFor(() => {
-      expect(screen.getByTestId('pathname')).toHaveTextContent('/admin/reports');
+      expect(screen.getByTestId('pathname')).toHaveTextContent('/admin/analytics');
     });
 
     expect(screen.getByTestId('nav-type')).toHaveTextContent('REPLACE');

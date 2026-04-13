@@ -306,7 +306,7 @@ export const superAdminService = {
 
   async sendEmail(tenantId: string, data: { to?: string; subject: string; body: string }) {
     const res = await api.post(`/super-admin/tenants/${tenantId}/send-email/`, data);
-    return res.data as { sent: boolean; to: string; subject: string };
+    return res.data as { queued: boolean; to: string; subject: string };
   },
 
   async bulkSendEmail(data: { tenant_ids: string[]; subject: string; body: string }) {
@@ -336,7 +336,7 @@ export const superAdminService = {
 
   async sendDemoBookingEmail(id: string, data: { subject: string; body: string }) {
     const res = await api.post(`/super-admin/demo-bookings/${id}/send-email/`, data);
-    return res.data as { sent: boolean; to: string };
+    return res.data as { queued: boolean; to: string };
   },
 
   async impersonate(tenantId: string) {

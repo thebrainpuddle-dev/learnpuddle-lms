@@ -1,48 +1,62 @@
 // src/pages/auth/ForgotPasswordPage.tsx
+//
+// Tenant-scoped "Forgot Password" page.
+// Users enter their email and receive a password-reset link.
 
-import React, { useState } from 'react';
+import React from 'react';
 import { Link } from 'react-router-dom';
-import { Input } from '../../components/common/Input';
+import { z } from 'zod';
+import { EnvelopeIcon, ArrowLeftIcon } from '@heroicons/react/24/outline';
+
+import { useZodForm } from '../../hooks/useZodForm';
+import { FormField } from '../../components/common/FormField';
 import { Button } from '../../components/common/Button';
 import { useTenantStore } from '../../stores/tenantStore';
 import { authService } from '../../services/authService';
 import { usePageTitle } from '../../hooks/usePageTitle';
-import { EnvelopeIcon, ArrowLeftIcon } from '@heroicons/react/24/outline';
+
+// ─── Zod schema ──────────────────────────────────────────────────────────────
+
+const ForgotPasswordSchema = z.object({
+  email: z.string().min(1, 'Email is required').email('Enter a valid email address'),
+});
+
+type ForgotPasswordData = z.infer<typeof ForgotPasswordSchema>;
+
+// ─── Component ───────────────────────────────────────────────────────────────
 
 export const ForgotPasswordPage: React.FC = () => {
   usePageTitle('Forgot Password');
   const { theme } = useTenantStore();
-  const [email, setEmail] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [submitted, setSubmitted] = useState(false);
-  const [error, setError] = useState('');
+  const [submitted, setSubmitted] = React.useState(false);
+  const [submittedEmail, setSubmittedEmail] = React.useState('');
 
   const tenantName = theme?.name || 'School';
   const tenantInitial = tenantName.charAt(0).toUpperCase();
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-    setLoading(true);
+  const form = useZodForm({
+    schema: ForgotPasswordSchema,
+    defaultValues: { email: '' },
+  });
 
+  const onSubmit = form.handleSubmit(async (data: ForgotPasswordData) => {
     try {
-      await authService.requestPasswordReset(email);
+      await authService.requestPasswordReset(data.email);
+      setSubmittedEmail(data.email);
       setSubmitted(true);
     } catch (err: any) {
       const detail =
         err.response?.data?.error ||
         err.response?.data?.detail ||
         'An error occurred. Please try again.';
-      setError(detail);
-    } finally {
-      setLoading(false);
+      form.setError('root', { type: 'server', message: detail });
     }
-  };
+  });
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-primary-50 to-secondary-50 flex items-center justify-center p-4">
       <div className="max-w-md w-full">
-        {/* Tenant Logo */}
+        {/* Tenant logo */}
         <div className="text-center mb-8">
           {theme?.logo ? (
             <img
@@ -60,13 +74,18 @@ export const ForgotPasswordPage: React.FC = () => {
 
         <div className="bg-white rounded-xl shadow-lg p-8">
           {submitted ? (
+            /* ── Success state ── */
             <div className="text-center">
               <div className="mx-auto h-12 w-12 bg-green-100 rounded-full flex items-center justify-center mb-4">
                 <EnvelopeIcon className="h-6 w-6 text-green-600" />
               </div>
-              <h2 className="text-2xl font-bold text-gray-900 mb-2">Check your email</h2>
+              <h2 className="text-2xl font-bold text-gray-900 mb-2">
+                Check your email
+              </h2>
               <p className="text-gray-600 mb-6">
-                If an account exists for <span className="font-medium">{email}</span>, we've sent password reset instructions.
+                If an account exists for{' '}
+                <span className="font-medium">{submittedEmail}</span>, we've
+                sent password reset instructions.
               </p>
               <Link
                 to="/login"
@@ -76,30 +95,33 @@ export const ForgotPasswordPage: React.FC = () => {
               </Link>
             </div>
           ) : (
+            /* ── Form state ── */
             <>
               <h2 className="text-2xl font-bold text-gray-900 mb-2">
                 Forgot your password?
               </h2>
               <p className="text-gray-600 mb-6">
-                Enter your email address and we'll send you a link to reset your password.
+                Enter your email address and we'll send you a link to reset
+                your password.
               </p>
 
-              {error && (
+              {/* Root / server-side error */}
+              {form.formState.errors.root?.message && (
                 <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg">
-                  <p className="text-sm text-red-600">{error}</p>
+                  <p className="text-sm text-red-600">
+                    {form.formState.errors.root.message}
+                  </p>
                 </div>
               )}
 
-              <form onSubmit={handleSubmit} className="space-y-6">
-                <Input
+              <form onSubmit={onSubmit} noValidate className="space-y-6">
+                <FormField
+                  control={form.control}
+                  name="email"
                   label="Email Address"
                   type="email"
-                  name="email"
                   id="email"
                   autoComplete="email"
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
                   leftIcon={<EnvelopeIcon className="h-5 w-5 text-gray-400" />}
                   placeholder="you@school.com"
                 />
@@ -109,7 +131,7 @@ export const ForgotPasswordPage: React.FC = () => {
                   variant="primary"
                   size="lg"
                   fullWidth
-                  loading={loading}
+                  loading={form.formState.isSubmitting}
                 >
                   Send Reset Link
                 </Button>

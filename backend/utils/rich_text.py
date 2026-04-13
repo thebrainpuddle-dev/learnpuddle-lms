@@ -2,6 +2,7 @@ import re
 from typing import Dict, Iterable, Set
 
 import bleach
+from bleach.css_sanitizer import CSSSanitizer
 from bs4 import BeautifulSoup
 from django.conf import settings
 from django.core.files.storage import default_storage
@@ -33,7 +34,16 @@ ALLOWED_TAGS = [
     "h1",
     "h2",
     "h3",
+    "h4",
     "span",
+    "div",
+    "table",
+    "thead",
+    "tbody",
+    "tr",
+    "th",
+    "td",
+    "hr",
 ]
 
 ALLOWED_ATTRIBUTES = {
@@ -44,10 +54,30 @@ ALLOWED_ATTRIBUTES = {
     "h1": ["style"],
     "h2": ["style"],
     "h3": ["style"],
+    "h4": ["style"],
+    "div": ["style"],
+    "table": ["style"],
+    "th": ["style"],
+    "td": ["style"],
+    "tr": ["style"],
 }
 
 ALLOWED_PROTOCOLS = ["http", "https", "mailto", "tel", "rtimg"]
-ALLOWED_CSS_PROPS = {"font-size", "margin-left", "text-align"}
+ALLOWED_CSS_PROPS = {
+    "font-size", "margin-left", "text-align",
+    # Layout & spacing
+    "margin", "margin-top", "margin-bottom", "margin-right",
+    "padding", "padding-top", "padding-bottom", "padding-left", "padding-right",
+    # Colors & backgrounds
+    "color", "background", "background-color",
+    # Borders
+    "border", "border-left", "border-right", "border-top", "border-bottom",
+    "border-radius", "border-collapse",
+    # Typography
+    "font-weight", "font-style", "line-height",
+    # Table
+    "width", "max-width",
+}
 
 
 def _normalize_style(style: str) -> str:
@@ -105,11 +135,13 @@ def sanitize_rich_text_html(raw_html: str) -> str:
     if not raw_html:
         return ""
 
+    css_sanitizer = CSSSanitizer(allowed_css_properties=list(ALLOWED_CSS_PROPS))
     cleaned = bleach.clean(
         raw_html,
         tags=ALLOWED_TAGS,
         attributes=ALLOWED_ATTRIBUTES,
         protocols=ALLOWED_PROTOCOLS,
+        css_sanitizer=css_sanitizer,
         strip=True,
     )
     cleaned = bleach.linkify(cleaned)
@@ -191,3 +223,39 @@ def rewrite_rich_text_html_for_output(raw_html: str, image_url_map: Dict[str, st
             img.attrs["src"] = resolved
 
     return str(soup)
+
+
+def rewrite_rich_text_for_serializer(raw_html: str, context: dict) -> str:
+    """Rewrite rich text HTML by resolving inline image IDs to signed/public URLs.
+
+    This is the canonical implementation of the ``_rewrite_rich_text`` pattern that
+    appears in DRF serializers.  Serializers should call this helper instead of
+    duplicating the logic:
+
+        def _rewrite_rich_text(self, raw_html: str) -> str:
+            return rewrite_rich_text_for_serializer(raw_html, self.context)
+
+    Args:
+        raw_html: Raw HTML string (may contain ``rtimg:<uuid>`` src attributes).
+        context:  DRF serializer context dict.  Must contain ``"request"`` to
+                  resolve tenant for image lookups.  A ``"_rich_text_image_url_map"``
+                  key is used as a per-serialization cache to avoid repeated DB/S3
+                  round-trips when multiple fields reference the same images.
+
+    Returns:
+        HTML string with resolved image URLs.
+    """
+    image_ids = collect_rich_text_image_ids(raw_html)
+    if not image_ids:
+        return raw_html
+
+    cache = context.setdefault("_rich_text_image_url_map", {})
+    missing = [image_id for image_id in image_ids if image_id not in cache]
+    if missing:
+        cache.update(
+            build_rich_text_image_url_map(
+                missing,
+                request=context.get("request"),
+            )
+        )
+    return rewrite_rich_text_html_for_output(raw_html, cache)

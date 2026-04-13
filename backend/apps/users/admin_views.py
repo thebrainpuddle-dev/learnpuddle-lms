@@ -5,17 +5,31 @@ import secrets
 from django.db import models
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
-from rest_framework.decorators import api_view, permission_classes, parser_classes
+from rest_framework.decorators import api_view, permission_classes, parser_classes, throttle_classes
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.throttling import ScopedRateThrottle
 
 from utils.decorators import admin_only, tenant_required, check_tenant_limit
+
+
+class InvitationAcceptThrottle(ScopedRateThrottle):
+    scope = 'invitation_accept'
+
+
 from utils.audit import log_audit
 from .models import User, TeacherInvitation
 from .serializers import UserSerializer
+
+
+def _sanitize_csv_value(val: str) -> str:
+    """Strip leading formula-injection characters from CSV cell values."""
+    if val and val[0] in ('=', '+', '-', '@', '\t', '\r'):
+        return val.lstrip('=+\-@\t\r')
+    return val
 
 
 class TeacherPagination(PageNumberPagination):
@@ -205,12 +219,6 @@ def teachers_bulk_import_view(request):
     tenant = request.tenant
     current_teachers = User.objects.filter(tenant=tenant, role__in=("TEACHER", "HOD", "IB_COORDINATOR"), is_active=True).count()
     remaining_slots = max(0, tenant.max_teachers - current_teachers)
-
-    def _sanitize_csv_value(val: str) -> str:
-        """Strip leading formula-injection characters from CSV cell values."""
-        if val and val[0] in ('=', '+', '-', '@', '\t', '\r'):
-            return val.lstrip('=+\-@\t\r')
-        return val
 
     for i, row in enumerate(reader, start=1):
         if i > max_rows:
@@ -461,9 +469,9 @@ def teacher_bulk_invite_view(request):
             results.append({"row": i, "email": "", "status": "error", "message": "Row limit exceeded (500)"})
             break
 
-        email = (row.get("email") or "").strip().lower()
-        first_name = (row.get("first_name") or "").strip()
-        last_name = (row.get("last_name") or "").strip()
+        email = _sanitize_csv_value((row.get("email") or "").strip().lower())
+        first_name = _sanitize_csv_value((row.get("first_name") or "").strip())
+        last_name = _sanitize_csv_value((row.get("last_name") or "").strip())
 
         if not email or not first_name:
             results.append({"row": i, "email": email, "status": "error", "message": "Missing email or first_name"})
@@ -531,6 +539,7 @@ def invitation_validate_view(request, token):
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
+@throttle_classes([InvitationAcceptThrottle])
 def invitation_accept_view(request, token):
     """Public endpoint: accept an invitation and create the teacher account."""
     try:
@@ -548,8 +557,23 @@ def invitation_accept_view(request, token):
         return Response({"error": "This invitation has expired."}, status=status.HTTP_400_BAD_REQUEST)
 
     password = (request.data.get("password") or "").strip()
-    if not password or len(password) < 8:
-        return Response({"error": "Password must be at least 8 characters."}, status=status.HTTP_400_BAD_REQUEST)
+    if not password:
+        return Response({"error": "Password is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+    from django.contrib.auth.password_validation import validate_password
+    from django.core.exceptions import ValidationError as DjangoValidationError
+    try:
+        temp_user = User(
+            email=invitation.email,
+            first_name=invitation.first_name,
+            last_name=invitation.last_name,
+        )
+        validate_password(password, user=temp_user)
+    except DjangoValidationError as exc:
+        return Response(
+            {"error": "Password does not meet requirements", "details": list(exc.messages)},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
     if User.objects.filter(email__iexact=invitation.email).exists():
         return Response({"error": "An account with this email already exists."}, status=status.HTTP_400_BAD_REQUEST)

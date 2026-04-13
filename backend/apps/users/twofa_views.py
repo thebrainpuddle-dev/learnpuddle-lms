@@ -15,8 +15,9 @@ import logging
 import secrets
 from django.conf import settings
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes, throttle_classes
-from rest_framework.permissions import IsAuthenticated
+from django.core.cache import cache
+from rest_framework.decorators import api_view, permission_classes, throttle_classes, authentication_classes
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 
@@ -316,33 +317,44 @@ def twofa_regenerate_backup_codes(request):
 
 
 @api_view(['POST'])
+@permission_classes([AllowAny])
+@authentication_classes([])
 @throttle_classes([TwoFAVerifyThrottle])
 def twofa_verify(request):
     """
     Verify 2FA code during login.
-    
+
     Called after password authentication if 2FA is enabled.
-    
+
     POST body:
     {
-        "user_id": "uuid",
+        "challenge_token": "random_token",
         "code": "123456"
     }
-    
+
     Returns JWT tokens on success.
     """
     from apps.users.models import User
     from rest_framework_simplejwt.tokens import RefreshToken
-    
-    user_id = request.data.get('user_id')
+
+    challenge_token = request.data.get('challenge_token')
     code = request.data.get('code', '').strip()
-    
-    if not user_id or not code:
+
+    if not challenge_token or not code:
         return Response(
-            {'error': 'user_id and code are required'},
+            {'error': 'challenge_token and code are required'},
             status=status.HTTP_400_BAD_REQUEST
         )
-    
+
+    # Look up user_id from cache using the challenge token
+    cache_key = f'2fa_challenge:{challenge_token}'
+    user_id = cache.get(cache_key)
+    if not user_id:
+        return Response(
+            {'error': 'Invalid or expired challenge token'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
     try:
         user = User.objects.get(id=user_id, is_active=True)
     except User.DoesNotExist:
@@ -350,20 +362,24 @@ def twofa_verify(request):
             {'error': 'Invalid user'},
             status=status.HTTP_400_BAD_REQUEST
         )
-    
+
     # Verify TOTP code
     totp_device = TOTPDevice.objects.filter(user=user, confirmed=True).first()
     if totp_device and totp_device.verify_token(code):
+        # Delete the challenge token after successful use
+        cache.delete(cache_key)
         # Generate tokens
         refresh = RefreshToken.for_user(user)
         return Response({
             'access': str(refresh.access_token),
             'refresh': str(refresh),
         })
-    
+
     # Try backup code
     static_device = StaticDevice.objects.filter(user=user).first()
     if static_device and static_device.verify_token(code):
+        # Delete the challenge token after successful use
+        cache.delete(cache_key)
         # Generate tokens
         refresh = RefreshToken.for_user(user)
         return Response({
@@ -371,7 +387,7 @@ def twofa_verify(request):
             'refresh': str(refresh),
             'backup_code_used': True,
         })
-    
+
     return Response(
         {'error': 'Invalid verification code'},
         status=status.HTTP_400_BAD_REQUEST

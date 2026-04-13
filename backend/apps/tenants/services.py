@@ -22,6 +22,7 @@ from apps.progress.completion_metrics import (
 PLAN_PRESETS = {
     "FREE": {
         "max_teachers": 10,
+        "max_students": 0,
         "max_courses": 5,
         "max_storage_mb": 500,
         "max_video_duration_minutes": 30,
@@ -34,9 +35,12 @@ PLAN_PRESETS = {
         "feature_groups": True,
         "feature_certificates": False,
         "feature_teacher_authoring": False,
+        "feature_ai_studio": False,
+        "feature_students": False,
     },
     "STARTER": {
         "max_teachers": 50,
+        "max_students": 200,
         "max_courses": 20,
         "max_storage_mb": 5000,
         "max_video_duration_minutes": 60,
@@ -49,9 +53,12 @@ PLAN_PRESETS = {
         "feature_groups": True,
         "feature_certificates": False,
         "feature_teacher_authoring": True,
+        "feature_ai_studio": False,
+        "feature_students": True,
     },
     "PRO": {
         "max_teachers": 200,
+        "max_students": 1000,
         "max_courses": 100,
         "max_storage_mb": 50000,
         "max_video_duration_minutes": 60,
@@ -64,9 +71,12 @@ PLAN_PRESETS = {
         "feature_groups": True,
         "feature_certificates": True,
         "feature_teacher_authoring": True,
+        "feature_ai_studio": True,
+        "feature_students": True,
     },
     "ENTERPRISE": {
         "max_teachers": 9999,
+        "max_students": 9999,
         "max_courses": 9999,
         "max_storage_mb": 500000,
         "max_video_duration_minutes": 120,
@@ -79,6 +89,8 @@ PLAN_PRESETS = {
         "feature_groups": True,
         "feature_certificates": True,
         "feature_teacher_authoring": True,
+        "feature_ai_studio": True,
+        "feature_students": True,
     },
 }
 
@@ -105,6 +117,7 @@ def get_tenant_usage(tenant: Tenant) -> dict:
     from apps.courses.models import RichTextImageAsset
     from apps.media.models import MediaAsset
     teacher_count = User.objects.filter(tenant=tenant, role__in=TEACHER_ROLES, is_active=True).count()
+    student_count = User.objects.filter(tenant=tenant, role='STUDENT', is_active=True).count()
     course_count = Course.objects.filter(tenant=tenant).count()
     # Storage: sum file sizes from tenant-owned assets (bytes → MB)
     from apps.courses.models import Content
@@ -123,6 +136,7 @@ def get_tenant_usage(tenant: Tenant) -> dict:
 
     return {
         "teachers": {"used": teacher_count, "limit": tenant.max_teachers},
+        "students": {"used": student_count, "limit": tenant.max_students},
         "courses": {"used": course_count, "limit": tenant.max_courses},
         "storage_mb": {"used": storage_mb, "limit": tenant.max_storage_mb},
     }
@@ -186,11 +200,18 @@ class TenantService:
             email_verified=False
         )
         
+        from django.conf import settings as django_settings
+        platform_domain = getattr(django_settings, 'PLATFORM_DOMAIN', 'localhost')
+        if platform_domain == 'localhost':
+            login_url = f"http://{subdomain}.localhost:8000"
+        else:
+            login_url = f"https://{subdomain}.{platform_domain}"
+
         return {
             'tenant': tenant,
             'admin': admin_user,
             'subdomain': subdomain,
-            'login_url': f"http://{subdomain}.localhost:8000"  # Update for production
+            'login_url': login_url,
         }
     
     @staticmethod

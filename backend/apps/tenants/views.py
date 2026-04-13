@@ -132,6 +132,7 @@ def tenant_config_view(request):
             "groups": tenant.feature_groups,
             "certificates": tenant.feature_certificates,
             "teacher_authoring": tenant.feature_teacher_authoring,
+            "ai_studio": tenant.feature_ai_studio,
         },
     }
     if is_admin:

@@ -17,7 +17,7 @@ from bs4 import BeautifulSoup
 from celery import shared_task
 from django.conf import settings as conf
 from django.core.files.storage import default_storage
-from django.db import transaction
+from django.db import OperationalError, transaction
 from django.db.models import Q
 from django.utils import timezone
 
@@ -31,6 +31,7 @@ from utils.storage_paths import (
     course_video_thumbnail_path,
     course_video_captions_path,
 )
+from utils.tenant_middleware import set_current_tenant, clear_current_tenant
 
 
 MAX_VIDEO_DURATION_SECONDS = 60 * 60  # 1 hour
@@ -434,16 +435,106 @@ def _generate_quiz_deterministic(transcript_text: str, question_count: int = 6) 
     return questions[:question_count]
 
 
+def _generate_quiz_via_llm_service(
+    transcript_text: str, question_count: int = 6
+) -> list[dict[str, Any]] | None:
+    """
+    Generate quiz questions using the unified LLM service (OpenRouter → Ollama chain).
+    """
+    from utils.llm_service import llm_generate
+
+    mcq_count = max(2, int(question_count * 0.6))
+    tf_count = 1 if question_count >= 4 else 0
+    sa_count = max(1, question_count - mcq_count - tf_count)
+
+    prompt = f"""Create rigorous quiz questions grounded ONLY in the provided source material.
+
+## Source Grounding Rules (mandatory)
+1) Use only facts present in the source text below.
+2) Do not invent policies, steps, or numbers.
+3) If evidence is weak for a concept, skip it.
+4) Each explanation must reference the source in plain language.
+
+## Required mix
+- MCQ: {mcq_count}
+- TRUE_FALSE: {tf_count}
+- SHORT_ANSWER: {sa_count}
+- Total: exactly {question_count}
+
+## Quality bar
+- Use realistic job/classroom scenarios — not "which term best relates".
+- Each MCQ must test understanding, not keyword recall.
+- Distractors must be plausible, not random words.
+- No "all of the above" or "none of the above".
+- MCQ must include 4 options.
+
+## JSON schema (return only JSON array, no markdown)
+For MCQ:
+{{"question_type": "MCQ", "selection_mode": "SINGLE", "prompt": "...", "options": ["A", "B", "C", "D"], "correct_answer": {{"option_index": 0}}, "explanation": "...", "points": 1}}
+
+For TRUE_FALSE:
+{{"question_type": "TRUE_FALSE", "prompt": "...", "correct_answer": {{"value": true}}, "explanation": "...", "points": 1}}
+
+For SHORT_ANSWER:
+{{"question_type": "SHORT_ANSWER", "prompt": "...", "correct_answer": {{}}, "explanation": "...", "points": 2}}
+
+## Source material
+{transcript_text[:6000]}
+
+Return exactly {question_count} items as a JSON array. No markdown fences. No extra keys."""
+
+    system_prompt = "You are a senior assessment architect. Return ONLY a valid JSON array of quiz questions. No other text."
+
+    try:
+        raw = llm_generate(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            temperature=0.35,
+            max_tokens=4096,
+            timeout=180,
+        )
+        if not raw:
+            return None
+
+        start = raw.find("[")
+        end = raw.rfind("]") + 1
+        if start >= 0 and end > start:
+            questions = json.loads(raw[start:end])
+            valid = []
+            for q in questions:
+                if isinstance(q, dict) and "question_type" in q and "prompt" in q:
+                    q.setdefault("options", [])
+                    q.setdefault("correct_answer", {})
+                    q.setdefault("explanation", "")
+                    q.setdefault("selection_mode", "SINGLE")
+                    q.setdefault("points", 2 if q["question_type"] == "SHORT_ANSWER" else 1)
+                    valid.append(q)
+            if len(valid) >= 2:
+                logger.info("LLM service generated %s quiz questions", len(valid))
+                return valid[:question_count]
+    except Exception as e:
+        logger.warning("LLM quiz generation failed: %s", e)
+    return None
+
+
 def _generate_quiz_questions_with_meta(
     transcript_text: str, question_count: int = 6
 ) -> tuple[list[dict[str, Any]], dict[str, str]]:
     """
     Generate quiz questions and return metadata about which generator produced the output.
+    Priority: LLM service (OpenRouter → Ollama) → Ollama direct → deterministic fallback.
     """
+    # Try unified LLM service (OpenRouter first, then Ollama)
+    llm_result = _generate_quiz_via_llm_service(transcript_text, question_count)
+    if llm_result:
+        return llm_result, {"provider": "LLM_SERVICE", "model": "openrouter-or-ollama"}
+
+    # Try Ollama directly (legacy path)
     ollama_result = _generate_quiz_via_ollama(transcript_text, question_count)
     if ollama_result:
         _base_url, model = _configured_ollama()
         return ollama_result, {"provider": "OLLAMA", "model": model}
+
     return _generate_quiz_deterministic(transcript_text, question_count), {
         "provider": "DETERMINISTIC",
         "model": "heuristic-v2",
@@ -814,6 +905,8 @@ def generate_assignments(self, video_asset_id: str) -> str:
     course = content.module.course
     module = content.module
 
+    # Set tenant context for TenantManager filtering (Celery has no HTTP context).
+    set_current_tenant(course.tenant)
     try:
         with transaction.atomic():
             # Reflection assignment
@@ -830,6 +923,7 @@ def generate_assignments(self, video_asset_id: str) -> str:
                 generation_source="VIDEO_AUTO",
                 title=reflection_title,
                 defaults={
+                    "tenant": course.tenant,
                     "description": reflection_desc,
                     "instructions": reflection_instructions,
                     "is_mandatory": True,
@@ -850,6 +944,7 @@ def generate_assignments(self, video_asset_id: str) -> str:
                 generation_source="VIDEO_AUTO",
                 title=quiz_title,
                 defaults={
+                    "tenant": course.tenant,
                     "description": quiz_desc,
                     "instructions": quiz_instructions,
                     "is_mandatory": True,
@@ -861,6 +956,7 @@ def generate_assignments(self, video_asset_id: str) -> str:
             quiz_obj, _created = Quiz.objects.get_or_create(
                 assignment=quiz_assignment,
                 defaults={
+                    "tenant": course.tenant,
                     "schema_version": 1,
                     "is_auto_generated": True,
                     "generation_model": os.getenv("QUIZ_GENERATION_MODEL", ""),
@@ -876,6 +972,7 @@ def generate_assignments(self, video_asset_id: str) -> str:
             q_payloads = _generate_quiz_questions(transcript_text or content.title, question_count=6)
             for idx, q in enumerate(q_payloads, start=1):
                 QuizQuestion.objects.create(
+                    tenant=course.tenant,
                     quiz=quiz_obj,
                     order=idx,
                     question_type=q["question_type"],
@@ -892,6 +989,8 @@ def generate_assignments(self, video_asset_id: str) -> str:
     except Exception as e:
         # Assignment generation is non-fatal: log but don't mark asset as FAILED.
         logger.error("generate_assignments failed for asset %s: %s", video_asset_id, e)
+    finally:
+        clear_current_tenant()
 
     return video_asset_id
 
@@ -946,3 +1045,87 @@ def finalize_video_asset(self, video_asset_id: str) -> str:
         if not asset.thumbnail_url:
             logger.warning("finalize_video_asset: asset %s is READY but missing thumbnail", video_asset_id)
     return video_asset_id
+
+
+# ---------------------------------------------------------------------------
+# AI Course Generation (async Celery task)
+# ---------------------------------------------------------------------------
+
+@shared_task(bind=True, autoretry_for=(OperationalError,), retry_backoff=True, retry_kwargs={"max_retries": 2})
+def generate_course_from_outline_async(self, outline_data: dict, tenant_id: str, user_id: str) -> str:
+    """
+    Create Course, Module, and Content objects from an AI-generated outline.
+
+    Called asynchronously via Celery for larger outlines (>3 modules).
+    Returns the created course ID as a string.
+
+    Args:
+        outline_data: The outline dict with title, description, modules[], etc.
+        tenant_id: UUID string of the tenant.
+        user_id: UUID string of the user who initiated the request.
+    """
+    from apps.tenants.models import Tenant
+    from apps.courses.models import Course, Module, Content as ContentModel
+
+    tenant = Tenant.objects.get(id=tenant_id)
+    user = User.objects.get(id=user_id)
+
+    # Set tenant context for TenantManager filtering (Celery has no HTTP request context).
+    set_current_tenant(tenant)
+    try:
+        estimated_hours = outline_data.get("estimated_hours", 0)
+        try:
+            estimated_hours = float(estimated_hours)
+        except (TypeError, ValueError):
+            estimated_hours = 0
+
+        with transaction.atomic():
+            course = Course(
+                tenant=tenant,
+                title=outline_data.get("title", "AI-Generated Course")[:300],
+                description=outline_data.get("description", ""),
+                estimated_hours=estimated_hours,
+                is_published=False,
+                is_active=True,
+                created_by=user,
+            )
+            # Let Course.save() handle slug generation
+            course.save()
+
+            for mod_data in outline_data.get("modules", []):
+                module = Module.objects.create(
+                    course=course,
+                    title=mod_data.get("title", "Untitled Module")[:300],
+                    description=mod_data.get("description", ""),
+                    order=mod_data.get("order", 0),
+                    is_active=True,
+                )
+
+                for item_data in mod_data.get("content_items", []):
+                    content_type = str(item_data.get("content_type", "TEXT")).upper()
+                    if content_type not in {"VIDEO", "DOCUMENT", "TEXT", "LINK"}:
+                        content_type = "TEXT"
+
+                    ContentModel.objects.create(
+                        module=module,
+                        title=item_data.get("title", "Untitled Content")[:300],
+                        content_type=content_type,
+                        text_content=item_data.get("text_content", item_data.get("description", "")),
+                        order=item_data.get("order", 0),
+                        is_mandatory=True,
+                        is_active=True,
+                    )
+
+        logger.info(
+            "generate_course_from_outline_async: created course %s (%s) with %d modules for tenant %s",
+            course.id,
+            course.title,
+            len(outline_data.get("modules", [])),
+            tenant_id,
+        )
+        return str(course.id)
+    except Exception as e:
+        logger.error("generate_course_from_outline_async failed: %s", e)
+        raise
+    finally:
+        clear_current_tenant()

@@ -1,159 +1,208 @@
-import React, { useState } from 'react';
+// src/pages/admin/CreateTeacherPage.tsx
+//
+// School-admin page for creating a new teacher account.
+// Form validation is handled by React Hook Form + Zod for type-safe,
+// declarative validation. Server-side field errors from Django REST Framework
+// are merged back into the form state via `setError`.
+
+import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { z } from 'zod';
+import axios from 'axios';
+
+import { useZodForm } from '../../hooks/useZodForm';
+import { FormField } from '../../components/common/FormField';
 import { Button } from '../../components/common/Button';
-import { Input } from '../../components/common/Input';
 import { useToast } from '../../components/common';
 import { adminTeachersService } from '../../services/adminTeachersService';
 import { usePageTitle } from '../../hooks/usePageTitle';
-import axios from 'axios';
 
-// Type for field-level validation errors from backend
-interface FieldErrors {
-  [key: string]: string[];
-}
+// ─── Zod schema ─────────────────────────────────────────────────────────────
 
-// Helper to extract first error message for a field
-function getFieldError(errors: FieldErrors | null, field: string): string | undefined {
-  if (!errors || !errors[field]) return undefined;
-  return errors[field][0];
-}
+const CreateTeacherSchema = z
+  .object({
+    first_name: z.string().min(1, 'First name is required').max(150),
+    last_name: z.string().min(1, 'Last name is required').max(150),
+    email: z.string().min(1, 'Email is required').email('Enter a valid email address'),
+    password: z
+      .string()
+      .min(8, 'Password must be at least 8 characters')
+      .max(128),
+    password_confirm: z.string().min(1, 'Please confirm the password'),
+    employee_id: z.string().max(50).optional().or(z.literal('')),
+    department: z.string().max(100).optional().or(z.literal('')),
+  })
+  .refine((data) => data.password === data.password_confirm, {
+    path: ['password_confirm'],
+    message: 'Passwords do not match',
+  });
+
+type CreateTeacherData = z.infer<typeof CreateTeacherSchema>;
+
+// ─── Component ───────────────────────────────────────────────────────────────
 
 export const CreateTeacherPage: React.FC = () => {
   usePageTitle('Create Teacher');
   const toast = useToast();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [fieldErrors, setFieldErrors] = useState<FieldErrors | null>(null);
 
-  const [form, setForm] = useState({
-    email: '',
-    first_name: '',
-    last_name: '',
-    password: '',
-    password_confirm: '',
-    employee_id: '',
-    department: '',
+  const form = useZodForm({
+    schema: CreateTeacherSchema,
+    defaultValues: {
+      first_name: '',
+      last_name: '',
+      email: '',
+      password: '',
+      password_confirm: '',
+      employee_id: '',
+      department: '',
+    },
   });
 
   const mutation = useMutation({
-    mutationFn: () => adminTeachersService.createTeacher(form),
-    onSuccess: async () => {
+    mutationFn: (data: CreateTeacherData) =>
+      adminTeachersService.createTeacher(data),
+
+    onSuccess: async (_, data) => {
       await queryClient.invalidateQueries({ queryKey: ['adminTeachers'] });
-      toast.success('Teacher created', `${form.first_name} ${form.last_name} has been added.`);
+      toast.success(
+        'Teacher created',
+        `${data.first_name} ${data.last_name} has been added.`,
+      );
       navigate('/admin/teachers');
     },
+
     onError: (error) => {
-      // Extract field-level errors from axios response
+      // Merge Django REST Framework field-level errors into RHF state
       if (axios.isAxiosError(error) && error.response?.data) {
-        const data = error.response.data as FieldErrors;
-        setFieldErrors(data);
-        // Show a more specific error message if we can find one
-        const firstError = Object.values(data).flat()[0];
+        const serverErrors = error.response.data as Record<string, string[]>;
+        let hasFieldError = false;
+
+        (Object.keys(serverErrors) as Array<keyof CreateTeacherData>).forEach(
+          (field) => {
+            const messages = serverErrors[field as string];
+            if (Array.isArray(messages) && messages.length > 0) {
+              form.setError(field, { type: 'server', message: messages[0] });
+              hasFieldError = true;
+            }
+          },
+        );
+
+        const firstError = Object.values(serverErrors).flat()[0];
         if (firstError) {
           toast.error('Validation error', String(firstError));
-        } else {
-          toast.error('Validation error', 'Please check the form and correct any errors.');
+        } else if (!hasFieldError) {
+          toast.error(
+            'Validation error',
+            'Please check the form and correct any errors.',
+          );
         }
       } else {
-        setFieldErrors(null);
-        const message = error instanceof Error ? error.message : 'Please try again.';
+        const message =
+          error instanceof Error ? error.message : 'Please try again.';
         toast.error('Failed to create teacher', message);
       }
     },
   });
 
-  // Clear field error when user types
-  const handleChange = (field: string, value: string) => {
-    setForm({ ...form, [field]: value });
-    if (fieldErrors && fieldErrors[field]) {
-      setFieldErrors({ ...fieldErrors, [field]: [] });
-    }
-  };
+  const onSubmit = form.handleSubmit((data) => mutation.mutate(data));
 
   return (
     <div className="space-y-6 max-w-2xl">
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Create Teacher</h1>
-        <p className="mt-1 text-sm text-gray-500">Create a new teacher under this tenant.</p>
+        <p className="mt-1 text-sm text-gray-500">
+          Create a new teacher under this tenant.
+        </p>
       </div>
 
-      <div className="card space-y-4">
+      <form onSubmit={onSubmit} noValidate className="card space-y-4">
+        {/* Name row */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <Input
+          <FormField
+            control={form.control}
+            name="first_name"
             label="First name"
-            value={form.first_name}
-            onChange={(e) => handleChange('first_name', e.target.value)}
-            error={getFieldError(fieldErrors, 'first_name')}
+            autoComplete="given-name"
           />
-          <Input
+          <FormField
+            control={form.control}
+            name="last_name"
             label="Last name"
-            value={form.last_name}
-            onChange={(e) => handleChange('last_name', e.target.value)}
-            error={getFieldError(fieldErrors, 'last_name')}
-          />
-        </div>
-        <Input
-          label="Email"
-          type="email"
-          value={form.email}
-          onChange={(e) => handleChange('email', e.target.value)}
-          error={getFieldError(fieldErrors, 'email')}
-        />
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <Input
-            label="Password"
-            type="password"
-            value={form.password}
-            onChange={(e) => handleChange('password', e.target.value)}
-            error={getFieldError(fieldErrors, 'password')}
-            helperText="Must be at least 8 characters"
-          />
-          <Input
-            label="Confirm password"
-            type="password"
-            value={form.password_confirm}
-            onChange={(e) => handleChange('password_confirm', e.target.value)}
-            error={getFieldError(fieldErrors, 'password_confirm')}
-          />
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <Input
-            label="Employee ID"
-            value={form.employee_id}
-            onChange={(e) => handleChange('employee_id', e.target.value)}
-            error={getFieldError(fieldErrors, 'employee_id')}
-          />
-          <Input
-            label="Department"
-            value={form.department}
-            onChange={(e) => handleChange('department', e.target.value)}
-            error={getFieldError(fieldErrors, 'department')}
+            autoComplete="family-name"
           />
         </div>
 
-        {/* Show non-field errors (e.g., general errors) */}
-        {mutation.isError && fieldErrors?.non_field_errors && (
-          <div className="text-sm text-red-600">
-            {fieldErrors.non_field_errors[0]}
-          </div>
+        {/* Email */}
+        <FormField
+          control={form.control}
+          name="email"
+          label="Email"
+          type="email"
+          autoComplete="email"
+          placeholder="teacher@school.com"
+        />
+
+        {/* Passwords */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <FormField
+            control={form.control}
+            name="password"
+            label="Password"
+            type="password"
+            autoComplete="new-password"
+            helperText="Must be at least 8 characters"
+          />
+          <FormField
+            control={form.control}
+            name="password_confirm"
+            label="Confirm password"
+            type="password"
+            autoComplete="new-password"
+          />
+        </div>
+
+        {/* Optional fields */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <FormField
+            control={form.control}
+            name="employee_id"
+            label="Employee ID"
+          />
+          <FormField
+            control={form.control}
+            name="department"
+            label="Department"
+          />
+        </div>
+
+        {/* Non-field / root errors surfaced by the server */}
+        {form.formState.errors.root?.message && (
+          <p className="text-sm text-red-600">
+            {form.formState.errors.root.message}
+          </p>
         )}
 
         <div className="flex items-center justify-end gap-3">
-          <Button variant="outline" onClick={() => navigate('/admin/teachers')}>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => navigate('/admin/teachers')}
+          >
             Cancel
           </Button>
           <Button
+            type="submit"
             variant="primary"
             className="bg-primary-600 hover:bg-primary-700"
             loading={mutation.isPending}
-            onClick={() => mutation.mutate()}
           >
             Create
           </Button>
         </div>
-      </div>
+      </form>
     </div>
   );
 };
-

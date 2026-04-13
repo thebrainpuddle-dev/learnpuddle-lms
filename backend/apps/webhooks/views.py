@@ -70,6 +70,8 @@ def _validate_webhook_url(url: str) -> str | None:
 
 class WebhookPagination(PageNumberPagination):
     page_size = 20
+    page_size_query_param = 'page_size'
+    max_page_size = 100
 
 
 @api_view(['GET', 'POST'])
@@ -191,11 +193,13 @@ def webhook_detail(request, webhook_id):
     elif request.method == 'PUT':
         if 'name' in request.data:
             endpoint.name = request.data['name'].strip()
-        
+
         if 'url' in request.data:
             url = request.data['url'].strip()
-            if not url.startswith('https://'):
-                return Response({'error': 'URL must use HTTPS'}, status=400)
+            # Apply full SSRF protection — same validation as POST handler.
+            url_error = _validate_webhook_url(url)
+            if url_error:
+                return Response({'error': url_error}, status=400)
             endpoint.url = url
         
         if 'events' in request.data:

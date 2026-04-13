@@ -13,6 +13,8 @@ export interface TenantFeatures {
   groups: boolean;
   certificates: boolean;
   teacher_authoring: boolean;
+  ai_studio: boolean;
+  maic: boolean;
 }
 
 export interface TenantLimits {
@@ -38,6 +40,8 @@ const DEFAULT_FEATURES: TenantFeatures = {
   groups: true,
   certificates: false,
   teacher_authoring: false,
+  ai_studio: false,
+  maic: false,
 };
 
 interface TenantState {
@@ -49,6 +53,7 @@ interface TenantState {
   setTheme: (theme: TenantTheme) => void;
   setConfig: (config: { plan?: string; features?: TenantFeatures; limits?: TenantLimits; usage?: TenantUsage }) => void;
   hasFeature: (feature: keyof TenantFeatures) => boolean;
+  reset: () => void;
 }
 
 export const useTenantStore = create<TenantState>((set, get) => ({
@@ -65,4 +70,5 @@ export const useTenantStore = create<TenantState>((set, get) => ({
     usage: config.usage ?? get().usage,
   }),
   hasFeature: (feature) => get().features[feature] ?? false,
+  reset: () => set({ theme: DEFAULT_THEME, plan: 'FREE', features: DEFAULT_FEATURES, limits: null, usage: null }),
 }));

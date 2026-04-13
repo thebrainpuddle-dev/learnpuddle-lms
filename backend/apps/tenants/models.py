@@ -47,6 +47,7 @@ class Tenant(models.Model):
     plan = models.CharField(max_length=20, choices=PLAN_CHOICES, default='FREE')
     plan_started_at = models.DateTimeField(null=True, blank=True)
     plan_expires_at = models.DateTimeField(null=True, blank=True)
+    stripe_customer_id = models.CharField(max_length=255, blank=True, default='', db_index=True)
 
     # Limits (configurable per school by super admin)
     max_teachers = models.PositiveIntegerField(default=10, help_text="Max teacher accounts")
@@ -64,8 +65,14 @@ class Tenant(models.Model):
     feature_groups = models.BooleanField(default=True)
     feature_certificates = models.BooleanField(default=False)
     feature_teacher_authoring = models.BooleanField(default=False)
+    feature_ai_studio = models.BooleanField(default=False, help_text="AI lesson builder & interactive slides")
     feature_sso = models.BooleanField(default=False)
     feature_2fa = models.BooleanField(default=False)
+    feature_students = models.BooleanField(default=False, help_text="Enable student portal")
+    feature_maic = models.BooleanField(default=False, help_text="Enable OpenMAIC AI Classroom feature")
+
+    # Student limits
+    max_students = models.PositiveIntegerField(default=50, help_text="Max student accounts")
 
     # SSO Configuration
     sso_domains = models.TextField(
@@ -114,6 +121,52 @@ class Tenant(models.Model):
 
     # Super admin internal notes
     internal_notes = models.TextField(blank=True, default='')
+
+    # ─── Academic Structure ───────────────────────────────────────────────
+    current_academic_year = models.CharField(
+        max_length=20, blank=True, default='',
+        help_text="Current academic year, e.g. 2026-27",
+    )
+    academic_year_start_date = models.DateField(
+        null=True, blank=True,
+        help_text="Start date of the current academic year",
+    )
+    academic_year_end_date = models.DateField(
+        null=True, blank=True,
+        help_text="End date of the current academic year",
+    )
+
+    # ─── Auto-Generated User IDs ─────────────────────────────────────────
+    id_prefix = models.CharField(
+        max_length=10, blank=True, default='',
+        help_text="Prefix for auto-generated user IDs, e.g. KIS",
+    )
+    student_id_counter = models.PositiveIntegerField(
+        default=1,
+        help_text="Next sequence number for student ID generation (atomic)",
+    )
+    teacher_id_counter = models.PositiveIntegerField(
+        default=1,
+        help_text="Next sequence number for teacher ID generation (atomic)",
+    )
+
+    # ─── White-Label Branding ─────────────────────────────────────────────
+    white_label = models.BooleanField(
+        default=False,
+        help_text="When enabled, hides all LearnPuddle branding",
+    )
+    login_bg_image = models.URLField(
+        max_length=500, blank=True, default='',
+        help_text="Background image URL for the login page",
+    )
+    welcome_message = models.CharField(
+        max_length=200, blank=True, default='',
+        help_text="Dashboard greeting message, e.g. 'Welcome to Keystone Learning'",
+    )
+    school_motto = models.CharField(
+        max_length=200, blank=True, default='',
+        help_text="Footer/about text, e.g. 'Powered by the Idea-Loom Model'",
+    )
 
     # Metadata
     created_at = models.DateTimeField(auto_now_add=True)

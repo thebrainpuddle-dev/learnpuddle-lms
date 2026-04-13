@@ -25,16 +25,15 @@ export function useAuthBlobUrl(protectedUrl: string | null | undefined): string 
         if (token) headers['Authorization'] = `Bearer ${token}`;
 
         const res = await fetch(protectedUrl, { headers });
-        if (!res.ok) {
-          console.warn(`useAuthBlobUrl: fetch failed ${res.status} for ${protectedUrl}`);
+        if (!res.ok || res.status === 204) {
           return;
         }
         const blob = await res.blob();
-        if (revoked) return;
+        if (revoked || blob.size === 0) return;
         objectUrl = URL.createObjectURL(blob);
         setBlobUrl(objectUrl);
-      } catch (err) {
-        console.warn('useAuthBlobUrl: fetch error', err);
+      } catch {
+        // Fetch failed silently; blob URL remains null
       }
     };
 

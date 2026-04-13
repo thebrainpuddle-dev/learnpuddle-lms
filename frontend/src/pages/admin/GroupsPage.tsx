@@ -1,8 +1,17 @@
+// src/pages/admin/GroupsPage.tsx
+//
+// Admin page for managing teacher groups and memberships.
+// The "Create Group" modal form uses React Hook Form + Zod for validation.
+
 import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { z } from 'zod';
+import { Controller } from 'react-hook-form';
 import { Button } from '../../components/common/Button';
 import { Input } from '../../components/common/Input';
+import { FormField } from '../../components/common/FormField';
 import { useToast, ConfirmDialog } from '../../components/common';
+import { useZodForm } from '../../hooks/useZodForm';
 import { adminGroupsService, TeacherGroup } from '../../services/adminGroupsService';
 import { adminTeachersService } from '../../services/adminTeachersService';
 import {
@@ -15,7 +24,18 @@ import {
 } from '@heroicons/react/24/outline';
 import { usePageTitle } from '../../hooks/usePageTitle';
 
-// Debounce hook
+// ── Zod Schema ────────────────────────────────────────────────────────
+
+const CreateGroupSchema = z.object({
+  name: z.string().min(1, 'Group name is required').max(200),
+  description: z.string().max(500).optional().or(z.literal('')),
+  group_type: z.enum(['CUSTOM', 'SUBJECT', 'GRADE', 'DEPARTMENT']).default('CUSTOM'),
+});
+
+type CreateGroupData = z.infer<typeof CreateGroupSchema>;
+
+// ── Debounce hook ─────────────────────────────────────────────────────
+
 function useDebounce<T>(value: T, delay: number): T {
   const [debouncedValue, setDebouncedValue] = useState<T>(value);
   useEffect(() => {
@@ -25,6 +45,8 @@ function useDebounce<T>(value: T, delay: number): T {
   return debouncedValue;
 }
 
+// ── Component ─────────────────────────────────────────────────────────
+
 export const GroupsPage: React.FC = () => {
   usePageTitle('Groups');
   const toast = useToast();
@@ -33,10 +55,14 @@ export const GroupsPage: React.FC = () => {
   const [groupSearch, setGroupSearch] = useState('');
 
   const [createOpen, setCreateOpen] = useState(false);
-  const [createForm, setCreateForm] = useState({
-    name: '',
-    description: '',
-    group_type: 'CUSTOM',
+
+  const createGroupForm = useZodForm({
+    schema: CreateGroupSchema,
+    defaultValues: {
+      name: '',
+      description: '',
+      group_type: 'CUSTOM',
+    },
   });
 
   const [teacherSearch, setTeacherSearch] = useState('');
@@ -73,11 +99,11 @@ export const GroupsPage: React.FC = () => {
   });
 
   const createMutation = useMutation({
-    mutationFn: () => adminGroupsService.createGroup(createForm),
+    mutationFn: (data: CreateGroupData) => adminGroupsService.createGroup(data),
     onSuccess: async (g) => {
       await queryClient.invalidateQueries({ queryKey: ['adminGroups'] });
       setCreateOpen(false);
-      setCreateForm({ name: '', description: '', group_type: 'CUSTOM' });
+      createGroupForm.reset();
       setSelectedGroupId(g.id);
       toast.success('Group created', `"${g.name}" has been created successfully.`);
     },
@@ -126,6 +152,16 @@ export const GroupsPage: React.FC = () => {
     return (teachers ?? []).filter((t) => !memberIds.has(t.id));
   }, [teachers, memberIds]);
 
+  // Reset the form when the modal is opened
+  const handleOpenCreateModal = () => {
+    createGroupForm.reset({ name: '', description: '', group_type: 'CUSTOM' });
+    setCreateOpen(true);
+  };
+
+  const onCreateSubmit = createGroupForm.handleSubmit((data) => {
+    createMutation.mutate(data);
+  });
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -133,7 +169,7 @@ export const GroupsPage: React.FC = () => {
           <h1 className="text-2xl font-bold text-gray-900">Groups</h1>
           <p className="mt-1 text-sm text-gray-500">Create teacher groups and manage memberships.</p>
         </div>
-        <Button className="w-full sm:w-auto" variant="primary" onClick={() => setCreateOpen(true)}>
+        <Button className="w-full sm:w-auto" variant="primary" onClick={handleOpenCreateModal}>
           <PlusIcon className="h-5 w-5 mr-2" />
           Create Group
         </Button>
@@ -146,13 +182,13 @@ export const GroupsPage: React.FC = () => {
             <Input
               value={groupSearch}
               onChange={(e) => setGroupSearch(e.target.value)}
-              placeholder="Search groups…"
+              placeholder="Search groups..."
               leftIcon={<MagnifyingGlassIcon className="h-5 w-5" />}
             />
           </div>
           <div className="space-y-2">
             {groupsLoading ? (
-              <div className="text-sm text-gray-500">Loading…</div>
+              <div className="text-sm text-gray-500">Loading...</div>
             ) : filteredGroups.length === 0 ? (
               <div className="text-sm text-gray-500">No groups yet.</div>
             ) : (
@@ -224,7 +260,7 @@ export const GroupsPage: React.FC = () => {
                 <Input
                   value={teacherSearch}
                   onChange={(e) => setTeacherSearch(e.target.value)}
-                  placeholder="Search teachers…"
+                  placeholder="Search teachers..."
                   leftIcon={<MagnifyingGlassIcon className="h-5 w-5" />}
                 />
 
@@ -262,7 +298,7 @@ export const GroupsPage: React.FC = () => {
                   Members ({members?.length || 0})
                 </div>
                 {membersLoading ? (
-                  <div className="p-4 text-sm text-gray-500">Loading…</div>
+                  <div className="p-4 text-sm text-gray-500">Loading...</div>
                 ) : (members?.length || 0) === 0 ? (
                   <div className="p-6 text-sm text-gray-500">No members in this group yet.</div>
                 ) : (
@@ -305,51 +341,63 @@ export const GroupsPage: React.FC = () => {
               </button>
             </div>
 
-            <div className="space-y-4">
-              <Input
+            <form onSubmit={onCreateSubmit} noValidate className="space-y-4">
+              <FormField
+                control={createGroupForm.control}
+                name="name"
                 label="Group name"
-                value={createForm.name}
-                onChange={(e) => setCreateForm({ ...createForm, name: e.target.value })}
                 placeholder="e.g., Grade 9, Math Teachers"
               />
-              <Input
+              <FormField
+                control={createGroupForm.control}
+                name="description"
                 label="Description"
-                value={createForm.description}
-                onChange={(e) => setCreateForm({ ...createForm, description: e.target.value })}
                 placeholder="Optional"
               />
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Type</label>
-                <select
-                  value={createForm.group_type}
-                  onChange={(e) => setCreateForm({ ...createForm, group_type: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                >
-                  <option value="CUSTOM">Custom</option>
-                  <option value="SUBJECT">Subject</option>
-                  <option value="GRADE">Grade</option>
-                  <option value="DEPARTMENT">Department</option>
-                </select>
-              </div>
-            </div>
+              <Controller
+                control={createGroupForm.control}
+                name="group_type"
+                render={({ field }) => (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Type</label>
+                    <select
+                      value={field.value}
+                      onChange={(e) => field.onChange(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                    >
+                      <option value="CUSTOM">Custom</option>
+                      <option value="SUBJECT">Subject</option>
+                      <option value="GRADE">Grade</option>
+                      <option value="DEPARTMENT">Department</option>
+                    </select>
+                  </div>
+                )}
+              />
 
-            <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-end">
-              <Button className="w-full sm:w-auto" variant="outline" onClick={() => setCreateOpen(false)}>
-                Cancel
-              </Button>
-              <Button
-                className="w-full sm:w-auto"
-                variant="primary"
-                onClick={() => createMutation.mutate()}
-                disabled={!createForm.name.trim()}
-                loading={createMutation.isPending}
-              >
-                Create
-              </Button>
-            </div>
+              {createGroupForm.formState.errors.root?.message && (
+                <p className="text-sm text-red-600">
+                  {createGroupForm.formState.errors.root.message}
+                </p>
+              )}
+
+              <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-end">
+                <Button className="w-full sm:w-auto" variant="outline" type="button" onClick={() => setCreateOpen(false)}>
+                  Cancel
+                </Button>
+                <Button
+                  className="w-full sm:w-auto"
+                  variant="primary"
+                  type="submit"
+                  loading={createMutation.isPending}
+                >
+                  Create
+                </Button>
+              </div>
+            </form>
           </div>
         </div>
       )}
+
       {/* Delete confirmation dialog */}
       {selectedGroup && (
         <ConfirmDialog

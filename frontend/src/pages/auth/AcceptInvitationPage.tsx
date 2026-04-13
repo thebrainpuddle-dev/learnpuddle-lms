@@ -1,15 +1,41 @@
 import React, { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation } from '@tanstack/react-query';
+import { z } from 'zod';
 import { CheckCircleIcon, ExclamationTriangleIcon, AcademicCapIcon } from '@heroicons/react/24/outline';
+
+import { useZodForm } from '../../hooks/useZodForm';
+import { FormField } from '../../components/common/FormField';
 import { adminTeachersService } from '../../services/adminTeachersService';
+
+// ─── Zod schema ──────────────────────────────────────────────────────────────
+
+const AcceptInvitationSchema = z
+  .object({
+    password: z
+      .string()
+      .min(8, 'Password must be at least 8 characters')
+      .max(128),
+    confirmPassword: z.string().min(1, 'Please confirm your password'),
+  })
+  .refine((d) => d.password === d.confirmPassword, {
+    path: ['confirmPassword'],
+    message: 'Passwords do not match',
+  });
+
+type AcceptInvitationData = z.infer<typeof AcceptInvitationSchema>;
+
+// ─── Component ───────────────────────────────────────────────────────────────
 
 export const AcceptInvitationPage: React.FC = () => {
   const { token } = useParams<{ token: string }>();
   const navigate = useNavigate();
-  const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
   const [accepted, setAccepted] = useState(false);
+
+  const form = useZodForm({
+    schema: AcceptInvitationSchema,
+    defaultValues: { password: '', confirmPassword: '' },
+  });
 
   const { data: invitation, isLoading, error } = useQuery({
     queryKey: ['invitation', token],
@@ -19,12 +45,26 @@ export const AcceptInvitationPage: React.FC = () => {
   });
 
   const acceptMut = useMutation({
-    mutationFn: () => adminTeachersService.acceptInvitation(token!, password),
+    mutationFn: (password: string) =>
+      adminTeachersService.acceptInvitation(token!, password),
     onSuccess: () => setAccepted(true),
+    onError: (err: any) => {
+      const message =
+        err?.response?.data?.error ||
+        (err?.response?.data?.details as string[])?.join(' ') ||
+        'Failed to create account. Please try again.';
+      form.setError('root', { type: 'server', message });
+    },
   });
 
-  const errorMessage = (error as any)?.response?.data?.error || (error as any)?.message || 'Something went wrong.';
-  const acceptError = (acceptMut.error as any)?.response?.data?.error || '';
+  const onSubmit = form.handleSubmit((data: AcceptInvitationData) => {
+    acceptMut.mutate(data.password);
+  });
+
+  const errorMessage =
+    (error as any)?.response?.data?.error ||
+    (error as any)?.message ||
+    'Something went wrong.';
 
   if (accepted) {
     return (
@@ -70,7 +110,7 @@ export const AcceptInvitationPage: React.FC = () => {
             </button>
           </div>
         ) : invitation ? (
-          <div className="bg-white rounded-xl shadow-sm border p-6 space-y-5">
+          <form onSubmit={onSubmit} noValidate className="bg-white rounded-xl shadow-sm border p-6 space-y-5">
             <div className="bg-indigo-50 rounded-lg p-4">
               <p className="text-sm text-indigo-700">
                 You've been invited to join <strong>{invitation.school_name}</strong>
@@ -80,43 +120,43 @@ export const AcceptInvitationPage: React.FC = () => {
 
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">First Name</label>
-              <input type="text" value={invitation.first_name} disabled className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 text-gray-600" />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Password *</label>
               <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="At least 8 characters"
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                type="text"
+                value={invitation.first_name}
+                disabled
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 text-gray-600"
               />
             </div>
 
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Confirm Password *</label>
-              <input
-                type="password"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                placeholder="Re-enter your password"
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-              />
-            </div>
+            <FormField
+              control={form.control}
+              name="password"
+              label="Password"
+              type="password"
+              autoComplete="new-password"
+              placeholder="Choose a strong password"
+              helperText="Must be at least 8 characters"
+            />
 
-            {acceptError && (
-              <p className="text-sm text-red-600">{acceptError}</p>
-            )}
+            <FormField
+              control={form.control}
+              name="confirmPassword"
+              label="Confirm Password"
+              type="password"
+              autoComplete="new-password"
+              placeholder="Re-enter your password"
+            />
 
-            {password && confirmPassword && password !== confirmPassword && (
-              <p className="text-sm text-red-600">Passwords do not match.</p>
+            {form.formState.errors.root?.message && (
+              <p className="text-sm text-red-600">
+                {form.formState.errors.root.message}
+              </p>
             )}
 
             <button
-              onClick={() => acceptMut.mutate()}
-              disabled={!password || password.length < 8 || password !== confirmPassword || acceptMut.isPending}
-              className="w-full py-2.5 px-4 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+              type="submit"
+              disabled={acceptMut.isPending || form.formState.isSubmitting}
+              className="w-full py-2.5 px-4 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 transition disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
             >
               {acceptMut.isPending ? 'Creating Account...' : 'Create Account & Join'}
             </button>
@@ -124,7 +164,7 @@ export const AcceptInvitationPage: React.FC = () => {
             <p className="text-xs text-gray-400 text-center">
               Invitation expires {new Date(invitation.expires_at).toLocaleDateString()}
             </p>
-          </div>
+          </form>
         ) : null}
       </div>
     </div>

@@ -9,13 +9,16 @@ import {
   AcademicCapIcon,
   UserGroupIcon,
   UsersIcon,
-  PaperAirplaneIcon,
-  MegaphoneIcon,
   ChartBarIcon,
   Cog6ToothIcon,
   ArrowRightOnRectangleIcon,
-  FolderIcon,
   QuestionMarkCircleIcon,
+  ShieldCheckIcon,
+  CreditCardIcon,
+  BellIcon,
+  BookOpenIcon,
+  FolderIcon as FolderTreeIcon,
+  BuildingLibraryIcon,
 } from '@heroicons/react/24/outline';
 import { useAuthStore } from '../../stores/authStore';
 import { authService } from '../../services/authService';
@@ -28,16 +31,50 @@ interface AdminSidebarProps {
   onClose?: () => void;
 }
 
-const ALL_NAV_ITEMS = [
-  { name: 'Dashboard', href: '/admin/dashboard', icon: HomeIcon, feature: null, tourId: 'admin-nav-dashboard' },
-  { name: 'Courses', href: '/admin/courses', icon: AcademicCapIcon, feature: null, tourId: 'admin-nav-courses' },
-  { name: 'Media', href: '/admin/media', icon: FolderIcon, feature: null, tourId: 'admin-nav-media' },
-  { name: 'Teachers', href: '/admin/teachers', icon: UserGroupIcon, feature: null, tourId: 'admin-nav-teachers' },
-  { name: 'Groups', href: '/admin/groups', icon: UsersIcon, feature: 'groups' as const, tourId: 'admin-nav-groups' },
-  { name: 'Analytics', href: '/admin/analytics', icon: ChartBarIcon, feature: null, tourId: 'admin-nav-analytics' },
-  { name: 'Reminders', href: '/admin/reminders', icon: PaperAirplaneIcon, feature: 'reminders' as const, tourId: 'admin-nav-reminders' },
-  { name: 'Announcements', href: '/admin/announcements', icon: MegaphoneIcon, feature: null, tourId: 'admin-nav-announcements' },
-  { name: 'Settings', href: '/admin/settings', icon: Cog6ToothIcon, feature: null, tourId: 'admin-nav-settings' },
+interface NavItem {
+  name: string;
+  href: string;
+  icon: React.ComponentType<React.SVGProps<SVGSVGElement>>;
+  feature: string | null;
+  tourId: string;
+}
+
+interface NavSection {
+  label: string | null; // null = no header (top items)
+  items: NavItem[];
+}
+
+const NAV_SECTIONS: NavSection[] = [
+  {
+    label: null,
+    items: [
+      { name: 'Dashboard', href: '/admin/dashboard', icon: HomeIcon, feature: null, tourId: 'admin-nav-dashboard' },
+      { name: 'Courses', href: '/admin/courses', icon: BookOpenIcon, feature: null, tourId: 'admin-nav-courses' },
+      { name: 'School', href: '/admin/school', icon: BuildingLibraryIcon, feature: null, tourId: 'admin-nav-school' },
+    ],
+  },
+  {
+    label: 'PEOPLE',
+    items: [
+      { name: 'Teachers', href: '/admin/teachers', icon: UserGroupIcon, feature: null, tourId: 'admin-nav-teachers' },
+      { name: 'Groups', href: '/admin/groups', icon: FolderTreeIcon, feature: 'groups' as const, tourId: 'admin-nav-groups' },
+    ],
+  },
+  {
+    label: 'INSIGHTS',
+    items: [
+      { name: 'Certifications', href: '/admin/certifications', icon: ShieldCheckIcon, feature: null, tourId: 'admin-nav-certifications' },
+      { name: 'Analytics', href: '/admin/analytics', icon: ChartBarIcon, feature: null, tourId: 'admin-nav-analytics' },
+    ],
+  },
+  {
+    label: 'MORE',
+    items: [
+      { name: 'Reminders', href: '/admin/reminders', icon: BellIcon, feature: null, tourId: 'admin-nav-reminders' },
+      { name: 'Billing', href: '/admin/billing', icon: CreditCardIcon, feature: null, tourId: 'admin-nav-billing' },
+      { name: 'Settings', href: '/admin/settings', icon: Cog6ToothIcon, feature: null, tourId: 'admin-nav-settings' },
+    ],
+  },
 ];
 
 export const AdminSidebar: React.FC<AdminSidebarProps> = ({ open, onClose }) => {
@@ -45,25 +82,28 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({ open, onClose }) => 
   const { theme, hasFeature } = useTenantStore();
   const { startTour } = useGuidedTour();
 
-  // Filter navigation items based on tenant feature flags
-  const navigation = ALL_NAV_ITEMS.filter(
-    (item) => item.feature === null || hasFeature(item.feature)
-  );
+  // Filter navigation sections based on tenant feature flags
+  const filteredSections = NAV_SECTIONS.map((section) => ({
+    ...section,
+    items: section.items.filter(
+      (item) => item.feature === null || hasFeature(item.feature as any)
+    ),
+  })).filter((section) => section.items.length > 0);
   
   const handleLogout = async () => {
     try {
       if (refreshToken) {
         await authService.logout(refreshToken);
       }
-    } catch (error) {
-      console.error('Logout error:', error);
+    } catch {
+      // Logout API call failed; proceed with local session cleanup
     } finally {
       broadcastLogout('manual_logout');
       clearAuth();
       window.location.href = '/login';
     }
   };
-  
+
   const SidebarContent = () => (
     <div data-tour="admin-sidebar" className="flex h-full flex-col bg-white border-r border-gray-200">
       {/* Logo */}
@@ -116,22 +156,31 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({ open, onClose }) => 
       </div>
       
       {/* Navigation */}
-      <nav className="flex-1 px-4 py-4 space-y-1 overflow-y-auto">
-        {navigation.map((item) => (
-          <NavLink
-            key={item.name}
-            to={item.href}
-            data-tour={item.tourId}
-            onClick={() => onClose?.()}
-            className={({ isActive }) =>
-              isActive
-                ? 'sidebar-link sidebar-link-active'
-                : 'sidebar-link'
-            }
-          >
-            <item.icon className="h-5 w-5 mr-3" />
-            {item.name}
-          </NavLink>
+      <nav className="flex-1 px-4 py-4 space-y-4 overflow-y-auto">
+        {filteredSections.map((section, sIdx) => (
+          <div key={section.label ?? `top-${sIdx}`} className="space-y-1">
+            {section.label && (
+              <p className="px-4 pt-2 pb-1 text-[11px] font-semibold uppercase tracking-wider text-gray-400">
+                {section.label}
+              </p>
+            )}
+            {section.items.map((item) => (
+              <NavLink
+                key={item.name}
+                to={item.href}
+                data-tour={item.tourId}
+                onClick={() => onClose?.()}
+                className={({ isActive }) =>
+                  isActive
+                    ? 'sidebar-link sidebar-link-active'
+                    : 'sidebar-link'
+                }
+              >
+                <item.icon className="h-5 w-5 mr-3" />
+                {item.name}
+              </NavLink>
+            ))}
+          </div>
         ))}
       </nav>
       

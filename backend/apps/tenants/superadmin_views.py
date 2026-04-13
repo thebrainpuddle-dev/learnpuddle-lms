@@ -38,6 +38,10 @@ class ImpersonateThrottle(ScopedRateThrottle):
     scope = 'impersonate'
 
 
+class EmailThrottle(ScopedRateThrottle):
+    scope = 'superadmin_email'
+
+
 class TenantPagination(PageNumberPagination):
     page_size = 20
     page_size_query_param = "page_size"
@@ -71,21 +75,35 @@ def platform_stats(request):
     )
 
     # Schools near limits (>80% of any resource)
-    schools_near_limits = []
-    usage_errors = 0
-    for t in Tenant.objects.filter(is_active=True):
-        try:
-            usage = get_tenant_usage(t)
-        except Exception:
-            usage_errors += 1
-            logger.exception("platform_stats: usage calculation failed for tenant_id=%s", t.id)
-            continue
-        for resource, bucket in usage.items():
-            if bucket["limit"] > 0 and bucket["used"] / bucket["limit"] > 0.8:
-                schools_near_limits.append({
-                    "id": str(t.id), "name": t.name, "resource": resource,
-                    "used": bucket["used"], "limit": bucket["limit"],
-                })
+    # Use cache to avoid running expensive aggregations on every dashboard load.
+    from django.core.cache import cache as django_cache
+    cache_key = "superadmin:schools_near_limits"
+    cached = django_cache.get(cache_key)
+    if cached is not None:
+        schools_near_limits = cached.get("schools_near_limits", [])
+        usage_errors = cached.get("usage_errors", 0)
+    else:
+        schools_near_limits = []
+        usage_errors = 0
+        for t in Tenant.objects.filter(is_active=True).only(
+            "id", "name", "max_teachers", "max_courses", "max_storage_mb",
+        ):
+            try:
+                usage = get_tenant_usage(t)
+            except Exception:
+                usage_errors += 1
+                logger.exception("platform_stats: usage calculation failed for tenant_id=%s", t.id)
+                continue
+            for resource, bucket in usage.items():
+                if bucket["limit"] > 0 and bucket["used"] / bucket["limit"] > 0.8:
+                    schools_near_limits.append({
+                        "id": str(t.id), "name": t.name, "resource": resource,
+                        "used": bucket["used"], "limit": bucket["limit"],
+                    })
+        django_cache.set(cache_key, {
+            "schools_near_limits": schools_near_limits,
+            "usage_errors": usage_errors,
+        }, timeout=300)  # Cache for 5 minutes
 
     return Response({
         "total_tenants": total_tenants,
@@ -121,6 +139,9 @@ def tenant_list_create(request):
         search = request.GET.get("search")
         if search:
             qs = qs.filter(name__icontains=search)
+
+        # Annotate counts in a single query instead of N+1
+        qs = TenantListSerializer.annotate_counts(qs)
 
         paginator = TenantPagination()
         page = paginator.paginate_queryset(qs, request)
@@ -213,7 +234,9 @@ def tenant_list_create(request):
 @permission_classes([IsAuthenticated])
 @super_admin_only
 def tenant_detail(request, tenant_id):
-    tenant = get_object_or_404(Tenant, id=tenant_id)
+    # Use annotated queryset so count fields are populated (not default=0)
+    qs = TenantListSerializer.annotate_counts(Tenant.objects.all())
+    tenant = get_object_or_404(qs, id=tenant_id)
 
     if request.method == "GET":
         serializer = TenantDetailSerializer(tenant, context={"request": request})
@@ -250,7 +273,13 @@ def tenant_impersonate(request, tenant_id):
     access['tenant_id'] = str(admin_user.tenant_id) if admin_user.tenant_id else None
     access['is_impersonation'] = True
 
-    log_audit('LOGIN', 'Tenant', target_id=str(tenant.id), target_repr=f"Impersonate {tenant.name} as {admin_user.email}", request=request)
+    log_audit(
+        'IMPERSONATE', 'Tenant',
+        target_id=str(tenant.id),
+        target_repr=f"Impersonate {tenant.name} as {admin_user.email}",
+        changes={"impersonated_user": admin_user.email, "tenant": tenant.name, "expires_minutes": 15},
+        request=request,
+    )
 
     return Response({
         "tokens": {"access": str(access)},
@@ -306,10 +335,27 @@ def tenant_apply_plan(request, tenant_id):
         "feature_video_upload", "feature_auto_quiz", "feature_transcripts",
         "feature_reminders", "feature_custom_branding", "feature_reports_export",
         "feature_groups", "feature_certificates", "feature_teacher_authoring",
+        "feature_ai_studio",
         "is_trial", "trial_end_date", "plan_expires_at",
     }
+    INTEGER_FIELDS = {"max_teachers", "max_courses", "max_storage_mb", "max_video_duration_minutes"}
     overrides = {k: v for k, v in request.data.items() if k != "plan" and k in ALLOWED_PLAN_OVERRIDES}
     if overrides:
+        # Validate integer fields are non-negative
+        for field in INTEGER_FIELDS & overrides.keys():
+            try:
+                val = int(overrides[field])
+                if val < 0:
+                    return Response(
+                        {"error": f"{field} must be a non-negative integer."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                overrides[field] = val
+            except (ValueError, TypeError):
+                return Response(
+                    {"error": f"{field} must be a valid integer."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
         for k, v in overrides.items():
             setattr(tenant, k, v)
         tenant.save()
@@ -326,37 +372,57 @@ def tenant_apply_plan(request, tenant_id):
 @permission_classes([IsAuthenticated])
 @super_admin_only
 def tenant_reset_admin_password(request, tenant_id):
-    """Reset the school admin's password and send a reset link email."""
+    """
+    Reset the school admin's password.
+
+    Modes (mutually exclusive):
+    - Send ``new_password`` → set it immediately.
+    - Omit ``new_password``  → email a reset link instead.
+    """
     tenant = get_object_or_404(Tenant, id=tenant_id)
     admin_user = User.objects.filter(tenant=tenant, role="SCHOOL_ADMIN", is_active=True).first()
     if not admin_user:
         return Response({"error": "No active admin found"}, status=404)
 
-    # Generate a token-based reset link instead of sending plaintext password
+    new_password = request.data.get("new_password")
+
+    if new_password:
+        # ── Mode A: set password directly ──────────────────────────────
+        from django.contrib.auth.password_validation import validate_password
+        from django.core.exceptions import ValidationError as DjangoValidationError
+        try:
+            validate_password(new_password, admin_user)
+        except DjangoValidationError as exc:
+            return Response(
+                {"error": "Password does not meet requirements", "details": list(exc.messages)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        admin_user.set_password(new_password)
+        admin_user.save()
+
+        log_audit('PASSWORD_RESET', 'User', target_id=str(admin_user.id),
+                  target_repr=f"Direct password set for {admin_user.email}",
+                  request=request, tenant=tenant)
+
+        return Response({"message": "Password set successfully", "email": admin_user.email, "method": "direct"})
+
+    # ── Mode B: send reset link via email ──────────────────────────────
     from django.contrib.auth.tokens import default_token_generator
     from django.utils.http import urlsafe_base64_encode
     from django.utils.encoding import force_bytes
     from django.core.mail import send_mail
 
-    # If caller provided a new password, set it directly
-    new_password = request.data.get("new_password")
-    if new_password:
-        admin_user.set_password(new_password)
-        admin_user.save()
-
-    # Generate reset link for email (regardless of whether password was set)
     uid = urlsafe_base64_encode(force_bytes(admin_user.pk))
     token = default_token_generator.make_token(admin_user)
-    domain = getattr(settings, 'PLATFORM_DOMAIN', 'lms.com')
+    domain = getattr(settings, 'PLATFORM_DOMAIN', 'learnpuddle.com')
     reset_link = f"https://{tenant.subdomain}.{domain}/reset-password?uid={uid}&token={token}"
 
-    # Send reset link email -- logged, never blocks the reset action
     try:
         send_mail(
             subject=f"Password reset — {getattr(settings, 'PLATFORM_NAME', 'LearnPuddle')}",
             message=(
                 f"Hi {admin_user.first_name},\n\n"
-                f"Your password has been reset by the platform admin.\n\n"
+                f"A password reset was requested by the platform admin.\n\n"
                 f"Click the link below to set a new password:\n\n"
                 f"  {reset_link}\n\n"
                 f"This link expires in 24 hours.\n\n"
@@ -366,19 +432,15 @@ def tenant_reset_admin_password(request, tenant_id):
             recipient_list=[admin_user.email],
             fail_silently=getattr(settings, "EMAIL_FAIL_SILENTLY", False),
         )
-        import logging
-        logging.getLogger(__name__).info(
-            "Password reset email sent tenant=%s to=%s", tenant_id, admin_user.email,
-        )
+        logger.info("Password reset email sent tenant=%s to=%s", tenant_id, admin_user.email)
     except Exception as exc:
-        import logging
-        logging.getLogger(__name__).warning(
-            "Password reset email failed tenant=%s to=%s err=%s", tenant_id, admin_user.email, exc,
-        )
+        logger.warning("Password reset email failed tenant=%s to=%s err=%s", tenant_id, admin_user.email, exc)
 
-    log_audit('PASSWORD_RESET', 'User', target_id=str(admin_user.id), target_repr=str(admin_user), request=request, tenant=tenant)
+    log_audit('PASSWORD_RESET', 'User', target_id=str(admin_user.id),
+              target_repr=f"Reset link emailed to {admin_user.email}",
+              request=request, tenant=tenant)
 
-    return Response({"message": "Password reset successfully", "email": admin_user.email})
+    return Response({"message": "Password reset link emailed", "email": admin_user.email, "method": "email"})
 
 
 # ── Send custom email to a tenant ──────────────────────────────────────────
@@ -386,6 +448,7 @@ def tenant_reset_admin_password(request, tenant_id):
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
+@throttle_classes([EmailThrottle])
 @super_admin_only
 def tenant_send_email(request, tenant_id):
     """
@@ -425,7 +488,7 @@ def tenant_send_email(request, tenant_id):
         tenant=tenant,
     )
 
-    return Response({"sent": True, "to": to_email, "subject": subject})
+    return Response({"queued": True, "to": to_email, "subject": subject})
 
 
 # ── Bulk email to multiple tenants ─────────────────────────────────────────
@@ -433,6 +496,7 @@ def tenant_send_email(request, tenant_id):
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
+@throttle_classes([EmailThrottle])
 @super_admin_only
 def bulk_send_email(request):
     """
@@ -591,6 +655,7 @@ def demo_booking_detail(request, booking_id):
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
+@throttle_classes([EmailThrottle])
 @super_admin_only
 def demo_booking_send_email(request, booking_id):
     """Send a custom email to a demo booking contact."""
@@ -607,7 +672,14 @@ def demo_booking_send_email(request, booking_id):
     from apps.notifications.tasks import send_arbitrary_email
     send_arbitrary_email.delay(booking.email, f"[{platform_name}] {subject}", body)
 
-    return Response({"sent": True, "to": booking.email})
+    log_audit(
+        "SEND_EMAIL", "DemoBooking",
+        target_id=str(booking.id),
+        target_repr=f'"{subject}" to {booking.email}',
+        request=request,
+    )
+
+    return Response({"queued": True, "to": booking.email})
 
 
 def _serialize_demo_booking(booking):

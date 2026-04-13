@@ -25,6 +25,8 @@ logger = logging.getLogger(__name__)
 
 class LearningPathPagination(PageNumberPagination):
     page_size = 20
+    page_size_query_param = 'page_size'
+    max_page_size = 100
 
 
 # ============================================================
@@ -41,7 +43,7 @@ def learning_path_list_create(request):
     POST: Create a new learning path
     """
     if request.method == 'GET':
-        paths = LearningPath.objects.filter(is_active=True)
+        paths = LearningPath.objects.filter(tenant=request.tenant, is_active=True)
         
         # Filters
         if request.GET.get('is_published'):
@@ -97,7 +99,7 @@ def learning_path_detail(request, path_id):
     PUT: Update learning path
     DELETE: Soft delete learning path
     """
-    path = get_object_or_404(LearningPath, id=path_id)
+    path = get_object_or_404(LearningPath, id=path_id, tenant=request.tenant)
     
     if request.method == 'GET':
         # Get courses in order
@@ -171,13 +173,13 @@ def learning_path_add_course(request, path_id):
         "prerequisites": ["path_course_id", ...]  // Optional
     }
     """
-    path = get_object_or_404(LearningPath, id=path_id)
+    path = get_object_or_404(LearningPath, id=path_id, tenant=request.tenant)
     
     course_id = request.data.get('course_id')
     if not course_id:
         return Response({'error': 'course_id is required'}, status=400)
     
-    course = get_object_or_404(Course, id=course_id)
+    course = get_object_or_404(Course, id=course_id, tenant=request.tenant)
     
     # Check if course already in path
     if path.path_courses.filter(course=course).exists():
@@ -228,7 +230,7 @@ def learning_path_course_detail(request, path_id, path_course_id):
     PUT: Update a course in the learning path
     DELETE: Remove a course from the learning path
     """
-    path = get_object_or_404(LearningPath, id=path_id)
+    path = get_object_or_404(LearningPath, id=path_id, tenant=request.tenant)
     path_course = get_object_or_404(LearningPathCourse, id=path_course_id, learning_path=path)
     
     if request.method == 'PUT':
@@ -277,7 +279,7 @@ def learning_path_reorder(request, path_id):
         ]
     }
     """
-    path = get_object_or_404(LearningPath, id=path_id)
+    path = get_object_or_404(LearningPath, id=path_id, tenant=request.tenant)
     
     course_order = request.data.get('course_order', [])
     
@@ -306,6 +308,7 @@ def teacher_learning_paths(request):
     
     # Get assigned paths
     paths = LearningPath.objects.filter(
+        tenant=request.tenant,
         is_active=True,
         is_published=True,
     ).filter(
@@ -352,6 +355,7 @@ def teacher_learning_path_detail(request, path_id):
     path = get_object_or_404(
         LearningPath,
         id=path_id,
+        tenant=request.tenant,
         is_active=True,
         is_published=True,
     )
@@ -440,6 +444,7 @@ def teacher_start_learning_path(request, path_id):
     path = get_object_or_404(
         LearningPath,
         id=path_id,
+        tenant=request.tenant,
         is_active=True,
         is_published=True,
     )

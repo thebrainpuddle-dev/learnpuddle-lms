@@ -2,12 +2,18 @@
 /**
  * Public tenant self-service signup page.
  * Allows new schools to create their own LMS instance.
+ *
+ * Form management uses React Hook Form + Zod for type-safe validation.
  */
 
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
+import { z } from 'zod';
+import { Controller } from 'react-hook-form';
 import { Button, Input } from '../../components/common';
+import { FormField } from '../../components/common/FormField';
+import { useZodForm } from '../../hooks/useZodForm';
 import { usePageTitle } from '../../hooks/usePageTitle';
 import {
   BuildingOfficeIcon,
@@ -17,6 +23,8 @@ import {
   CheckCircleIcon,
 } from '@heroicons/react/24/outline';
 import api from '../../config/api';
+
+// ── Types ─────────────────────────────────────────────────────────────
 
 interface Plan {
   id: string;
@@ -30,29 +38,47 @@ interface Plan {
   recommended: boolean;
 }
 
-interface SignupData {
-  school_name: string;
-  admin_email: string;
-  admin_first_name: string;
-  admin_last_name: string;
-  admin_password: string;
-  plan: string;
-}
+// ── Zod Schema ────────────────────────────────────────────────────────
+
+const SignupSchema = z
+  .object({
+    school_name: z.string().min(3, 'School name must be at least 3 characters'),
+    admin_email: z.string().min(1, 'Email is required').email('Invalid email format'),
+    admin_first_name: z.string().min(1, 'First name is required'),
+    admin_last_name: z.string().min(1, 'Last name is required'),
+    admin_password: z.string().min(8, 'Password must be at least 8 characters'),
+    confirm_password: z.string().min(1, 'Please confirm your password'),
+    plan: z.string().default('FREE'),
+  })
+  .refine((data) => data.admin_password === data.confirm_password, {
+    path: ['confirm_password'],
+    message: 'Passwords do not match',
+  });
+
+type SignupData = z.infer<typeof SignupSchema>;
+
+// ── Component ─────────────────────────────────────────────────────────
 
 export const SignupPage: React.FC = () => {
   usePageTitle('Sign Up');
   const [step, setStep] = useState(1);
-  const [formData, setFormData] = useState<SignupData>({
-    school_name: '',
-    admin_email: '',
-    admin_first_name: '',
-    admin_last_name: '',
-    admin_password: '',
-    plan: 'FREE',
-  });
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [errors, setErrors] = useState<Record<string, string>>({});
   const [subdomain, setSubdomain] = useState('');
+
+  const form = useZodForm({
+    schema: SignupSchema,
+    defaultValues: {
+      school_name: '',
+      admin_email: '',
+      admin_first_name: '',
+      admin_last_name: '',
+      admin_password: '',
+      confirm_password: '',
+      plan: 'FREE',
+    },
+  });
+
+  const watchedSchoolName = form.watch('school_name');
+  const watchedPlan = form.watch('plan');
 
   // Fetch available plans
   const { data: plans = [] } = useQuery<Plan[]>({
@@ -76,74 +102,53 @@ export const SignupPage: React.FC = () => {
 
   // Submit signup
   const signup = useMutation({
-    mutationFn: async (data: SignupData) => {
+    mutationFn: async (data: Omit<SignupData, 'confirm_password'>) => {
       const res = await api.post('/onboarding/signup/', data);
       return res.data;
     },
-    onSuccess: (data) => {
-      setStep(4); // Success step
+    onSuccess: () => {
+      setStep(4);
     },
     onError: (error: any) => {
       const apiErrors = error.response?.data?.errors || {};
-      setErrors(apiErrors);
+      // Merge server errors into form state
+      (Object.keys(apiErrors) as Array<keyof SignupData>).forEach((field) => {
+        const msg = apiErrors[field as string];
+        if (typeof msg === 'string') {
+          form.setError(field, { type: 'server', message: msg });
+        } else if (Array.isArray(msg) && msg.length > 0) {
+          form.setError(field, { type: 'server', message: msg[0] });
+        }
+      });
     },
   });
 
   // Check subdomain when school name changes
   useEffect(() => {
     const timeout = setTimeout(() => {
-      if (formData.school_name.length >= 3) {
-        checkSubdomain.mutate(formData.school_name);
+      if (watchedSchoolName && watchedSchoolName.length >= 3) {
+        checkSubdomain.mutate(watchedSchoolName);
       }
     }, 500);
     return () => clearTimeout(timeout);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [formData.school_name]);
+  }, [watchedSchoolName]);
 
-  const updateField = (field: keyof SignupData, value: string) => {
-    setFormData(prev => ({ ...prev, [field]: value }));
-    if (errors[field]) {
-      setErrors(prev => {
-        const next = { ...prev };
-        delete next[field];
-        return next;
-      });
+  // Validate only specific step fields before proceeding
+  const nextStep = async () => {
+    let valid = false;
+    if (step === 1) {
+      valid = await form.trigger(['school_name']);
+    } else if (step === 2) {
+      valid = await form.trigger([
+        'admin_email',
+        'admin_first_name',
+        'admin_last_name',
+        'admin_password',
+        'confirm_password',
+      ]);
     }
-  };
-
-  const validateStep = (stepNum: number): boolean => {
-    const newErrors: Record<string, string> = {};
-
-    if (stepNum === 1) {
-      if (!formData.school_name || formData.school_name.length < 3) {
-        newErrors.school_name = 'School name must be at least 3 characters';
-      }
-    } else if (stepNum === 2) {
-      if (!formData.admin_email) {
-        newErrors.admin_email = 'Email is required';
-      } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.admin_email)) {
-        newErrors.admin_email = 'Invalid email format';
-      }
-      if (!formData.admin_first_name) {
-        newErrors.admin_first_name = 'First name is required';
-      }
-      if (!formData.admin_last_name) {
-        newErrors.admin_last_name = 'Last name is required';
-      }
-      if (!formData.admin_password || formData.admin_password.length < 8) {
-        newErrors.admin_password = 'Password must be at least 8 characters';
-      }
-      if (formData.admin_password !== confirmPassword) {
-        newErrors.confirmPassword = 'Passwords do not match';
-      }
-    }
-
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
-  };
-
-  const nextStep = () => {
-    if (validateStep(step)) {
+    if (valid) {
       setStep(step + 1);
     }
   };
@@ -152,9 +157,13 @@ export const SignupPage: React.FC = () => {
     setStep(step - 1);
   };
 
-  const handleSubmit = () => {
-    if (validateStep(2)) {
-      signup.mutate(formData);
+  const handleSubmit = async () => {
+    const valid = await form.trigger();
+    if (valid) {
+      const values = form.getValues();
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const { confirm_password, ...payload } = values;
+      signup.mutate(payload);
     }
   };
 
@@ -217,13 +226,12 @@ export const SignupPage: React.FC = () => {
             </p>
 
             <div className="space-y-4">
-              <Input
+              <FormField
+                control={form.control}
+                name="school_name"
                 label="School Name"
-                value={formData.school_name}
-                onChange={(e) => updateField('school_name', e.target.value)}
                 leftIcon={<BuildingOfficeIcon className="w-5 h-5 text-gray-400" />}
                 placeholder="Demo School"
-                error={errors.school_name}
               />
 
               {subdomain && (
@@ -261,48 +269,43 @@ export const SignupPage: React.FC = () => {
 
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-4">
-                <Input
+                <FormField
+                  control={form.control}
+                  name="admin_first_name"
                   label="First Name"
-                  value={formData.admin_first_name}
-                  onChange={(e) => updateField('admin_first_name', e.target.value)}
                   leftIcon={<UserIcon className="w-5 h-5 text-gray-400" />}
-                  error={errors.admin_first_name}
                 />
-                <Input
+                <FormField
+                  control={form.control}
+                  name="admin_last_name"
                   label="Last Name"
-                  value={formData.admin_last_name}
-                  onChange={(e) => updateField('admin_last_name', e.target.value)}
-                  error={errors.admin_last_name}
                 />
               </div>
 
-              <Input
+              <FormField
+                control={form.control}
+                name="admin_email"
                 label="Email"
                 type="email"
-                value={formData.admin_email}
-                onChange={(e) => updateField('admin_email', e.target.value)}
                 leftIcon={<EnvelopeIcon className="w-5 h-5 text-gray-400" />}
                 placeholder="admin@school.com"
-                error={errors.admin_email}
               />
 
-              <Input
+              <FormField
+                control={form.control}
+                name="admin_password"
                 label="Password"
                 type="password"
-                value={formData.admin_password}
-                onChange={(e) => updateField('admin_password', e.target.value)}
                 leftIcon={<LockClosedIcon className="w-5 h-5 text-gray-400" />}
                 placeholder="Minimum 8 characters"
-                error={errors.admin_password}
               />
 
-              <Input
+              <FormField
+                control={form.control}
+                name="confirm_password"
                 label="Confirm Password"
                 type="password"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
                 leftIcon={<LockClosedIcon className="w-5 h-5 text-gray-400" />}
-                error={errors.confirmPassword}
               />
             </div>
 
@@ -327,46 +330,52 @@ export const SignupPage: React.FC = () => {
               Start free and upgrade anytime. All plans include a 14-day trial.
             </p>
 
-            <div className="grid md:grid-cols-3 gap-6">
-              {plans.map((plan) => (
-                <div
-                  key={plan.id}
-                  onClick={() => updateField('plan', plan.id)}
-                  className={`relative rounded-xl border-2 p-6 cursor-pointer transition-all ${
-                    formData.plan === plan.id
-                      ? 'border-primary-600 bg-primary-50'
-                      : 'border-gray-200 hover:border-gray-300'
-                  }`}
-                >
-                  {plan.recommended && (
-                    <div className="absolute -top-3 left-1/2 -translate-x-1/2">
-                      <span className="bg-primary-600 text-white text-xs px-3 py-1 rounded-full">
-                        Recommended
-                      </span>
+            <Controller
+              control={form.control}
+              name="plan"
+              render={({ field }) => (
+                <div className="grid md:grid-cols-3 gap-6">
+                  {plans.map((plan) => (
+                    <div
+                      key={plan.id}
+                      onClick={() => field.onChange(plan.id)}
+                      className={`relative rounded-xl border-2 p-6 cursor-pointer transition-all ${
+                        field.value === plan.id
+                          ? 'border-primary-600 bg-primary-50'
+                          : 'border-gray-200 hover:border-gray-300'
+                      }`}
+                    >
+                      {plan.recommended && (
+                        <div className="absolute -top-3 left-1/2 -translate-x-1/2">
+                          <span className="bg-primary-600 text-white text-xs px-3 py-1 rounded-full">
+                            Recommended
+                          </span>
+                        </div>
+                      )}
+
+                      <h3 className="text-lg font-semibold text-gray-900">
+                        {plan.name}
+                      </h3>
+                      <div className="mt-2">
+                        <span className="text-3xl font-bold text-gray-900">
+                          ${plan.price}
+                        </span>
+                        <span className="text-gray-500">/month</span>
+                      </div>
+
+                      <ul className="mt-4 space-y-2">
+                        {plan.features.map((feature, i) => (
+                          <li key={i} className="flex items-start text-sm">
+                            <CheckCircleIcon className="w-5 h-5 text-green-500 mr-2 flex-shrink-0" />
+                            <span className="text-gray-600">{feature}</span>
+                          </li>
+                        ))}
+                      </ul>
                     </div>
-                  )}
-
-                  <h3 className="text-lg font-semibold text-gray-900">
-                    {plan.name}
-                  </h3>
-                  <div className="mt-2">
-                    <span className="text-3xl font-bold text-gray-900">
-                      ${plan.price}
-                    </span>
-                    <span className="text-gray-500">/month</span>
-                  </div>
-
-                  <ul className="mt-4 space-y-2">
-                    {plan.features.map((feature, i) => (
-                      <li key={i} className="flex items-start text-sm">
-                        <CheckCircleIcon className="w-5 h-5 text-green-500 mr-2 flex-shrink-0" />
-                        <span className="text-gray-600">{feature}</span>
-                      </li>
-                    ))}
-                  </ul>
+                  ))}
                 </div>
-              ))}
-            </div>
+              )}
+            />
 
             <div className="mt-8 flex justify-center space-x-4">
               <Button onClick={prevStep} variant="outline" size="lg">
@@ -382,8 +391,10 @@ export const SignupPage: React.FC = () => {
               </Button>
             </div>
 
-            {errors.submit && (
-              <p className="mt-4 text-center text-red-600">{errors.submit}</p>
+            {form.formState.errors.root?.message && (
+              <p className="mt-4 text-center text-red-600">
+                {form.formState.errors.root.message}
+              </p>
             )}
           </div>
         )}

@@ -1,0 +1,924 @@
+"""
+OpenMAIC AI Classroom -- Django proxy views.
+
+Proxy endpoints relay requests to the OpenMAIC sidecar (http://openmaic:3000)
+after authenticating the user, resolving the tenant, decrypting API keys from
+TenantAIConfig, and injecting them as headers. The sidecar never stores keys.
+
+Teacher endpoints:
+    POST /api/v1/teacher/maic/chat/                    -- SSE chat proxy
+    POST /api/v1/teacher/maic/generate/outlines/       -- SSE outline generation
+    POST /api/v1/teacher/maic/generate/scene-content/  -- JSON scene content
+    POST /api/v1/teacher/maic/generate/tts/            -- Binary TTS proxy
+    POST /api/v1/teacher/maic/generate/classroom/      -- Async classroom gen
+    POST /api/v1/teacher/maic/generate/image/          -- JSON image generation
+    GET  /api/v1/teacher/maic/classrooms/              -- List classrooms
+    POST /api/v1/teacher/maic/classrooms/create/       -- Create classroom
+    GET  /api/v1/teacher/maic/classrooms/<id>/         -- Classroom detail
+    PATCH /api/v1/teacher/maic/classrooms/<id>/update/ -- Update classroom
+    DELETE /api/v1/teacher/maic/classrooms/<id>/delete/ -- Delete classroom
+
+Student endpoints:
+    GET  /api/v1/student/maic/classrooms/              -- Browse public
+    GET  /api/v1/student/maic/classrooms/<id>/         -- Classroom detail
+    POST /api/v1/student/maic/chat/                    -- SSE chat (student)
+    POST /api/v1/student/maic/generate/tts/            -- TTS playback
+"""
+
+import json
+import logging
+
+import requests as http_requests
+from django.http import StreamingHttpResponse, HttpResponse
+from rest_framework import status
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+
+from apps.courses.maic_models import TenantAIConfig, MAICClassroom
+from apps.courses.maic_generation_service import (
+    generate_outline_sse,
+    generate_scene_content,
+    generate_scene_actions,
+    generate_chat_sse,
+    generate_tts_audio,
+)
+from utils.decorators import teacher_or_admin, student_or_admin, tenant_required, check_feature
+
+logger = logging.getLogger(__name__)
+
+OPENMAIC_BASE = "http://openmaic:3000"
+# Connection timeout (seconds) for sidecar reachability check.
+# Low value so fallback to direct LLM is fast when sidecar is down.
+_SIDECAR_CONNECT_TIMEOUT = 2
+
+
+# ======================================================================
+# Internal helpers
+# ======================================================================
+
+def _get_ai_config(tenant):
+    """Load and validate TenantAIConfig, return (config, error_response)."""
+    try:
+        config = TenantAIConfig.objects.get(tenant=tenant)
+    except TenantAIConfig.DoesNotExist:
+        return None, Response(
+            {"error": "AI Classroom is not configured. Ask your admin to set up AI Provider in Settings."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    if not config.maic_enabled:
+        return None, Response(
+            {"error": "AI Classroom is disabled for this school."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    return config, None
+
+
+def _build_proxy_headers(config):
+    """Build headers to inject into OpenMAIC sidecar requests."""
+    headers = {
+        "Content-Type": "application/json",
+        "x-llm-provider": config.llm_provider,
+        "x-llm-model": config.llm_model,
+    }
+    api_key = config.get_llm_api_key()
+    if api_key:
+        headers["x-api-key"] = api_key
+    if config.llm_base_url:
+        headers["x-base-url"] = config.llm_base_url
+    if config.tts_provider and config.tts_provider != "disabled":
+        headers["x-tts-provider"] = config.tts_provider
+        tts_key = config.get_tts_api_key()
+        if tts_key:
+            headers["x-tts-api-key"] = tts_key
+        if config.tts_voice_id:
+            headers["x-tts-voice-id"] = config.tts_voice_id
+    if config.image_provider and config.image_provider != "disabled":
+        headers["x-image-provider"] = config.image_provider
+        img_key = config.get_image_api_key()
+        if img_key:
+            headers["x-image-api-key"] = img_key
+    return headers
+
+
+def _proxy_sse(request, path, config):
+    """Forward a POST to the sidecar and stream SSE back."""
+    url = f"{OPENMAIC_BASE}{path}"
+    headers = _build_proxy_headers(config)
+
+    try:
+        body = request.body.decode("utf-8") if request.body else "{}"
+    except UnicodeDecodeError:
+        body = "{}"
+
+    try:
+        upstream = http_requests.post(
+            url, data=body, headers=headers, stream=True, timeout=(_SIDECAR_CONNECT_TIMEOUT, 300),
+        )
+    except http_requests.ConnectionError:
+        logger.error("OpenMAIC sidecar unreachable at %s", url)
+        return HttpResponse(
+            json.dumps({"error": "AI Classroom service is temporarily unavailable."}),
+            status=502,
+            content_type="application/json",
+        )
+    except http_requests.Timeout:
+        return HttpResponse(
+            json.dumps({"error": "AI Classroom service timed out."}),
+            status=504,
+            content_type="application/json",
+        )
+
+    if upstream.status_code != 200:
+        return HttpResponse(
+            upstream.content,
+            status=upstream.status_code,
+            content_type=upstream.headers.get("Content-Type", "application/json"),
+        )
+
+    def stream():
+        try:
+            for chunk in upstream.iter_content(chunk_size=None):
+                if chunk:
+                    yield chunk
+        finally:
+            upstream.close()
+
+    response = StreamingHttpResponse(
+        stream(),
+        content_type=upstream.headers.get("Content-Type", "text/event-stream"),
+    )
+    response["Cache-Control"] = "no-cache"
+    response["X-Accel-Buffering"] = "no"
+    return response
+
+
+def _proxy_json(request, path, config, method="POST"):
+    """Forward a request and return JSON."""
+    url = f"{OPENMAIC_BASE}{path}"
+    headers = _build_proxy_headers(config)
+
+    try:
+        body = request.body.decode("utf-8") if request.body else "{}"
+    except UnicodeDecodeError:
+        body = "{}"
+
+    try:
+        if method == "POST":
+            upstream = http_requests.post(url, data=body, headers=headers, timeout=(_SIDECAR_CONNECT_TIMEOUT, 120))
+        else:
+            upstream = http_requests.get(url, headers=headers, timeout=(_SIDECAR_CONNECT_TIMEOUT, 120))
+    except http_requests.ConnectionError:
+        return Response(
+            {"error": "AI Classroom service is temporarily unavailable."},
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
+    except http_requests.Timeout:
+        return Response(
+            {"error": "AI Classroom service timed out."},
+            status=status.HTTP_504_GATEWAY_TIMEOUT,
+        )
+
+    try:
+        data = upstream.json()
+    except ValueError:
+        data = {"raw": upstream.text}
+
+    return Response(data, status=upstream.status_code)
+
+
+def _proxy_binary(request, path, config):
+    """Forward a request and return binary (audio) data."""
+    url = f"{OPENMAIC_BASE}{path}"
+    headers = _build_proxy_headers(config)
+
+    try:
+        body = request.body.decode("utf-8") if request.body else "{}"
+    except UnicodeDecodeError:
+        body = "{}"
+
+    try:
+        upstream = http_requests.post(url, data=body, headers=headers, timeout=(_SIDECAR_CONNECT_TIMEOUT, 120))
+    except (http_requests.ConnectionError, http_requests.Timeout):
+        return HttpResponse(
+            json.dumps({"error": "AI Classroom service unavailable."}),
+            status=502,
+            content_type="application/json",
+        )
+
+    return HttpResponse(
+        upstream.content,
+        status=upstream.status_code,
+        content_type=upstream.headers.get("Content-Type", "audio/mpeg"),
+    )
+
+
+# ======================================================================
+# Teacher Proxy Endpoints
+# ======================================================================
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@teacher_or_admin
+@tenant_required
+@check_feature("feature_maic")
+def teacher_maic_chat(request):
+    """SSE proxy to OpenMAIC /api/chat — tries sidecar, then direct LLM."""
+    config, err = _get_ai_config(request.tenant)
+    if err:
+        return err
+
+    # Try sidecar first
+    result = _proxy_sse(request, "/api/chat", config)
+    if result.status_code != 502:
+        return result
+
+    # Sidecar unavailable — generate chat response directly via LLM
+    logger.info("Sidecar unavailable, using direct chat generation")
+    try:
+        body = json.loads(request.body) if request.body else {}
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        body = {}
+
+    # Look up classroom for context
+    classroom_title = ""
+    agents = []
+    classroom_id = body.get("classroomId")
+    if classroom_id:
+        try:
+            classroom = MAICClassroom.objects.get(pk=classroom_id, tenant=request.tenant)
+            classroom_title = classroom.title or classroom.topic
+            agents = (classroom.config or {}).get("agents", [])
+        except MAICClassroom.DoesNotExist:
+            pass
+
+    response = StreamingHttpResponse(
+        generate_chat_sse(
+            message=body.get("message", ""),
+            classroom_title=classroom_title,
+            agents=agents,
+            config=config,
+        ),
+        content_type="text/event-stream",
+    )
+    response["Cache-Control"] = "no-cache"
+    response["X-Accel-Buffering"] = "no"
+    return response
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@teacher_or_admin
+@tenant_required
+@check_feature("feature_maic")
+def teacher_maic_generate_outlines(request):
+    """SSE outline generation — tries sidecar first, then direct LLM."""
+    config, err = _get_ai_config(request.tenant)
+    if err:
+        return err
+
+    # Try sidecar first
+    result = _proxy_sse(request, "/api/generate/scene-outlines-stream", config)
+    if result.status_code != 502:
+        return result
+
+    # Sidecar unavailable — generate directly via LLM
+    logger.info("Sidecar unavailable, using direct outline generation")
+    try:
+        body = json.loads(request.body) if request.body else {}
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        body = {}
+
+    response = StreamingHttpResponse(
+        generate_outline_sse(
+            topic=body.get("topic", ""),
+            language=body.get("language", "en"),
+            agent_count=body.get("agentCount", 3),
+            scene_count=body.get("sceneCount", 6),
+            pdf_text=body.get("pdfText"),
+            config=config,
+        ),
+        content_type="text/event-stream",
+    )
+    response["Cache-Control"] = "no-cache"
+    response["X-Accel-Buffering"] = "no"
+    return response
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@teacher_or_admin
+@tenant_required
+@check_feature("feature_maic")
+def teacher_maic_generate_scene_content(request):
+    """Scene content generation — tries sidecar first, then direct LLM."""
+    config, err = _get_ai_config(request.tenant)
+    if err:
+        return err
+
+    # Try sidecar first
+    result = _proxy_json(request, "/api/generate/scene-content", config)
+    if result.status_code != 502:
+        return result
+
+    # Direct LLM fallback
+    logger.info("Sidecar unavailable, using direct scene content generation")
+    try:
+        body = json.loads(request.body) if request.body else {}
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        body = {}
+
+    data = generate_scene_content(
+        scene=body.get("scene", {}),
+        agents=body.get("agents", []),
+        language=body.get("language", "en"),
+        config=config,
+    )
+    if data:
+        return Response(data)
+    return Response(
+        {"error": "Failed to generate scene content."},
+        status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+    )
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@teacher_or_admin
+@tenant_required
+@check_feature("feature_maic")
+def teacher_maic_generate_tts(request):
+    """Binary proxy to OpenMAIC /api/generate/tts — tries sidecar, then direct TTS."""
+    config, err = _get_ai_config(request.tenant)
+    if err:
+        return err
+
+    result = _proxy_binary(request, "/api/generate/tts", config)
+    if result.status_code != 502:
+        return result
+
+    # Sidecar unavailable — generate TTS directly
+    logger.info("Sidecar unavailable, using direct TTS generation")
+    try:
+        body = json.loads(request.body) if request.body else {}
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        body = {}
+
+    text = body.get("text", "")
+    if not text:
+        return HttpResponse(
+            json.dumps({"error": "No text provided"}),
+            status=400,
+            content_type="application/json",
+        )
+
+    audio_bytes = generate_tts_audio(text, config)
+    if audio_bytes:
+        return HttpResponse(audio_bytes, content_type="audio/mpeg")
+
+    # No TTS available — return 204 so frontend uses timed silence
+    return HttpResponse(status=204)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@teacher_or_admin
+@tenant_required
+@check_feature("feature_maic")
+def teacher_maic_generate_classroom(request):
+    """JSON proxy to OpenMAIC /api/generate-classroom -- async full generation."""
+    config, err = _get_ai_config(request.tenant)
+    if err:
+        return err
+    return _proxy_json(request, "/api/generate-classroom", config)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@teacher_or_admin
+@tenant_required
+@check_feature("feature_maic")
+def teacher_maic_generate_image(request):
+    """JSON proxy to OpenMAIC /api/generate/image."""
+    config, err = _get_ai_config(request.tenant)
+    if err:
+        return err
+    return _proxy_json(request, "/api/generate/image", config)
+
+
+# ======================================================================
+# Teacher Classroom CRUD
+# ======================================================================
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+@teacher_or_admin
+@tenant_required
+@check_feature("feature_maic")
+def teacher_maic_classroom_list(request):
+    """List the current teacher's MAIC classrooms."""
+    qs = MAICClassroom.objects.filter(
+        tenant=request.tenant, creator=request.user,
+    ).order_by("-updated_at")
+
+    status_filter = request.query_params.get("status")
+    if status_filter:
+        qs = qs.filter(status=status_filter.upper())
+
+    search = request.query_params.get("search")
+    if search:
+        qs = qs.filter(title__icontains=search)
+
+    classrooms = []
+    for c in qs:
+        classrooms.append({
+            "id": str(c.id),
+            "title": c.title,
+            "description": c.description,
+            "topic": c.topic,
+            "status": c.status,
+            "is_public": c.is_public,
+            "scene_count": c.scene_count,
+            "estimated_minutes": c.estimated_minutes,
+            "course_id": str(c.course_id) if c.course_id else None,
+            "created_at": c.created_at.isoformat(),
+            "updated_at": c.updated_at.isoformat(),
+        })
+
+    return Response(classrooms)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@teacher_or_admin
+@tenant_required
+@check_feature("feature_maic")
+def teacher_maic_classroom_create(request):
+    """Create a new MAIC classroom record."""
+    title = (request.data.get("title") or "").strip()
+    if not title:
+        return Response({"error": "title is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Check classroom limit
+    try:
+        config = TenantAIConfig.objects.get(tenant=request.tenant)
+        existing_count = MAICClassroom.objects.filter(
+            tenant=request.tenant, creator=request.user,
+        ).exclude(status="ARCHIVED").count()
+        if existing_count >= config.max_classrooms_per_teacher:
+            return Response(
+                {"error": f"You have reached the maximum of {config.max_classrooms_per_teacher} classrooms."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+    except TenantAIConfig.DoesNotExist:
+        pass
+
+    course_id = request.data.get("course_id")
+    course = None
+    if course_id:
+        from apps.courses.models import Course
+        try:
+            course = Course.objects.get(pk=course_id, tenant=request.tenant)
+        except Course.DoesNotExist:
+            return Response({"error": "Course not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    classroom = MAICClassroom.objects.create(
+        tenant=request.tenant,
+        creator=request.user,
+        title=title,
+        description=request.data.get("description", ""),
+        topic=request.data.get("topic", ""),
+        language=request.data.get("language", "en"),
+        course=course,
+        config=request.data.get("config", {}),
+        status="DRAFT",
+    )
+
+    return Response({
+        "id": str(classroom.id),
+        "title": classroom.title,
+        "status": classroom.status,
+        "created_at": classroom.created_at.isoformat(),
+    }, status=status.HTTP_201_CREATED)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+@teacher_or_admin
+@tenant_required
+@check_feature("feature_maic")
+def teacher_maic_classroom_detail(request, classroom_id):
+    """Get a single classroom's metadata."""
+    try:
+        classroom = MAICClassroom.objects.get(
+            pk=classroom_id, tenant=request.tenant, creator=request.user,
+        )
+    except MAICClassroom.DoesNotExist:
+        return Response({"error": "Classroom not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    return Response({
+        "id": str(classroom.id),
+        "title": classroom.title,
+        "description": classroom.description,
+        "topic": classroom.topic,
+        "language": classroom.language,
+        "status": classroom.status,
+        "error_message": classroom.error_message,
+        "is_public": classroom.is_public,
+        "scene_count": classroom.scene_count,
+        "estimated_minutes": classroom.estimated_minutes,
+        "course_id": str(classroom.course_id) if classroom.course_id else None,
+        "config": classroom.config,
+        "created_at": classroom.created_at.isoformat(),
+        "updated_at": classroom.updated_at.isoformat(),
+    })
+
+
+@api_view(["PATCH"])
+@permission_classes([IsAuthenticated])
+@teacher_or_admin
+@tenant_required
+@check_feature("feature_maic")
+def teacher_maic_classroom_update(request, classroom_id):
+    """Update classroom metadata."""
+    try:
+        classroom = MAICClassroom.objects.get(
+            pk=classroom_id, tenant=request.tenant, creator=request.user,
+        )
+    except MAICClassroom.DoesNotExist:
+        return Response({"error": "Classroom not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    updatable = ["title", "description", "topic", "language", "status",
+                  "is_public", "scene_count", "estimated_minutes", "config", "error_message"]
+    updated_fields = []
+    for field in updatable:
+        if field in request.data:
+            setattr(classroom, field, request.data[field])
+            updated_fields.append(field)
+
+    if updated_fields:
+        updated_fields.append("updated_at")
+        classroom.save(update_fields=updated_fields)
+
+    return Response({"id": str(classroom.id), "status": classroom.status})
+
+
+@api_view(["DELETE"])
+@permission_classes([IsAuthenticated])
+@teacher_or_admin
+@tenant_required
+@check_feature("feature_maic")
+def teacher_maic_classroom_delete(request, classroom_id):
+    """Delete (archive) a classroom."""
+    try:
+        classroom = MAICClassroom.objects.get(
+            pk=classroom_id, tenant=request.tenant, creator=request.user,
+        )
+    except MAICClassroom.DoesNotExist:
+        return Response({"error": "Classroom not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    classroom.status = "ARCHIVED"
+    classroom.save(update_fields=["status", "updated_at"])
+
+    return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# Quiz grading
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@teacher_or_admin
+@tenant_required
+@check_feature("feature_maic")
+def teacher_maic_quiz_grade(request):
+    """JSON proxy to OpenMAIC /api/quiz-grade for AI-graded short answers."""
+    config, err = _get_ai_config(request.tenant)
+    if err:
+        return err
+    return _proxy_json(request, "/api/quiz-grade", config)
+
+
+# Export
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@teacher_or_admin
+@tenant_required
+@check_feature("feature_maic")
+def teacher_maic_export_pptx(request):
+    """Binary proxy to OpenMAIC /api/export/pptx."""
+    config, err = _get_ai_config(request.tenant)
+    if err:
+        return err
+    return _proxy_binary(request, "/api/export/pptx", config)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@teacher_or_admin
+@tenant_required
+@check_feature("feature_maic")
+def teacher_maic_export_html(request):
+    """Binary proxy to OpenMAIC /api/export/html."""
+    config, err = _get_ai_config(request.tenant)
+    if err:
+        return err
+    return _proxy_binary(request, "/api/export/html", config)
+
+
+# Web search
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@teacher_or_admin
+@tenant_required
+@check_feature("feature_maic")
+def teacher_maic_web_search(request):
+    """JSON proxy to OpenMAIC /api/web-search."""
+    config, err = _get_ai_config(request.tenant)
+    if err:
+        return err
+    return _proxy_json(request, "/api/web-search", config)
+
+
+# Scene actions generation
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@teacher_or_admin
+@tenant_required
+@check_feature("feature_maic")
+def teacher_maic_generate_scene_actions(request):
+    """Scene actions generation — tries sidecar first, then direct LLM."""
+    config, err = _get_ai_config(request.tenant)
+    if err:
+        return err
+
+    # Try sidecar first
+    result = _proxy_json(request, "/api/generate/scene-actions", config)
+    if result.status_code != 502:
+        return result
+
+    # Direct LLM fallback
+    logger.info("Sidecar unavailable, using direct scene actions generation")
+    try:
+        body = json.loads(request.body) if request.body else {}
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        body = {}
+
+    data = generate_scene_actions(
+        scene=body.get("scene", {}),
+        agents=body.get("agents", []),
+        language=body.get("language", "en"),
+        config=config,
+    )
+    if data:
+        return Response(data)
+    return Response(
+        {"error": "Failed to generate scene actions."},
+        status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+    )
+
+
+# Agent profiles generation
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@teacher_or_admin
+@tenant_required
+@check_feature("feature_maic")
+def teacher_maic_generate_agent_profiles(request):
+    """JSON proxy to OpenMAIC /api/generate/agent-profiles."""
+    config, err = _get_ai_config(request.tenant)
+    if err:
+        return err
+    return _proxy_json(request, "/api/generate/agent-profiles", config)
+
+
+# ======================================================================
+# Student Endpoints
+# ======================================================================
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+@student_or_admin
+@tenant_required
+@check_feature("feature_maic")
+def student_maic_classroom_list(request):
+    """Browse public READY classrooms for the student's tenant."""
+    qs = MAICClassroom.objects.filter(
+        tenant=request.tenant, is_public=True, status="READY",
+    ).order_by("-updated_at")
+
+    course_id = request.query_params.get("course_id")
+    if course_id:
+        qs = qs.filter(course_id=course_id)
+
+    search = request.query_params.get("search")
+    if search:
+        qs = qs.filter(title__icontains=search)
+
+    classrooms = []
+    for c in qs:
+        classrooms.append({
+            "id": str(c.id),
+            "title": c.title,
+            "description": c.description,
+            "topic": c.topic,
+            "scene_count": c.scene_count,
+            "estimated_minutes": c.estimated_minutes,
+            "course_id": str(c.course_id) if c.course_id else None,
+            "created_at": c.created_at.isoformat(),
+        })
+
+    return Response(classrooms)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+@student_or_admin
+@tenant_required
+@check_feature("feature_maic")
+def student_maic_classroom_detail(request, classroom_id):
+    """Get a public classroom's metadata."""
+    try:
+        classroom = MAICClassroom.objects.get(
+            pk=classroom_id, tenant=request.tenant, is_public=True, status="READY",
+        )
+    except MAICClassroom.DoesNotExist:
+        return Response({"error": "Classroom not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    return Response({
+        "id": str(classroom.id),
+        "title": classroom.title,
+        "description": classroom.description,
+        "topic": classroom.topic,
+        "language": classroom.language,
+        "scene_count": classroom.scene_count,
+        "estimated_minutes": classroom.estimated_minutes,
+        "course_id": str(classroom.course_id) if classroom.course_id else None,
+        "config": classroom.config,
+        "created_at": classroom.created_at.isoformat(),
+    })
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@student_or_admin
+@tenant_required
+@check_feature("feature_maic")
+def student_maic_chat(request):
+    """SSE proxy for student mode chat — tries sidecar, then direct LLM."""
+    config, err = _get_ai_config(request.tenant)
+    if err:
+        return err
+
+    result = _proxy_sse(request, "/api/chat", config)
+    if result.status_code != 502:
+        return result
+
+    # Sidecar unavailable — direct LLM fallback
+    logger.info("Sidecar unavailable, using direct chat generation (student)")
+    try:
+        body = json.loads(request.body) if request.body else {}
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        body = {}
+
+    classroom_title = ""
+    agents = []
+    classroom_id = body.get("classroomId")
+    if classroom_id:
+        try:
+            classroom = MAICClassroom.objects.get(pk=classroom_id, tenant=request.tenant)
+            classroom_title = classroom.title or classroom.topic
+            agents = (classroom.config or {}).get("agents", [])
+        except MAICClassroom.DoesNotExist:
+            pass
+
+    response = StreamingHttpResponse(
+        generate_chat_sse(
+            message=body.get("message", ""),
+            classroom_title=classroom_title,
+            agents=agents,
+            config=config,
+        ),
+        content_type="text/event-stream",
+    )
+    response["Cache-Control"] = "no-cache"
+    response["X-Accel-Buffering"] = "no"
+    return response
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@student_or_admin
+@tenant_required
+@check_feature("feature_maic")
+def student_maic_generate_tts(request):
+    """TTS proxy for student playback — tries sidecar, then direct TTS."""
+    config, err = _get_ai_config(request.tenant)
+    if err:
+        return err
+
+    result = _proxy_binary(request, "/api/generate/tts", config)
+    if result.status_code != 502:
+        return result
+
+    # Direct fallback
+    try:
+        body = json.loads(request.body) if request.body else {}
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        body = {}
+
+    text = body.get("text", "")
+    if not text:
+        return HttpResponse(status=204)
+
+    audio_bytes = generate_tts_audio(text, config)
+    if audio_bytes:
+        return HttpResponse(audio_bytes, content_type="audio/mpeg")
+
+    return HttpResponse(status=204)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@student_or_admin
+@tenant_required
+@check_feature("feature_maic")
+def student_maic_quiz_grade(request):
+    """Quiz grading proxy for student mode."""
+    config, err = _get_ai_config(request.tenant)
+    if err:
+        return err
+    return _proxy_json(request, "/api/quiz-grade", config)
+
+
+# ======================================================================
+# Admin AI Config Endpoints
+# ======================================================================
+
+@api_view(["GET", "PATCH"])
+@permission_classes([IsAuthenticated])
+@tenant_required
+def tenant_ai_config_view(request):
+    """
+    GET: Return current AI provider configuration (keys masked).
+    PATCH: Update AI provider settings.
+    Admin only.
+    """
+    if request.user.role not in ("SCHOOL_ADMIN", "SUPER_ADMIN"):
+        return Response({"error": "Admin access required."}, status=status.HTTP_403_FORBIDDEN)
+
+    config, created = TenantAIConfig.objects.get_or_create(
+        tenant=request.tenant,
+        defaults={"maic_enabled": False},
+    )
+
+    if request.method == "GET":
+        llm_key = config.get_llm_api_key()
+        tts_key = config.get_tts_api_key()
+        img_key = config.get_image_api_key()
+
+        return Response({
+            "llm_provider": config.llm_provider,
+            "llm_model": config.llm_model,
+            "llm_api_key_set": bool(llm_key),
+            "llm_api_key_preview": f"...{llm_key[-4:]}" if len(llm_key) > 4 else "",
+            "llm_base_url": config.llm_base_url,
+            "tts_provider": config.tts_provider,
+            "tts_api_key_set": bool(tts_key),
+            "tts_voice_id": config.tts_voice_id,
+            "image_provider": config.image_provider,
+            "image_api_key_set": bool(img_key),
+            "maic_enabled": config.maic_enabled,
+            "max_classrooms_per_teacher": config.max_classrooms_per_teacher,
+        })
+
+    # PATCH
+    data = request.data
+    if "llm_provider" in data:
+        config.llm_provider = data["llm_provider"]
+    if "llm_model" in data:
+        config.llm_model = data["llm_model"]
+    if "llm_api_key" in data and data["llm_api_key"]:
+        config.set_llm_api_key(data["llm_api_key"])
+    if "llm_base_url" in data:
+        config.llm_base_url = data["llm_base_url"]
+    if "tts_provider" in data:
+        config.tts_provider = data["tts_provider"]
+    if "tts_api_key" in data and data["tts_api_key"]:
+        config.set_tts_api_key(data["tts_api_key"])
+    if "tts_voice_id" in data:
+        config.tts_voice_id = data["tts_voice_id"]
+    if "image_provider" in data:
+        config.image_provider = data["image_provider"]
+    if "image_api_key" in data and data["image_api_key"]:
+        config.set_image_api_key(data["image_api_key"])
+    if "maic_enabled" in data:
+        config.maic_enabled = bool(data["maic_enabled"])
+    if "max_classrooms_per_teacher" in data:
+        config.max_classrooms_per_teacher = int(data["max_classrooms_per_teacher"])
+
+    config.save()
+
+    from utils.audit import log_audit
+    log_audit("SETTINGS_CHANGE", "TenantAIConfig", target_id=str(config.id),
+              target_repr=str(config.tenant), request=request)
+
+    return Response({"status": "updated"})

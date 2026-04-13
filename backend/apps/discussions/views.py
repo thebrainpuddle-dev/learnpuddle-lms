@@ -14,6 +14,8 @@ from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 from utils.decorators import admin_only, tenant_required, teacher_or_admin
 
+from django.utils.html import strip_tags
+from utils.rich_text import sanitize_rich_text_html
 from .models import DiscussionThread, DiscussionReply, DiscussionLike, DiscussionSubscription
 
 logger = logging.getLogger(__name__)
@@ -21,6 +23,8 @@ logger = logging.getLogger(__name__)
 
 class DiscussionPagination(PageNumberPagination):
     page_size = 20
+    page_size_query_param = 'page_size'
+    max_page_size = 100
 
 
 def serialize_author(user):
@@ -53,7 +57,7 @@ def thread_list_create(request):
     - status: Filter by status (open/closed/archived)
     """
     if request.method == 'GET':
-        threads = DiscussionThread.objects.all()
+        threads = DiscussionThread.objects.filter(tenant=request.tenant)
         
         # Filters
         course_id = request.GET.get('course_id')
@@ -94,24 +98,24 @@ def thread_list_create(request):
         return paginator.get_paginated_response(data)
     
     elif request.method == 'POST':
-        title = request.data.get('title', '').strip()
-        body = request.data.get('body', '').strip()
+        title = strip_tags(request.data.get('title', '')).strip()
+        body = sanitize_rich_text_html(request.data.get('body', '').strip())
         course_id = request.data.get('course_id')
         content_id = request.data.get('content_id')
-        
+
         if not title:
             return Response({'error': 'title is required'}, status=400)
         if not body:
             return Response({'error': 'body is required'}, status=400)
-        
+
         # Validate course/content
         course = None
         content = None
-        
+
         if course_id:
             from apps.courses.models import Course
-            course = get_object_or_404(Course, id=course_id)
-        
+            course = get_object_or_404(Course, id=course_id, tenant=request.tenant)
+
         if content_id:
             from apps.courses.models import Content
             content = get_object_or_404(
@@ -121,7 +125,7 @@ def thread_list_create(request):
             )
             if not course:
                 course = content.module.course
-        
+
         thread = DiscussionThread.objects.create(
             tenant=request.tenant,
             course=course,
@@ -158,6 +162,7 @@ def thread_detail(request, thread_id):
     thread = get_object_or_404(
         DiscussionThread.objects.select_related('author', 'course', 'content'),
         id=thread_id,
+        tenant=request.tenant,
     )
     
     if request.method == 'GET':
@@ -223,9 +228,9 @@ def thread_detail(request, thread_id):
             return Response({'error': 'Permission denied'}, status=403)
         
         if 'title' in request.data:
-            thread.title = request.data['title'].strip()
+            thread.title = strip_tags(request.data['title']).strip()
         if 'body' in request.data:
-            thread.body = request.data['body'].strip()
+            thread.body = sanitize_rich_text_html(request.data['body'].strip())
         
         # Admin-only fields
         if request.user.role == 'SCHOOL_ADMIN':
@@ -273,25 +278,26 @@ def reply_create(request, thread_id):
     thread = get_object_or_404(
         DiscussionThread,
         id=thread_id,
+        tenant=request.tenant,
     )
     
     if thread.status != 'open':
         return Response({'error': 'Thread is closed'}, status=400)
     
-    body = request.data.get('body', '').strip()
+    body = sanitize_rich_text_html(request.data.get('body', '').strip())
     parent_id = request.data.get('parent_id')
-    
+
     if not body:
         return Response({'error': 'body is required'}, status=400)
-    
+
     parent = None
     if parent_id:
         parent = get_object_or_404(DiscussionReply, id=parent_id, thread=thread)
-        
+
         # Limit nesting depth
         if parent.depth >= 3:
             return Response({'error': 'Maximum reply depth reached'}, status=400)
-    
+
     reply = DiscussionReply.objects.create(
         thread=thread,
         parent=parent,
@@ -321,18 +327,18 @@ def reply_detail(request, thread_id, reply_id):
     PUT: Edit a reply
     DELETE: Delete a reply
     """
-    thread = get_object_or_404(DiscussionThread, id=thread_id)
+    thread = get_object_or_404(DiscussionThread, id=thread_id, tenant=request.tenant)
     reply = get_object_or_404(DiscussionReply, id=reply_id, thread=thread)
-    
+
     if request.method == 'PUT':
         # Only author can edit
         if reply.author_id != request.user.id:
             return Response({'error': 'Permission denied'}, status=403)
         
-        body = request.data.get('body', '').strip()
+        body = sanitize_rich_text_html(request.data.get('body', '').strip())
         if not body:
             return Response({'error': 'body is required'}, status=400)
-        
+
         reply.body = body
         reply.is_edited = True
         reply.edited_at = timezone.now()
@@ -363,9 +369,9 @@ def reply_like(request, thread_id, reply_id):
     POST: Like a reply
     DELETE: Unlike a reply
     """
-    thread = get_object_or_404(DiscussionThread, id=thread_id)
+    thread = get_object_or_404(DiscussionThread, id=thread_id, tenant=request.tenant)
     reply = get_object_or_404(DiscussionReply, id=reply_id, thread=thread)
-    
+
     if request.method == 'POST':
         like, created = DiscussionLike.objects.get_or_create(
             reply=reply,
@@ -403,8 +409,8 @@ def thread_subscribe(request, thread_id):
     POST: Subscribe to thread notifications
     DELETE: Unsubscribe
     """
-    thread = get_object_or_404(DiscussionThread, id=thread_id)
-    
+    thread = get_object_or_404(DiscussionThread, id=thread_id, tenant=request.tenant)
+
     if request.method == 'POST':
         sub, created = DiscussionSubscription.objects.get_or_create(
             thread=thread,
@@ -438,9 +444,9 @@ def reply_moderate(request, thread_id, reply_id):
         "reason": "Reason for hiding"
     }
     """
-    thread = get_object_or_404(DiscussionThread, id=thread_id)
+    thread = get_object_or_404(DiscussionThread, id=thread_id, tenant=request.tenant)
     reply = get_object_or_404(DiscussionReply, id=reply_id, thread=thread)
-    
+
     action = request.data.get('action')
     
     if action == 'hide':

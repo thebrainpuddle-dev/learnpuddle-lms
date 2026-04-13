@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useCallback } from 'react';
 import { EditorContent, useEditor, type JSONContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Underline from '@tiptap/extension-underline';
@@ -19,6 +19,7 @@ import {
   CodeBracketIcon,
   ArrowUturnLeftIcon,
   ArrowUturnRightIcon,
+  XMarkIcon,
 } from '@heroicons/react/24/outline';
 
 const lowlight = createLowlight();
@@ -180,7 +181,41 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
   onModeWarning,
 }) => {
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
+  const linkInputRef = React.useRef<HTMLInputElement | null>(null);
   const [markdownDraft, setMarkdownDraft] = React.useState('');
+  const [showLinkInput, setShowLinkInput] = useState(false);
+  const [linkUrl, setLinkUrl] = useState('');
+
+  const handleInsertLink = useCallback(() => {
+    setShowLinkInput(true);
+    setLinkUrl('');
+    // Focus the input after it renders
+    requestAnimationFrame(() => linkInputRef.current?.focus());
+  }, []);
+
+  const handleConfirmLink = useCallback(
+    (editorInstance: any) => {
+      if (!editorInstance || !linkUrl.trim()) {
+        setShowLinkInput(false);
+        setLinkUrl('');
+        return;
+      }
+      editorInstance
+        .chain()
+        .focus()
+        .extendMarkRange('link')
+        .setLink({ href: linkUrl.trim(), target: '_blank', rel: 'noopener noreferrer' })
+        .run();
+      setShowLinkInput(false);
+      setLinkUrl('');
+    },
+    [linkUrl],
+  );
+
+  const handleCancelLink = useCallback(() => {
+    setShowLinkInput(false);
+    setLinkUrl('');
+  }, []);
 
   const editor = useEditor({
     extensions: [
@@ -336,12 +371,7 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
 
             <button
               type="button"
-              onClick={() => {
-                if (!editor) return;
-                const href = window.prompt('Enter URL');
-                if (!href) return;
-                editor.chain().focus().extendMarkRange('link').setLink({ href, target: '_blank', rel: 'noopener noreferrer' }).run();
-              }}
+              onClick={handleInsertLink}
               className="p-1.5 border rounded hover:bg-gray-100"
               title="Insert link"
             >
@@ -384,6 +414,46 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
           }}
         />
       </div>
+
+      {/* Inline link URL input — replaces window.prompt() */}
+      {showLinkInput && (
+        <div className="flex items-center gap-2 border-b border-gray-200 bg-blue-50 px-3 py-2">
+          <LinkIcon className="h-4 w-4 text-gray-500 flex-shrink-0" />
+          <input
+            ref={linkInputRef}
+            type="url"
+            value={linkUrl}
+            onChange={(e) => setLinkUrl(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                handleConfirmLink(editor);
+              }
+              if (e.key === 'Escape') {
+                handleCancelLink();
+              }
+            }}
+            placeholder="https://example.com"
+            className="flex-1 rounded border border-gray-300 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+          />
+          <button
+            type="button"
+            onClick={() => handleConfirmLink(editor)}
+            disabled={!linkUrl.trim()}
+            className="rounded bg-primary-600 px-3 py-1 text-xs font-medium text-white hover:bg-primary-700 disabled:opacity-50"
+          >
+            Insert
+          </button>
+          <button
+            type="button"
+            onClick={handleCancelLink}
+            className="rounded p-1 text-gray-400 hover:text-gray-600"
+            aria-label="Cancel link insertion"
+          >
+            <XMarkIcon className="h-4 w-4" />
+          </button>
+        </div>
+      )}
 
       {mode === 'MARKDOWN' ? (
         <textarea

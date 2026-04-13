@@ -2,7 +2,7 @@
 
 import logging
 from django.contrib.postgres.search import SearchQuery, SearchRank, SearchVector
-from django.db.models import Q
+from django.db.models import Count, Q
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes, parser_classes
 from rest_framework.parsers import JSONParser, MultiPartParser, FormParser
@@ -37,8 +37,45 @@ def _require_teacher_authoring_feature(request):
     return None
 
 
+def _validate_teacher_target_sections(request, data):
+    """
+    Ensure teacher-authored courses only target sections in their TeachingAssignment.
+    Returns error Response or None if valid.
+    """
+    if not _is_teacher_authoring_user(request):
+        return None  # Admins can target any section
+
+    target_section_ids = data.get('target_sections')
+    if not target_section_ids:
+        return None
+
+    # Normalize to list of strings
+    if isinstance(target_section_ids, str):
+        target_section_ids = [target_section_ids]
+
+    from apps.academics.models import TeachingAssignment
+    allowed_section_ids = set(
+        TeachingAssignment.objects.filter(
+            tenant=request.tenant,
+            teacher=request.user,
+            academic_year=request.tenant.current_academic_year,
+        ).values_list('sections__id', flat=True)
+    )
+
+    requested = set(str(sid) for sid in target_section_ids)
+    allowed = set(str(sid) for sid in allowed_section_ids if sid)
+    unauthorized = requested - allowed
+
+    if unauthorized:
+        return Response(
+            {'error': 'You can only target sections assigned to you via teaching assignments.'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    return None
+
+
 def _course_qs_for_request_user(request):
-    qs = Course.objects
+    qs = Course.objects.filter(tenant=request.tenant)
     if _is_teacher_authoring_user(request):
         qs = qs.filter(created_by=request.user)
     return qs
@@ -89,15 +126,24 @@ def course_list_create(request):
         is_published = request.GET.get('is_published')
         is_mandatory = request.GET.get('is_mandatory')
         search = request.GET.get('search')
-        
+
         courses = _course_qs_for_request_user(request).select_related(
             'tenant', 'created_by'
         ).prefetch_related(
-            'modules',
             'assigned_teachers',
             'assigned_groups',
+        ).annotate(
+            # Precompute counts to eliminate N+1 queries in CourseListSerializer
+            _module_count=Count(
+                'modules', filter=Q(modules__is_active=True), distinct=True
+            ),
+            _content_count=Count(
+                'modules__contents',
+                filter=Q(modules__contents__is_active=True),
+                distinct=True,
+            ),
         )
-        
+
         # Additional filters
         if is_published is not None:
             courses = courses.filter(is_published=is_published == 'true')
@@ -105,15 +151,27 @@ def course_list_create(request):
             courses = courses.filter(is_mandatory=is_mandatory == 'true')
         if search:
             courses = courses.filter(title__icontains=search)
-        
+
         # Order by created date
         courses = courses.order_by('-created_at')
-        
+
         # Paginate
         paginator = CoursePagination()
         page = paginator.paginate_queryset(courses, request)
-        
-        serializer = CourseListSerializer(page, many=True, context={'request': request})
+
+        # Pre-compute the tenant-wide teacher count once (used by CourseListSerializer
+        # for courses with assigned_to_all=True, avoiding N+1 per-course queries).
+        from apps.users.models import User as UserModel
+        tenant_teacher_count = UserModel.objects.filter(
+            tenant=request.tenant,
+            role='TEACHER',
+            is_active=True,
+        ).count()
+
+        serializer = CourseListSerializer(
+            page, many=True,
+            context={'request': request, 'tenant_teacher_count': tenant_teacher_count},
+        )
         return paginator.get_paginated_response(serializer.data)
     
     elif request.method == 'POST':
@@ -124,6 +182,11 @@ def course_list_create(request):
             data['assigned_to_all'] = 'false'
             data.pop('assigned_groups', None)
             data.pop('assigned_teachers', None)
+
+        # Validate teacher can only target their assigned sections
+        section_error = _validate_teacher_target_sections(request, data)
+        if section_error:
+            return section_error
 
         serializer = CourseDetailSerializer(
             data=data,
@@ -170,6 +233,12 @@ def course_detail(request, course_id):
             data['assigned_to_all'] = 'false'
             data.pop('assigned_groups', None)
             data.pop('assigned_teachers', None)
+
+        # Validate teacher can only target their assigned sections
+        section_error = _validate_teacher_target_sections(request, data)
+        if section_error:
+            return section_error
+
         serializer = CourseDetailSerializer(
             course,
             data=data,
@@ -200,8 +269,8 @@ def course_publish(request, course_id):
     """
     Publish or unpublish a course.
     """
-    course = get_object_or_404(Course, id=course_id)
-    
+    course = get_object_or_404(Course, id=course_id, tenant=request.tenant)
+
     action = request.data.get('action')  # 'publish' or 'unpublish'
     
     if action == 'publish':
@@ -266,7 +335,7 @@ def course_duplicate(request, course_id):
     """
     Duplicate an existing course.
     """
-    original_course = get_object_or_404(Course, id=course_id)
+    original_course = get_object_or_404(Course, id=course_id, tenant=request.tenant)
     
     # Create copy
     course_copy = Course.objects.create(
@@ -493,9 +562,10 @@ def courses_bulk_action(request):
             status=status.HTTP_400_BAD_REQUEST
         )
     
-    # Get courses within tenant (TenantSoftDeleteManager auto-filters by tenant)
+    # Get courses within tenant
     courses = Course.objects.filter(
         id__in=course_ids,
+        tenant=request.tenant,
     )
     
     found_count = courses.count()
@@ -571,11 +641,12 @@ def global_search(request):
     
     # Determine which courses the user can access
     if user.role in ['SCHOOL_ADMIN', 'SUPER_ADMIN']:
-        # Admins can see all courses (TenantSoftDeleteManager auto-filters by tenant)
-        course_base_qs = Course.objects.filter(is_active=True)
+        # Admins can see all courses within their tenant
+        course_base_qs = Course.objects.filter(tenant=request.tenant, is_active=True)
     else:
         # Teachers can only see published courses they're assigned to
         course_base_qs = Course.objects.filter(
+            tenant=request.tenant,
             is_active=True,
             is_published=True,
         ).filter(

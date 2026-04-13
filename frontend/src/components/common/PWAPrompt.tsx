@@ -30,9 +30,9 @@ export const PWAPrompt: React.FC<PWAPromptProps> = ({ className = '' }) => {
   useEffect(() => {
     const dismissedTime = localStorage.getItem('pwa-prompt-dismissed');
     if (dismissedTime) {
-      const hoursSince = (Date.now() - parseInt(dismissedTime)) / (1000 * 60 * 60);
-      // Show again after 24 hours
-      if (hoursSince < 24) {
+      const daysSince = (Date.now() - parseInt(dismissedTime)) / (1000 * 60 * 60 * 24);
+      // Show again after 7 days
+      if (daysSince < 7) {
         setDismissed(true);
       }
     }

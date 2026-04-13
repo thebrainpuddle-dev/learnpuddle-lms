@@ -1,7 +1,11 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { z } from 'zod';
+import { Controller } from 'react-hook-form';
 import { Button, Input, useToast, ConfirmDialog } from '../../components/common';
+import { FormField } from '../../components/common/FormField';
+import { useZodForm } from '../../hooks/useZodForm';
 import { BulkActionsBar, BulkAction } from '../../components/common/BulkActionsBar';
 import { adminTeachersService } from '../../services/adminTeachersService';
 import { useTenantStore } from '../../stores/tenantStore';
@@ -22,6 +26,27 @@ import {
 import type { User } from '../../types';
 import { usePageTitle } from '../../hooks/usePageTitle';
 
+// ── Zod Schemas ──────────────────────────────────────────────────────
+
+const InviteTeacherSchema = z.object({
+  email: z.string().min(1, 'Email is required').email('Enter a valid email'),
+  first_name: z.string().min(1, 'First name is required'),
+  last_name: z.string().optional().or(z.literal('')),
+});
+
+type InviteTeacherData = z.infer<typeof InviteTeacherSchema>;
+
+const EditTeacherSchema = z.object({
+  first_name: z.string().optional().or(z.literal('')),
+  last_name: z.string().optional().or(z.literal('')),
+  department: z.string().optional().or(z.literal('')),
+  employee_id: z.string().optional().or(z.literal('')),
+  role: z.enum(['TEACHER', 'HOD', 'IB_COORDINATOR']).default('TEACHER'),
+  is_active: z.boolean().default(true),
+});
+
+type EditTeacherData = z.infer<typeof EditTeacherSchema>;
+
 const INVITE_STATUS_COLORS: Record<string, string> = {
   pending: 'bg-yellow-100 text-yellow-700',
   accepted: 'bg-green-100 text-green-700',
@@ -40,11 +65,19 @@ export const TeachersPage: React.FC = () => {
   const activeTab = searchParams.get('tab') || 'teachers';
   const [search, setSearch] = useState('');
   const [editingTeacher, setEditingTeacher] = useState<User | null>(null);
-  const [editForm, setEditForm] = useState<Partial<User>>({});
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [deactivateTarget, setDeactivateTarget] = useState<User | null>(null);
   const [showInviteForm, setShowInviteForm] = useState(false);
-  const [inviteForm, setInviteForm] = useState({ email: '', first_name: '', last_name: '' });
+
+  const inviteForm = useZodForm({
+    schema: InviteTeacherSchema,
+    defaultValues: { email: '', first_name: '', last_name: '' },
+  });
+
+  const editForm = useZodForm({
+    schema: EditTeacherSchema,
+    defaultValues: { first_name: '', last_name: '', department: '', employee_id: '', role: 'TEACHER', is_active: true },
+  });
 
   const { data: teachers, isLoading } = useQuery({
     queryKey: ['adminTeachers', search],
@@ -94,9 +127,22 @@ export const TeachersPage: React.FC = () => {
       qc.invalidateQueries({ queryKey: ['teacherInvitations'] });
       toast.success('Invitation Sent', 'An invitation email has been sent.');
       setShowInviteForm(false);
-      setInviteForm({ email: '', first_name: '', last_name: '' });
+      inviteForm.reset();
     },
-    onError: (err: any) => toast.error('Error', err?.response?.data?.error || 'Failed to send invitation'),
+    onError: (err: any) => {
+      const detail = err?.response?.data;
+      if (detail && typeof detail === 'object') {
+        Object.entries(detail).forEach(([field, messages]) => {
+          if (field in InviteTeacherSchema.shape) {
+            inviteForm.setError(field as keyof InviteTeacherData, {
+              type: 'server',
+              message: Array.isArray(messages) ? (messages as string[])[0] : String(messages),
+            });
+          }
+        });
+      }
+      toast.error('Error', err?.response?.data?.error || 'Failed to send invitation');
+    },
   });
 
   const bulkInviteMut = useMutation({
@@ -146,7 +192,14 @@ export const TeachersPage: React.FC = () => {
 
   const openEdit = (t: User) => {
     setEditingTeacher(t);
-    setEditForm({ first_name: t.first_name, last_name: t.last_name, department: t.department, employee_id: t.employee_id, role: t.role, is_active: t.is_active });
+    editForm.reset({
+      first_name: t.first_name || '',
+      last_name: t.last_name || '',
+      department: t.department || '',
+      employee_id: t.employee_id || '',
+      role: (t.role as 'TEACHER' | 'HOD' | 'IB_COORDINATOR') || 'TEACHER',
+      is_active: t.is_active ?? true,
+    });
   };
 
   const setTab = (tab: string) => {
@@ -258,36 +311,42 @@ export const TeachersPage: React.FC = () => {
                   <h2 className="text-lg font-semibold">Invite Teacher</h2>
                   <button onClick={() => setShowInviteForm(false)} className="text-gray-400 hover:text-gray-600"><XMarkIcon className="h-5 w-5" /></button>
                 </div>
-                <div className="space-y-3">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Email *</label>
-                    <input type="email" value={inviteForm.email} onChange={(e) => setInviteForm(p => ({ ...p, email: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500" placeholder="teacher@school.com" />
-                  </div>
+                <form
+                  onSubmit={inviteForm.handleSubmit((data) => inviteMut.mutate(data))}
+                  noValidate
+                  className="space-y-3"
+                >
+                  <FormField
+                    control={inviteForm.control}
+                    name="email"
+                    label="Email *"
+                    type="email"
+                    placeholder="teacher@school.com"
+                  />
                   <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">First Name *</label>
-                      <input type="text" value={inviteForm.first_name} onChange={(e) => setInviteForm(p => ({ ...p, first_name: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500" />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Last Name</label>
-                      <input type="text" value={inviteForm.last_name} onChange={(e) => setInviteForm(p => ({ ...p, last_name: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500" />
-                    </div>
+                    <FormField
+                      control={inviteForm.control}
+                      name="first_name"
+                      label="First Name *"
+                    />
+                    <FormField
+                      control={inviteForm.control}
+                      name="last_name"
+                      label="Last Name"
+                    />
                   </div>
                   <p className="text-xs text-gray-500">An email will be sent with a link to set their password and join the platform. The invitation expires in 7 days.</p>
-                </div>
-                <div className="flex justify-end gap-3 mt-5">
-                  <Button variant="outline" onClick={() => setShowInviteForm(false)}>Cancel</Button>
-                  <Button
-                    variant="primary"
-                    onClick={() => {
-                      if (!inviteForm.email || !inviteForm.first_name) { toast.error('Missing Fields', 'Email and first name are required.'); return; }
-                      inviteMut.mutate(inviteForm);
-                    }}
-                    loading={inviteMut.isPending}
-                  >
-                    Send Invitation
-                  </Button>
-                </div>
+                  <div className="flex justify-end gap-3 mt-5">
+                    <Button variant="outline" type="button" onClick={() => setShowInviteForm(false)}>Cancel</Button>
+                    <Button
+                      variant="primary"
+                      type="submit"
+                      loading={inviteMut.isPending}
+                    >
+                      Send Invitation
+                    </Button>
+                  </div>
+                </form>
               </div>
             </div>
           )}
@@ -442,34 +501,50 @@ export const TeachersPage: React.FC = () => {
       {/* Edit modal */}
       {editingTeacher && (
         <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50">
-          <div className="bg-white rounded-t-2xl sm:rounded-xl p-6 max-w-lg w-full mx-0 sm:mx-4 space-y-4 max-h-[90vh] overflow-y-auto">
+          <form
+            onSubmit={editForm.handleSubmit((data) => updateMut.mutate({ id: editingTeacher.id, data }))}
+            noValidate
+            className="bg-white rounded-t-2xl sm:rounded-xl p-6 max-w-lg w-full mx-0 sm:mx-4 space-y-4 max-h-[90vh] overflow-y-auto"
+          >
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-bold text-gray-900">Edit Teacher</h3>
               <button type="button" onClick={() => setEditingTeacher(null)} className="text-gray-400 hover:text-gray-600"><XMarkIcon className="h-6 w-6" /></button>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Input id="edit-teacher-first-name" name="first_name" label="First Name" autoComplete="given-name" value={editForm.first_name || ''} onChange={(e) => setEditForm({ ...editForm, first_name: e.target.value })} />
-              <Input id="edit-teacher-last-name" name="last_name" label="Last Name" autoComplete="family-name" value={editForm.last_name || ''} onChange={(e) => setEditForm({ ...editForm, last_name: e.target.value })} />
+              <FormField control={editForm.control} name="first_name" label="First Name" autoComplete="given-name" id="edit-teacher-first-name" />
+              <FormField control={editForm.control} name="last_name" label="Last Name" autoComplete="family-name" id="edit-teacher-last-name" />
             </div>
-            <Input id="edit-teacher-department" name="department" label="Department" autoComplete="organization-title" value={editForm.department || ''} onChange={(e) => setEditForm({ ...editForm, department: e.target.value })} />
-            <Input id="edit-teacher-employee-id" name="employee_id" label="Employee ID" autoComplete="off" value={editForm.employee_id || ''} onChange={(e) => setEditForm({ ...editForm, employee_id: e.target.value })} />
-            <div>
-              <label htmlFor="edit-teacher-role" className="block text-sm font-medium text-gray-700 mb-1">Role</label>
-              <select id="edit-teacher-role" name="role" value={editForm.role || 'TEACHER'} onChange={(e) => setEditForm({ ...editForm, role: e.target.value as any })} className="w-full px-3 py-2 border border-gray-300 rounded-lg">
-                <option value="TEACHER">Teacher</option>
-                <option value="HOD">HOD</option>
-                <option value="IB_COORDINATOR">IB Coordinator</option>
-              </select>
-            </div>
-            <label htmlFor="edit-teacher-active" className="flex items-center gap-2 text-sm">
-              <input id="edit-teacher-active" name="is_active" type="checkbox" checked={editForm.is_active ?? true} onChange={(e) => setEditForm({ ...editForm, is_active: e.target.checked })} className="rounded border-gray-300 text-indigo-600" />
-              Active
-            </label>
+            <FormField control={editForm.control} name="department" label="Department" autoComplete="organization-title" id="edit-teacher-department" />
+            <FormField control={editForm.control} name="employee_id" label="Employee ID" autoComplete="off" id="edit-teacher-employee-id" />
+            <Controller
+              control={editForm.control}
+              name="role"
+              render={({ field }) => (
+                <div>
+                  <label htmlFor="edit-teacher-role" className="block text-sm font-medium text-gray-700 mb-1">Role</label>
+                  <select id="edit-teacher-role" value={field.value} onChange={(e) => field.onChange(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg">
+                    <option value="TEACHER">Teacher</option>
+                    <option value="HOD">HOD</option>
+                    <option value="IB_COORDINATOR">IB Coordinator</option>
+                  </select>
+                </div>
+              )}
+            />
+            <Controller
+              control={editForm.control}
+              name="is_active"
+              render={({ field }) => (
+                <label htmlFor="edit-teacher-active" className="flex items-center gap-2 text-sm">
+                  <input id="edit-teacher-active" type="checkbox" checked={field.value} onChange={(e) => field.onChange(e.target.checked)} className="rounded border-gray-300 text-indigo-600" />
+                  Active
+                </label>
+              )}
+            />
             <div className="flex justify-end gap-3 pt-2">
-              <Button variant="outline" onClick={() => setEditingTeacher(null)}>Cancel</Button>
-              <Button variant="primary" onClick={() => updateMut.mutate({ id: editingTeacher.id, data: editForm })} loading={updateMut.isPending}>Save</Button>
+              <Button variant="outline" type="button" onClick={() => setEditingTeacher(null)}>Cancel</Button>
+              <Button variant="primary" type="submit" loading={updateMut.isPending}>Save</Button>
             </div>
-          </div>
+          </form>
         </div>
       )}
 

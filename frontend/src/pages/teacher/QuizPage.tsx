@@ -34,7 +34,7 @@ export const QuizPage: React.FC = () => {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-tp-accent"></div>
       </div>
     );
   }
@@ -42,12 +42,12 @@ export const QuizPage: React.FC = () => {
   if (!data) {
     return (
       <div className="space-y-4">
-        <button onClick={() => navigate(-1)} className="inline-flex items-center text-sm text-gray-600 hover:text-gray-900">
+        <button onClick={() => navigate(-1)} className="inline-flex items-center text-[13px] text-slate-500 hover:text-slate-900">
           <ArrowLeftIcon className="h-4 w-4 mr-2" />
           Back
         </button>
-        <div className="bg-white border border-gray-200 rounded-xl p-6">
-          <h1 className="text-lg font-semibold text-gray-900">Quiz not found</h1>
+        <div className="bg-white rounded-2xl border border-slate-200/80 p-6">
+          <h1 className="text-[15px] font-semibold text-slate-900">Quiz not found</h1>
         </div>
       </div>
     );
@@ -56,21 +56,21 @@ export const QuizPage: React.FC = () => {
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <button onClick={() => navigate('/teacher/assignments')} className="inline-flex items-center text-sm text-gray-600 hover:text-gray-900">
+        <button onClick={() => navigate('/teacher/assignments')} className="inline-flex items-center text-[13px] text-slate-500 hover:text-slate-900">
           <ArrowLeftIcon className="h-4 w-4 mr-2" />
           Back to assignments
         </button>
-        <div className="text-sm text-gray-600">Quiz</div>
+        <div className="text-[13px] text-slate-500">Quiz</div>
       </div>
 
-      <div className="space-y-6 rounded-xl border border-gray-200 bg-white p-4 sm:p-6">
-        <h1 className="text-xl font-bold text-gray-900">Quiz</h1>
+      <div className="space-y-6 rounded-2xl border border-slate-200/80 shadow-sm bg-white p-4 sm:p-6">
+        <h1 className="text-[18px] font-bold text-slate-900">Quiz</h1>
 
         {data.questions.map((q) => (
-          <div key={q.id} className="rounded-xl border border-gray-200 p-4">
+          <div key={q.id} className="rounded-2xl border border-slate-200/80 p-4">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
               <div>
-                <p className="text-sm text-gray-500 mb-1">
+                <p className="text-[11px] text-slate-400 mb-1">
                   Q{q.order} • {
                     q.question_type === 'MCQ'
                       ? (q.selection_mode === 'MULTIPLE' ? 'Multiple select' : 'Multiple choice')
@@ -79,22 +79,22 @@ export const QuizPage: React.FC = () => {
                       : 'Short answer'
                   } • {q.points} pt
                 </p>
-                <p className="font-medium text-gray-900">{q.prompt}</p>
+                <p className="text-[14px] font-medium text-slate-900">{q.prompt}</p>
               </div>
             </div>
 
             {q.question_type === 'MCQ' && q.selection_mode === 'SINGLE' ? (
               <div className="mt-4 space-y-2">
                 {q.options.map((opt, idx) => (
-                  <label key={idx} className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-50 cursor-pointer">
+                  <label key={idx} className="flex items-center gap-3 p-2 rounded-lg hover:bg-slate-50 cursor-pointer">
                     <input
                       type="radio"
                       name={`q-${q.id}`}
                       checked={answers[q.id]?.option_index === idx}
                       onChange={() => setAnswers((prev) => ({ ...prev, [q.id]: { option_index: idx } }))}
-                      className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300"
+                      className="h-4 w-4 text-tp-accent focus:ring-orange-500/20 border-slate-300"
                     />
-                    <span className="text-sm text-gray-800">{opt}</span>
+                    <span className="text-[13px] text-slate-800">{opt}</span>
                   </label>
                 ))}
               </div>
@@ -106,7 +106,7 @@ export const QuizPage: React.FC = () => {
                     : [];
                   const checked = selected.includes(idx);
                   return (
-                    <label key={idx} className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-50 cursor-pointer">
+                    <label key={idx} className="flex items-center gap-3 p-2 rounded-lg hover:bg-slate-50 cursor-pointer">
                       <input
                         type="checkbox"
                         checked={checked}
@@ -116,9 +116,9 @@ export const QuizPage: React.FC = () => {
                             : selected.filter((value) => value !== idx);
                           setAnswers((prev) => ({ ...prev, [q.id]: { option_indices: next } }));
                         }}
-                        className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
+                        className="h-4 w-4 text-tp-accent focus:ring-orange-500/20 border-slate-300 rounded"
                       />
-                      <span className="text-sm text-gray-800">{opt}</span>
+                      <span className="text-[13px] text-slate-800">{opt}</span>
                     </label>
                   );
                 })}
@@ -126,15 +126,15 @@ export const QuizPage: React.FC = () => {
             ) : q.question_type === 'TRUE_FALSE' ? (
               <div className="mt-4 flex flex-col gap-3 sm:flex-row">
                 {[true, false].map((choice) => (
-                  <label key={String(choice)} className="inline-flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 cursor-pointer hover:bg-gray-50">
+                  <label key={String(choice)} className="inline-flex items-center gap-2 border-slate-200/80 rounded-xl border px-3 py-2 cursor-pointer hover:bg-slate-50">
                     <input
                       type="radio"
                       name={`q-${q.id}`}
                       checked={answers[q.id]?.value === choice}
                       onChange={() => setAnswers((prev) => ({ ...prev, [q.id]: { value: choice } }))}
-                      className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300"
+                      className="h-4 w-4 text-tp-accent focus:ring-orange-500/20 border-slate-300"
                     />
-                    <span className="text-sm text-gray-800">{choice ? 'True' : 'False'}</span>
+                    <span className="text-[13px] text-slate-800">{choice ? 'True' : 'False'}</span>
                   </label>
                 ))}
               </div>
@@ -144,7 +144,7 @@ export const QuizPage: React.FC = () => {
                   rows={3}
                   value={answers[q.id]?.text || ''}
                   onChange={(e) => setAnswers((prev) => ({ ...prev, [q.id]: { text: e.target.value } }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                  className="w-full px-3 py-2 border border-slate-200/80 rounded-xl text-[13px] focus:ring-2 focus:ring-orange-500/20 focus:border-orange-400 placeholder:text-slate-400"
                   placeholder="Type your answer..."
                 />
               </div>

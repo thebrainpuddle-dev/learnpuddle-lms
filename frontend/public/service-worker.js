@@ -1,6 +1,6 @@
 /* eslint-disable no-restricted-globals */
 // Service Worker for LearnPuddle PWA
-// Provides offline support, caching, and push notifications
+// Provides offline support, caching, background sync, and push notifications
 
 // Auto-replaced by postbuild script with git hash + timestamp on production builds.
 // In development, '__BUILD_HASH__' is treated as a static string (caches persist across reloads).
@@ -9,6 +9,7 @@ const CACHE_NAME = `brain-lms-v${SW_VERSION}`;
 const STATIC_CACHE = `brain-lms-static-v${SW_VERSION}`;
 const DYNAMIC_CACHE = `brain-lms-dynamic-v${SW_VERSION}`;
 const API_CACHE = `brain-lms-api-v${SW_VERSION}`;
+const OFFLINE_QUEUE_CACHE = 'brain-lms-offline-queue';
 
 // Resources to cache immediately on install
 const STATIC_ASSETS = [
@@ -43,7 +44,7 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   console.log(`[SW] Activating service worker v${SW_VERSION}...`);
   
-  const currentCaches = [CACHE_NAME, STATIC_CACHE, DYNAMIC_CACHE, API_CACHE];
+  const currentCaches = [CACHE_NAME, STATIC_CACHE, DYNAMIC_CACHE, API_CACHE, OFFLINE_QUEUE_CACHE];
   
   event.waitUntil(
     caches.keys()
@@ -142,6 +143,12 @@ async function staleWhileRevalidate(request) {
         const responseToCache = networkResponse.clone();
         const cache = await caches.open(DYNAMIC_CACHE);
         cache.put(request, responseToCache);
+
+        // LRU cache eviction: keep dynamic cache under 100 entries
+        const keys = await cache.keys();
+        if (keys.length > 100) {
+          await cache.delete(keys[0]); // Remove oldest entry
+        }
       }
       return networkResponse;
     })
@@ -221,36 +228,62 @@ self.addEventListener('notificationclick', (event) => {
 // Background sync for offline actions
 self.addEventListener('sync', (event) => {
   console.log('[SW] Background sync:', event.tag);
-  
-  if (event.tag === 'sync-progress') {
-    event.waitUntil(syncProgress());
+
+  if (event.tag === 'sync-offline-queue') {
+    event.waitUntil(replayOfflineQueue());
   }
 });
 
-// Sync progress data when back online
-async function syncProgress() {
+// Replay queued offline mutations when connectivity is restored.
+// Each entry in the offline-queue cache stores a JSON payload with
+// { url, method, headers, body, timestamp }.
+async function replayOfflineQueue() {
   try {
-    const cache = await caches.open('brain-lms-pending');
-    const requests = await cache.keys();
-    
-    for (const request of requests) {
-      const response = await cache.match(request);
-      const data = await response.json();
-      
-      // Try to sync the data
-      const syncResponse = await fetch(request, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-      });
-      
-      if (syncResponse.ok) {
-        await cache.delete(request);
-        console.log('[SW] Synced pending request:', request.url);
+    const cache = await caches.open(OFFLINE_QUEUE_CACHE);
+    const keys = await cache.keys();
+
+    const results = { synced: 0, failed: 0 };
+
+    for (const request of keys) {
+      try {
+        const cached = await cache.match(request);
+        if (!cached) continue;
+
+        const entry = await cached.json();
+
+        const response = await fetch(entry.url, {
+          method: entry.method || 'POST',
+          headers: entry.headers || { 'Content-Type': 'application/json' },
+          body: entry.body ? JSON.stringify(entry.body) : undefined,
+          credentials: 'same-origin',
+        });
+
+        if (response.ok || (response.status >= 400 && response.status < 500)) {
+          // Remove from queue on success or client error (retrying won't help)
+          await cache.delete(request);
+          results.synced++;
+          console.log('[SW] Replayed offline request:', entry.url);
+        } else {
+          results.failed++;
+          console.warn('[SW] Replay failed (will retry):', entry.url, response.status);
+        }
+      } catch (err) {
+        results.failed++;
+        console.warn('[SW] Replay network error:', err);
       }
     }
+
+    // Notify all clients about sync results
+    const clients = await self.clients.matchAll({ type: 'window' });
+    for (const client of clients) {
+      client.postMessage({
+        type: 'OFFLINE_QUEUE_SYNCED',
+        synced: results.synced,
+        failed: results.failed,
+      });
+    }
   } catch (error) {
-    console.error('[SW] Sync failed:', error);
+    console.error('[SW] Offline queue replay failed:', error);
   }
 }
 
@@ -279,6 +312,48 @@ self.addEventListener('message', (event) => {
         console.log('[SW] All caches cleared');
         if (event.ports[0]) {
           event.ports[0].postMessage({ cleared: true });
+        }
+      })
+    );
+  }
+
+  // Queue a mutation for offline replay.
+  // Payload: { url, method, headers, body, timestamp }
+  if (event.data && event.data.type === 'QUEUE_OFFLINE_MUTATION') {
+    const entry = event.data.payload;
+    event.waitUntil(
+      caches.open(OFFLINE_QUEUE_CACHE).then(async (cache) => {
+        // Cap queue at 100 entries — drop oldest if full
+        const keys = await cache.keys();
+        if (keys.length >= 100) {
+          await cache.delete(keys[0]);
+        }
+
+        const key = `${entry.url}__${entry.timestamp || Date.now()}`;
+        return cache.put(
+          new Request(key),
+          new Response(JSON.stringify(entry), {
+            headers: { 'Content-Type': 'application/json' },
+          })
+        );
+      }).then(() => {
+        console.log('[SW] Queued offline mutation:', entry.url);
+        // Register for background sync if available
+        if (self.registration.sync) {
+          return self.registration.sync.register('sync-offline-queue');
+        }
+      })
+    );
+  }
+
+  // Return the current offline queue size
+  if (event.data && event.data.type === 'GET_OFFLINE_QUEUE_SIZE') {
+    event.waitUntil(
+      caches.open(OFFLINE_QUEUE_CACHE).then((cache) => {
+        return cache.keys();
+      }).then((keys) => {
+        if (event.ports[0]) {
+          event.ports[0].postMessage({ size: keys.length });
         }
       })
     );

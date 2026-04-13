@@ -191,8 +191,8 @@ export const OperationsPage: React.FC = () => {
     <div className="space-y-4 sm:space-y-6">
       <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl">Operations Center</h1>
-          <p className="mt-1 text-gray-500">
+          <h1 className="text-[22px] font-bold text-slate-900 tracking-tight">Operations Center</h1>
+          <p className="mt-0.5 text-[13px] text-slate-500">
             Production retest, error lock, and guarded unblock actions without tenant impersonation.
           </p>
         </div>
@@ -201,12 +201,12 @@ export const OperationsPage: React.FC = () => {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search tenant..."
-            className="w-52 rounded-lg border border-gray-300 px-3 py-1.5 text-sm"
+            className="w-52 rounded-xl border border-slate-200/80 px-3 py-1.5 text-[13px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 placeholder:text-slate-400"
           />
           <select
             value={selectedTenantId}
             onChange={(e) => setSelectedTenantId(e.target.value)}
-            className="w-64 rounded-lg border border-gray-300 px-3 py-1.5 text-sm"
+            className="w-64 rounded-xl border border-slate-200/80 px-3 py-1.5 text-[13px]"
             disabled={tenantsLoading}
           >
             {tenantsData?.results.map((tenant) => (
@@ -218,7 +218,7 @@ export const OperationsPage: React.FC = () => {
           <select
             value={portal}
             onChange={(e) => setPortal(e.target.value as 'TENANT_ADMIN' | 'TEACHER')}
-            className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm"
+            className="rounded-xl border border-slate-200/80 px-3 py-1.5 text-[13px]"
           >
             <option value="TENANT_ADMIN">Tenant Admin</option>
             <option value="TEACHER">Teacher</option>
@@ -226,7 +226,7 @@ export const OperationsPage: React.FC = () => {
           <select
             value={timeRange}
             onChange={(e) => setTimeRange(e.target.value as TimeRangeOption)}
-            className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm"
+            className="rounded-xl border border-slate-200/80 px-3 py-1.5 text-[13px]"
           >
             <option value="24h">Last 24 hours</option>
             <option value="7d">Last 7 days</option>
@@ -235,22 +235,22 @@ export const OperationsPage: React.FC = () => {
       </div>
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <div className="rounded-xl border border-gray-200 bg-white p-4">
-          <div className="text-xs uppercase text-gray-500">Open Incidents</div>
-          <div className="mt-1 text-2xl font-semibold text-gray-900">{incidentsData?.results.length ?? 0}</div>
+        <div className="rounded-2xl border border-slate-200/80 bg-white shadow-sm p-4">
+          <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide">Open Incidents</div>
+          <div className="mt-1 text-[20px] font-bold tabular-nums text-slate-900">{incidentsData?.results.length ?? 0}</div>
         </div>
-        <div className="rounded-xl border border-gray-200 bg-white p-4">
-          <div className="text-xs uppercase text-gray-500">Active 500 Groups</div>
-          <div className="mt-1 text-2xl font-semibold text-red-700">{errors500}</div>
+        <div className="rounded-2xl border border-slate-200/80 bg-white shadow-sm p-4">
+          <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide">Active 500 Groups</div>
+          <div className="mt-1 text-[20px] font-bold tabular-nums text-red-700">{errors500}</div>
         </div>
-        <div className="rounded-xl border border-gray-200 bg-white p-4">
-          <div className="text-xs uppercase text-gray-500">Active 429 Groups</div>
-          <div className="mt-1 text-2xl font-semibold text-amber-700">{errors429}</div>
+        <div className="rounded-2xl border border-slate-200/80 bg-white shadow-sm p-4">
+          <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide">Active 429 Groups</div>
+          <div className="mt-1 text-[20px] font-bold tabular-nums text-amber-700">{errors429}</div>
         </div>
-        <div className="rounded-xl border border-gray-200 bg-white p-4">
-          <div className="text-xs uppercase text-gray-500">Health Score</div>
-          <div className="mt-1 text-2xl font-semibold text-indigo-700">{overview?.totals.healthy ?? 0}</div>
-          <div className="text-xs text-gray-500">healthy tenants</div>
+        <div className="rounded-2xl border border-slate-200/80 bg-white shadow-sm p-4">
+          <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide">Health Score</div>
+          <div className="mt-1 text-[20px] font-bold tabular-nums text-indigo-700">{overview?.totals.healthy ?? 0}</div>
+          <div className="text-[11px] text-slate-500">healthy tenants</div>
         </div>
       </div>
 
@@ -326,7 +326,7 @@ export const OperationsPage: React.FC = () => {
               type="button"
               onClick={() => approveActionMutation.mutate(pendingApprovalActionId)}
               disabled={approveActionMutation.isPending}
-              className="w-full rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+              className="w-full rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-50"
             >
               {approveActionMutation.isPending ? 'Approving...' : 'Approve Pending Action'}
             </button>

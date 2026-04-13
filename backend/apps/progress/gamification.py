@@ -268,6 +268,7 @@ def claim_quest_reward(user, courses_qs, quest_key: str) -> Dict:
     today = timezone.localdate()
     try:
         TeacherQuestClaim.objects.create(
+            tenant=user.tenant,
             teacher=user,
             quest_key=quest_key,
             claim_date=today,

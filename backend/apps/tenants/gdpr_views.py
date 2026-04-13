@@ -200,7 +200,7 @@ def user_data_export(request):
     user_id = request.query_params.get('user_id')
     
     # Determine target user
-    if user_id and request.user.role == 'SCHOOL_ADMIN':
+    if user_id and request.user.role in ('SCHOOL_ADMIN', 'SUPER_ADMIN'):
         try:
             target_user = User.objects.get(id=user_id, tenant=request.tenant)
         except User.DoesNotExist:

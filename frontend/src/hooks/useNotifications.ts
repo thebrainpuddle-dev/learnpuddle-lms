@@ -96,8 +96,8 @@ export function useNotifications(options: UseNotificationsOptions = {}): UseNoti
         const data = response.data;
         setNotifications(Array.isArray(data) ? data : (data.results || []));
         setUnreadCount(data.unread_count ?? 0);
-      } catch (error) {
-        console.error('Polling failed:', error);
+      } catch {
+        // Polling failed silently; will retry on next interval
       }
     };
 
@@ -118,8 +118,10 @@ export function useNotifications(options: UseNotificationsOptions = {}): UseNoti
 
     setConnectionStatus('connecting');
 
-    const wsUrl = `${WS_BASE_URL}/ws/notifications/?token=${accessToken}`;
-    const ws = new WebSocket(wsUrl);
+    // Pass JWT via subprotocol instead of URL query string to avoid
+    // token leakage in browser history, server logs, and referer headers.
+    const wsUrl = `${WS_BASE_URL}/ws/notifications/`;
+    const ws = new WebSocket(wsUrl, [`Bearer.${accessToken}`]);
     wsRef.current = ws;
 
     ws.onopen = () => {
@@ -169,13 +171,13 @@ export function useNotifications(options: UseNotificationsOptions = {}): UseNoti
             // Connection is alive
             break;
         }
-      } catch (e) {
-        console.error('Failed to parse WebSocket message:', e);
+      } catch {
+        // Malformed WS message; skip
       }
     };
 
-    ws.onerror = (error) => {
-      console.error('WebSocket error:', error);
+    ws.onerror = () => {
+      // WS error handled by onclose reconnection logic
     };
 
     ws.onclose = (event) => {
@@ -195,8 +197,7 @@ export function useNotifications(options: UseNotificationsOptions = {}): UseNoti
           const delay = getReconnectDelay();
           reconnectTimeoutRef.current = setTimeout(connect, delay);
         } else {
-          // Fall back to polling
-          console.log('Max reconnection attempts reached, falling back to polling');
+          // Fall back to polling after max reconnect attempts
           setConnectionStatus('polling');
           startPolling();
         }

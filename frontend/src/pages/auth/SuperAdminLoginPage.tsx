@@ -1,16 +1,31 @@
 // src/pages/auth/SuperAdminLoginPage.tsx
 
-import React, { useState } from 'react';
+import React from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Button } from '../../components/common/Button';
-import { useAuthStore } from '../../stores/authStore';
-import { usePageTitle } from '../../hooks/usePageTitle';
-import api from '../../config/api';
+import { z } from 'zod';
+import { Controller } from 'react-hook-form';
 import {
   EnvelopeIcon,
   LockClosedIcon,
   ShieldCheckIcon,
 } from '@heroicons/react/24/outline';
+
+import { useZodForm } from '../../hooks/useZodForm';
+import { Button } from '../../components/common/Button';
+import { useAuthStore } from '../../stores/authStore';
+import { usePageTitle } from '../../hooks/usePageTitle';
+import api from '../../config/api';
+
+// ─── Zod schema ──────────────────────────────────────────────────────────────
+
+const SuperAdminLoginSchema = z.object({
+  email: z.string().min(1, 'Email is required').email('Enter a valid email address'),
+  password: z.string().min(1, 'Password is required'),
+});
+
+type SuperAdminLoginData = z.infer<typeof SuperAdminLoginSchema>;
+
+// ─── Component ───────────────────────────────────────────────────────────────
 
 export const SuperAdminLoginPage: React.FC = () => {
   usePageTitle('Super Admin Login');
@@ -18,28 +33,28 @@ export const SuperAdminLoginPage: React.FC = () => {
   const [searchParams] = useSearchParams();
   const { setAuth, setLoading } = useAuthStore();
 
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
-  const [loading, setLoadingState] = useState(false);
   const logoutReason = searchParams.get('reason');
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-    setLoadingState(true);
-    setLoading(true);
+  const form = useZodForm({
+    schema: SuperAdminLoginSchema,
+    defaultValues: { email: '', password: '' },
+  });
 
+  const onSubmit = form.handleSubmit(async (data: SuperAdminLoginData) => {
+    setLoading(true);
     try {
       const response = await api.post('/users/auth/login/', {
-        email,
-        password,
+        email: data.email,
+        password: data.password,
         portal: 'super_admin',
       });
       const { user, tokens } = response.data;
 
       if (user.role !== 'SUPER_ADMIN') {
-        setError('This portal is for platform administrators only.');
+        form.setError('root', {
+          type: 'server',
+          message: 'This portal is for platform administrators only.',
+        });
         return;
       }
 
@@ -51,18 +66,21 @@ export const SuperAdminLoginPage: React.FC = () => {
         err.response?.data?.detail ||
         err.response?.data?.error ||
         '';
+      let message: string;
       if (err.response?.status === 400) {
-        setError(detail || 'Invalid credentials');
+        message = detail || 'Invalid credentials';
       } else if (err.response?.status === 403) {
-        setError('Access denied');
+        message = 'Access denied';
       } else {
-        setError('An error occurred. Please try again.');
+        message = 'An error occurred. Please try again.';
       }
+      form.setError('root', { type: 'server', message });
     } finally {
-      setLoadingState(false);
       setLoading(false);
     }
-  };
+  });
+
+  const hasRootError = Boolean(form.formState.errors.root);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center p-4">
@@ -82,66 +100,88 @@ export const SuperAdminLoginPage: React.FC = () => {
             Platform Admin Sign In
           </h2>
 
-          {error && (
+          {hasRootError && (
             <div className="mb-4 p-4 bg-red-500/10 border border-red-500/20 rounded-lg">
-              <p className="text-sm text-red-300">{error}</p>
+              <p className="text-sm text-red-300">
+                {form.formState.errors.root!.message}
+              </p>
             </div>
           )}
-          {!error && logoutReason === 'idle_timeout' && (
+          {!hasRootError && logoutReason === 'idle_timeout' && (
             <div className="mb-4 p-4 bg-amber-500/10 border border-amber-500/20 rounded-lg">
               <p className="text-sm text-amber-300">
                 You were signed out after 30 minutes of inactivity.
               </p>
             </div>
           )}
-          {!error && logoutReason === 'session_expired' && (
+          {!hasRootError && logoutReason === 'session_expired' && (
             <div className="mb-4 p-4 bg-sky-500/10 border border-sky-500/20 rounded-lg">
               <p className="text-sm text-sky-300">Session expired. Please sign in again.</p>
             </div>
           )}
-          {!error && logoutReason === 'tenant_access_denied' && (
+          {!hasRootError && logoutReason === 'tenant_access_denied' && (
             <div className="mb-4 p-4 bg-sky-500/10 border border-sky-500/20 rounded-lg">
               <p className="text-sm text-sky-300">Session context changed. Please sign in again.</p>
             </div>
           )}
 
-          <form onSubmit={handleSubmit} className="space-y-5">
+          <form onSubmit={onSubmit} noValidate className="space-y-5">
+            {/* Email — using Controller directly for the custom dark-theme input */}
             <div>
               <label htmlFor="superadmin-email" className="block text-sm font-medium text-slate-300 mb-1.5">
                 Email Address
               </label>
               <div className="relative">
                 <EnvelopeIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-500" />
-                <input
-                  id="superadmin-email"
+                <Controller
+                  control={form.control}
                   name="email"
-                  type="email"
-                  autoComplete="email"
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="admin@lms.com"
-                  className="w-full pl-10 pr-4 py-2.5 bg-white/5 border border-white/10 rounded-lg text-white placeholder-slate-500 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors"
+                  render={({ field, fieldState }) => (
+                    <>
+                      <input
+                        {...field}
+                        id="superadmin-email"
+                        type="email"
+                        autoComplete="email"
+                        placeholder="admin@lms.com"
+                        aria-invalid={fieldState.invalid}
+                        className="w-full pl-10 pr-4 py-2.5 bg-white/5 border border-white/10 rounded-lg text-white placeholder-slate-500 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors aria-[invalid=true]:border-red-500"
+                      />
+                      {fieldState.error && (
+                        <p className="mt-1 text-xs text-red-400">{fieldState.error.message}</p>
+                      )}
+                    </>
+                  )}
                 />
               </div>
             </div>
 
+            {/* Password */}
             <div>
               <label htmlFor="superadmin-password" className="block text-sm font-medium text-slate-300 mb-1.5">
                 Password
               </label>
               <div className="relative">
                 <LockClosedIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-500" />
-                <input
-                  id="superadmin-password"
+                <Controller
+                  control={form.control}
                   name="password"
-                  type="password"
-                  autoComplete="current-password"
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="w-full pl-10 pr-4 py-2.5 bg-white/5 border border-white/10 rounded-lg text-white placeholder-slate-500 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors"
+                  render={({ field, fieldState }) => (
+                    <>
+                      <input
+                        {...field}
+                        id="superadmin-password"
+                        type="password"
+                        autoComplete="current-password"
+                        placeholder="••••••••"
+                        aria-invalid={fieldState.invalid}
+                        className="w-full pl-10 pr-4 py-2.5 bg-white/5 border border-white/10 rounded-lg text-white placeholder-slate-500 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors aria-[invalid=true]:border-red-500"
+                      />
+                      {fieldState.error && (
+                        <p className="mt-1 text-xs text-red-400">{fieldState.error.message}</p>
+                      )}
+                    </>
+                  )}
                 />
               </div>
             </div>
@@ -151,7 +191,7 @@ export const SuperAdminLoginPage: React.FC = () => {
               variant="primary"
               size="lg"
               fullWidth
-              loading={loading}
+              loading={form.formState.isSubmitting}
               className="!bg-indigo-600 hover:!bg-indigo-700"
             >
               Sign In to Command Center

@@ -81,6 +81,7 @@ class TeacherMvpApiTestCase(TestCase):
             is_active=True,
         )
         self.assignment = Assignment.objects.create(
+            tenant=self.tenant,
             course=self.course,
             module=self.module_1,
             content=self.content_1,
@@ -177,6 +178,7 @@ class TeacherMvpApiTestCase(TestCase):
                 is_active=True,
             )
             progress = TeacherProgress.objects.create(
+                tenant=self.tenant,
                 teacher=self.teacher,
                 course=streak_course,
                 content=content,
@@ -204,6 +206,7 @@ class TeacherMvpApiTestCase(TestCase):
         self._login()
 
         quiz_assignment = Assignment.objects.create(
+            tenant=self.tenant,
             course=self.course,
             module=self.module_1,
             title="Quiz Assignment",
@@ -214,8 +217,9 @@ class TeacherMvpApiTestCase(TestCase):
             generation_metadata={},
             is_active=True,
         )
-        quiz = Quiz.objects.create(assignment=quiz_assignment)
+        quiz = Quiz.objects.create(tenant=self.tenant, assignment=quiz_assignment)
         QuizQuestion.objects.create(
+            tenant=self.tenant,
             quiz=quiz,
             order=1,
             question_type="MCQ",
@@ -231,6 +235,7 @@ class TeacherMvpApiTestCase(TestCase):
         self.assertEqual(before.json()["stats"]["pending_assignments"], 2)
 
         QuizSubmission.objects.create(
+            tenant=self.tenant,
             quiz=quiz,
             teacher=self.teacher,
             answers={str(quiz.questions.first().id): {"option_index": 1}},

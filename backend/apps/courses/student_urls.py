@@ -2,6 +2,7 @@ from django.urls import path, include
 
 from . import student_views
 from .maic_urls import student_urlpatterns as maic_student_urls
+from .chatbot_urls import student_urlpatterns as chatbot_student_urls
 
 app_name = "student_courses"
 
@@ -13,4 +14,7 @@ urlpatterns = [
 
     # OpenMAIC AI Classroom
     path("maic/", include((maic_student_urls, "maic"))),
+
+    # AI Chatbot
+    path("chatbots/", include((chatbot_student_urls, "chatbots"))),
 ]

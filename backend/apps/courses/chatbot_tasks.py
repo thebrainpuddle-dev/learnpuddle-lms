@@ -23,6 +23,21 @@ from utils.tenant_middleware import set_current_tenant, clear_current_tenant
 
 logger = logging.getLogger(__name__)
 
+
+def _check_pgvector_available() -> bool:
+    """Check if pgvector extension and embedding column exist in the database."""
+    try:
+        from django.db import connection
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name = 'ai_chatbot_chunks' AND column_name = 'embedding'"
+            )
+            return cursor.fetchone() is not None
+    except Exception:
+        return False
+
+
 # Chunking config
 CHUNK_SIZE = 512       # tokens per chunk
 CHUNK_OVERLAP = 50     # token overlap between chunks
@@ -146,7 +161,10 @@ def _get_embeddings(texts: list[str], api_key: str, base_url: str = "") -> list[
     """
     import requests as http_requests
 
-    url = (base_url.rstrip("/") if base_url else "https://api.openai.com") + "/v1/embeddings"
+    base = base_url.rstrip("/") if base_url else "https://api.openai.com/v1"
+    if not base.endswith("/v1"):
+        base += "/v1"
+    url = base + "/embeddings"
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
@@ -242,7 +260,9 @@ def ingest_chatbot_knowledge(self, knowledge_id: str):
             knowledge.save(update_fields=['embedding_status', 'error_message', 'updated_at'])
             return
 
-        # Step 2: Get embeddings
+        # Step 2: Check pgvector availability and get embeddings if possible
+        has_pgvector = _check_pgvector_available()
+
         try:
             ai_config = tenant.ai_config
         except Exception:
@@ -253,13 +273,22 @@ def ingest_chatbot_knowledge(self, knowledge_id: str):
         if not api_key:
             raise ValueError("No API key configured for AI provider.")
 
-        chunk_texts = [c["content"] for c in raw_chunks]
-        embeddings = _get_embeddings(chunk_texts, api_key, base_url)
+        embeddings = None
+        if has_pgvector:
+            chunk_texts = [c["content"] for c in raw_chunks]
+            try:
+                embeddings = _get_embeddings(chunk_texts, api_key, base_url)
+            except Exception:
+                logger.warning(
+                    "Embedding generation failed; storing chunks without vectors "
+                    "(keyword search will still work)",
+                    exc_info=True,
+                )
 
         # Step 3: Bulk insert chunks
         total_tokens = 0
         chunk_objects = []
-        for idx, (chunk_data, embedding) in enumerate(zip(raw_chunks, embeddings)):
+        for idx, chunk_data in enumerate(raw_chunks):
             total_tokens += chunk_data["token_count"]
             chunk_objects.append(
                 AIChatbotChunk(
@@ -271,7 +300,6 @@ def ingest_chatbot_knowledge(self, knowledge_id: str):
                     token_count=chunk_data["token_count"],
                     heading=chunk_data.get("heading", ""),
                     page_number=chunk_data.get("page_number"),
-                    embedding=embedding,
                 )
             )
 
@@ -279,6 +307,21 @@ def ingest_chatbot_knowledge(self, knowledge_id: str):
             # Delete existing chunks for this knowledge source (re-ingestion)
             AIChatbotChunk.all_objects.filter(knowledge=knowledge).delete()
             AIChatbotChunk.all_objects.bulk_create(chunk_objects, batch_size=500)
+
+            # If pgvector is available and we have embeddings, update them via raw SQL
+            if embeddings and has_pgvector:
+                from django.db import connection
+                created_chunks = list(
+                    AIChatbotChunk.all_objects.filter(knowledge=knowledge)
+                    .order_by('chunk_index')
+                    .values_list('id', flat=True)
+                )
+                with connection.cursor() as cursor:
+                    for chunk_id, emb in zip(created_chunks, embeddings):
+                        cursor.execute(
+                            "UPDATE ai_chatbot_chunks SET embedding = %s::vector WHERE id = %s",
+                            [emb, chunk_id],
+                        )
 
             knowledge.chunk_count = len(chunk_objects)
             knowledge.total_token_count = total_tokens

@@ -31,23 +31,31 @@ export const SuperAdminSidebar: React.FC<SuperAdminSidebarProps> = ({ open, onCl
   const { startTour } = useGuidedTour();
 
   const SidebarContent = () => (
-    <aside data-tour="superadmin-sidebar" className="flex h-full w-full flex-col bg-slate-900 text-white">
+    <aside
+      data-tour="superadmin-sidebar"
+      className="flex h-full w-full flex-col bg-slate-900 text-white"
+    >
       {/* Brand */}
-      <div className="flex h-16 items-center justify-between border-b border-slate-800 px-6">
-        <span className="text-lg font-bold tracking-tight">Command Center</span>
+      <div className="flex h-[60px] items-center justify-between border-b border-slate-800/80 px-5">
+        <div className="flex items-center gap-2.5">
+          <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-indigo-500 to-violet-500 flex items-center justify-center shadow-sm">
+            <span className="text-white font-bold text-[11px]">LP</span>
+          </div>
+          <span className="text-[15px] font-semibold tracking-tight">Command Center</span>
+        </div>
         {onClose && (
           <button
             onClick={onClose}
-            className="text-slate-400 hover:text-white lg:hidden"
+            className="text-slate-500 hover:text-white lg:hidden transition-colors"
             aria-label="Close navigation"
           >
-            <XMarkIcon className="h-6 w-6" />
+            <XMarkIcon className="h-5 w-5" />
           </button>
         )}
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
+      <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
         {navItems.map((item) => (
           <NavLink
             key={item.to}
@@ -55,28 +63,35 @@ export const SuperAdminSidebar: React.FC<SuperAdminSidebarProps> = ({ open, onCl
             data-tour={item.tourId}
             onClick={() => onClose?.()}
             className={({ isActive }) =>
-              `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+              `relative flex items-center gap-2.5 px-3 py-[9px] rounded-lg text-[13px] font-medium transition-all duration-150 ${
                 isActive
                   ? 'bg-slate-800 text-white'
-                  : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                  : 'text-slate-400 hover:bg-slate-800/60 hover:text-slate-200'
               }`
             }
           >
-            <item.icon className="h-5 w-5" />
-            {item.label}
+            {({ isActive }) => (
+              <>
+                {isActive && (
+                  <span className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-4 rounded-r-full bg-indigo-400" />
+                )}
+                <item.icon className={`h-[18px] w-[18px] flex-shrink-0 ${isActive ? 'text-indigo-400' : ''}`} />
+                {item.label}
+              </>
+            )}
           </NavLink>
         ))}
       </nav>
 
       {/* Footer */}
-      <div className="p-3 border-t border-slate-800">
+      <div className="p-3 border-t border-slate-800/80 space-y-0.5">
         <button
           type="button"
           onClick={startTour}
           data-tour="superadmin-tour-replay"
-          className="flex items-center gap-3 w-full mb-2 px-3 py-2.5 rounded-lg text-sm font-medium text-slate-300 hover:bg-slate-800 hover:text-white transition-colors"
+          className="flex items-center gap-2.5 w-full px-3 py-[9px] rounded-lg text-[13px] font-medium text-slate-400 hover:bg-slate-800/60 hover:text-slate-200 transition-colors"
         >
-          <QuestionMarkCircleIcon className="h-5 w-5" />
+          <QuestionMarkCircleIcon className="h-[18px] w-[18px]" />
           Start Tour
         </button>
         <button
@@ -85,9 +100,9 @@ export const SuperAdminSidebar: React.FC<SuperAdminSidebarProps> = ({ open, onCl
             clearAuth();
             window.location.href = '/super-admin/login';
           }}
-          className="flex items-center gap-3 w-full px-3 py-2.5 rounded-lg text-sm font-medium text-slate-300 hover:bg-slate-800 hover:text-white transition-colors"
+          className="flex items-center gap-2.5 w-full px-3 py-[9px] rounded-lg text-[13px] font-medium text-slate-400 hover:bg-red-500/10 hover:text-red-400 transition-colors"
         >
-          <ArrowRightOnRectangleIcon className="h-5 w-5" />
+          <ArrowRightOnRectangleIcon className="h-[18px] w-[18px]" />
           Sign out
         </button>
       </div>
@@ -107,7 +122,7 @@ export const SuperAdminSidebar: React.FC<SuperAdminSidebarProps> = ({ open, onCl
             leaveFrom="opacity-100"
             leaveTo="opacity-0"
           >
-            <div className="fixed inset-0 bg-slate-900/80" />
+            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-[2px]" />
           </Transition.Child>
 
           <div className="fixed inset-0 flex">
@@ -120,7 +135,7 @@ export const SuperAdminSidebar: React.FC<SuperAdminSidebarProps> = ({ open, onCl
               leaveFrom="translate-x-0"
               leaveTo="-translate-x-full"
             >
-              <Dialog.Panel className="relative mr-10 flex w-[85vw] max-w-xs flex-1 sm:mr-16">
+              <Dialog.Panel className="relative mr-16 flex w-[260px] flex-1">
                 <SidebarContent />
               </Dialog.Panel>
             </Transition.Child>

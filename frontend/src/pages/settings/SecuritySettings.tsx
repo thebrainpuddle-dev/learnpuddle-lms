@@ -3,11 +3,145 @@
  * Security settings page for SSO and 2FA configuration.
  */
 
-import React, { useState } from 'react';
+import React, { Fragment, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { z } from 'zod';
+import { Dialog, Transition } from '@headlessui/react';
+import { ShieldExclamationIcon } from '@heroicons/react/24/outline';
+
 import { Button, Loading } from '../../components/common';
+import { FormField } from '../../components/common/FormField';
+import { useZodForm } from '../../hooks/useZodForm';
 import { usePageTitle } from '../../hooks/usePageTitle';
 import api from '../../config/api';
+
+// ─── Zod schema for disabling 2FA ────────────────────────────────────────────
+
+const Disable2FASchema = z.object({
+  code: z
+    .string()
+    .length(6, 'Enter the 6-digit code from your authenticator app')
+    .regex(/^\d{6}$/, 'Code must be 6 digits'),
+  password: z.string().min(1, 'Password is required'),
+});
+
+type Disable2FAData = z.infer<typeof Disable2FASchema>;
+
+// ─── Disable 2FA modal ───────────────────────────────────────────────────────
+
+interface Disable2FAModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  onConfirm: (code: string, password: string) => void;
+  loading: boolean;
+}
+
+const Disable2FAModal: React.FC<Disable2FAModalProps> = ({
+  isOpen,
+  onClose,
+  onConfirm,
+  loading,
+}) => {
+  const form = useZodForm({
+    schema: Disable2FASchema,
+    defaultValues: { code: '', password: '' },
+  });
+
+  const onSubmit = form.handleSubmit((data: Disable2FAData) => {
+    onConfirm(data.code, data.password);
+  });
+
+  // Reset form whenever modal opens
+  React.useEffect(() => {
+    if (isOpen) form.reset();
+  }, [isOpen, form]);
+
+  return (
+    <Transition show={isOpen} as={Fragment}>
+      <Dialog as="div" className="relative z-50" onClose={onClose}>
+        <Transition.Child
+          as={Fragment}
+          enter="ease-out duration-200"
+          enterFrom="opacity-0"
+          enterTo="opacity-100"
+          leave="ease-in duration-150"
+          leaveFrom="opacity-100"
+          leaveTo="opacity-0"
+        >
+          <div className="fixed inset-0 bg-black/40" />
+        </Transition.Child>
+
+        <div className="fixed inset-0 overflow-y-auto">
+          <div className="flex min-h-full items-center justify-center p-4">
+            <Transition.Child
+              as={Fragment}
+              enter="ease-out duration-200"
+              enterFrom="opacity-0 scale-95"
+              enterTo="opacity-100 scale-100"
+              leave="ease-in duration-150"
+              leaveFrom="opacity-100 scale-100"
+              leaveTo="opacity-0 scale-95"
+            >
+              <Dialog.Panel className="w-full max-w-md transform overflow-hidden rounded-2xl bg-white p-6 shadow-xl transition-all">
+                <div className="flex items-start gap-3 mb-5">
+                  <div className="flex-shrink-0 p-2 rounded-full bg-red-100">
+                    <ShieldExclamationIcon className="h-6 w-6 text-red-600" />
+                  </div>
+                  <div>
+                    <Dialog.Title className="text-lg font-semibold text-gray-900">
+                      Disable Two-Factor Authentication
+                    </Dialog.Title>
+                    <p className="mt-1 text-sm text-gray-500">
+                      This will remove an extra layer of security from your account.
+                    </p>
+                  </div>
+                </div>
+
+                <form onSubmit={onSubmit} noValidate className="space-y-4">
+                  <FormField
+                    control={form.control}
+                    name="code"
+                    label="Authenticator code"
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={6}
+                    autoComplete="one-time-code"
+                    placeholder="000000"
+                  />
+                  <FormField
+                    control={form.control}
+                    name="password"
+                    label="Current password"
+                    type="password"
+                    autoComplete="current-password"
+                  />
+
+                  <div className="flex justify-end gap-3 pt-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={onClose}
+                      disabled={loading}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      type="submit"
+                      loading={loading}
+                      className="bg-red-600 hover:bg-red-700 text-white"
+                    >
+                      Disable 2FA
+                    </Button>
+                  </div>
+                </form>
+              </Dialog.Panel>
+            </Transition.Child>
+          </div>
+        </div>
+      </Dialog>
+    </Transition>
+  );
+};
 
 interface TwoFAStatus {
   enabled: boolean;
@@ -45,6 +179,7 @@ export const SecuritySettings: React.FC = () => {
   const [verifyCode, setVerifyCode] = useState('');
   const [backupCodes, setBackupCodes] = useState<string[]>([]);
   const [showBackupCodes, setShowBackupCodes] = useState(false);
+  const [showDisable2FAModal, setShowDisable2FAModal] = useState(false);
 
   // Fetch 2FA status
   const { data: twoFAStatus, isLoading: loadingTwoFA } = useQuery<TwoFAStatus>({
@@ -146,13 +281,7 @@ export const SecuritySettings: React.FC = () => {
             {twoFAStatus.can_disable && (
               <Button
                 variant="outline"
-                onClick={() => {
-                  const code = prompt('Enter your 2FA code:');
-                  const password = prompt('Enter your password:');
-                  if (code && password) {
-                    disableTwoFAMutation.mutate({ code, password });
-                  }
-                }}
+                onClick={() => setShowDisable2FAModal(true)}
               >
                 Disable 2FA
               </Button>
@@ -250,6 +379,19 @@ export const SecuritySettings: React.FC = () => {
           </div>
         )}
       </section>
+
+      {/* Disable 2FA modal */}
+      <Disable2FAModal
+        isOpen={showDisable2FAModal}
+        onClose={() => setShowDisable2FAModal(false)}
+        loading={disableTwoFAMutation.isPending}
+        onConfirm={(code, password) => {
+          disableTwoFAMutation.mutate(
+            { code, password },
+            { onSuccess: () => setShowDisable2FAModal(false) },
+          );
+        }}
+      />
 
       {/* Single Sign-On */}
       <section data-tour="security-sso-section" className="bg-white rounded-lg shadow p-6">

@@ -26,12 +26,12 @@ function mapTenantAdminTab(pathname: string, tabParam: string): string {
     return 'course_editor';
   }
   if (pathname.startsWith('/admin/courses')) return 'courses';
-  if (pathname.startsWith('/admin/media')) return 'media';
   if (pathname.startsWith('/admin/teachers')) return 'teachers';
   if (pathname.startsWith('/admin/groups')) return 'groups';
   if (pathname.startsWith('/admin/reminders')) return 'reminders';
-  if (pathname.startsWith('/admin/announcements')) return 'announcements';
-  if (pathname.startsWith('/admin/analytics')) return 'reports';
+  if (pathname.startsWith('/admin/analytics')) return 'analytics';
+  if (pathname.startsWith('/admin/certifications')) return 'certifications';
+  if (pathname.startsWith('/admin/billing')) return 'billing';
   if (pathname.startsWith('/admin/settings')) return 'settings';
   return 'admin';
 }

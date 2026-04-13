@@ -4,6 +4,7 @@ import React from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import { AdminSidebar } from './AdminSidebar';
 import { AdminHeader } from './AdminHeader';
+import { ErrorBoundary } from '../common';
 
 export const AdminLayout: React.FC = () => {
   const [sidebarOpen, setSidebarOpen] = React.useState(false);
@@ -61,7 +62,9 @@ export const AdminLayout: React.FC = () => {
         <main className="flex-1 min-w-0">
           <div className="py-4 sm:py-6">
             <div className="mx-auto max-w-7xl px-3 sm:px-6 md:px-8">
-              <Outlet />
+              <ErrorBoundary>
+                <Outlet />
+              </ErrorBoundary>
             </div>
           </div>
         </main>

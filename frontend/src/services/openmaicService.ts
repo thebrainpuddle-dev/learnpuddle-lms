@@ -6,7 +6,7 @@ import api from '../config/api';
 import type { MAICClassroomMeta, MAICOutlineScene, MAICAgent } from '../types/maic';
 import type { MAICAction } from '../types/maic-actions';
 import type { MAICScene } from '../types/maic-scenes';
-import type { AIChatbot, AIChatbotKnowledge, AIChatbotCreatePayload, ChatbotAnalytics, Conversation } from '../types/chatbot';
+import type { AIChatbot, AIChatbotKnowledge, AIChatbotCreatePayload, ChatbotAnalytics, Conversation, TeacherSection } from '../types/chatbot';
 
 // ─── MAIC AI Classroom API (Teacher) ─────────────────────────────────────────
 
@@ -100,6 +100,16 @@ export const chatbotApi = {
 
   delete: (id: string) =>
     api.delete(`/v1/teacher/chatbots/${id}/`),
+
+  clone: (id: string) =>
+    api.post<AIChatbot>(`/v1/teacher/chatbots/${id}/clone/`),
+
+  refreshSources: (id: string) =>
+    api.post(`/v1/teacher/chatbots/${id}/refresh-sources/`),
+
+  // Sections
+  mySections: () =>
+    api.get<TeacherSection[]>('/v1/teacher/chatbots/my-sections/'),
 
   // Knowledge
   listKnowledge: (chatbotId: string) =>

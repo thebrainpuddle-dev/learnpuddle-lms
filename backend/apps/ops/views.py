@@ -6,10 +6,11 @@ from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 
 from apps.tenants.models import Tenant
 from utils.decorators import super_admin_only
@@ -638,8 +639,13 @@ def ops_action_approve(request, action_id):
     return Response(result)
 
 
+class ClientErrorIngestThrottle(ScopedRateThrottle):
+    scope = 'client_error_ingest'
+
+
 @api_view(["POST"])
 @permission_classes([AllowAny])
+@throttle_classes([ClientErrorIngestThrottle])
 def ops_client_error_ingest(request):
     payload = request.data if isinstance(request.data, dict) else {}
     status_code = int(payload.get("status_code") or 0)

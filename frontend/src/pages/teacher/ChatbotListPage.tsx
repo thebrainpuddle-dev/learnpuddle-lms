@@ -1,11 +1,11 @@
 // src/pages/teacher/ChatbotListPage.tsx
 //
-// Teacher chatbot library — grid of ChatbotCards with search filter,
-// loading state, and empty state. Follows MAICLibraryPage pattern.
+// Teacher chatbot library — flat grid with section filter dropdown,
+// search, clone support. Cards show section badge tags.
 
 import React, { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Bot, Plus, Search } from 'lucide-react';
+import { Bot, Plus, Search, Filter } from 'lucide-react';
 import { usePageTitle } from '../../hooks/usePageTitle';
 import { useToast } from '../../components/common';
 import { chatbotApi } from '../../services/openmaicService';
@@ -21,8 +21,9 @@ export function ChatbotListPage() {
   const toast = useToast();
 
   const [search, setSearch] = useState('');
+  const [sectionFilter, setSectionFilter] = useState('');
 
-  const { chatbots, isLoading, error, setChatbots, setLoading, setError, removeChatbot } =
+  const { chatbots, isLoading, error, setChatbots, setLoading, setError, removeChatbot, addChatbot } =
     useChatbotStore();
 
   // Fetch chatbots on mount
@@ -52,12 +53,35 @@ export function ChatbotListPage() {
     };
   }, [setChatbots, setLoading, setError]);
 
-  // Filter by search term
+  // Build unique section labels for filter
+  const sectionOptions = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const bot of chatbots) {
+      for (const sec of bot.sections || []) {
+        if (!seen.has(sec.id)) {
+          seen.set(sec.id, `${sec.grade_short_code}-${sec.name}`);
+        }
+      }
+    }
+    return Array.from(seen.entries())
+      .map(([id, label]) => ({ id, label }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [chatbots]);
+
+  // Filter by search + section
   const filtered = useMemo(() => {
-    if (!search.trim()) return chatbots;
-    const q = search.trim().toLowerCase();
-    return chatbots.filter((c) => c.name.toLowerCase().includes(q));
-  }, [chatbots, search]);
+    let result = chatbots;
+    if (search.trim()) {
+      const q = search.trim().toLowerCase();
+      result = result.filter((c) => c.name.toLowerCase().includes(q));
+    }
+    if (sectionFilter) {
+      result = result.filter((c) =>
+        c.sections?.some((s) => s.id === sectionFilter),
+      );
+    }
+    return result;
+  }, [chatbots, search, sectionFilter]);
 
   // Delete handler
   async function handleDelete(id: string) {
@@ -67,6 +91,17 @@ export function ChatbotListPage() {
       removeChatbot(id);
     } catch (err: unknown) {
       toast.error('Delete failed', err instanceof Error ? err.message : 'Could not delete chatbot.');
+    }
+  }
+
+  // Clone handler
+  async function handleClone(id: string) {
+    try {
+      const res = await chatbotApi.clone(id);
+      addChatbot(res.data);
+      toast.success('Cloned', 'Chatbot cloned successfully. Knowledge sources were not copied.');
+    } catch (err: unknown) {
+      toast.error('Clone failed', err instanceof Error ? err.message : 'Could not clone chatbot.');
     }
   }
 
@@ -89,7 +124,7 @@ export function ChatbotListPage() {
         </button>
       </div>
 
-      {/* Search */}
+      {/* Search + Section Filter */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
         <div className="relative flex-1 max-w-sm">
           <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -103,6 +138,24 @@ export function ChatbotListPage() {
             className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-indigo-500 focus:border-indigo-500"
           />
         </div>
+
+        {sectionOptions.length > 0 && (
+          <div className="relative">
+            <Filter className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400 pointer-events-none" />
+            <select
+              value={sectionFilter}
+              onChange={(e) => setSectionFilter(e.target.value)}
+              className="pl-9 pr-8 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:ring-indigo-500 focus:border-indigo-500 appearance-none"
+            >
+              <option value="">All Sections</option>
+              {sectionOptions.map((opt) => (
+                <option key={opt.id} value={opt.id}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
       </div>
 
       {/* Error */}
@@ -122,14 +175,14 @@ export function ChatbotListPage() {
         <div className="text-center py-16">
           <Bot className="mx-auto h-12 w-12 text-gray-300" />
           <h3 className="mt-4 text-lg font-medium text-gray-900">
-            {search.trim() ? 'No chatbots match your search' : 'No chatbots yet'}
+            {search.trim() || sectionFilter ? 'No chatbots match your filters' : 'No chatbots yet'}
           </h3>
           <p className="mt-2 text-sm text-gray-500">
-            {search.trim()
-              ? 'Try a different search term.'
+            {search.trim() || sectionFilter
+              ? 'Try a different search term or section filter.'
               : 'Create your first AI Chatbot to get started.'}
           </p>
-          {!search.trim() && (
+          {!search.trim() && !sectionFilter && (
             <button
               onClick={() => navigate('/teacher/chatbots/new')}
               className="mt-6 inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 transition-colors"
@@ -146,6 +199,7 @@ export function ChatbotListPage() {
               key={chatbot.id}
               chatbot={chatbot}
               onDelete={handleDelete}
+              onClone={handleClone}
             />
           ))}
         </div>

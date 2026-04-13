@@ -270,6 +270,7 @@ def _serialize_assignment(assignment: Assignment, include_questions: bool = True
 
 def _replace_quiz_questions(assignment: Assignment, questions: list[dict[str, Any]], is_auto_generated: bool = False):
     quiz, _created = Quiz.objects.get_or_create(
+        tenant=assignment.tenant,
         assignment=assignment,
         defaults={
             "schema_version": 1,
@@ -283,6 +284,7 @@ def _replace_quiz_questions(assignment: Assignment, questions: list[dict[str, An
     quiz.questions.all().delete()
     for payload in questions:
         QuizQuestion.objects.create(
+            tenant=assignment.tenant,
             quiz=quiz,
             order=payload["order"],
             question_type=payload["question_type"],
@@ -375,6 +377,7 @@ def assignment_list_create(request, course_id):
 
         with transaction.atomic():
             assignment = Assignment.objects.create(
+                tenant=request.tenant,
                 course=course,
                 module=module if scope_type == "MODULE" else None,
                 content=None,
@@ -586,6 +589,7 @@ def assignment_ai_generate(request, course_id):
 
         with transaction.atomic():
             assignment = Assignment.objects.create(
+                tenant=request.tenant,
                 course=course,
                 module=module if scope_type == "MODULE" else None,
                 content=None,

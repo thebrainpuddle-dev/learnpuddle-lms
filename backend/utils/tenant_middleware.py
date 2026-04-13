@@ -1,35 +1,34 @@
 # utils/tenant_middleware.py
 
 import re
-import logging
-import threading
+import contextvars
 from django.core.exceptions import PermissionDenied
 from django.http import JsonResponse
 from .tenant_utils import get_tenant_from_request
 
-# region agent log
-_debug_log = logging.getLogger('debug.tenant_middleware')
-# endregion
 
-
-# Thread-local storage for current tenant
-_thread_locals = threading.local()
+# Context-var storage for current tenant (safe for both WSGI and ASGI).
+# threading.local() leaks state across async tasks in ASGI/Channels because
+# multiple coroutines share the same OS thread.  contextvars.ContextVar is
+# coroutine-aware and automatically scoped per-task.
+_current_tenant: contextvars.ContextVar = contextvars.ContextVar(
+    'current_tenant', default=None
+)
 
 
 def get_current_tenant():
-    """Get tenant from thread-local storage."""
-    return getattr(_thread_locals, 'tenant', None)
+    """Get tenant from context-var storage (ASGI-safe)."""
+    return _current_tenant.get()
 
 
 def set_current_tenant(tenant):
-    """Set tenant in thread-local storage."""
-    _thread_locals.tenant = tenant
+    """Set tenant in context-var storage (ASGI-safe)."""
+    _current_tenant.set(tenant)
 
 
 def clear_current_tenant():
-    """Clear tenant from thread-local storage."""
-    if hasattr(_thread_locals, 'tenant'):
-        delattr(_thread_locals, 'tenant')
+    """Clear tenant from context-var storage (ASGI-safe)."""
+    _current_tenant.set(None)
 
 
 class TenantMiddleware:
@@ -49,11 +48,6 @@ class TenantMiddleware:
         # Clear any previous tenant
         clear_current_tenant()
 
-        # region agent log
-        host = request.get_host()
-        _debug_log.warning('[DBG-MW] path=%s host=%s method=%s user=%s', request.path, host, request.method, getattr(request, 'user', 'anon'))
-        # endregion
-        
         # Public endpoints: do not enforce tenant-membership check
         # (but we still want tenant resolution for tenant-scoped responses like theme)
         public_paths = [
@@ -78,13 +72,7 @@ class TenantMiddleware:
                 tenant = get_tenant_from_request(request)
                 set_current_tenant(tenant)
                 request.tenant = tenant
-                # region agent log
-                _debug_log.warning('[DBG-MW] tenant_resolved=%s tenant_id=%s', tenant, getattr(tenant, 'id', None))
-                # endregion
             except Exception as exc:
-                # region agent log
-                _debug_log.warning('[DBG-MW] tenant_resolution_failed=%s', exc)
-                # endregion
                 # For truly public/non-tenant routes, proceed without tenant.
                 tenant = None
             

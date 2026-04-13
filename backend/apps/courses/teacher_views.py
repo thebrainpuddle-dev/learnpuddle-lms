@@ -1,4 +1,5 @@
-from django.db.models import Q
+from django.db.models import Count, Q, Subquery, OuterRef, DecimalField, IntegerField, Sum, Value
+from django.db.models.functions import Coalesce
 from django.shortcuts import get_object_or_404
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -6,23 +7,13 @@ from rest_framework.response import Response
 from rest_framework import status
 
 from utils.decorators import tenant_required, teacher_or_admin
+from utils.course_access import is_teacher_assigned_to_course as _teacher_assigned_to_course
+from utils.responses import error_response
 from apps.progress.models import TeacherProgress
 from apps.progress.locking import compute_course_sequence_state
 from apps.courses.video_models import VideoAsset, VideoTranscript
 from .models import Course, Content
 from .teacher_serializers import TeacherCourseListSerializer, TeacherCourseDetailSerializer
-
-
-def _teacher_assigned_to_course(user, course: Course) -> bool:
-    if user.role in ["SCHOOL_ADMIN", "SUPER_ADMIN"]:
-        return True
-    if course.assigned_to_all:
-        return True
-    if course.assigned_teachers.filter(id=user.id).exists():
-        return True
-    if course.assigned_groups.filter(id__in=user.teacher_groups.values_list("id", flat=True)).exists():
-        return True
-    return False
 
 
 @api_view(["GET"])
@@ -42,6 +33,34 @@ def teacher_course_list(request):
     # Note: Course uses TenantSoftDeleteManager which auto-filters by tenant via get_current_tenant().
     # Do NOT add tenant=request.tenant here - it causes empty results when request.tenant and
     # get_current_tenant() diverge (middleware timing issues).
+
+    # Subquery: count of completed content for this teacher in each course
+    completed_subquery = (
+        TeacherProgress.objects.filter(
+            teacher=user,
+            course=OuterRef("pk"),
+            content__isnull=False,
+            status="COMPLETED",
+        )
+        .order_by()
+        .values("course")
+        .annotate(cnt=Count("id"))
+        .values("cnt")
+    )
+
+    # Subquery: sum of progress_percentage for this teacher in each course
+    progress_sum_subquery = (
+        TeacherProgress.objects.filter(
+            teacher=user,
+            course=OuterRef("pk"),
+            content__isnull=False,
+        )
+        .order_by()
+        .values("course")
+        .annotate(total=Sum("progress_percentage"))
+        .values("total")
+    )
+
     qs = (
         Course.objects.filter(is_active=True, is_published=True)
         .filter(
@@ -50,6 +69,22 @@ def teacher_course_list(request):
             | Q(assigned_groups__in=user.teacher_groups.all())
         )
         .distinct()
+        .annotate(
+            # Precompute counts to eliminate N+1 queries in TeacherCourseListSerializer
+            _total_content_count=Count(
+                "modules__contents",
+                filter=Q(modules__contents__is_active=True),
+                distinct=True,
+            ),
+            _completed_content_count=Coalesce(
+                Subquery(completed_subquery, output_field=IntegerField()),
+                Value(0, output_field=IntegerField()),
+            ),
+            _progress_sum=Coalesce(
+                Subquery(progress_sum_subquery, output_field=DecimalField()),
+                Value(0, output_field=DecimalField()),
+            ),
+        )
         .order_by("-created_at")
     )
 
@@ -77,7 +112,7 @@ def teacher_course_detail(request, course_id):
 
     # Ensure teacher is assigned (admins can view; teachers must be assigned)
     if not _teacher_assigned_to_course(user, course):
-        return Response({"error": "Not assigned to this course"}, status=status.HTTP_403_FORBIDDEN)
+        return error_response("Not assigned to this course", status_code=status.HTTP_403_FORBIDDEN)
 
     progress_qs = TeacherProgress.objects.filter(
         teacher=user,
@@ -127,14 +162,14 @@ def teacher_video_transcript(request, content_id):
     )
     course = content.module.course
     if not _teacher_assigned_to_course(request.user, course):
-        return Response({"error": "Not assigned to this course"}, status=status.HTTP_403_FORBIDDEN)
+        return error_response("Not assigned to this course", status_code=status.HTTP_403_FORBIDDEN)
 
     asset = getattr(content, "video_asset", None)
     if not asset:
-        return Response({"error": "Video not processed yet"}, status=status.HTTP_404_NOT_FOUND)
+        return error_response("Video not processed yet", status_code=status.HTTP_404_NOT_FOUND)
     transcript = getattr(asset, "transcript", None)
     if not transcript:
-        return Response({"error": "Transcript not available"}, status=status.HTTP_404_NOT_FOUND)
+        return error_response("Transcript not available", status_code=status.HTTP_404_NOT_FOUND)
 
     vtt_url = transcript.vtt_url
     if vtt_url and not (vtt_url.startswith("http://") or vtt_url.startswith("https://")):
@@ -166,7 +201,7 @@ def course_certificate(request, course_id):
 
     tenant = request.tenant
     if not getattr(tenant, "feature_certificates", False):
-        return Response({"error": "Certificates not available on your plan.", "upgrade_required": True}, status=403)
+        return error_response("Certificates not available on your plan.", status_code=403, upgrade_required=True)
 
     # Note: Course uses TenantSoftDeleteManager - no need for tenant= filter
     course = get_object_or_404(
@@ -177,7 +212,7 @@ def course_certificate(request, course_id):
     )
     user = request.user
     if not _teacher_assigned_to_course(user, course):
-        return Response({"error": "Not assigned to this course"}, status=403)
+        return error_response("Not assigned to this course", status_code=403)
 
     # Check 100% completion (both queries must use the same is_active scope)
     from apps.courses.models import Content as ContentModel
@@ -187,7 +222,7 @@ def course_certificate(request, course_id):
     ).count()
 
     if total == 0 or completed < total:
-        return Response({"error": "Course not completed yet"}, status=400)
+        return error_response("Course not completed yet", status_code=400)
 
     # Find completion date (only from currently-active content)
     last_completion = TeacherProgress.objects.filter(

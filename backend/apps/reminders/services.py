@@ -6,7 +6,6 @@ from datetime import date as date_cls
 from typing import Iterable
 
 from django.conf import settings
-from django.db import models
 from django.utils import timezone
 
 from apps.courses.models import Course
@@ -21,6 +20,11 @@ from apps.notifications.email_utils import (
     build_school_sender_email,
     build_tenant_reply_to,
     build_bucket_headers,
+)
+
+from utils.helpers import (
+    tenant_teachers_qs,
+    course_assigned_teachers,
 )
 
 from .models import ReminderCampaign, ReminderDelivery
@@ -71,23 +75,6 @@ def get_course_reminder_lead_days() -> list[int]:
 
 def is_automation_enabled() -> bool:
     return bool(getattr(settings, "AUTO_COURSE_REMINDERS_ENABLED", True))
-
-
-def tenant_teachers_qs(tenant):
-    return User.objects.filter(
-        tenant=tenant,
-        role__in=["TEACHER", "HOD", "IB_COORDINATOR"],
-        is_active=True,
-    )
-
-
-def course_assigned_teachers(course: Course):
-    teachers = tenant_teachers_qs(course.tenant)
-    if course.assigned_to_all:
-        return teachers
-    return teachers.filter(
-        models.Q(teacher_groups__in=course.assigned_groups.all()) | models.Q(assigned_courses=course)
-    ).distinct()
 
 
 def recipients_for_course_deadline(course: Course):

@@ -9,6 +9,7 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
 app = Celery("lms")
 app.config_from_object("django.conf:settings", namespace="CELERY")
 app.autodiscover_tasks()
+app.autodiscover_tasks(["apps.courses"], related_name="ai_studio_tasks")
 
 
 # ── Periodic (beat) schedule ───────────────────────────────────────────────
@@ -40,5 +41,9 @@ app.conf.beat_schedule = {
     "ops-data-cleanup-daily": {
         "task": "apps.ops.tasks.ops_cleanup_data",
         "schedule": crontab(hour=2, minute=30),
+    },
+    "check-certification-expiry-daily": {
+        "task": "progress.check_certification_expiry_and_autorenew",
+        "schedule": crontab(hour=7, minute=0),  # every day at 07:00 UTC
     },
 }

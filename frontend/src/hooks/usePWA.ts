@@ -63,8 +63,8 @@ export function usePWA(): UsePWAReturn {
                 .map((key) => caches.delete(key)),
             );
           }
-        } catch (error) {
-          console.warn('Service Worker cleanup failed:', error);
+        } catch {
+          // SW cleanup failed silently — non-critical
         }
       };
 
@@ -73,7 +73,6 @@ export function usePWA(): UsePWAReturn {
     }
 
     if (!('serviceWorker' in navigator)) {
-      console.log('Service Worker not supported');
       return;
     }
 
@@ -92,8 +91,6 @@ export function usePWA(): UsePWAReturn {
           scope: '/',
           updateViaCache: 'none',
         });
-
-        console.log('Service Worker registered:', registration.scope);
 
         setState(prev => ({
           ...prev,
@@ -117,8 +114,8 @@ export function usePWA(): UsePWAReturn {
         if (registration.waiting) {
           setState(prev => ({ ...prev, isUpdateAvailable: true }));
         }
-      } catch (error) {
-        console.error('Service Worker registration failed:', error);
+      } catch {
+        // SW registration failed silently; app continues without offline support
       }
     };
 
@@ -195,8 +192,7 @@ export function usePWA(): UsePWAReturn {
       }));
 
       return outcome === 'accepted';
-    } catch (error) {
-      console.error('Install failed:', error);
+    } catch {
       return false;
     }
   }, [state.deferredPrompt]);
@@ -217,7 +213,6 @@ export function usePWA(): UsePWAReturn {
       return null;
     }
     if (!state.registration) {
-      console.warn('Service Worker not registered');
       return null;
     }
 
@@ -225,7 +220,6 @@ export function usePWA(): UsePWAReturn {
       // Check if permission is already granted
       const permission = await Notification.requestPermission();
       if (permission !== 'granted') {
-        console.log('Push notification permission denied');
         return null;
       }
 
@@ -243,10 +237,8 @@ export function usePWA(): UsePWAReturn {
       // Send subscription to server
       await api.post('/notifications/push/subscribe/', subscription.toJSON());
 
-      console.log('Push subscription successful');
       return subscription;
-    } catch (error) {
-      console.error('Push subscription failed:', error);
+    } catch {
       return null;
     }
   }, [state.registration]);
@@ -270,8 +262,7 @@ export function usePWA(): UsePWAReturn {
         await api.post('/notifications/push/unsubscribe/', { endpoint: subscription.endpoint });
       }
       return true;
-    } catch (error) {
-      console.error('Push unsubscribe failed:', error);
+    } catch {
       return false;
     }
   }, [state.registration]);

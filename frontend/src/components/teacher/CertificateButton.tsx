@@ -62,7 +62,6 @@ export const CertificateButton: React.FC<CertificateButtonProps> = ({
     } catch (err: any) {
       const errorMessage = err.response?.data?.error || 'Failed to download certificate';
       setError(errorMessage);
-      console.error('Certificate download error:', err);
     } finally {
       setIsDownloading(false);
     }

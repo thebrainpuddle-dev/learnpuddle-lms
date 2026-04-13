@@ -15,7 +15,9 @@ import {
 
 const API_BASE_URL =
   process.env.REACT_APP_API_URL ||
-  (process.env.NODE_ENV === 'production' ? '/api' : 'http://localhost:8000/api');
+  (process.env.NODE_ENV === 'production'
+    ? '/api'
+    : `http://${window.location.hostname}:8000/api`);
 
 /**
  * Create axios instance with default config
@@ -23,7 +25,7 @@ const API_BASE_URL =
  */
 export const api: AxiosInstance = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 30000,
+  timeout: 120000,
 });
 
 const AUTH_HEADER_BYPASS_PATHS = [
@@ -249,6 +251,22 @@ api.interceptors.request.use(
       config.headers['X-LP-Component'] = opsContext.componentName;
     }
 
+    // Dev mode: send tenant subdomain header so backend resolves correct tenant
+    const devHostname = window.location.hostname;
+    if (devHostname === 'localhost' || devHostname === '127.0.0.1' || devHostname.endsWith('.localhost')) {
+      // Prefer subdomain from URL (e.g., april5.localhost), then fall back to storage
+      const urlSubdomain = devHostname.endsWith('.localhost')
+        ? devHostname.replace('.localhost', '')
+        : null;
+      const subdomain =
+        urlSubdomain ||
+        sessionStorage.getItem('tenant_subdomain') ||
+        localStorage.getItem('tenant_subdomain');
+      if (subdomain) {
+        config.headers['X-Tenant-Subdomain'] = subdomain;
+      }
+    }
+
     if (shouldBypassAuthHeader(String(config.url || ''))) {
       if (config.headers && 'Authorization' in config.headers) {
         delete (config.headers as any).Authorization;
@@ -356,7 +374,10 @@ api.interceptors.response.use(
         const tokenStorage = getTokenStorage();
         tokenStorage.setItem('access_token', access);
 
-        // Update Zustand store in both storages (best-effort)
+        // Update Zustand in-memory state so subsequent requests use new token
+        useAuthStore.setState({ accessToken: access });
+
+        // Update Zustand persisted storage (best-effort)
         try {
           for (const storage of [sessionStorage, localStorage]) {
             const authData = storage.getItem('auth-storage');
@@ -369,7 +390,7 @@ api.interceptors.response.use(
             }
           }
         } catch {
-          // Zustand sync is best-effort
+          // Persisted storage sync is best-effort
         }
 
         isRefreshing = false;

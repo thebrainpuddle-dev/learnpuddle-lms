@@ -25,9 +25,12 @@ class AIChatbot(models.Model):
     """Teacher-created AI chatbot with persona and guardrails."""
 
     PERSONA_CHOICES = [
-        ('tutor', 'Socratic Tutor'),
-        ('reference', 'Reference Assistant'),
-        ('open', 'Open Discussion'),
+        ('study_buddy', 'Study Buddy'),
+        ('quiz_master', 'Quiz Master'),
+        ('concept_explainer', 'Concept Explainer'),
+        ('homework_helper', 'Homework Helper'),
+        ('revision_coach', 'Revision Coach'),
+        ('custom', 'Custom'),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -43,7 +46,11 @@ class AIChatbot(models.Model):
     name = models.CharField(max_length=200)
     avatar_url = models.CharField(max_length=500, blank=True, default='')
     persona_preset = models.CharField(
-        max_length=20, choices=PERSONA_CHOICES, default='tutor',
+        max_length=20, choices=PERSONA_CHOICES, default='study_buddy',
+    )
+    sections = models.ManyToManyField(
+        'academics.Section', related_name='ai_chatbots', blank=True,
+        help_text='Sections that can see this chatbot',
     )
     persona_description = models.TextField(
         blank=True, default='',
@@ -104,6 +111,16 @@ class AIChatbotKnowledge(models.Model):
     chatbot = models.ForeignKey(
         AIChatbot, on_delete=models.CASCADE,
         related_name='knowledge_sources',
+    )
+
+    content_source = models.ForeignKey(
+        'courses.Content', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='chatbot_knowledge',
+        help_text='Auto-ingested from this Content item (null for manual uploads)',
+    )
+    is_auto = models.BooleanField(
+        default=False,
+        help_text='True = auto-ingested from course content, False = manual upload',
     )
 
     source_type = models.CharField(max_length=20, choices=SOURCE_TYPE_CHOICES)

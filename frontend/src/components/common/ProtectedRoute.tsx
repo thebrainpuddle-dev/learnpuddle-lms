@@ -13,6 +13,7 @@ function getDashboardPathForRole(role?: string | null): string | null {
   if (role === 'SUPER_ADMIN') return '/super-admin/dashboard';
   if (role === 'SCHOOL_ADMIN') return '/admin/dashboard';
   if (role === 'TEACHER' || role === 'HOD' || role === 'IB_COORDINATOR') return '/teacher/dashboard';
+  if (role === 'STUDENT') return '/student/dashboard';
   return null;
 }
 

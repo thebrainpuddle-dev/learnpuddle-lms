@@ -3,7 +3,9 @@
 from django.db import models
 import uuid
 
-from utils.soft_delete import SoftDeleteMixin, SoftDeleteManager
+from utils.soft_delete import SoftDeleteMixin
+from utils.tenant_manager import TenantManager
+from utils.tenant_soft_delete_manager import TenantSoftDeleteManager
 
 
 class TeacherProgress(models.Model):
@@ -15,41 +17,56 @@ class TeacherProgress(models.Model):
         ('IN_PROGRESS', 'In Progress'),
         ('COMPLETED', 'Completed'),
     ]
-    
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    
+
+    # Tenant isolation (null=True for backward-compat with existing rows; always set on new records)
+    tenant = models.ForeignKey(
+        'tenants.Tenant', on_delete=models.CASCADE, related_name='teacher_progress',
+        null=True, blank=True,
+    )
+
     # Relationships
     teacher = models.ForeignKey('users.User', on_delete=models.CASCADE, related_name='progress')
     course = models.ForeignKey('courses.Course', on_delete=models.CASCADE, related_name='progress')
     content = models.ForeignKey('courses.Content', on_delete=models.CASCADE, related_name='progress', null=True, blank=True)
-    
+
     # Progress tracking
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='NOT_STARTED')
     progress_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=0)
-    
+
     # Timestamps
     started_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
     last_accessed = models.DateTimeField(auto_now=True)
-    
+
     # Video-specific tracking
     video_progress_seconds = models.PositiveIntegerField(default=0, help_text="Seconds watched")
-    
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    
+
+    objects = TenantManager()
+    all_objects = models.Manager()
+
     class Meta:
         db_table = 'teacher_progress'
         unique_together = [('teacher', 'course', 'content')]
         indexes = [
-            models.Index(fields=['teacher', 'course']),
-            models.Index(fields=['teacher', 'status']),
-            models.Index(fields=['course', 'status']),
+            models.Index(fields=['tenant', 'teacher', 'course']),
+            models.Index(fields=['tenant', 'teacher', 'status']),
+            models.Index(fields=['tenant', 'course', 'status']),
             # For dashboard queries
             models.Index(fields=['teacher', 'status', 'completed_at']),
             models.Index(fields=['last_accessed']),
         ]
-    
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(progress_percentage__gte=0) & models.Q(progress_percentage__lte=100),
+                name='teacher_progress_percentage_valid_range',
+            ),
+        ]
+
     def __str__(self):
         return f"{self.teacher.email} - {self.course.title} - {self.status}"
 
@@ -59,6 +76,13 @@ class Assignment(SoftDeleteMixin, models.Model):
     Assignments within courses.
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    # Tenant isolation (null=True for backward-compat with existing rows; always set on new records)
+    tenant = models.ForeignKey(
+        'tenants.Tenant', on_delete=models.CASCADE, related_name='assignments',
+        null=True, blank=True,
+    )
+
     course = models.ForeignKey('courses.Course', on_delete=models.CASCADE, related_name='assignments')
     module = models.ForeignKey('courses.Module', on_delete=models.CASCADE, related_name='assignments', null=True, blank=True)
 
@@ -99,17 +123,18 @@ class Assignment(SoftDeleteMixin, models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
-    objects = SoftDeleteManager()
+    # TenantSoftDeleteManager combines tenant-scoped filtering with soft-delete.
+    objects = TenantSoftDeleteManager()
     all_objects = models.Manager()
 
     class Meta:
         db_table = 'assignments'
         ordering = ['course', 'due_date']
         indexes = [
-            models.Index(fields=['course', 'is_active']),
-            models.Index(fields=['due_date', 'is_active']),
+            models.Index(fields=['tenant', 'course', 'is_active']),
+            models.Index(fields=['tenant', 'due_date', 'is_active']),
         ]
-    
+
     def __str__(self):
         return f"{self.course.title} - {self.title}"
 
@@ -121,6 +146,14 @@ class Quiz(models.Model):
     """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    # Tenant isolation — mirrors the tenant on the parent Assignment.
+    # (null=True for backward-compat with existing rows; always set on new records)
+    tenant = models.ForeignKey(
+        'tenants.Tenant', on_delete=models.CASCADE, related_name='quizzes',
+        null=True, blank=True,
+    )
+
     assignment = models.OneToOneField(Assignment, on_delete=models.CASCADE, related_name="quiz")
 
     schema_version = models.PositiveSmallIntegerField(default=1)
@@ -129,6 +162,9 @@ class Quiz(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    objects = TenantManager()
+    all_objects = models.Manager()
 
     class Meta:
         db_table = "quizzes"
@@ -154,6 +190,13 @@ class QuizQuestion(models.Model):
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    # Tenant isolation (null=True for backward-compat with existing rows; always set on new records)
+    tenant = models.ForeignKey(
+        'tenants.Tenant', on_delete=models.CASCADE, related_name='quiz_questions',
+        null=True, blank=True,
+    )
+
     quiz = models.ForeignKey(Quiz, on_delete=models.CASCADE, related_name="questions")
 
     order = models.PositiveIntegerField(default=0)
@@ -172,11 +215,15 @@ class QuizQuestion(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    objects = TenantManager()
+    all_objects = models.Manager()
+
     class Meta:
         db_table = "quiz_questions"
         ordering = ["quiz", "order"]
         indexes = [
             models.Index(fields=["quiz", "order"]),
+            models.Index(fields=["tenant", "quiz"]),
         ]
 
     def __str__(self):
@@ -189,6 +236,13 @@ class QuizSubmission(models.Model):
     """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    # Tenant isolation (null=True for backward-compat with existing rows; always set on new records)
+    tenant = models.ForeignKey(
+        'tenants.Tenant', on_delete=models.CASCADE, related_name='quiz_submissions',
+        null=True, blank=True,
+    )
+
     quiz = models.ForeignKey(Quiz, on_delete=models.CASCADE, related_name="submissions")
     teacher = models.ForeignKey('users.User', on_delete=models.CASCADE, related_name="quiz_submissions")
 
@@ -200,12 +254,15 @@ class QuizSubmission(models.Model):
     submitted_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    objects = TenantManager()
+    all_objects = models.Manager()
+
     class Meta:
         db_table = "quiz_submissions"
         unique_together = [("quiz", "teacher")]
         ordering = ["-submitted_at"]
         indexes = [
-            models.Index(fields=["teacher", "submitted_at"]),
+            models.Index(fields=["tenant", "teacher", "submitted_at"]),
         ]
 
     def __str__(self):
@@ -223,34 +280,44 @@ class AssignmentSubmission(models.Model):
     ]
     
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    # Tenant isolation (null=True for backward-compat with existing rows; always set on new records)
+    tenant = models.ForeignKey(
+        'tenants.Tenant', on_delete=models.CASCADE, related_name='assignment_submissions',
+        null=True, blank=True,
+    )
+
     assignment = models.ForeignKey(Assignment, on_delete=models.CASCADE, related_name='submissions')
     teacher = models.ForeignKey('users.User', on_delete=models.CASCADE, related_name='submissions')
-    
+
     # Submission
     submission_text = models.TextField(blank=True)
     file_url = models.URLField(blank=True, help_text="S3 URL of uploaded file")
-    
+
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING')
-    
+
     # Grading
     score = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     feedback = models.TextField(blank=True)
     graded_by = models.ForeignKey('users.User', on_delete=models.SET_NULL, null=True, blank=True, related_name='graded_submissions')
     graded_at = models.DateTimeField(null=True, blank=True)
-    
+
     submitted_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    
+
+    objects = TenantManager()
+    all_objects = models.Manager()
+
     class Meta:
         db_table = 'assignment_submissions'
         unique_together = [('assignment', 'teacher')]
         ordering = ['-submitted_at']
         indexes = [
-            models.Index(fields=['assignment', 'status']),
-            models.Index(fields=['teacher', 'status']),
+            models.Index(fields=['tenant', 'assignment', 'status']),
+            models.Index(fields=['tenant', 'teacher', 'status']),
             models.Index(fields=['submitted_at']),
         ]
-    
+
     def __str__(self):
         return f"{self.teacher.email} - {self.assignment.title}"
 
@@ -261,20 +328,39 @@ class TeacherQuestClaim(models.Model):
     """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    # Tenant isolation (null=True for backward-compat with existing rows; always set on new records)
+    tenant = models.ForeignKey(
+        'tenants.Tenant', on_delete=models.CASCADE, related_name='teacher_quest_claims',
+        null=True, blank=True,
+    )
+
     teacher = models.ForeignKey('users.User', on_delete=models.CASCADE, related_name='quest_claims')
     quest_key = models.CharField(max_length=100)
     claim_date = models.DateField()
     points_awarded = models.PositiveIntegerField(default=0)
     claimed_at = models.DateTimeField(auto_now_add=True)
 
+    objects = TenantManager()
+    all_objects = models.Manager()
+
     class Meta:
         db_table = 'teacher_quest_claims'
         unique_together = [('teacher', 'quest_key', 'claim_date')]
         ordering = ['-claimed_at']
         indexes = [
-            models.Index(fields=['teacher', 'claim_date']),
-            models.Index(fields=['teacher', 'quest_key']),
+            models.Index(fields=['tenant', 'teacher', 'claim_date']),
+            models.Index(fields=['tenant', 'teacher', 'quest_key']),
         ]
 
     def __str__(self):
         return f"{self.teacher_id}::{self.quest_key}::{self.claim_date}"
+
+
+# Ensure Django registers skills and certification models that live in separate modules.
+from .skills_models import Skill, CourseSkill, TeacherSkill  # noqa: E402,F401
+from .certification_models import CertificationType, TeacherCertification  # noqa: E402,F401
+from .gamification_models import (  # noqa: E402,F401
+    GamificationConfig, XPTransaction, TeacherXPSummary,
+    BadgeDefinition, TeacherBadge, TeacherStreak, LeaderboardSnapshot,
+)

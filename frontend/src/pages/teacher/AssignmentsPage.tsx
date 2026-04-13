@@ -1,210 +1,353 @@
 // src/pages/teacher/AssignmentsPage.tsx
+//
+// Assessments page — polished white + orange theme.
 
 import React, { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { AssignmentCard } from '../../components/teacher';
-import { SubmissionModal } from '../../components/teacher/SubmissionModal';
+import {
+  ClipboardList,
+  Clock,
+  CheckCircle2,
+  AlertCircle,
+  FileText,
+  Play,
+  Eye,
+  Send,
+} from 'lucide-react';
+import { cn } from '../../design-system/theme/cn';
 import { useToast } from '../../components/common';
-import { ClipboardDocumentListIcon } from '@heroicons/react/24/outline';
-import { teacherService, TeacherAssignmentSubmission, TeacherAssignmentListItem } from '../../services/teacherService';
+import { SubmissionModal } from '../../components/teacher/SubmissionModal';
+import {
+  teacherService,
+  TeacherAssignmentListItem,
+  TeacherAssignmentSubmission,
+} from '../../services/teacherService';
 import { usePageTitle } from '../../hooks/usePageTitle';
 
-type TabFilter = 'ALL' | 'PENDING' | 'SUBMITTED';
+type TabFilter = 'ALL' | 'PENDING' | 'SUBMITTED' | 'GRADED';
+
+const TABS: { key: TabFilter; label: string }[] = [
+  { key: 'ALL', label: 'All' },
+  { key: 'PENDING', label: 'Pending' },
+  { key: 'SUBMITTED', label: 'Submitted' },
+  { key: 'GRADED', label: 'Graded' },
+];
 
 export const AssignmentsPage: React.FC = () => {
-  usePageTitle('Assignments');
+  usePageTitle('Assessments');
   const toast = useToast();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<TabFilter>('ALL');
   const [submissionModalOpen, setSubmissionModalOpen] = useState(false);
-  const [selectedAssignment, setSelectedAssignment] = useState<TeacherAssignmentListItem | null>(null);
-  const [currentSubmission, setCurrentSubmission] = useState<TeacherAssignmentSubmission | null>(null);
+  const [selectedAssignment, setSelectedAssignment] =
+    useState<TeacherAssignmentListItem | null>(null);
+  const [currentSubmission, setCurrentSubmission] =
+    useState<TeacherAssignmentSubmission | null>(null);
   const [loadingSubmission, setLoadingSubmission] = useState(false);
-  const queryClient = useQueryClient();
-  const navigate = useNavigate();
-  
-  // Fetch all assignments once for accurate counts
-  const { data: allAssignments } = useQuery({
+
+  const { data: allAssignments = [] } = useQuery({
     queryKey: ['teacherAssignmentsAll'],
     queryFn: () => teacherService.listAssignments(),
   });
 
-  // Fetch assignments
-  const { data: assignments, isLoading } = useQuery({
+  const { data: assignments = [], isLoading } = useQuery({
     queryKey: ['teacherAssignments', activeTab],
     queryFn: () =>
       activeTab === 'ALL'
         ? teacherService.listAssignments()
-        : teacherService.listAssignments(activeTab),
+        : teacherService.listAssignments(
+            activeTab as 'PENDING' | 'SUBMITTED' | 'GRADED',
+          ),
   });
 
   const submitMutation = useMutation({
-    mutationFn: (assignmentId: string) => teacherService.submitAssignment(assignmentId, { submission_text: '' }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['teacherAssignments'] });
-      await queryClient.invalidateQueries({ queryKey: ['teacherAssignments', activeTab] });
-      toast.success('Assignment submitted', 'Your assignment has been submitted successfully.');
+    mutationFn: (id: string) =>
+      teacherService.submitAssignment(id, { submission_text: '' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['teacherAssignments'] });
+      toast.success('Submitted', 'Your assessment has been submitted.');
     },
     onError: () => {
-      toast.error('Submission failed', 'Could not submit assignment. Please try again.');
+      toast.error('Failed', 'Could not submit. Please try again.');
     },
   });
 
-  const handleViewSubmission = async (assignment: TeacherAssignmentListItem) => {
-    setSelectedAssignment(assignment);
+  const handleViewSubmission = async (a: TeacherAssignmentListItem) => {
+    setSelectedAssignment(a);
     setSubmissionModalOpen(true);
     setLoadingSubmission(true);
     setCurrentSubmission(null);
-    
     try {
-      const submission = await teacherService.getSubmission(assignment.id);
-      setCurrentSubmission(submission);
-    } catch (error) {
-      toast.error('Error', 'Could not load submission details.');
+      const sub = await teacherService.getSubmission(a.id);
+      setCurrentSubmission(sub);
+    } catch {
+      toast.error('Error', 'Could not load submission.');
     } finally {
       setLoadingSubmission(false);
     }
   };
 
-  const handleCloseSubmissionModal = () => {
-    setSubmissionModalOpen(false);
-    setSelectedAssignment(null);
-    setCurrentSubmission(null);
+  const counts = {
+    ALL: allAssignments.length,
+    PENDING: allAssignments.filter((a) => a.submission_status === 'PENDING')
+      .length,
+    SUBMITTED: allAssignments.filter((a) => a.submission_status === 'SUBMITTED')
+      .length,
+    GRADED: allAssignments.filter((a) => a.submission_status === 'GRADED')
+      .length,
   };
-  
-  // Count by status
-  const statusCounts = {
-    ALL: allAssignments?.length || 0,
-    PENDING: allAssignments?.filter(a => a.submission_status === 'PENDING').length || 0,
-    SUBMITTED: allAssignments?.filter(a => a.submission_status === 'SUBMITTED').length || 0,
-  };
-  
-  const tabs: { key: TabFilter; label: string }[] = [
-    { key: 'ALL', label: 'All' },
-    { key: 'PENDING', label: 'Pending' },
-    { key: 'SUBMITTED', label: 'Submitted' },
-  ];
-  
+
   return (
-    <div className="space-y-6">
-      {/* Header */}
+    <div className="space-y-5">
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">Assignments</h1>
-        <p className="mt-1 text-gray-500">
-          View and submit your course assignments
+        <h1 className="text-[22px] font-bold text-tp-text tracking-tight">
+          Assessments
+        </h1>
+        <p className="mt-0.5 text-[13px] text-gray-400">
+          View and submit your course assessments
         </p>
       </div>
-      
+
       {/* Stats */}
-      <div data-tour="teacher-assignments-stats" className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <div className="bg-white rounded-xl p-4 border border-gray-100">
-          <p className="text-sm text-gray-500">Total</p>
-          <p className="text-2xl font-bold text-gray-900">{statusCounts.ALL}</p>
+      <div className="grid grid-cols-3 gap-3">
+        <div className="bg-white rounded-2xl border border-gray-100 p-4 text-center shadow-sm">
+          <p className="text-[22px] font-bold text-tp-text leading-tight tabular-nums">
+            {counts.PENDING}
+          </p>
+          <p className="text-[10px] text-amber-500 mt-1 font-semibold uppercase tracking-wider">
+            Pending
+          </p>
         </div>
-        <div className="bg-amber-50 rounded-xl p-4 border border-amber-100">
-          <p className="text-sm text-amber-600">Pending</p>
-          <p className="text-2xl font-bold text-amber-700">{statusCounts.PENDING}</p>
+        <div className="bg-white rounded-2xl border border-gray-100 p-4 text-center shadow-sm">
+          <p className="text-[22px] font-bold text-tp-text leading-tight tabular-nums">
+            {allAssignments.length > 0
+              ? Math.round(
+                  allAssignments
+                    .filter((a) => a.score !== null)
+                    .reduce((acc, a) => acc + (a.score ?? 0), 0) /
+                    Math.max(
+                      1,
+                      allAssignments.filter((a) => a.score !== null).length,
+                    ),
+                ) + '%'
+              : '—'}
+          </p>
+          <p className="text-[10px] text-tp-accent mt-1 font-semibold uppercase tracking-wider">
+            Avg Score
+          </p>
         </div>
-        <div className="bg-blue-50 rounded-xl p-4 border border-blue-100">
-          <p className="text-sm text-blue-600">Submitted</p>
-          <p className="text-2xl font-bold text-blue-700">{statusCounts.SUBMITTED}</p>
+        <div className="bg-white rounded-2xl border border-gray-100 p-4 text-center shadow-sm">
+          <p className="text-[22px] font-bold text-tp-text leading-tight tabular-nums">
+            {counts.GRADED + counts.SUBMITTED}
+          </p>
+          <p className="text-[10px] text-emerald-500 mt-1 font-semibold uppercase tracking-wider">
+            Completed
+          </p>
         </div>
       </div>
-      
+
       {/* Tabs */}
-      <div data-tour="teacher-assignments-tabs" className="border-b border-gray-200">
-        <nav className="-mb-px flex gap-6 overflow-x-auto">
-          {tabs.map((tab) => (
-            <button
-              type="button"
-              key={tab.key}
-              onClick={() => setActiveTab(tab.key)}
-              className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors whitespace-nowrap ${
+      <div className="flex items-center gap-0.5 border-b border-gray-200 pb-px overflow-x-auto">
+        {TABS.map((tab) => (
+          <button
+            key={tab.key}
+            onClick={() => setActiveTab(tab.key)}
+            className={cn(
+              'px-4 py-2.5 text-[13px] font-medium border-b-2 transition-colors whitespace-nowrap',
+              activeTab === tab.key
+                ? 'border-tp-accent text-tp-accent'
+                : 'border-transparent text-gray-400 hover:text-tp-text',
+            )}
+          >
+            {tab.label}
+            <span
+              className={cn(
+                'ml-1.5 px-1.5 py-[2px] rounded-md text-[10px] font-semibold tabular-nums leading-none',
                 activeTab === tab.key
-                  ? 'border-emerald-500 text-emerald-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-              }`}
+                  ? 'bg-orange-50 text-tp-accent'
+                  : 'bg-gray-100 text-gray-400',
+              )}
             >
-              {tab.label}
-              <span className={`ml-2 py-0.5 px-2 rounded-full text-xs ${
-                activeTab === tab.key
-                  ? 'bg-emerald-100 text-emerald-600'
-                  : 'bg-gray-100 text-gray-600'
-              }`}>
-                {statusCounts[tab.key]}
-              </span>
-            </button>
-          ))}
-        </nav>
+              {counts[tab.key]}
+            </span>
+          </button>
+        ))}
       </div>
-      
-      {/* Assignment List */}
+
+      {/* List */}
       {isLoading ? (
-        <div data-tour="teacher-assignments-list" className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <AssignmentCard
-              key={i}
-              loading
-              id=""
-              title=""
-              courseName=""
-              description=""
-              maxScore={0}
-              status="PENDING"
-            />
+        <div className="space-y-3">
+          {[1, 2, 3, 4].map((i) => (
+            <div key={i} className="h-24 tp-skeleton rounded-2xl" />
           ))}
         </div>
-      ) : assignments && assignments.length > 0 ? (
-        <div data-tour="teacher-assignments-list" className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          {assignments?.map((assignment) => (
-            <AssignmentCard
-              key={assignment.id}
-              id={assignment.id}
-              title={assignment.title}
-              courseName={assignment.course_title}
-              description={assignment.description}
-              dueDate={assignment.due_date || undefined}
-              maxScore={Number(assignment.max_score || 0)}
-              status={assignment.submission_status}
-              score={assignment.score ?? undefined}
-              feedback={assignment.feedback || undefined}
-              isQuiz={Boolean(assignment.is_quiz)}
-              onSubmit={() => {
-                if (assignment.is_quiz) return;
-                submitMutation.mutate(assignment.id);
-              }}
-              onStartQuiz={() => {
-                navigate(`/teacher/quizzes/${assignment.id}`);
-              }}
-              onView={() => {
-                if (assignment.is_quiz) {
-                  navigate(`/teacher/quizzes/${assignment.id}`);
-                  return;
-                }
-                handleViewSubmission(assignment);
-              }}
-            />
-          ))}
+      ) : assignments.length === 0 ? (
+        <div className="text-center py-20">
+          <ClipboardList className="h-10 w-10 mx-auto text-gray-200 mb-3" />
+          <h3 className="text-[15px] font-semibold text-tp-text mb-1">
+            No assessments found
+          </h3>
+          <p className="text-[13px] text-gray-400">
+            {activeTab === 'ALL'
+              ? "You don't have any assessments yet"
+              : `No ${activeTab.toLowerCase()} assessments`}
+          </p>
         </div>
       ) : (
-        <div data-tour="teacher-assignments-list" className="text-center py-12">
-          <ClipboardDocumentListIcon className="h-12 w-12 mx-auto text-gray-400 mb-4" />
-          <h3 className="text-lg font-medium text-gray-900 mb-1">No assignments found</h3>
-          <p className="text-gray-500">
-            {activeTab === 'ALL' 
-              ? 'You don\'t have any assignments yet' 
-              : `No ${activeTab.toLowerCase()} assignments`}
-          </p>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+          {assignments.map((a) => {
+            const isPending = a.submission_status === 'PENDING';
+            const isGraded = a.submission_status === 'GRADED';
+            const dueDate = a.due_date ? new Date(a.due_date) : null;
+            const now = new Date();
+            const isUrgent =
+              dueDate &&
+              dueDate.getTime() - now.getTime() < 24 * 60 * 60 * 1000 &&
+              isPending;
+            const isSoon =
+              dueDate &&
+              dueDate.getTime() - now.getTime() < 3 * 24 * 60 * 60 * 1000 &&
+              isPending;
+
+            return (
+              <div
+                key={a.id}
+                className={cn(
+                  'bg-white rounded-2xl border p-4 transition-all hover:shadow-md shadow-sm',
+                  isUrgent ? 'border-red-200' : 'border-gray-100',
+                )}
+              >
+                <div className="flex items-start justify-between gap-3 mb-2.5">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 mb-0.5">
+                      {a.is_quiz ? (
+                        <div className="h-6 w-6 rounded-md bg-orange-50 flex items-center justify-center flex-shrink-0">
+                          <FileText className="h-3.5 w-3.5 text-tp-accent" />
+                        </div>
+                      ) : (
+                        <div className="h-6 w-6 rounded-md bg-blue-50 flex items-center justify-center flex-shrink-0">
+                          <ClipboardList className="h-3.5 w-3.5 text-blue-500" />
+                        </div>
+                      )}
+                      <h3 className="text-[13px] font-semibold text-tp-text truncate leading-tight">
+                        {a.title}
+                      </h3>
+                    </div>
+                    <p className="text-[11px] text-gray-400 ml-8">{a.course_title}</p>
+                  </div>
+                  <span
+                    className={cn(
+                      'px-2 py-[3px] rounded-md text-[10px] font-semibold uppercase tracking-wide flex-shrink-0 leading-none',
+                      isPending
+                        ? 'bg-amber-50 text-amber-600'
+                        : isGraded
+                          ? 'bg-emerald-50 text-emerald-600'
+                          : 'bg-blue-50 text-blue-600',
+                    )}
+                  >
+                    {a.submission_status}
+                  </span>
+                </div>
+
+                {isGraded && a.score !== null && (
+                  <div className="mb-2.5 ml-8 flex items-center gap-2">
+                    <div className="h-7 w-7 rounded-full bg-emerald-50 flex items-center justify-center">
+                      <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
+                    </div>
+                    <div>
+                      <p className="text-[13px] font-semibold text-tp-text tabular-nums">
+                        {a.score}/{a.max_score}
+                      </p>
+                      <p className="text-[9px] text-gray-400 uppercase tracking-wider font-semibold">
+                        Score
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex items-center gap-3 text-[11px] text-gray-400 mb-3 ml-8">
+                  <span className="flex items-center gap-1 font-medium">
+                    <FileText className="h-3 w-3" />
+                    {a.is_quiz ? 'Quiz' : 'Assignment'}
+                  </span>
+                  {dueDate && (
+                    <span
+                      className={cn(
+                        'flex items-center gap-1 font-medium',
+                        isUrgent
+                          ? 'text-red-500'
+                          : isSoon
+                            ? 'text-amber-500'
+                            : '',
+                      )}
+                    >
+                      {isUrgent && <AlertCircle className="h-3 w-3" />}
+                      <Clock className="h-3 w-3" />
+                      {dueDate.toLocaleDateString('en-US', {
+                        month: 'short',
+                        day: 'numeric',
+                      })}
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2 ml-8">
+                  {isPending && a.is_quiz && (
+                    <button
+                      onClick={() => navigate(`/teacher/quizzes/${a.id}`)}
+                      className="inline-flex items-center gap-1.5 px-3 py-[6px] rounded-lg text-[11px] font-semibold bg-tp-accent text-white hover:bg-tp-accent-dark transition-colors shadow-sm"
+                    >
+                      <Play className="h-3 w-3" />
+                      Start Quiz
+                    </button>
+                  )}
+                  {isPending && !a.is_quiz && (
+                    <button
+                      onClick={() => submitMutation.mutate(a.id)}
+                      className="inline-flex items-center gap-1.5 px-3 py-[6px] rounded-lg text-[11px] font-semibold bg-tp-accent text-white hover:bg-tp-accent-dark transition-colors shadow-sm"
+                    >
+                      <Send className="h-3 w-3" />
+                      Submit
+                    </button>
+                  )}
+                  {!isPending && (
+                    <button
+                      onClick={() => {
+                        if (a.is_quiz) {
+                          navigate(`/teacher/quizzes/${a.id}`);
+                        } else {
+                          handleViewSubmission(a);
+                        }
+                      }}
+                      className="inline-flex items-center gap-1.5 px-3 py-[6px] rounded-lg text-[11px] font-semibold bg-gray-50 border border-gray-200 text-gray-600 hover:text-tp-text hover:bg-gray-100 transition-colors"
+                    >
+                      <Eye className="h-3 w-3" />
+                      View
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
 
-      {/* Submission Details Modal */}
       <SubmissionModal
         isOpen={submissionModalOpen}
-        onClose={handleCloseSubmissionModal}
+        onClose={() => {
+          setSubmissionModalOpen(false);
+          setSelectedAssignment(null);
+          setCurrentSubmission(null);
+        }}
         submission={currentSubmission}
         assignmentTitle={selectedAssignment?.title}
-        maxScore={selectedAssignment?.max_score ? Number(selectedAssignment.max_score) : undefined}
+        maxScore={
+          selectedAssignment?.max_score
+            ? Number(selectedAssignment.max_score)
+            : undefined
+        }
         isLoading={loadingSubmission}
       />
     </div>

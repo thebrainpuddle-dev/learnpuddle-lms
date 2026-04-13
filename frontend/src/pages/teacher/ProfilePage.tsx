@@ -2,10 +2,13 @@
 
 import React, { useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { z } from 'zod';
 import { useAuthStore } from '../../stores/authStore';
 import { Button } from '../../components/common/Button';
 import { Input } from '../../components/common/Input';
+import { FormField } from '../../components/common/FormField';
 import { useToast } from '../../components/common';
+import { useZodForm } from '../../hooks/useZodForm';
 import api from '../../config/api';
 import { useGuidedTour } from '../../components/tour';
 import { teacherService } from '../../services/teacherService';
@@ -24,6 +27,24 @@ import {
   SparklesIcon,
 } from '@heroicons/react/24/outline';
 import { usePageTitle } from '../../hooks/usePageTitle';
+
+// ─── Password change schema ───────────────────────────────────────────────────
+
+const ChangePasswordSchema = z
+  .object({
+    current_password: z.string().min(1, 'Current password is required'),
+    new_password: z
+      .string()
+      .min(8, 'New password must be at least 8 characters')
+      .max(128),
+    confirm_password: z.string().min(1, 'Please confirm your new password'),
+  })
+  .refine((d: { new_password: string; confirm_password: string }) => d.new_password === d.confirm_password, {
+    path: ['confirm_password'],
+    message: 'Passwords do not match',
+  });
+
+type ChangePasswordData = z.infer<typeof ChangePasswordSchema>;
 
 const COMMON_SUBJECTS = [
   'Mathematics', 'Physics', 'Chemistry', 'Biology', 'English',
@@ -78,8 +99,10 @@ export const ProfilePage: React.FC = () => {
   );
   const [profilePicFile, setProfilePicFile] = useState<File | null>(null);
 
-  const [passwordForm, setPasswordForm] = useState({
-    current_password: '', new_password: '', confirm_password: '',
+  // Password change form — uses RHF + Zod for strict validation
+  const passwordForm = useZodForm({
+    schema: ChangePasswordSchema,
+    defaultValues: { current_password: '', new_password: '', confirm_password: '' },
   });
 
   const [notifications, setNotifications] = useState({
@@ -160,24 +183,25 @@ export const ProfilePage: React.FC = () => {
     }
   };
 
-  const handlePasswordSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (passwordForm.new_password !== passwordForm.confirm_password) {
-      toast.error('Passwords do not match', 'Please ensure both passwords are the same.');
-      return;
-    }
-    setIsSaving(true);
-    try {
-      const { authService } = await import('../../services/authService');
-      await authService.changePassword(passwordForm.current_password, passwordForm.new_password);
-      setPasswordForm({ current_password: '', new_password: '', confirm_password: '' });
-      toast.success('Password updated', 'Your password has been changed.');
-    } catch {
-      toast.error('Failed', 'Could not change password. Check your current password.');
-    } finally {
-      setIsSaving(false);
-    }
-  };
+  const handlePasswordSubmit = passwordForm.handleSubmit(
+    async (data: ChangePasswordData) => {
+      setIsSaving(true);
+      try {
+        const { authService } = await import('../../services/authService');
+        await authService.changePassword(data.current_password, data.new_password);
+        passwordForm.reset();
+        toast.success('Password updated', 'Your password has been changed.');
+      } catch {
+        toast.error('Failed', 'Could not change password. Check your current password.');
+        passwordForm.setError('current_password', {
+          type: 'server',
+          message: 'Current password is incorrect',
+        });
+      } finally {
+        setIsSaving(false);
+      }
+    },
+  );
 
   const handleNotificationsSave = async () => {
     setIsSaving(true);
@@ -212,8 +236,8 @@ export const ProfilePage: React.FC = () => {
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Profile Settings</h1>
-          <p className="mt-1 text-gray-500">Manage your account settings, preferences, and growth milestones</p>
+          <h1 className="text-[22px] font-bold text-slate-900 tracking-tight">Profile Settings</h1>
+          <p className="mt-1 text-[13px] text-slate-500">Manage your account settings, preferences, and growth milestones</p>
         </div>
         <Button
           type="button"
@@ -228,31 +252,31 @@ export const ProfilePage: React.FC = () => {
 
       <div className="flex flex-col lg:flex-row gap-6">
         <div className="lg:w-72 flex-shrink-0">
-          <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
-            <div className="p-6 text-center border-b border-gray-100 relative">
+          <div className="bg-white rounded-2xl border border-slate-200/80 shadow-sm overflow-hidden">
+            <div className="p-6 text-center border-b border-slate-200/80 relative">
               <div className="relative inline-block">
                 {avatarUrl ? (
-                  <img src={avatarUrl} alt="" className="h-24 w-24 mx-auto rounded-full object-cover border-4 border-emerald-100" />
+                  <img src={avatarUrl} alt="" className="h-24 w-24 mx-auto rounded-full object-cover border-4 border-orange-100" />
                 ) : (
-                  <div className="h-24 w-24 mx-auto rounded-full bg-emerald-100 flex items-center justify-center border-4 border-emerald-50">
-                    <span className="text-3xl font-semibold text-emerald-700">
+                  <div className="h-24 w-24 mx-auto rounded-full bg-orange-100 flex items-center justify-center border-4 border-orange-50">
+                    <span className="text-3xl font-semibold text-orange-700">
                       {user?.first_name?.charAt(0)}{user?.last_name?.charAt(0)}
                     </span>
                   </div>
                 )}
                 <button
                   onClick={() => fileInputRef.current?.click()}
-                  className="absolute bottom-0 right-0 h-8 w-8 bg-emerald-600 text-white rounded-full flex items-center justify-center shadow-lg hover:bg-emerald-700 transition-colors"
+                  className="absolute bottom-0 right-0 h-8 w-8 bg-tp-accent text-white rounded-full flex items-center justify-center shadow-lg hover:bg-orange-600 transition-colors"
                   title="Change photo"
                 >
                   <CameraIcon className="h-4 w-4" />
                 </button>
                 <input ref={fileInputRef} type="file" accept="image/*" onChange={handlePicChange} className="hidden" />
               </div>
-              <h3 className="font-semibold text-gray-900 mt-3">{user?.first_name} {user?.last_name}</h3>
-              <p className="text-sm text-emerald-600 font-medium">{profileForm.designation || user?.role?.replace('_', ' ')}</p>
+              <h3 className="font-semibold text-slate-900 mt-3">{user?.first_name} {user?.last_name}</h3>
+              <p className="text-[13px] text-tp-accent font-medium">{profileForm.designation || user?.role?.replace('_', ' ')}</p>
               {profileForm.employee_id && (
-                <p className="text-xs text-gray-400 mt-1">ID: {profileForm.employee_id}</p>
+                <p className="text-xs text-slate-400 mt-1">ID: {profileForm.employee_id}</p>
               )}
             </div>
 
@@ -261,10 +285,10 @@ export const ProfilePage: React.FC = () => {
                 <button
                   key={section.id}
                   onClick={() => setActiveSection(section.id as ProfileSection)}
-                  className={`flex flex-shrink-0 items-center rounded-lg px-4 py-3 text-sm font-medium transition-colors lg:w-full ${
+                  className={`flex flex-shrink-0 items-center rounded-lg px-4 py-3 text-[13px] font-medium transition-colors lg:w-full ${
                     activeSection === section.id
-                      ? 'bg-emerald-50 text-emerald-700'
-                      : 'text-gray-600 hover:bg-gray-50'
+                      ? 'bg-orange-50 text-tp-accent'
+                      : 'text-slate-600 hover:bg-slate-50'
                   }`}
                 >
                   <section.icon className="h-5 w-5 mr-3" />
@@ -276,10 +300,10 @@ export const ProfilePage: React.FC = () => {
         </div>
 
         <div className="flex-1">
-          <div className="rounded-xl border border-gray-100 bg-white p-4 sm:p-6">
+          <div className="rounded-2xl border border-slate-200/80 bg-white p-4 sm:p-6">
             {activeSection === 'profile' && (
               <form data-tour="teacher-profile-form" onSubmit={handleProfileSubmit}>
-                <h2 className="text-lg font-semibold text-gray-900 mb-6">Profile Information</h2>
+                <h2 className="text-[15px] font-semibold text-slate-900 mb-6">Profile Information</h2>
 
                 <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
                   <Input
@@ -311,11 +335,11 @@ export const ProfilePage: React.FC = () => {
                   />
 
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Designation</label>
+                    <label className="block text-[13px] font-medium text-slate-700 mb-1">Designation</label>
                     <select
                       value={profileForm.designation}
                       onChange={(e) => setProfileForm({ ...profileForm, designation: e.target.value })}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
+                      className="w-full px-3 py-2 border border-slate-200/80 rounded-xl focus:ring-2 focus:ring-orange-500/20 focus:border-orange-400"
                     >
                       <option value="">Select designation...</option>
                       {DESIGNATIONS.map((designation) => <option key={designation} value={designation}>{designation}</option>)}
@@ -332,19 +356,19 @@ export const ProfilePage: React.FC = () => {
                   />
 
                   <div className="sm:col-span-2">
-                    <label className="block text-sm font-medium text-gray-700 mb-1">About Me</label>
+                    <label className="block text-[13px] font-medium text-slate-700 mb-1">About Me</label>
                     <textarea
                       value={profileForm.bio}
                       onChange={(e) => setProfileForm({ ...profileForm, bio: e.target.value })}
                       rows={3}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
+                      className="w-full px-3 py-2 border border-slate-200/80 rounded-xl focus:ring-2 focus:ring-orange-500/20 focus:border-orange-400"
                       placeholder="Tell us about yourself, your teaching philosophy, experience..."
                     />
                   </div>
                 </div>
 
                 <div className="mt-6">
-                  <label className="flex items-center gap-2 text-sm font-medium text-gray-700 mb-2">
+                  <label className="flex items-center gap-2 text-[13px] font-medium text-slate-700 mb-2">
                     <BookOpenIcon className="h-4 w-4" /> Subjects I Teach
                   </label>
                   <div className="flex flex-wrap gap-2">
@@ -355,8 +379,8 @@ export const ProfilePage: React.FC = () => {
                         onClick={() => toggleSubject(subject)}
                         className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
                           profileForm.subjects.includes(subject)
-                            ? 'bg-emerald-100 border-emerald-300 text-emerald-800'
-                            : 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100'
+                            ? 'bg-orange-100 border-orange-300 text-orange-800'
+                            : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
                         }`}
                       >
                         {subject}
@@ -366,7 +390,7 @@ export const ProfilePage: React.FC = () => {
                 </div>
 
                 <div className="mt-5">
-                  <label className="flex items-center gap-2 text-sm font-medium text-gray-700 mb-2">
+                  <label className="flex items-center gap-2 text-[13px] font-medium text-slate-700 mb-2">
                     <AcademicCapIcon className="h-4 w-4" /> Classes / Grades
                   </label>
                   <div className="flex flex-wrap gap-2">
@@ -378,7 +402,7 @@ export const ProfilePage: React.FC = () => {
                         className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
                           profileForm.grades.includes(grade)
                             ? 'bg-blue-100 border-blue-300 text-blue-800'
-                            : 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100'
+                            : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
                         }`}
                       >
                         {grade}
@@ -388,7 +412,7 @@ export const ProfilePage: React.FC = () => {
                 </div>
 
                 <div className="mt-6 flex justify-end">
-                  <Button type="submit" loading={isSaving} className="w-full bg-emerald-600 hover:bg-emerald-700 sm:w-auto">
+                  <Button type="submit" loading={isSaving} className="w-full bg-tp-accent hover:bg-orange-600 sm:w-auto">
                     Save Changes
                   </Button>
                 </div>
@@ -396,22 +420,50 @@ export const ProfilePage: React.FC = () => {
             )}
 
             {activeSection === 'password' && (
-              <form onSubmit={handlePasswordSubmit}>
-                <h2 className="text-lg font-semibold text-gray-900 mb-6">Change Password</h2>
+              <form onSubmit={handlePasswordSubmit} noValidate>
+                <h2 className="text-[15px] font-semibold text-slate-900 mb-6">Change Password</h2>
                 <div className="max-w-md space-y-6">
-                  <Input label="Current Password" type="password" value={passwordForm.current_password} onChange={(e) => setPasswordForm({ ...passwordForm, current_password: e.target.value })} leftIcon={<KeyIcon className="h-5 w-5" />} required />
-                  <Input label="New Password" type="password" value={passwordForm.new_password} onChange={(e) => setPasswordForm({ ...passwordForm, new_password: e.target.value })} leftIcon={<KeyIcon className="h-5 w-5" />} helperText="Must be at least 8 characters" required />
-                  <Input label="Confirm New Password" type="password" value={passwordForm.confirm_password} onChange={(e) => setPasswordForm({ ...passwordForm, confirm_password: e.target.value })} leftIcon={<KeyIcon className="h-5 w-5" />} required />
+                  <FormField
+                    control={passwordForm.control}
+                    name="current_password"
+                    label="Current Password"
+                    type="password"
+                    autoComplete="current-password"
+                    leftIcon={<KeyIcon className="h-5 w-5" />}
+                  />
+                  <FormField
+                    control={passwordForm.control}
+                    name="new_password"
+                    label="New Password"
+                    type="password"
+                    autoComplete="new-password"
+                    leftIcon={<KeyIcon className="h-5 w-5" />}
+                    helperText="Must be at least 8 characters"
+                  />
+                  <FormField
+                    control={passwordForm.control}
+                    name="confirm_password"
+                    label="Confirm New Password"
+                    type="password"
+                    autoComplete="new-password"
+                    leftIcon={<KeyIcon className="h-5 w-5" />}
+                  />
                 </div>
                 <div className="mt-6 flex justify-end">
-                  <Button type="submit" loading={isSaving} className="w-full bg-emerald-600 hover:bg-emerald-700 sm:w-auto">Update Password</Button>
+                  <Button
+                    type="submit"
+                    loading={isSaving || passwordForm.formState.isSubmitting}
+                    className="w-full bg-tp-accent hover:bg-orange-600 sm:w-auto"
+                  >
+                    Update Password
+                  </Button>
                 </div>
               </form>
             )}
 
             {activeSection === 'notifications' && (
               <div>
-                <h2 className="text-lg font-semibold text-gray-900 mb-6">Notification Preferences</h2>
+                <h2 className="text-[15px] font-semibold text-slate-900 mb-6">Notification Preferences</h2>
                 <div className="space-y-4">
                   {[
                     { key: 'email_course_updates', title: 'Course Updates', desc: 'Get notified when courses are updated' },
@@ -419,10 +471,10 @@ export const ProfilePage: React.FC = () => {
                     { key: 'email_deadline_alerts', title: 'Deadline Alerts', desc: 'Get alerts before deadlines approach' },
                     { key: 'browser_notifications', title: 'Browser Notifications', desc: 'Enable desktop push notifications' },
                   ].map((item) => (
-                    <div key={item.key} className="flex flex-col gap-3 border-b border-gray-100 py-3 sm:flex-row sm:items-center sm:justify-between last:border-0">
+                    <div key={item.key} className="flex flex-col gap-3 border-b border-slate-200/80 py-3 sm:flex-row sm:items-center sm:justify-between last:border-0">
                       <div>
-                        <p className="font-medium text-gray-900">{item.title}</p>
-                        <p className="text-sm text-gray-500">{item.desc}</p>
+                        <p className="text-[13px] font-medium text-slate-900">{item.title}</p>
+                        <p className="text-[13px] text-slate-500">{item.desc}</p>
                       </div>
                       <label className="relative inline-flex items-center cursor-pointer">
                         <input
@@ -431,13 +483,13 @@ export const ProfilePage: React.FC = () => {
                           onChange={(e) => setNotifications({ ...notifications, [item.key]: e.target.checked })}
                           className="sr-only peer"
                         />
-                        <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-emerald-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+                        <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-orange-300/50 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-tp-accent"></div>
                       </label>
                     </div>
                   ))}
                 </div>
                 <div className="mt-6 flex justify-end">
-                  <Button onClick={handleNotificationsSave} loading={isSaving} className="w-full bg-emerald-600 hover:bg-emerald-700 sm:w-auto">
+                  <Button onClick={handleNotificationsSave} loading={isSaving} className="w-full bg-tp-accent hover:bg-orange-600 sm:w-auto">
                     Save Preferences
                   </Button>
                 </div>

@@ -3,6 +3,9 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { User } from '../types';
+import { useTenantStore } from './tenantStore';
+import { useBillingStore } from './billingStore';
+import { useGamificationStore } from './gamificationStore';
 
 // Storage key constants
 const ACCESS_TOKEN_KEY = 'access_token';
@@ -86,6 +89,11 @@ export const useAuthStore = create<AuthState>()(
         storage.setItem(ACCESS_TOKEN_KEY, tokens.access);
         storage.setItem(REFRESH_TOKEN_KEY, tokens.refresh);
         localStorage.setItem(SESSION_LAST_ACTIVITY_KEY, String(Date.now()));
+
+        // Store tenant subdomain for X-Tenant-Subdomain header (localhost dev)
+        if (user.tenant_subdomain) {
+          storage.setItem('tenant_subdomain', user.tenant_subdomain);
+        }
         
         set({
           user,
@@ -103,13 +111,20 @@ export const useAuthStore = create<AuthState>()(
         sessionStorage.removeItem(ACCESS_TOKEN_KEY);
         sessionStorage.removeItem(REFRESH_TOKEN_KEY);
         localStorage.removeItem(SESSION_LAST_ACTIVITY_KEY);
-        
+        localStorage.removeItem('tenant_subdomain');
+        sessionStorage.removeItem('tenant_subdomain');
+
         set({
           user: null,
           accessToken: null,
           refreshToken: null,
           isAuthenticated: false,
         });
+
+        // Reset tenant-scoped stores to prevent cross-tenant data leakage
+        useTenantStore.getState().reset();
+        useBillingStore.getState().reset();
+        useGamificationStore.getState().reset();
       },
       
       setUser: (user) => set({ user }),

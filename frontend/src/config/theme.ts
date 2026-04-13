@@ -10,6 +10,11 @@ export interface TenantTheme {
   tenantFound: boolean;
   tenantErrorReason?: 'not_found' | 'trial_expired' | 'deactivated';
   tenantErrorMessage?: string;
+  // White-label branding
+  whiteLabel?: boolean;
+  loginBgImage?: string;
+  welcomeMessage?: string;
+  schoolMotto?: string;
 }
 
 // Default theme (fallback)
@@ -128,18 +133,25 @@ export function applyTheme(theme: TenantTheme): void {
  */
 export function getSubdomain(): string {
   const hostname = window.location.hostname;
-  
-  // Development
-  if (hostname === 'localhost' || hostname === '127.0.0.1') {
-    return 'demo';
+
+  // Development: subdomain.localhost (e.g., april5.localhost)
+  if (hostname.endsWith('.localhost')) {
+    return hostname.replace('.localhost', '');
   }
-  
+
+  // Development: bare localhost or 127.0.0.1
+  if (hostname === 'localhost' || hostname === '127.0.0.1') {
+    return sessionStorage.getItem('tenant_subdomain') ||
+           localStorage.getItem('tenant_subdomain') ||
+           'demo';
+  }
+
   // Production: subdomain.lms.com
   const parts = hostname.split('.');
   if (parts.length >= 2) {
     return parts[0];
   }
-  
+
   return 'demo';
 }
 
@@ -173,9 +185,12 @@ export async function loadTenantTheme(): Promise<TenantTheme> {
       tenantFound: data.tenant_found !== false,
       tenantErrorReason: data.tenant_found === false ? data.reason : undefined,
       tenantErrorMessage: data.tenant_found === false ? data.message : undefined,
+      whiteLabel: (data as any).white_label || false,
+      loginBgImage: (data as any).login_bg_image || undefined,
+      welcomeMessage: (data as any).welcome_message || undefined,
+      schoolMotto: (data as any).school_motto || undefined,
     };
-  } catch (error) {
-    console.error('Failed to load theme:', error);
+  } catch {
     return DEFAULT_THEME;
   }
 }

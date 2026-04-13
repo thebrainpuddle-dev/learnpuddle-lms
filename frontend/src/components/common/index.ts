@@ -1,6 +1,7 @@
 // src/components/common/index.ts
 
 export { Input } from './Input';
+export { FormField } from './FormField';
 export { Button } from './Button';
 export { Checkbox } from './Checkbox';
 export { Loading } from './Loading';

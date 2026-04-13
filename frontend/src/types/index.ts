@@ -18,6 +18,7 @@ export interface User {
   is_active: boolean;
   email_verified: boolean;
   created_at: string;
+  tenant_subdomain?: string;
 }
 
 export interface Tenant {
