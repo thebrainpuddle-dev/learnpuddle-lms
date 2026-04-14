@@ -10,8 +10,7 @@ import {
   BookOpen,
   Megaphone,
   ClipboardList,
-  BarChart3,
-  Compass,
+  TrendingUp,
   Settings,
   HelpCircle,
   LogOut,
@@ -20,6 +19,8 @@ import {
   MessageSquare,
   GraduationCap,
   Bot,
+  Sparkles,
+  ShieldCheck,
 } from 'lucide-react';
 import { cn } from '../../design-system/theme/cn';
 import { useAuthStore } from '../../stores/authStore';
@@ -40,15 +41,16 @@ const MAIN_NAV = [
 
 const LEARNING_NAV = [
   { label: 'AI Classroom', href: '/teacher/ai-classroom', icon: Presentation },
-  { label: 'AI Chatbots', href: '/teacher/chatbots', icon: Bot },
+  { label: 'AI Tutor', href: '/teacher/chatbots', icon: Bot },
+  { label: 'AI Study Notes', href: '/teacher/study-notes', icon: Sparkles },
   { label: 'Discussions', href: '/teacher/discussions', icon: MessageSquare },
 ];
 
 const TOOLS_NAV = [
-  { label: 'Announcements', href: '/teacher/reminders', icon: Megaphone },
+  { label: 'My Certifications', href: '/teacher/certifications', icon: ShieldCheck },
+  { label: 'Reminders', href: '/teacher/reminders', icon: Megaphone },
   { label: 'Assessments', href: '/teacher/assignments', icon: ClipboardList },
-  { label: 'Competency', href: '/teacher/competency', icon: Compass },
-  { label: 'Reports', href: '/teacher/gamification', icon: BarChart3 },
+  { label: 'My Growth', href: '/teacher/growth', icon: TrendingUp },
 ];
 
 const BOTTOM_ITEMS = [
@@ -123,10 +125,10 @@ export const TeacherSidebar: React.FC<TeacherSidebarProps> = ({ open, onClose })
           <img
             src={theme.logo}
             alt={tenantName}
-            className="h-8 w-8 rounded-lg object-cover"
+            className="h-8 w-8 rounded-full object-cover"
           />
         ) : (
-          <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-tp-accent to-amber-500 flex items-center justify-center flex-shrink-0 shadow-sm">
+          <div className="h-8 w-8 rounded-full bg-gradient-to-br from-tp-accent to-amber-500 flex items-center justify-center flex-shrink-0 shadow-sm">
             <span className="text-white font-bold text-[13px]">{tenantInitial}</span>
           </div>
         )}

@@ -108,6 +108,12 @@ const GradeDetailPage = React.lazy(() =>
 const AdminSectionDetailPage = React.lazy(() =>
   import('./pages/admin/SectionDetailPage').then((m) => ({ default: m.SectionDetailPage }))
 );
+const StudentsPage = React.lazy(() =>
+  import('./pages/admin/StudentsPage').then((m) => ({ default: m.StudentsPage }))
+);
+const DirectoryPage = React.lazy(() =>
+  import('./pages/admin/DirectoryPage').then((m) => ({ default: m.DirectoryPage }))
+);
 
 // Teacher pages
 const TeacherDashboardPage = React.lazy(() =>
@@ -131,9 +137,11 @@ const QuizPage = React.lazy(() =>
 const ProfilePage = React.lazy(() =>
   import('./pages/teacher/ProfilePage').then((m) => ({ default: m.ProfilePage }))
 );
-const GamificationPage = React.lazy(() => import('./pages/teacher/GamificationPage'));
-const CompetencyPage = React.lazy(() =>
-  import('./pages/teacher/CompetencyPage').then((m) => ({ default: m.CompetencyPage }))
+const ProfessionalGrowthPage = React.lazy(() =>
+  import('./pages/teacher/ProfessionalGrowthPage').then((m) => ({ default: m.ProfessionalGrowthPage }))
+);
+const MyCertificationsPage = React.lazy(() =>
+  import('./pages/teacher/MyCertificationsPage').then((m) => ({ default: m.MyCertificationsPage }))
 );
 const MyClassesPage = React.lazy(() =>
   import('./pages/teacher/MyClassesPage').then((m) => ({ default: m.MyClassesPage }))
@@ -396,6 +404,8 @@ function AppContent() {
         <Route path="teachers" element={<RoutePage><TeachersPage /></RoutePage>} />
         <Route path="teachers/new" element={<RoutePage><CreateTeacherPage /></RoutePage>} />
         <Route path="groups" element={<RoutePage><GroupsPage /></RoutePage>} />
+        <Route path="students" element={<RoutePage><StudentsPage /></RoutePage>} />
+        <Route path="directory" element={<RoutePage><DirectoryPage /></RoutePage>} />
         <Route path="reminders" element={<RoutePage><RemindersPage /></RoutePage>} />
         <Route path="school" element={<RoutePage><SchoolViewPage /></RoutePage>} />
         <Route path="school/grade/:gradeId" element={<RoutePage><GradeDetailPage /></RoutePage>} />
@@ -427,8 +437,8 @@ function AppContent() {
         <Route path="reminders" element={<RoutePage><TeacherRemindersPage /></RoutePage>} />
         <Route path="quizzes/:assignmentId" element={<RoutePage><QuizPage /></RoutePage>} />
         <Route path="profile" element={<RoutePage><ProfilePage /></RoutePage>} />
-        <Route path="gamification" element={<RoutePage><GamificationPage /></RoutePage>} />
-        <Route path="competency" element={<RoutePage><CompetencyPage /></RoutePage>} />
+        <Route path="growth" element={<RoutePage><ProfessionalGrowthPage /></RoutePage>} />
+        <Route path="certifications" element={<RoutePage><MyCertificationsPage /></RoutePage>} />
         {/* OpenMAIC Features */}
         <Route path="ai-classroom" element={<RoutePage><MAICLibraryPage /></RoutePage>} />
         <Route path="ai-classroom/new" element={<RoutePage><MAICCreatePage /></RoutePage>} />
