@@ -7,8 +7,8 @@ import { NavLink, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard,
   BookOpen,
+  GraduationCap,
   ClipboardList,
-  Megaphone,
   MoreHorizontal,
 } from 'lucide-react';
 import { cn } from '../../design-system/theme/cn';
@@ -20,8 +20,8 @@ interface MobileBottomNavProps {
 const TABS = [
   { label: 'Overview', href: 'dashboard', icon: LayoutDashboard },
   { label: 'Courses', href: 'courses', icon: BookOpen },
+  { label: 'Classes', href: 'my-classes', icon: GraduationCap },
   { label: 'Assessments', href: 'assignments', icon: ClipboardList },
-  { label: 'Announce', href: 'reminders', icon: Megaphone },
   { label: 'More', href: 'profile', icon: MoreHorizontal },
 ];
 

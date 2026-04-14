@@ -21,6 +21,7 @@ import {
   Bot,
   Sparkles,
   ShieldCheck,
+  FileText,
 } from 'lucide-react';
 import { cn } from '../../design-system/theme/cn';
 import { useAuthStore } from '../../stores/authStore';
@@ -33,24 +34,24 @@ interface TeacherSidebarProps {
   onClose?: () => void;
 }
 
-const MAIN_NAV = [
+const MY_LEARNING_NAV = [
   { label: 'Overview', href: '/teacher/dashboard', icon: LayoutDashboard },
   { label: 'My Courses', href: '/teacher/courses', icon: BookOpen },
-  { label: 'My Classes', href: '/teacher/my-classes', icon: GraduationCap },
-];
-
-const LEARNING_NAV = [
-  { label: 'AI Classroom', href: '/teacher/ai-classroom', icon: Presentation },
-  { label: 'AI Tutor', href: '/teacher/chatbots', icon: Bot },
-  { label: 'AI Study Notes', href: '/teacher/study-notes', icon: Sparkles },
-  { label: 'Discussions', href: '/teacher/discussions', icon: MessageSquare },
-];
-
-const TOOLS_NAV = [
-  { label: 'My Certifications', href: '/teacher/certifications', icon: ShieldCheck },
-  { label: 'Reminders', href: '/teacher/reminders', icon: Megaphone },
   { label: 'Assessments', href: '/teacher/assignments', icon: ClipboardList },
   { label: 'My Growth', href: '/teacher/growth', icon: TrendingUp },
+];
+
+const MY_CLASSROOM_NAV = [
+  { label: 'My Classes', href: '/teacher/my-classes', icon: GraduationCap },
+  { label: 'Discussions', href: '/teacher/discussions', icon: MessageSquare },
+  { label: 'AI Classroom', href: '/teacher/ai-classroom', icon: Presentation },
+  { label: 'AI Tutor', href: '/teacher/chatbots', icon: Bot },
+];
+
+const PROFESSIONAL_NAV = [
+  { label: 'Certifications', href: '/teacher/certifications', icon: ShieldCheck },
+  { label: 'Study Notes', href: '/teacher/study-notes', icon: FileText },
+  { label: 'Reminders', href: '/teacher/reminders', icon: Megaphone },
 ];
 
 const BOTTOM_ITEMS = [
@@ -166,23 +167,23 @@ export const TeacherSidebar: React.FC<TeacherSidebarProps> = ({ open, onClose })
 
       {/* Navigation */}
       <nav className="flex-1 px-3 overflow-y-auto tp-scrollbar">
-        <SectionLabel>Main</SectionLabel>
+        <SectionLabel>My Learning</SectionLabel>
         <div className="space-y-0.5">
-          {MAIN_NAV.map((item) => (
+          {MY_LEARNING_NAV.map((item) => (
             <NavItem key={item.href} item={item} onClose={onClose} />
           ))}
         </div>
 
-        <SectionLabel>AI Learning</SectionLabel>
+        <SectionLabel>My Classroom</SectionLabel>
         <div className="space-y-0.5">
-          {LEARNING_NAV.map((item) => (
+          {MY_CLASSROOM_NAV.map((item) => (
             <NavItem key={item.href} item={item} onClose={onClose} />
           ))}
         </div>
 
-        <SectionLabel>Tools</SectionLabel>
+        <SectionLabel>Professional</SectionLabel>
         <div className="space-y-0.5">
-          {TOOLS_NAV.map((item) => (
+          {PROFESSIONAL_NAV.map((item) => (
             <NavItem key={item.href} item={item} onClose={onClose} />
           ))}
         </div>
