@@ -143,6 +143,9 @@ const ProfessionalGrowthPage = React.lazy(() =>
 const MyCertificationsPage = React.lazy(() =>
   import('./pages/teacher/MyCertificationsPage').then((m) => ({ default: m.MyCertificationsPage }))
 );
+const TeacherStudyNotesPage = React.lazy(() =>
+  import('./pages/teacher/TeacherStudyNotesPage').then((m) => ({ default: m.TeacherStudyNotesPage }))
+);
 const MyClassesPage = React.lazy(() =>
   import('./pages/teacher/MyClassesPage').then((m) => ({ default: m.MyClassesPage }))
 );
@@ -173,6 +176,9 @@ const MAICBrowsePage = React.lazy(() =>
 );
 const StudentMAICPlayerPage = React.lazy(() =>
   import('./pages/student/MAICPlayerPage').then((m) => ({ default: m.StudentMAICPlayerPage }))
+);
+const StudentMAICCreatePage = React.lazy(() =>
+  import('./pages/student/StudentMAICCreatePage').then((m) => ({ default: m.StudentMAICCreatePage }))
 );
 
 // AI Chatbot
@@ -439,6 +445,7 @@ function AppContent() {
         <Route path="profile" element={<RoutePage><ProfilePage /></RoutePage>} />
         <Route path="growth" element={<RoutePage><ProfessionalGrowthPage /></RoutePage>} />
         <Route path="certifications" element={<RoutePage><MyCertificationsPage /></RoutePage>} />
+        <Route path="study-notes" element={<RoutePage><TeacherStudyNotesPage /></RoutePage>} />
         {/* OpenMAIC Features */}
         <Route path="ai-classroom" element={<RoutePage><MAICLibraryPage /></RoutePage>} />
         <Route path="ai-classroom/new" element={<RoutePage><MAICCreatePage /></RoutePage>} />
@@ -472,6 +479,7 @@ function AppContent() {
         <Route path="achievements" element={<RoutePage><StudentAchievementsPage /></RoutePage>} />
         <Route path="study-notes" element={<RoutePage><StudyNotesPage /></RoutePage>} />
         <Route path="ai-classroom" element={<RoutePage><MAICBrowsePage /></RoutePage>} />
+        <Route path="ai-classroom/new" element={<RoutePage><StudentMAICCreatePage /></RoutePage>} />
         <Route path="ai-classroom/:id" element={<RoutePage><StudentMAICPlayerPage /></RoutePage>} />
         <Route path="chatbots" element={<RoutePage><StudentChatbotsPage /></RoutePage>} />
         <Route path="chatbots/:id" element={<RoutePage><StudentChatPage /></RoutePage>} />
