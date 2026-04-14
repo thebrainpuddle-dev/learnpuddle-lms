@@ -17,7 +17,8 @@ import {
   X,
   Presentation,
   Bot,
-  StickyNote,
+  Sparkles,
+  MessageSquare,
 } from 'lucide-react';
 import { cn } from '../../design-system/theme/cn';
 import { useAuthStore } from '../../stores/authStore';
@@ -30,20 +31,18 @@ interface StudentSidebarProps {
   onClose?: () => void;
 }
 
-const MAIN_NAV = [
+const MY_LEARNING_NAV = [
   { label: 'Dashboard', href: '/student/dashboard', icon: LayoutDashboard },
   { label: 'My Courses', href: '/student/courses', icon: BookOpen },
-];
-
-const TOOLS_NAV = [
   { label: 'Assignments', href: '/student/assignments', icon: ClipboardList },
   { label: 'Achievements', href: '/student/achievements', icon: Trophy },
 ];
 
-const LEARNING_TOOLS_NAV = [
+const AI_TOOLS_NAV = [
   { label: 'AI Classroom', href: '/student/ai-classroom', icon: Presentation },
-  { label: 'AI Chatbots', href: '/student/chatbots', icon: Bot },
-  { label: 'Study Notes', href: '/student/study-notes', icon: StickyNote },
+  { label: 'AI Tutor', href: '/student/chatbots', icon: Bot },
+  { label: 'Study Summaries', href: '/student/study-notes', icon: Sparkles },
+  { label: 'Discussions', href: '/student/discussions', icon: MessageSquare },
 ];
 
 const BOTTOM_ITEMS = [
@@ -119,10 +118,10 @@ export const StudentSidebar: React.FC<StudentSidebarProps> = ({ open, onClose })
           <img
             src={theme.logo}
             alt={tenantName}
-            className="h-8 w-8 rounded-lg object-cover"
+            className="h-8 w-8 rounded-full object-cover"
           />
         ) : (
-          <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-indigo-500 to-indigo-600 flex items-center justify-center flex-shrink-0 shadow-sm">
+          <div className="h-8 w-8 rounded-full bg-gradient-to-br from-indigo-500 to-indigo-600 flex items-center justify-center flex-shrink-0 shadow-sm">
             <span className="text-white font-bold text-[13px]">{tenantInitial}</span>
           </div>
         )}
@@ -153,30 +152,29 @@ export const StudentSidebar: React.FC<StudentSidebarProps> = ({ open, onClose })
             <p className="text-[13px] font-medium text-tp-text truncate leading-tight">
               {user?.first_name} {user?.last_name}
             </p>
-            <p className="text-[11px] text-gray-400 font-medium">Student</p>
+            {user?.grade_name || user?.section_name ? (
+              <p className="text-[11px] text-indigo-500 font-medium truncate">
+                {[user.grade_name, user.section_name && `Section ${user.section_name}`].filter(Boolean).join(' · ')}
+              </p>
+            ) : (
+              <p className="text-[11px] text-gray-400 font-medium">Student</p>
+            )}
           </div>
         </div>
       </div>
 
       {/* Navigation */}
       <nav className="flex-1 px-3 overflow-y-auto tp-scrollbar">
-        <SectionLabel>Main</SectionLabel>
+        <SectionLabel>My Learning</SectionLabel>
         <div className="space-y-0.5">
-          {MAIN_NAV.map((item) => (
+          {MY_LEARNING_NAV.map((item) => (
             <NavItem key={item.href} item={item} onClose={onClose} />
           ))}
         </div>
 
-        <SectionLabel>Learning</SectionLabel>
+        <SectionLabel>AI Tools</SectionLabel>
         <div className="space-y-0.5">
-          {TOOLS_NAV.map((item) => (
-            <NavItem key={item.href} item={item} onClose={onClose} />
-          ))}
-        </div>
-
-        <SectionLabel>Learning Tools</SectionLabel>
-        <div className="space-y-0.5">
-          {LEARNING_TOOLS_NAV.map((item) => (
+          {AI_TOOLS_NAV.map((item) => (
             <NavItem key={item.href} item={item} onClose={onClose} />
           ))}
         </div>
