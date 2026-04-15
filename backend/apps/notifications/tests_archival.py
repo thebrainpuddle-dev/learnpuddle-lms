@@ -198,8 +198,8 @@ class ArchiveOldNotificationsTaskTestCase(TestCase):
         result = archive_old_notifications()
         self.assertEqual(result["archived"], 0)
 
-    def test_boundary_exactly_90_days_old_not_archived(self):
-        """Notification created exactly 90 days ago is NOT archived (lt, not lte)."""
+    def test_boundary_exactly_90_days_old_is_archived(self):
+        """Notification created exactly 90 days ago IS archived (lte)."""
         boundary_notif = Notification.all_objects.create(
             tenant=self.tenant,
             teacher=self.teacher,
@@ -213,10 +213,10 @@ class ArchiveOldNotificationsTaskTestCase(TestCase):
 
         result = archive_old_notifications()
 
-        # created_at__lt=cutoff means exactly 90 days does NOT match
-        self.assertEqual(result["archived"], 0)
+        # created_at__lte=cutoff means exactly 90 days DOES match
+        self.assertEqual(result["archived"], 1)
         boundary_notif.refresh_from_db()
-        self.assertIsNone(boundary_notif.archived_at)
+        self.assertIsNotNone(boundary_notif.archived_at)
 
     def test_91_days_old_is_archived(self):
         """Notification created 91 days ago IS archived."""
@@ -326,8 +326,8 @@ class DeleteArchivedNotificationsTaskTestCase(TestCase):
         result = delete_archived_notifications()
         self.assertEqual(result["deleted"], 0)
 
-    def test_boundary_exactly_30_days_archived_not_deleted(self):
-        """Archived exactly 30 days ago is NOT deleted (lt, not lte)."""
+    def test_boundary_exactly_30_days_archived_is_deleted(self):
+        """Archived exactly 30 days ago IS deleted (lte)."""
         boundary = Notification.all_objects.create(
             tenant=self.tenant,
             teacher=self.teacher,
@@ -339,8 +339,8 @@ class DeleteArchivedNotificationsTaskTestCase(TestCase):
 
         result = delete_archived_notifications()
 
-        self.assertEqual(result["deleted"], 0)
-        self.assertTrue(
+        self.assertEqual(result["deleted"], 1)
+        self.assertFalse(
             Notification.all_objects.filter(id=boundary.id).exists()
         )
 

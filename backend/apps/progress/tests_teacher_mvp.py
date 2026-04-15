@@ -121,7 +121,7 @@ class TeacherMvpApiTestCase(TestCase):
         self._login()
         resp = self.client.post(f"/api/teacher/progress/content/{self.content_2.id}/start/")
         self.assertEqual(resp.status_code, 400, resp.content)
-        self.assertEqual(resp.json()["code"], "CONTENT_LOCKED")
+        self.assertEqual(resp.json()["error"]["code"], "CONTENT_LOCKED")
 
     def test_content_unlocks_after_previous_module_completion(self):
         self._login()

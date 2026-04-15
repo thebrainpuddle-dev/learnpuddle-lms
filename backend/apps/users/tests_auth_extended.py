@@ -78,6 +78,7 @@ class RegisterTeacherTestCase(TestCase):
             "first_name": "New",
             "last_name": "Teacher",
             "password": "StrongPass123!",
+            "password_confirm": "StrongPass123!",
         })
         self.assertEqual(resp.status_code, 201)
         self.assertEqual(resp.json()["email"], "newteacher@reg.test")

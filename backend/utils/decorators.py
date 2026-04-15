@@ -8,7 +8,8 @@ from .tenant_middleware import get_current_tenant
 def tenant_required(view_func):
     """
     Decorator to ensure a tenant exists in the request.
-    Use on API views that require tenant context.
+    Also enforces cross-tenant isolation: authenticated users (except
+    SUPER_ADMIN) must belong to the resolved tenant.
     """
     @wraps(view_func)
     def wrapper(request, *args, **kwargs):
@@ -18,6 +19,14 @@ def tenant_required(view_func):
         # Also ensure request.tenant is available
         if not hasattr(request, 'tenant') or request.tenant is None:
             request.tenant = tenant
+        # Cross-tenant isolation (DRF-level check — catches force_authenticate)
+        if (request.user.is_authenticated
+                and request.user.role != 'SUPER_ADMIN'
+                and getattr(request.user, 'tenant_id', None) is not None
+                and request.user.tenant_id != tenant.id):
+            raise PermissionDenied(
+                "Access denied: User does not belong to this tenant"
+            )
         return view_func(request, *args, **kwargs)
     return wrapper
 

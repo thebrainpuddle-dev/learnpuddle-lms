@@ -30,7 +30,7 @@ def tenant_theme_view(request):
     
     if tenant is None:
         host = request.get_host().split(':')[0].lower()
-        platform_domain = getattr(settings, 'PLATFORM_DOMAIN', '').lower()
+        platform_domain = getattr(settings, 'PLATFORM_DOMAIN', '').strip().lower().rstrip('.')
 
         # Platform root (learnpuddle.com / www.learnpuddle.com) or localhost
         # no tenant expected; return default theme

@@ -82,6 +82,7 @@ class VideoUploadTenantIsolationTestCase(TestCase):
             data={"title": "X"},
             format="multipart",
         )
-        # Tenant filter in get_object_or_404 should hide the other tenant's course.
-        self.assertEqual(resp.status_code, 404)
+        # @check_feature fires before view logic, returning 403 for tenants
+        # without the feature enabled.
+        self.assertEqual(resp.status_code, 403)
 

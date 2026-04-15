@@ -292,7 +292,15 @@ def announcement_list_create(request):
         ))
     
     Notification.objects.bulk_create(notifications)
-    
+
+    # Normalize created_at across the batch so grouping/deletion by exact
+    # timestamp works.  bulk_create + auto_now_add can produce microsecond
+    # differences between rows.
+    if notifications:
+        batch_ids = [n.id for n in notifications]
+        reference_time = notifications[0].created_at
+        Notification.all_objects.filter(id__in=batch_ids).update(created_at=reference_time)
+
     log_audit(
         'CREATE',
         'Announcement',
@@ -330,7 +338,7 @@ def announcement_delete(request, announcement_id):
     
     # Delete all notifications with same title, message, and exact creation time
     # bulk_create sets the same auto_now_add timestamp for all notifications in a batch
-    deleted_count, _ = Notification.objects.filter(
+    deleted_count, _ = Notification.all_objects.filter(
         tenant=tenant,
         notification_type='ANNOUNCEMENT',
         title=notification.title,

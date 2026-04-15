@@ -15,6 +15,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 from utils.decorators import tenant_required, teacher_or_admin, student_only
+from rest_framework.exceptions import PermissionDenied as DRFPermissionDenied
 
 from django.utils.html import strip_tags
 from utils.rich_text import sanitize_rich_text_html
@@ -41,15 +42,26 @@ def serialize_author(user):
     }
 
 
+def _safe_section(thread):
+    """Return section object or None, avoiding RelatedObjectDoesNotExist."""
+    if not thread.section_id:
+        return None
+    try:
+        return thread.section
+    except DiscussionThread.section.RelatedObjectDoesNotExist:
+        return None
+
+
 def serialize_thread_summary(thread):
     """Serialize a thread for list views."""
+    section = _safe_section(thread)
     return {
         'id': str(thread.id),
         'title': thread.title,
         'body': thread.body[:200] + '...' if len(thread.body) > 200 else thread.body,
         'author': serialize_author(thread.author),
-        'section_id': str(thread.section_id),
-        'section_name': thread.section.name if hasattr(thread, '_section_cache') or thread.section_id else None,
+        'section_id': str(thread.section_id) if thread.section_id else None,
+        'section_name': section.name if section else None,
         'grade_name': None,
         'course_id': str(thread.course_id) if thread.course_id else None,
         'course_title': thread.course.title if thread.course else None,
@@ -105,29 +117,31 @@ def serialize_thread_detail(thread, user):
         thread=thread, user=user
     ).exists()
 
-    is_teacher = user.role in ('TEACHER', 'SCHOOL_ADMIN', 'SUPER_ADMIN', 'HOD', 'IB_COORDINATOR')
+    is_admin = user.role in ('SCHOOL_ADMIN', 'SUPER_ADMIN')
+    is_author = thread.author_id == user.id
+    section = _safe_section(thread)
 
     return {
         'id': str(thread.id),
         'title': thread.title,
         'body': thread.body,
         'author': serialize_author(thread.author),
-        'section_id': str(thread.section_id),
-        'section_name': thread.section.name if thread.section else None,
-        'grade_name': thread.section.grade.name if thread.section and thread.section.grade else None,
+        'section_id': str(thread.section_id) if thread.section_id else None,
+        'section_name': section.name if section else None,
+        'grade_name': section.grade.name if section and hasattr(section, 'grade') and section.grade else None,
         'course_id': str(thread.course_id) if thread.course_id else None,
-        'course_title': thread.course.title if thread.course else None,
+        'course_title': thread.course.title if thread.course_id else None,
         'content_id': str(thread.content_id) if thread.content_id else None,
-        'content_title': thread.content.title if thread.content else None,
+        'content_title': thread.content.title if thread.content_id else None,
         'status': thread.status,
         'is_pinned': thread.is_pinned,
         'is_announcement': thread.is_announcement,
         'reply_count': thread.reply_count,
         'view_count': thread.view_count,
         'is_subscribed': is_subscribed,
-        'can_edit': thread.author_id == user.id or is_teacher,
-        'can_delete': is_teacher,
-        'can_moderate': is_teacher,
+        'can_edit': is_author or is_admin,
+        'can_delete': is_admin,
+        'can_moderate': is_admin,
         'replies': replies_data,
         'created_at': thread.created_at.isoformat(),
         'updated_at': thread.updated_at.isoformat(),
@@ -699,6 +713,191 @@ def teacher_sections_list(request):
     } for s in sections]
 
     return Response(data)
+
+
+# ============================================================
+# Generic Views (role-agnostic, mounted at /api/v1/discussions/)
+# ============================================================
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+@tenant_required
+def discussion_thread_list_create(request):
+    """List or create discussion threads for the current tenant."""
+    if request.method == 'GET':
+        threads = DiscussionThread.objects.filter(
+            tenant=request.tenant,
+        ).select_related('author', 'last_reply_by', 'course', 'content')
+        status_filter = request.GET.get('status')
+        if status_filter:
+            threads = threads.filter(status=status_filter)
+        threads = threads.order_by('-is_pinned', '-created_at')
+        paginator = DiscussionPagination()
+        page = paginator.paginate_queryset(threads, request)
+        data = [serialize_thread_summary(t) for t in page]
+        return paginator.get_paginated_response(data)
+
+    # POST — create thread
+    title = request.data.get('title', '').strip()
+    body_raw = request.data.get('body', '').strip()
+    if not title:
+        return Response({'error': 'Title is required'}, status=status.HTTP_400_BAD_REQUEST)
+    if not body_raw:
+        return Response({'error': 'Body is required'}, status=status.HTTP_400_BAD_REQUEST)
+    body = sanitize_rich_text_html(body_raw) if '<' in body_raw else body_raw
+    thread = DiscussionThread.objects.create(
+        tenant=request.tenant, title=title, body=body, author=request.user,
+    )
+    DiscussionSubscription.objects.get_or_create(thread=thread, user=request.user)
+    return Response(
+        {'id': str(thread.id), 'title': thread.title, 'body': thread.body},
+        status=status.HTTP_201_CREATED,
+    )
+
+
+@api_view(['GET', 'PUT', 'DELETE'])
+@permission_classes([IsAuthenticated])
+@tenant_required
+def discussion_thread_detail_view(request, thread_id):
+    """Get, update, or delete a discussion thread."""
+    thread = get_object_or_404(DiscussionThread, id=thread_id, tenant=request.tenant)
+    is_author = thread.author_id == request.user.id
+    is_admin = request.user.role in ('SCHOOL_ADMIN', 'SUPER_ADMIN')
+
+    if request.method == 'GET':
+        thread.view_count += 1
+        thread.save(update_fields=['view_count'])
+        data = serialize_thread_detail(thread, request.user)
+        return Response(data)
+
+    if request.method == 'PUT':
+        if not is_author and not is_admin:
+            raise DRFPermissionDenied("Only the author or an admin can edit this thread")
+        if 'title' in request.data:
+            thread.title = request.data['title']
+        if 'status' in request.data and is_admin:
+            thread.status = request.data['status']
+        if 'is_pinned' in request.data and is_admin:
+            thread.is_pinned = request.data['is_pinned']
+        thread.save()
+        return Response({'id': str(thread.id), 'title': thread.title, 'status': thread.status})
+
+    # DELETE
+    if not is_admin:
+        raise DRFPermissionDenied("Only admins can delete threads")
+    thread.delete()
+    return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+@tenant_required
+def discussion_reply_create_view(request, thread_id):
+    """Create a reply on a thread."""
+    thread = get_object_or_404(DiscussionThread, id=thread_id, tenant=request.tenant)
+    if thread.status == 'closed':
+        return Response({'error': 'Thread is closed'}, status=status.HTTP_400_BAD_REQUEST)
+    body_raw = request.data.get('body', '').strip()
+    if not body_raw:
+        return Response({'error': 'Body is required'}, status=status.HTTP_400_BAD_REQUEST)
+    body = sanitize_rich_text_html(body_raw) if '<' in body_raw else body_raw
+    parent = None
+    parent_id = request.data.get('parent_id')
+    if parent_id:
+        parent = get_object_or_404(DiscussionReply, id=parent_id, thread=thread)
+    reply = DiscussionReply.objects.create(
+        thread=thread, body=body, author=request.user,
+        parent=parent,
+    )
+    thread.reply_count = thread.replies.count()
+    thread.last_reply_at = reply.created_at
+    thread.last_reply_by = request.user
+    thread.save(update_fields=['reply_count', 'last_reply_at', 'last_reply_by'])
+    _notify_subscribers(thread, reply)
+    return Response({'id': str(reply.id), 'body': reply.body}, status=status.HTTP_201_CREATED)
+
+
+@api_view(['PUT', 'DELETE'])
+@permission_classes([IsAuthenticated])
+@tenant_required
+def discussion_reply_detail_view(request, thread_id, reply_id):
+    """Edit or delete a reply."""
+    thread = get_object_or_404(DiscussionThread, id=thread_id, tenant=request.tenant)
+    reply = get_object_or_404(DiscussionReply, id=reply_id, thread=thread)
+    is_author = reply.author_id == request.user.id
+    is_admin = request.user.role in ('SCHOOL_ADMIN', 'SUPER_ADMIN')
+
+    if request.method == 'PUT':
+        if not is_author:
+            raise DRFPermissionDenied("Only the author can edit this reply")
+        body = request.data.get('body', '').strip()
+        if body:
+            reply.body = body
+            reply.is_edited = True
+            reply.save(update_fields=['body', 'is_edited'])
+        return Response({'id': str(reply.id), 'body': reply.body, 'is_edited': reply.is_edited})
+
+    # DELETE
+    if not is_author and not is_admin:
+        raise DRFPermissionDenied("Only the author or an admin can delete this reply")
+    reply.delete()
+    return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@api_view(['POST', 'DELETE'])
+@permission_classes([IsAuthenticated])
+@tenant_required
+def discussion_reply_like_view(request, thread_id, reply_id):
+    """Like or unlike a reply."""
+    thread = get_object_or_404(DiscussionThread, id=thread_id, tenant=request.tenant)
+    reply = get_object_or_404(DiscussionReply, id=reply_id, thread=thread)
+
+    if request.method == 'POST':
+        DiscussionLike.objects.get_or_create(reply=reply, user=request.user)
+        reply.like_count = reply.likes.count()
+        reply.save(update_fields=['like_count'])
+        return Response({'liked': True, 'like_count': reply.like_count})
+
+    DiscussionLike.objects.filter(reply=reply, user=request.user).delete()
+    reply.like_count = reply.likes.count()
+    reply.save(update_fields=['like_count'])
+    return Response({'liked': False, 'like_count': reply.like_count})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+@tenant_required
+def discussion_reply_moderate_view(request, thread_id, reply_id):
+    """Admin-only moderation: hide/unhide replies."""
+    if request.user.role not in ('SCHOOL_ADMIN', 'SUPER_ADMIN'):
+        raise DRFPermissionDenied("Only admins can moderate")
+    thread = get_object_or_404(DiscussionThread, id=thread_id, tenant=request.tenant)
+    reply = get_object_or_404(DiscussionReply, id=reply_id, thread=thread)
+    action = request.data.get('action', '')
+    if action == 'hide':
+        reply.is_hidden = True
+        reply.hidden_reason = request.data.get('reason', '')
+        reply.save(update_fields=['is_hidden', 'hidden_reason'])
+        return Response({'hidden': True})
+    if action == 'unhide':
+        reply.is_hidden = False
+        reply.hidden_reason = ''
+        reply.save(update_fields=['is_hidden', 'hidden_reason'])
+        return Response({'hidden': False})
+    return Response({'error': f'Invalid action: {action}'}, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['POST', 'DELETE'])
+@permission_classes([IsAuthenticated])
+@tenant_required
+def discussion_thread_subscribe_view(request, thread_id):
+    """Subscribe or unsubscribe from a thread."""
+    thread = get_object_or_404(DiscussionThread, id=thread_id, tenant=request.tenant)
+    if request.method == 'POST':
+        DiscussionSubscription.objects.get_or_create(thread=thread, user=request.user)
+        return Response({'subscribed': True})
+    DiscussionSubscription.objects.filter(thread=thread, user=request.user).delete()
+    return Response({'subscribed': False})
 
 
 # ============================================================

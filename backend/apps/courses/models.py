@@ -139,6 +139,12 @@ class Course(SoftDeleteMixin, models.Model):
         return self.title
     
     def save(self, *args, **kwargs):
+        # Auto-set tenant from context if not explicitly provided
+        if not self.tenant_id:
+            from utils.tenant_middleware import get_current_tenant
+            tenant = get_current_tenant()
+            if tenant:
+                self.tenant = tenant
         if not self.slug:
             base_slug = slugify(self.title) or 'course'
             slug = base_slug

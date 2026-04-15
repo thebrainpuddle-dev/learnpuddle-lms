@@ -230,6 +230,14 @@ class CoursePublishTestCase(TestCase):
         self.tenant = _make_tenant('Test School', 'course-pub', 'test', 'pub@courses.com')
         self.admin = _make_user('admin@coursepub.com', self.tenant)
         self.course = _make_course(self.tenant, self.admin, title='Publish Course')
+        # Add module + content so publish validation passes
+        self.module = Module.objects.create(
+            course=self.course, title='Module 1', order=1,
+        )
+        Content.objects.create(
+            module=self.module, title='Content 1', content_type='TEXT',
+            order=1, text_content='Test content',
+        )
 
     def test_admin_can_publish_course(self):
         self.assertFalse(self.course.is_published)

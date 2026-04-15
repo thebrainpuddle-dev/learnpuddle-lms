@@ -53,8 +53,26 @@ class UserSoftDeleteManager(BaseUserManager):
     """
 
     def get_queryset(self):
-        """Return queryset excluding soft-deleted users."""
+        """Return queryset excluding soft-deleted users, filtered by tenant context."""
+        qs = UserSoftDeleteQuerySet(self.model, using=self._db).alive()
+        tenant = get_current_tenant()
+        if tenant:
+            qs = qs.filter(tenant=tenant)
+        return qs
+
+    def all_tenants(self):
+        """Get all non-deleted users across all tenants (admin use only)."""
         return UserSoftDeleteQuerySet(self.model, using=self._db).alive()
+
+    def get_by_natural_key(self, username):
+        """Look up user by USERNAME_FIELD across all tenants.
+
+        Django's authentication backend calls this during ``authenticate()``.
+        The lookup must be tenant-agnostic so that cross-tenant login checks
+        (e.g. "user exists but belongs to a different tenant → 403") work
+        correctly instead of returning "Invalid credentials" (400).
+        """
+        return self.all_tenants().get(**{self.model.USERNAME_FIELD: username})
 
     def all_with_deleted(self):
         """Include soft-deleted users in results."""

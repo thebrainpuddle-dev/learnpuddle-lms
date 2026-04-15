@@ -350,7 +350,7 @@ def archive_old_notifications():
     now = timezone.now()
     count = (
         Notification.all_objects
-        .filter(created_at__lt=cutoff, archived_at__isnull=True)
+        .filter(created_at__lte=cutoff, archived_at__isnull=True)
         .update(is_archived=True, archived_at=now)
     )
     logger.info("archive_old_notifications: archived %d notifications older than 90 days", count)
@@ -372,7 +372,7 @@ def delete_archived_notifications():
     cutoff = timezone.now() - timedelta(days=30)
     count, _ = (
         Notification.all_objects
-        .filter(archived_at__lt=cutoff)
+        .filter(archived_at__lte=cutoff)
         .delete()
     )
     logger.info("delete_archived_notifications: hard-deleted %d archived notifications", count)

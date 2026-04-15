@@ -67,7 +67,7 @@ def tenant_teachers_qs(tenant: "Tenant") -> "QuerySet":
     """
     from apps.users.models import User
 
-    return User.objects.filter(
+    return User.objects.all_tenants().filter(
         tenant=tenant,
         role__in=_TEACHER_ROLES,
         is_active=True,
@@ -78,7 +78,7 @@ def tenant_students_qs(tenant: "Tenant") -> "QuerySet":
     """Return active students for *tenant*."""
     from apps.users.models import User
 
-    return User.objects.filter(
+    return User.objects.all_tenants().filter(
         tenant=tenant,
         role="STUDENT",
         is_active=True,

@@ -47,6 +47,7 @@ class ReportsViewTestCase(TestCase):
             is_active=True,
         )
         TeacherProgress.objects.create(
+            tenant=self.tenant,
             teacher=self.teacher,
             course=self.course,
             content=self.lesson,

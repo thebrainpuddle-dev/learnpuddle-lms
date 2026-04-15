@@ -271,20 +271,22 @@ class TenantServiceTestCase(TestCase):
         self.assertEqual(stats['avg_completion_pct'], 100.0)
 
 
-@override_settings(PLATFORM_DOMAIN='learnpuddle.com', ALLOWED_HOSTS=['*'])
+@override_settings(ALLOWED_HOSTS=['*'])
 class TenantThemeViewHostTestCase(TestCase):
+    """Uses PLATFORM_DOMAIN='lms.com' set by the conftest autouse fixture."""
+
     def setUp(self):
         self.client = APIClient()
 
     def test_theme_on_platform_apex_host_returns_platform_theme(self):
-        response = self.client.get('/api/tenants/theme/', HTTP_HOST='learnpuddle.com')
+        response = self.client.get('/api/tenants/theme/', HTTP_HOST='lms.com')
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.data.get('tenant_found'))
         self.assertEqual(response.data.get('subdomain'), '')
         self.assertEqual(response.data.get('name'), 'LearnPuddle')
 
     def test_theme_on_platform_www_host_returns_platform_theme(self):
-        response = self.client.get('/api/tenants/theme/', HTTP_HOST='www.learnpuddle.com')
+        response = self.client.get('/api/tenants/theme/', HTTP_HOST='www.lms.com')
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.data.get('tenant_found'))
         self.assertEqual(response.data.get('subdomain'), '')

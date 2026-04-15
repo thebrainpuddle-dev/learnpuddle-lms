@@ -27,5 +27,13 @@ teacher_urlpatterns = [
     path('sections/', views.teacher_sections_list, name='teacher_sections_list'),
 ]
 
-# Legacy flat pattern (kept for backward compat — will be removed)
-urlpatterns = []
+# Generic endpoints — mounted at /api/v1/discussions/
+urlpatterns = [
+    path('threads/', views.discussion_thread_list_create, name='thread_list_create'),
+    path('threads/<uuid:thread_id>/', views.discussion_thread_detail_view, name='thread_detail'),
+    path('threads/<uuid:thread_id>/replies/', views.discussion_reply_create_view, name='reply_create'),
+    path('threads/<uuid:thread_id>/replies/<uuid:reply_id>/', views.discussion_reply_detail_view, name='reply_detail'),
+    path('threads/<uuid:thread_id>/replies/<uuid:reply_id>/like/', views.discussion_reply_like_view, name='reply_like'),
+    path('threads/<uuid:thread_id>/replies/<uuid:reply_id>/moderate/', views.discussion_reply_moderate_view, name='reply_moderate'),
+    path('threads/<uuid:thread_id>/subscribe/', views.discussion_thread_subscribe_view, name='thread_subscribe'),
+]

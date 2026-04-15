@@ -118,10 +118,6 @@ def course_list_create(request):
     GET: List all courses for current tenant
     POST: Create new course (supports multipart/form-data for thumbnail upload)
     """
-    denied = _require_teacher_authoring_feature(request)
-    if denied:
-        return denied
-
     if request.method == 'GET':
         is_published = request.GET.get('is_published')
         is_mandatory = request.GET.get('is_mandatory')
@@ -175,6 +171,9 @@ def course_list_create(request):
         return paginator.get_paginated_response(serializer.data)
     
     elif request.method == 'POST':
+        denied = _require_teacher_authoring_feature(request)
+        if denied:
+            return denied
         data = _normalize_multipart_list_fields(request.data)
         if _is_teacher_authoring_user(request):
             data = dict(data)
