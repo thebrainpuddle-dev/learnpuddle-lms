@@ -89,17 +89,35 @@ describe('authStore', () => {
       // Pre-populate both storages
       localStorage.setItem('access_token', 'old-local-token');
       sessionStorage.setItem('access_token', 'old-session-token');
-      
+
       const { setAuth } = useAuthStore.getState();
-      
+
       act(() => {
         setAuth(mockUser, mockTokens, false);
       });
-      
-      // Old localStorage token should be cleared
-      expect(localStorage.getItem('access_token')).toBeNull();
+
+      // localStorage token is NOT cleared when rememberMe=false — this
+      // prevents a login in one tab from destroying another tab's
+      // persistent ("remember me") session.
+      expect(localStorage.getItem('access_token')).toBe('old-local-token');
       // New token should be in sessionStorage
       expect(sessionStorage.getItem('access_token')).toBe(mockTokens.access);
+    });
+
+    it('should clear localStorage tokens when rememberMe=true', () => {
+      // Pre-populate localStorage with stale tokens
+      localStorage.setItem('access_token', 'old-local-token');
+      localStorage.setItem('refresh_token', 'old-local-refresh');
+
+      const { setAuth } = useAuthStore.getState();
+
+      act(() => {
+        setAuth(mockUser, mockTokens, true);
+      });
+
+      // Old localStorage tokens should be replaced with new ones
+      expect(localStorage.getItem('access_token')).toBe(mockTokens.access);
+      expect(localStorage.getItem('refresh_token')).toBe(mockTokens.refresh);
     });
   });
 
