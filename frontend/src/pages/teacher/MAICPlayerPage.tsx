@@ -9,7 +9,7 @@ import { useQuery } from '@tanstack/react-query';
 import { usePageTitle } from '../../hooks/usePageTitle';
 import { maicApi } from '../../services/openmaicService';
 import { useMAICStageStore } from '../../stores/maicStageStore';
-import { getStoredClassroom } from '../../lib/maicDb';
+import { getStoredClassroom, saveClassroom } from '../../lib/maicDb';
 import { Stage } from '../../components/maic/Stage';
 
 const ArrowLeftIcon = () => (
@@ -29,6 +29,7 @@ export const MAICPlayerPage: React.FC = () => {
   const setAgents = useMAICStageStore((s) => s.setAgents);
   const setChatMessages = useMAICStageStore((s) => s.setChatMessages);
   const setScenes = useMAICStageStore((s) => s.setScenes);
+  const setSceneSlideBounds = useMAICStageStore((s) => s.setSceneSlideBounds);
   const reset = useMAICStageStore((s) => s.reset);
 
   const { data: classroom, isLoading, error } = useQuery({
@@ -61,19 +62,42 @@ export const MAICPlayerPage: React.FC = () => {
 
       let contentFound = false;
 
-      if (stored) {
+      if (stored?.slides?.length) {
+        // Load from IndexedDB cache
         if (stored.slides?.length) { setSlides(stored.slides); contentFound = true; }
         if (stored.agents?.length) setAgents(stored.agents);
         if (stored.chatHistory?.length) setChatMessages(stored.chatHistory);
         if (stored.scenes?.length) { setScenes(stored.scenes); contentFound = true; }
-      }
-
-      // Fallback: scenes from API response
-      if (!stored?.scenes?.length) {
+        if (stored.sceneSlideBounds?.length) setSceneSlideBounds(stored.sceneSlideBounds);
+      } else {
+        // IndexedDB empty — try loading from API response content field
         const meta = classroom as unknown as Record<string, unknown>;
-        if (meta.scenes && Array.isArray(meta.scenes)) {
-          setScenes(meta.scenes as Parameters<typeof setScenes>[0]);
+        const apiContent = meta.content as {
+          slides?: unknown[]; scenes?: unknown[]; sceneSlideBounds?: unknown[];
+        } | undefined;
+        const config = meta.config as { agents?: unknown[] } | undefined;
+
+        if (apiContent?.slides?.length) {
+          setSlides(apiContent.slides as Parameters<typeof setSlides>[0]);
           contentFound = true;
+          if (apiContent.scenes?.length) { setScenes(apiContent.scenes as Parameters<typeof setScenes>[0]); contentFound = true; }
+          if (apiContent.sceneSlideBounds?.length) setSceneSlideBounds(apiContent.sceneSlideBounds as Parameters<typeof setSceneSlideBounds>[0]);
+          if (config?.agents?.length) setAgents(config.agents as Parameters<typeof setAgents>[0]);
+
+          // Cache to IndexedDB for future visits
+          saveClassroom({
+            id: id!,
+            title: String(meta.title || ''),
+            slides: (apiContent.slides || []) as Parameters<typeof setSlides>[0],
+            scenes: (apiContent.scenes || []) as Parameters<typeof setScenes>[0],
+            outlines: [],
+            agents: (config?.agents || []) as Parameters<typeof setAgents>[0],
+            chatHistory: [],
+            audioCache: {},
+            config: {},
+            sceneSlideBounds: (apiContent.sceneSlideBounds || []) as Parameters<typeof setSceneSlideBounds>[0],
+            syncedAt: Date.now(),
+          }).catch(() => {});
         }
       }
 

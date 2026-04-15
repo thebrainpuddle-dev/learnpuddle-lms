@@ -371,10 +371,23 @@ class TenantService:
             for p in recent_activity_qs
         ]
 
+        # ── Total students ──────────────────────────────────────────
+        total_students = User.objects.filter(tenant=tenant, role='STUDENT', is_active=True).count()
+
+        # ── Certification compliance summary ───────────────────────
+        cert_compliance = TenantService._compute_cert_compliance(tenant, teachers)
+
+        # ── Weekly completion trend (last 8 weeks) ─────────────────
+        weekly_trend = TenantService._compute_weekly_trend(tenant)
+
+        # ── Upcoming deadlines (next 14 days) ──────────────────────
+        upcoming_deadlines = TenantService._compute_upcoming_deadlines(tenant)
+
         return {
             'total_teachers': teacher_count,
             'active_teachers': active_teachers,
             'inactive_teachers': inactive_teachers,
+            'total_students': total_students,
             'total_admins': User.objects.filter(tenant=tenant, role='SCHOOL_ADMIN').count(),
             'total_courses': courses.count(),
             'published_courses': len(published_courses),
@@ -391,7 +404,129 @@ class TenantService:
             'pending_review_detail': pending_review_detail,
             'top_teachers': top_teachers,
             'recent_activity': recent_activity,
+            'cert_compliance': cert_compliance,
+            'weekly_trend': weekly_trend,
+            'upcoming_deadlines': upcoming_deadlines,
         }
+
+    @staticmethod
+    def _compute_cert_compliance(tenant, teachers):
+        """Compute certification compliance summary across all teachers."""
+        from .accreditation_models import StaffCertification
+        from .teacher_cert_views import REQUIRED_CERT_TYPES
+        from .accreditation_views import _compute_cert_status
+        from datetime import date
+
+        teacher_count = teachers.count()
+        if teacher_count == 0:
+            return {
+                'total_teachers': 0,
+                'fully_compliant': 0,
+                'partially_compliant': 0,
+                'non_compliant': 0,
+                'compliance_pct': 0,
+                'expiring_certs': 0,
+                'expired_certs': 0,
+            }
+
+        today = date.today()
+        all_certs = StaffCertification.objects.filter(
+            tenant=tenant,
+            teacher__in=teachers,
+        ).select_related('teacher')
+
+        # Build per-teacher compliance map
+        teacher_certs = {}  # teacher_id -> set of valid/expiring cert types
+        expiring_count = 0
+        expired_count = 0
+
+        for cert in all_certs:
+            status = _compute_cert_status(cert)
+            tid = cert.teacher_id
+            if tid not in teacher_certs:
+                teacher_certs[tid] = set()
+            if status in ('VALID', 'EXPIRING'):
+                teacher_certs[tid].add(cert.certification_type)
+            if status == 'EXPIRING':
+                expiring_count += 1
+            elif status == 'EXPIRED':
+                expired_count += 1
+
+        required_set = set(REQUIRED_CERT_TYPES)
+        fully_compliant = 0
+        partially_compliant = 0
+        non_compliant = 0
+
+        for teacher in teachers:
+            held = teacher_certs.get(teacher.id, set())
+            met = held & required_set
+            if len(met) == len(required_set):
+                fully_compliant += 1
+            elif len(met) > 0:
+                partially_compliant += 1
+            else:
+                non_compliant += 1
+
+        return {
+            'total_teachers': teacher_count,
+            'fully_compliant': fully_compliant,
+            'partially_compliant': partially_compliant,
+            'non_compliant': non_compliant,
+            'compliance_pct': round(fully_compliant / teacher_count * 100) if teacher_count > 0 else 0,
+            'expiring_certs': expiring_count,
+            'expired_certs': expired_count,
+        }
+
+    @staticmethod
+    def _compute_weekly_trend(tenant):
+        """Compute weekly completions for the last 8 weeks."""
+        from apps.progress.models import TeacherProgress
+        from django.utils import timezone
+        import datetime
+
+        now = timezone.now()
+        weeks = []
+        for i in range(7, -1, -1):
+            week_start = now - datetime.timedelta(weeks=i)
+            week_end = week_start + datetime.timedelta(weeks=1)
+            count = TeacherProgress.objects.filter(
+                course__tenant=tenant,
+                status='COMPLETED',
+                completed_at__gte=week_start,
+                completed_at__lt=week_end,
+            ).count()
+            weeks.append({
+                'week': week_start.strftime('%b %d'),
+                'completions': count,
+            })
+        return weeks
+
+    @staticmethod
+    def _compute_upcoming_deadlines(tenant):
+        """Get upcoming assignment deadlines in the next 14 days."""
+        from apps.progress.models import Assignment
+        from django.utils import timezone
+        import datetime
+
+        now = timezone.now()
+        two_weeks = now + datetime.timedelta(days=14)
+        deadlines = Assignment.objects.filter(
+            course__tenant=tenant,
+            is_active=True,
+            due_date__gte=now,
+            due_date__lte=two_weeks,
+        ).select_related('course').order_by('due_date')[:10]
+
+        return [
+            {
+                'id': str(a.id),
+                'title': a.title,
+                'course_title': a.course.title,
+                'due_date': a.due_date.isoformat(),
+                'is_mandatory': a.is_mandatory,
+            }
+            for a in deadlines
+        ]
 
     @staticmethod
     def get_tenant_analytics(tenant, course_id=None, months=6):
@@ -537,10 +672,183 @@ class TenantService:
         )
         dept_stats = list(dept_stats_qs)
 
+        # --- Student analytics ---
+        student_analytics = TenantService._compute_student_analytics(
+            tenant, published_course_list, now,
+        )
+
         return {
             'course_breakdown': course_breakdown,
             'monthly_trend': monthly_trend,
             'assignment_breakdown': assignment_breakdown,
             'teacher_engagement': engagement,
             'department_stats': dept_stats,
+            **student_analytics,
+        }
+
+    @staticmethod
+    def _compute_student_analytics(tenant, published_courses, now):
+        """
+        Compute student-specific analytics: overview, grade distribution,
+        engagement, course progress, and assignment performance.
+        """
+        from apps.users.models import User
+        from apps.progress.models import TeacherProgress, AssignmentSubmission, QuizSubmission
+        from django.db.models import Q, Avg, Count, F
+        import datetime
+
+        students = User.objects.filter(tenant=tenant, role='STUDENT', is_active=True)
+        total_students = students.count()
+
+        if total_students == 0:
+            return {
+                'student_overview': {
+                    'total': 0, 'active_30d': 0, 'inactive': 0,
+                },
+                'student_grade_distribution': [],
+                'student_engagement': {
+                    'highly_active': 0, 'active': 0,
+                    'low_activity': 0, 'inactive': 0,
+                },
+                'student_course_progress': {
+                    'total_enrollments': 0, 'completed': 0,
+                    'in_progress': 0, 'not_started': 0,
+                    'avg_completion_pct': 0,
+                },
+                'student_performance': {
+                    'total_submissions': 0, 'graded': 0,
+                    'avg_score_pct': 0, 'pass_rate_pct': 0,
+                },
+            }
+
+        thirty_days_ago = now - datetime.timedelta(days=30)
+        active_30d = students.filter(last_login__gte=thirty_days_ago).count()
+
+        # --- Grade distribution ---
+        grade_dist_qs = (
+            students.exclude(grade_level='')
+            .values('grade_level')
+            .annotate(count=Count('id'))
+            .order_by('grade_level')
+        )
+        grade_distribution = [
+            {'grade': row['grade_level'], 'count': row['count']}
+            for row in grade_dist_qs
+        ]
+
+        # --- Student course progress (reuse same snapshot infra) ---
+        student_ids = list(students.values_list('id', flat=True))
+
+        # Determine which courses each student is assigned to
+        def _assigned_student_ids(course):
+            if getattr(course, 'assigned_to_all_students', False):
+                return student_ids
+            return list(
+                students.filter(student_assigned_courses=course)
+                .values_list('id', flat=True)
+            )
+
+        student_snapshots = build_teacher_course_snapshots(
+            [c.id for c in published_courses],
+            student_ids,
+        )
+
+        student_course_status_map = {}
+        total_enrollments = 0
+        for c in published_courses:
+            assigned = _assigned_student_ids(c)
+            total_enrollments += len(assigned)
+            for sid in assigned:
+                snap = student_snapshots.get((str(c.id), str(sid)))
+                status = snap.status if snap else STATUS_NOT_STARTED
+                student_course_status_map[(str(sid), str(c.id))] = status
+
+        s_completed = sum(1 for s in student_course_status_map.values() if s == STATUS_COMPLETED)
+        s_in_progress = sum(1 for s in student_course_status_map.values() if s == STATUS_IN_PROGRESS)
+        s_not_started = total_enrollments - s_completed - s_in_progress
+        s_avg_pct = round(s_completed / total_enrollments * 100, 1) if total_enrollments > 0 else 0
+
+        # --- Student engagement bucketing ---
+        s_engagement = {'highly_active': 0, 'active': 0, 'low_activity': 0, 'inactive': 0}
+        for sid in student_ids:
+            statuses = [
+                st for (student_id, _), st in student_course_status_map.items()
+                if student_id == str(sid)
+            ]
+            completed_count = sum(1 for st in statuses if st == STATUS_COMPLETED)
+            started_count = sum(1 for st in statuses if st != STATUS_NOT_STARTED)
+            if completed_count >= 3:
+                s_engagement['highly_active'] += 1
+            elif completed_count >= 1:
+                s_engagement['active'] += 1
+            elif started_count >= 1:
+                s_engagement['low_activity'] += 1
+            else:
+                s_engagement['inactive'] += 1
+
+        # --- Assignment/quiz performance ---
+        student_assignment_subs = AssignmentSubmission.objects.filter(
+            assignment__course__tenant=tenant,
+            teacher__role='STUDENT',
+        )
+        student_quiz_subs = QuizSubmission.objects.filter(
+            quiz__assignment__course__tenant=tenant,
+            teacher__role='STUDENT',
+        )
+        total_subs = student_assignment_subs.count() + student_quiz_subs.count()
+        graded_assignment = student_assignment_subs.filter(status='GRADED')
+        graded_quiz = student_quiz_subs.filter(graded_at__isnull=False)
+        graded_count = graded_assignment.count() + graded_quiz.count()
+
+        # Average score as percentage of max_score
+        avg_score_pct = 0
+        pass_count = 0
+        total_scored = 0
+        for sub in graded_assignment.select_related('assignment').only(
+            'score', 'assignment__max_score', 'assignment__passing_score'
+        ):
+            if sub.score is not None and sub.assignment.max_score:
+                max_s = float(sub.assignment.max_score)
+                if max_s > 0:
+                    pct = float(sub.score) / max_s * 100
+                    avg_score_pct += pct
+                    total_scored += 1
+                    if sub.assignment.passing_score and float(sub.score) >= float(sub.assignment.passing_score):
+                        pass_count += 1
+        for sub in graded_quiz.select_related('quiz__assignment').only(
+            'score', 'quiz__assignment__max_score', 'quiz__assignment__passing_score'
+        ):
+            if sub.score is not None and sub.quiz.assignment.max_score:
+                max_s = float(sub.quiz.assignment.max_score)
+                if max_s > 0:
+                    pct = float(sub.score) / max_s * 100
+                    avg_score_pct += pct
+                    total_scored += 1
+                    if sub.quiz.assignment.passing_score and float(sub.score) >= float(sub.quiz.assignment.passing_score):
+                        pass_count += 1
+
+        avg_score_pct = round(avg_score_pct / total_scored, 1) if total_scored > 0 else 0
+        pass_rate_pct = round(pass_count / total_scored * 100, 1) if total_scored > 0 else 0
+
+        return {
+            'student_overview': {
+                'total': total_students,
+                'active_30d': active_30d,
+                'inactive': total_students - active_30d,
+            },
+            'student_grade_distribution': grade_distribution,
+            'student_engagement': s_engagement,
+            'student_course_progress': {
+                'total_enrollments': total_enrollments,
+                'completed': s_completed,
+                'in_progress': s_in_progress,
+                'not_started': s_not_started,
+                'avg_completion_pct': s_avg_pct,
+            },
+            'student_performance': {
+                'total_submissions': total_subs,
+                'graded': graded_count,
+                'avg_score_pct': avg_score_pct,
+                'pass_rate_pct': pass_rate_pct,
+            },
         }

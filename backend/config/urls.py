@@ -25,8 +25,10 @@ _api_patterns = [
     path('', include('apps.courses.group_urls')),
     path('teacher/', include('apps.courses.teacher_urls')),
     path('teacher/', include('apps.progress.teacher_urls')),
+    path('teacher/', include('apps.tenants.teacher_cert_urls')),
     path('student/', include('apps.courses.student_urls')),
     path('student/', include('apps.progress.student_urls')),
+    path('student/', include(('apps.academics.attendance_student_urls', 'student_attendance'))),
     path('students/', include('apps.users.student_admin_urls')),
     path('academics/', include('apps.academics.admin_urls')),
     path('teacher/academics/', include('apps.academics.teacher_urls')),
@@ -42,6 +44,7 @@ _api_patterns = [
     path('discussions/', include('apps.discussions.urls')),
     path('billing/', include('apps.billing.urls')),
     path('ops/', include('apps.ops.public_urls')),
+    path('parent/', include('apps.courses.parent_urls')),
 ]
 
 urlpatterns = [
@@ -78,9 +81,10 @@ if settings.DEBUG:
         path('api/redoc/', SpectacularRedocView.as_view(url_name='schema'), name='redoc'),
     ]
 
-# Prometheus metrics endpoint - protect in production via nginx IP whitelist
-# Exposes request counts, latency histograms, DB query metrics, etc.
-urlpatterns += [path('', include('django_prometheus.urls'))]
+# Prometheus metrics endpoint
+# In production, metrics should be accessed via internal network only (nginx blocks it)
+if settings.DEBUG:
+    urlpatterns += [path('', include('django_prometheus.urls'))]
 
 # Serve media files in development
 if settings.DEBUG:

@@ -2,7 +2,7 @@
 
 import { create } from 'zustand';
 import type { MAICSlide, MAICAgent, MAICViewMode, MAICChatMessage } from '../types/maic';
-import type { MAICScene, MAICEngineMode, MAICDiscussionSessionType } from '../types/maic-scenes';
+import type { MAICScene, MAICEngineMode, MAICDiscussionSessionType, SceneSlideBounds, MAICNote } from '../types/maic-scenes';
 
 interface MAICStageState {
   // Slides
@@ -40,6 +40,18 @@ interface MAICStageState {
   setScenes: (scenes: MAICScene[]) => void;
   goToScene: (index: number) => void;
   nextScene: () => void;
+
+  // Multi-slide scene bounds (maps scene index to slide range in flat slides[])
+  sceneSlideBounds: SceneSlideBounds[];
+  setSceneSlideBounds: (bounds: SceneSlideBounds[]) => void;
+  /** Returns only the slides belonging to the current scene */
+  getCurrentSceneSlides: () => MAICSlide[];
+
+  // Notes
+  notes: MAICNote[];
+  showNotesPanel: boolean;
+  addNote: (note: MAICNote) => void;
+  toggleNotesPanel: () => void;
 
   // Speech state
   speechText: string | null;
@@ -80,6 +92,9 @@ const initialState = {
   laserColor: null as string | null,
   scenes: [] as MAICScene[],
   currentSceneIndex: 0,
+  sceneSlideBounds: [] as SceneSlideBounds[],
+  notes: [] as MAICNote[],
+  showNotesPanel: false,
   speechText: null as string | null,
   discussionMode: null as MAICDiscussionSessionType | null,
   viewMode: 'slides' as MAICViewMode,
@@ -91,26 +106,39 @@ const initialState = {
 export const useMAICStageStore = create<MAICStageState>((set, get) => ({
   ...initialState,
 
-  // Slides (synced with scenes — slide N ↔ scene N)
+  // Slides — multi-slide aware: derives scene index from sceneSlideBounds
   setSlides: (slides) => set({ slides }),
   goToSlide: (index) => {
-    const { slides, scenes } = get();
-    const max = Math.max(slides.length, scenes.length) - 1;
+    const { slides, sceneSlideBounds } = get();
+    const max = slides.length - 1;
     if (max < 0) return;
     const clamped = Math.max(0, Math.min(index, max));
-    set({ currentSlideIndex: clamped, currentSceneIndex: clamped });
+    const updates: Partial<MAICStageState> = { currentSlideIndex: clamped };
+    // Derive scene index from bounds if available
+    if (sceneSlideBounds.length > 0) {
+      const sceneIdx = sceneSlideBounds.findIndex(
+        (b) => clamped >= b.startSlide && clamped <= b.endSlide,
+      );
+      if (sceneIdx >= 0) {
+        updates.currentSceneIndex = sceneIdx;
+      }
+    } else {
+      // Legacy 1:1 fallback
+      updates.currentSceneIndex = clamped;
+    }
+    set(updates);
   },
   nextSlide: () => {
-    const { currentSlideIndex, slides, scenes } = get();
-    const max = Math.max(slides.length, scenes.length) - 1;
+    const { currentSlideIndex, slides } = get();
+    const max = slides.length - 1;
     if (currentSlideIndex < max) {
-      set({ currentSlideIndex: currentSlideIndex + 1, currentSceneIndex: currentSlideIndex + 1 });
+      get().goToSlide(currentSlideIndex + 1);
     }
   },
   prevSlide: () => {
     const { currentSlideIndex } = get();
     if (currentSlideIndex > 0) {
-      set({ currentSlideIndex: currentSlideIndex - 1, currentSceneIndex: currentSlideIndex - 1 });
+      get().goToSlide(currentSlideIndex - 1);
     }
   },
 
@@ -132,20 +160,43 @@ export const useMAICStageStore = create<MAICStageState>((set, get) => ({
       laserColor: elementId ? (color ?? '#EF4444') : null,
     }),
 
-  // Scenes (synced with slides — scene N ↔ slide N)
+  // Scenes — multi-slide aware: uses sceneSlideBounds to map to slide index
   setScenes: (scenes) => set({ scenes, currentSceneIndex: 0, currentSlideIndex: 0 }),
   goToScene: (index) => {
-    const max = get().scenes.length - 1;
+    const { scenes, sceneSlideBounds } = get();
+    const max = scenes.length - 1;
     if (max < 0) return;
     const clamped = Math.max(0, Math.min(index, max));
-    set({ currentSceneIndex: clamped, currentSlideIndex: clamped });
+    // Jump to the first slide of the target scene
+    if (sceneSlideBounds.length > 0 && sceneSlideBounds[clamped]) {
+      set({ currentSceneIndex: clamped, currentSlideIndex: sceneSlideBounds[clamped].startSlide });
+    } else {
+      // Legacy 1:1 fallback
+      set({ currentSceneIndex: clamped, currentSlideIndex: clamped });
+    }
   },
   nextScene: () => {
     const { currentSceneIndex, scenes } = get();
     if (currentSceneIndex < scenes.length - 1) {
-      set({ currentSceneIndex: currentSceneIndex + 1, currentSlideIndex: currentSceneIndex + 1 });
+      get().goToScene(currentSceneIndex + 1);
     }
   },
+
+  // Multi-slide scene bounds
+  setSceneSlideBounds: (bounds) => set({ sceneSlideBounds: bounds }),
+  getCurrentSceneSlides: () => {
+    const { slides, currentSceneIndex, sceneSlideBounds } = get();
+    if (sceneSlideBounds.length > 0 && sceneSlideBounds[currentSceneIndex]) {
+      const { startSlide, endSlide } = sceneSlideBounds[currentSceneIndex];
+      return slides.slice(startSlide, endSlide + 1);
+    }
+    // Legacy 1:1 fallback — return the single slide at currentSceneIndex
+    return slides[currentSceneIndex] ? [slides[currentSceneIndex]] : [];
+  },
+
+  // Notes
+  addNote: (note) => set((s) => ({ notes: [...s.notes, note] })),
+  toggleNotesPanel: () => set((s) => ({ showNotesPanel: !s.showNotesPanel })),
 
   // Speech
   setSpeechText: (text) => set({ speechText: text }),

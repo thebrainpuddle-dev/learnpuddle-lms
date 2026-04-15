@@ -1,4 +1,4 @@
-from django.urls import path
+from django.urls import path, include
 
 from . import views, domain_views, gdpr_views
 from apps.courses import maic_views as maic_views_ref
@@ -25,5 +25,8 @@ urlpatterns = [
     path("export/user/", gdpr_views.user_data_export, name="user_data_export"),
     path("gdpr/delete-user/", gdpr_views.user_data_delete, name="user_data_delete"),
     path("gdpr/request-deletion/", gdpr_views.request_account_deletion, name="request_account_deletion"),
+
+    # Accreditations & Rankings
+    path("", include("apps.tenants.accreditation_urls")),
 ]
 

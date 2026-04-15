@@ -6,38 +6,48 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { SchoolDetailPage } from './SchoolDetailPage';
 import { superAdminService } from '../../services/superAdminService';
 
-jest.mock('../../services/superAdminService', () => ({
+vi.mock('../../services/superAdminService', () => ({
   PLAN_OPTIONS: ['FREE', 'STARTER', 'PRO', 'ENTERPRISE'],
   FEATURE_FLAGS: [
     { key: 'feature_video_upload', label: 'Video Upload' },
     { key: 'feature_auto_quiz', label: 'Auto Quiz Generation' },
   ],
   superAdminService: {
-    getTenant: jest.fn(),
-    getTenantUsage: jest.fn(),
-    updateTenant: jest.fn(),
-    applyPlan: jest.fn(),
-    resetAdminPassword: jest.fn(),
-    impersonate: jest.fn(),
+    getTenant: vi.fn(),
+    getTenantUsage: vi.fn(),
+    updateTenant: vi.fn(),
+    applyPlan: vi.fn(),
+    resetAdminPassword: vi.fn(),
+    impersonate: vi.fn(),
   },
 }));
 
-jest.mock('../../components/common', () => ({
-  ...jest.requireActual('../../components/common'),
-  useToast: () => ({
-    success: jest.fn(),
-    error: jest.fn(),
-    warning: jest.fn(),
-    info: jest.fn(),
-  }),
-}));
+vi.mock('../../components/common', async () => {
+  const actual = await vi.importActual('../../components/common');
+  return {
+    ...actual,
+    useToast: () => ({
+      success: vi.fn(),
+      error: vi.fn(),
+      warning: vi.fn(),
+      info: vi.fn(),
+    }),
+  };
+});
 
 const LocationProbe: React.FC = () => {
   const location = useLocation();
   return <div data-testid="search">{location.search}</div>;
 };
 
-const mockSuperAdminService = superAdminService as jest.Mocked<typeof superAdminService>;
+const mockSuperAdminService = superAdminService as {
+  getTenant: ReturnType<typeof vi.fn>;
+  getTenantUsage: ReturnType<typeof vi.fn>;
+  updateTenant: ReturnType<typeof vi.fn>;
+  applyPlan: ReturnType<typeof vi.fn>;
+  resetAdminPassword: ReturnType<typeof vi.fn>;
+  impersonate: ReturnType<typeof vi.fn>;
+};
 
 const tenantResponse = {
   id: 'tenant-1',
@@ -88,7 +98,7 @@ const usageResponse = {
 
 describe('SchoolDetailPage tab URL stability', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
 
     mockSuperAdminService.getTenant.mockResolvedValue(tenantResponse);
     mockSuperAdminService.getTenantUsage.mockResolvedValue(usageResponse);

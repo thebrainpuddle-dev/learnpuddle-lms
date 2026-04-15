@@ -19,6 +19,7 @@ import {
   Bot,
   Sparkles,
   MessageSquare,
+  CalendarDays,
 } from 'lucide-react';
 import { cn } from '../../design-system/theme/cn';
 import { useAuthStore } from '../../stores/authStore';
@@ -36,6 +37,7 @@ const MY_LEARNING_NAV = [
   { label: 'My Courses', href: '/student/courses', icon: BookOpen },
   { label: 'Assignments', href: '/student/assignments', icon: ClipboardList },
   { label: 'Achievements', href: '/student/achievements', icon: Trophy },
+  { label: 'Attendance', href: '/student/attendance', icon: CalendarDays },
 ];
 
 const AI_TOOLS_NAV = [
@@ -231,7 +233,7 @@ export const StudentSidebar: React.FC<StudentSidebarProps> = ({ open, onClose })
               leaveFrom="translate-x-0"
               leaveTo="-translate-x-full"
             >
-              <Dialog.Panel className="relative mr-16 flex w-[260px] flex-1">
+              <Dialog.Panel className="relative mr-10 flex w-[85vw] max-w-xs flex-1">
                 <SidebarContent />
               </Dialog.Panel>
             </Transition.Child>

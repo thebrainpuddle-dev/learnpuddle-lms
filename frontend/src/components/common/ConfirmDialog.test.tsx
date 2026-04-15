@@ -7,14 +7,14 @@ import { ConfirmDialog } from './ConfirmDialog';
 describe('ConfirmDialog', () => {
   const defaultProps = {
     isOpen: true,
-    onClose: jest.fn(),
-    onConfirm: jest.fn(),
+    onClose: vi.fn(),
+    onConfirm: vi.fn(),
     title: 'Delete Course',
     message: 'Are you sure you want to delete this course?',
   };
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   it('renders title and message when open', () => {

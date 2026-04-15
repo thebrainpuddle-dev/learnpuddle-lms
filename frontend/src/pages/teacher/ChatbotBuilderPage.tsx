@@ -33,7 +33,7 @@ export function ChatbotBuilderPage() {
   const [chatbotId, setChatbotId] = useState<string | null>(id ?? null);
   const effectiveChatbotId = id ?? chatbotId;
   const isEditMode = Boolean(effectiveChatbotId);
-  usePageTitle(isEditMode ? 'Edit Chatbot' : 'New Chatbot');
+  usePageTitle(isEditMode ? 'Edit Tutor' : 'New Tutor');
 
   // Form state
   const [name, setName] = useState('');
@@ -78,7 +78,7 @@ export function ChatbotBuilderPage() {
         setChatbotId(bot.id);
       } catch {
         if (!cancelled) {
-          toast.error('Load failed', 'Could not load chatbot details.');
+          toast.error('Load failed', 'Could not load tutor details.');
         }
       } finally {
         if (!cancelled) setIsLoading(false);
@@ -103,7 +103,7 @@ export function ChatbotBuilderPage() {
   // Save handler
   async function handleSave() {
     if (!name.trim()) {
-      toast.error('Validation', 'Please enter a chatbot name.');
+      toast.error('Validation', 'Please enter a tutor name.');
       return;
     }
 
@@ -120,17 +120,17 @@ export function ChatbotBuilderPage() {
     try {
       if (isEditMode && effectiveChatbotId) {
         await chatbotApi.update(effectiveChatbotId, payload);
-        toast.success('Saved', 'Chatbot updated successfully.');
+        toast.success('Saved', 'Tutor updated successfully.');
       } else {
         const res = await chatbotApi.create(payload);
         const createdId = res.data.id;
         setChatbotId(createdId);
-        toast.success('Created', 'Chatbot created! Now add knowledge sources below.');
+        toast.success('Created', 'Tutor created! Now add knowledge sources below.');
         // Switch to edit route so future saves reliably patch this chatbot.
         navigate(`/teacher/chatbots/${createdId}`, { replace: true });
       }
     } catch {
-      toast.error('Save failed', 'Could not save chatbot. Please try again.');
+      toast.error('Save failed', 'Could not save tutor. Please try again.');
     } finally {
       setIsSaving(false);
     }
@@ -156,7 +156,7 @@ export function ChatbotBuilderPage() {
   }
 
   const previewWelcome =
-    welcomeMessage.trim() || `Hi! I'm ${name || 'your chatbot'}. How can I help you?`;
+    welcomeMessage.trim() || `Hi! I'm ${name || 'your tutor'}. How can I help you?`;
 
   // ─── Render ──────────────────────────────────────────────────────────────
 
@@ -171,10 +171,10 @@ export function ChatbotBuilderPage() {
             className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 transition-colors mb-4"
           >
             <ArrowLeft className="h-4 w-4" />
-            Back to Chatbots
+            Back to Tutors
           </button>
           <h1 className="text-2xl font-bold text-gray-900">
-            {isEditMode ? 'Edit Chatbot' : 'Create Chatbot'}
+            {isEditMode ? 'Edit Tutor' : 'Create Tutor'}
           </h1>
         </div>
 
@@ -208,7 +208,7 @@ export function ChatbotBuilderPage() {
             {/* Name */}
             <div>
               <label htmlFor="chatbot-name" className="block text-sm font-medium text-gray-700 mb-1">
-                Chatbot Name
+                Tutor Name
               </label>
               <input
                 id="chatbot-name"
@@ -227,7 +227,7 @@ export function ChatbotBuilderPage() {
                   Visible to Sections
                 </label>
                 <p className="text-xs text-gray-400 mb-2">
-                  Choose which class sections can see and use this chatbot. Course content from these sections will be auto-ingested.
+                  Choose which class sections can see and use this tutor. Course content from these sections will be auto-ingested.
                 </p>
                 <div className="space-y-3">
                   {Object.entries(sectionsByGrade).map(([gradeName, sections]) => (
@@ -261,7 +261,7 @@ export function ChatbotBuilderPage() {
                 </div>
                 {selectedSectionIds.length === 0 && (
                   <p className="mt-2 text-xs text-amber-600">
-                    No sections selected — students won't see this chatbot until you assign sections.
+                    No sections selected — students won't see this tutor until you assign sections.
                   </p>
                 )}
               </div>
@@ -299,7 +299,7 @@ export function ChatbotBuilderPage() {
               ) : (
                 <div className="rounded-lg border-2 border-dashed border-gray-200 p-8 text-center">
                   <p className="text-sm text-gray-400">
-                    Save the chatbot first to start adding sources.
+                    Save the tutor first to start adding sources.
                   </p>
                 </div>
               )}
@@ -330,7 +330,7 @@ export function ChatbotBuilderPage() {
               ) : (
                 <Save className="h-4 w-4" />
               )}
-              {isSaving ? 'Saving...' : 'Save Chatbot'}
+              {isSaving ? 'Saving...' : 'Save Tutor'}
             </button>
             <button
               type="button"
@@ -362,7 +362,7 @@ export function ChatbotBuilderPage() {
                 </button>
               </div>
               <p className="px-4 py-2 text-[11px] text-gray-400 bg-amber-50 border-b border-amber-100">
-                Preview mode — test your chatbot as a student would see it. Messages are temporary.
+                Preview mode — test your tutor as a student would see it. Messages are temporary.
               </p>
               <div className="flex-1 min-h-0">
                 <ChatbotChat
@@ -399,7 +399,7 @@ export function ChatbotBuilderPage() {
               </button>
             </div>
             <p className="px-4 py-2 text-[11px] text-gray-400 bg-amber-50 border-b border-amber-100">
-              Preview mode — test your chatbot as a student would see it.
+              Preview mode — test your tutor as a student would see it.
             </p>
             <div className="flex-1 min-h-0">
               <ChatbotChat

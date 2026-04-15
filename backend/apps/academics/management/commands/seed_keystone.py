@@ -45,6 +45,7 @@ KEYSTONE_USERS = [
         'first_name': 'Keystone',
         'last_name': 'Student',
         'role': 'STUDENT',
+        'parent_email': 'parent@keystoneeducation.in',
     },
 ]
 
@@ -128,21 +129,29 @@ class Command(BaseCommand):
             tenant.save(update_fields=['feature_maic'])
 
         for user_data in KEYSTONE_USERS:
+            defaults = {
+                'first_name': user_data['first_name'],
+                'last_name': user_data['last_name'],
+                'role': user_data['role'],
+                'tenant': tenant,
+                'is_active': True,
+            }
+            if user_data.get('parent_email'):
+                defaults['parent_email'] = user_data['parent_email']
+
             user, created = User.objects.get_or_create(
                 email=user_data['email'],
-                defaults={
-                    'first_name': user_data['first_name'],
-                    'last_name': user_data['last_name'],
-                    'role': user_data['role'],
-                    'tenant': tenant,
-                    'is_active': True,
-                },
+                defaults=defaults,
             )
             if created:
                 user.set_password(user_data['password'])
                 user.save()
                 self.stdout.write(self.style.SUCCESS(f'  ✓ Created {user_data["role"]}: {user_data["email"]}'))
             else:
+                # Update parent_email on existing student if not set
+                if user_data.get('parent_email') and not user.parent_email:
+                    user.parent_email = user_data['parent_email']
+                    user.save(update_fields=['parent_email'])
                 self.stdout.write(f'  • {user_data["role"]} already exists: {user_data["email"]}')
 
         # ─── 3. Grade Bands ──────────────────────────────────────────
@@ -315,11 +324,13 @@ class Command(BaseCommand):
   Subjects:      {Subject.all_objects.filter(tenant=tenant).count()}
 
   Login URL:     http://keystone.localhost:3000/login
+  Parent Portal: http://keystone.localhost:3000/parent
 ''')
         self.stdout.write(self.style.SUCCESS('  ── Login Credentials ──'))
         self.stdout.write(f'  {"Role":<15} {"Email":<35} {"Password"}')
         self.stdout.write(f'  {"-"*15} {"-"*35} {"-"*15}')
         for u in KEYSTONE_USERS:
             self.stdout.write(f'  {u["role"]:<15} {u["email"]:<35} {u["password"]}')
+        self.stdout.write(f'  {"PARENT":<15} {"parent@keystoneeducation.in":<35} {"(magic link)"}')
         self.stdout.write('')
         self.stdout.write(self.style.SUCCESS('Done!\n'))

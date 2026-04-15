@@ -14,7 +14,11 @@ LOCKOUT_DURATION_SECONDS = 15 * 60  # 15 minutes
 
 
 def _lockout_key(email):
-    return f"login_fail:{email.lower()}"
+    return f"login_lockout:{email.lower()}"
+
+
+def _attempts_key(email):
+    return f"login_attempts:{email.lower()}"
 
 
 # Patterns for auto-generated user IDs: PREFIX-S-DIGITS or PREFIX-T-DIGITS
@@ -46,12 +50,15 @@ class UserSerializer(serializers.ModelSerializer):
     """Basic user serializer for returning user info."""
     profile_picture_url = serializers.SerializerMethodField()
     tenant_subdomain = serializers.SerializerMethodField()
+    grade_name = serializers.SerializerMethodField()
+    section_name = serializers.SerializerMethodField()
 
     class Meta:
         model = User
         fields = [
             'id', 'email', 'first_name', 'last_name', 'role',
             'student_id', 'grade_fk', 'section_fk',
+            'grade_name', 'section_name',
             'employee_id', 'subjects', 'grades', 'department',
             'designation', 'bio', 'profile_picture', 'profile_picture_url',
             'date_of_joining',
@@ -70,6 +77,16 @@ class UserSerializer(serializers.ModelSerializer):
 
     def get_tenant_subdomain(self, obj):
         return obj.tenant.subdomain if obj.tenant_id else None
+
+    def get_grade_name(self, obj):
+        if obj.grade_fk_id:
+            return obj.grade_fk.name
+        return obj.grade_level or None
+
+    def get_section_name(self, obj):
+        if obj.section_fk_id:
+            return obj.section_fk.name
+        return obj.section or None
 
 
 class LoginSerializer(serializers.Serializer):
@@ -104,12 +121,12 @@ class LoginSerializer(serializers.Serializer):
             raise serializers.ValidationError("Identifier and password are required")
 
         # Check account lockout
-        key = _lockout_key(identifier)
-        attempts = cache.get(key, 0)
-        if attempts >= MAX_LOGIN_ATTEMPTS:
+        lockout_key = _lockout_key(identifier)
+        attempts_key = _attempts_key(identifier)
+
+        if cache.get(lockout_key):
             raise serializers.ValidationError(
-                "Account temporarily locked due to too many failed attempts. "
-                "Please try again in 15 minutes."
+                "Too many failed login attempts. Please try again in 15 minutes."
             )
 
         # Detect identifier type and resolve user
@@ -156,8 +173,14 @@ class LoginSerializer(serializers.Serializer):
 
         if not user:
             # Increment failed attempts
-            cache.set(key, attempts + 1, LOCKOUT_DURATION_SECONDS)
-            raise serializers.ValidationError("Invalid credentials")
+            attempts = cache.get(attempts_key, 0) + 1
+            cache.set(attempts_key, attempts, LOCKOUT_DURATION_SECONDS)
+            if attempts >= MAX_LOGIN_ATTEMPTS:
+                cache.set(lockout_key, True, LOCKOUT_DURATION_SECONDS)
+                raise serializers.ValidationError(
+                    "Too many failed login attempts. Account locked for 15 minutes."
+                )
+            raise serializers.ValidationError("Invalid credentials.")
 
         if not user.is_active:
             raise serializers.ValidationError("User account is disabled")
@@ -181,7 +204,8 @@ class LoginSerializer(serializers.Serializer):
             )
 
         # Reset failed attempts on success
-        cache.delete(key)
+        cache.delete(attempts_key)
+        cache.delete(lockout_key)
 
         data['user'] = user
         return data

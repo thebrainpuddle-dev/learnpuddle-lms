@@ -46,6 +46,9 @@ export const AssignmentsPage: React.FC = () => {
   const [currentSubmission, setCurrentSubmission] =
     useState<TeacherAssignmentSubmission | null>(null);
   const [loadingSubmission, setLoadingSubmission] = useState(false);
+  const [submitModalOpen, setSubmitModalOpen] = useState(false);
+  const [submitTarget, setSubmitTarget] = useState<TeacherAssignmentListItem | null>(null);
+  const [submissionText, setSubmissionText] = useState('');
 
   const { data: allAssignments = [] } = useQuery({
     queryKey: ['teacherAssignmentsAll'],
@@ -63,16 +66,26 @@ export const AssignmentsPage: React.FC = () => {
   });
 
   const submitMutation = useMutation({
-    mutationFn: (id: string) =>
-      teacherService.submitAssignment(id, { submission_text: '' }),
+    mutationFn: ({ id, text }: { id: string; text: string }) =>
+      teacherService.submitAssignment(id, { submission_text: text }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['teacherAssignments'] });
+      queryClient.invalidateQueries({ queryKey: ['teacherAssignmentsAll'] });
       toast.success('Submitted', 'Your assessment has been submitted.');
+      setSubmitModalOpen(false);
+      setSubmitTarget(null);
+      setSubmissionText('');
     },
     onError: () => {
       toast.error('Failed', 'Could not submit. Please try again.');
     },
   });
+
+  const handleOpenSubmit = (a: TeacherAssignmentListItem) => {
+    setSubmitTarget(a);
+    setSubmissionText('');
+    setSubmitModalOpen(true);
+  };
 
   const handleViewSubmission = async (a: TeacherAssignmentListItem) => {
     setSelectedAssignment(a);
@@ -305,7 +318,7 @@ export const AssignmentsPage: React.FC = () => {
                   )}
                   {isPending && !a.is_quiz && (
                     <button
-                      onClick={() => submitMutation.mutate(a.id)}
+                      onClick={() => handleOpenSubmit(a)}
                       className="inline-flex items-center gap-1.5 px-3 py-[6px] rounded-lg text-[11px] font-semibold bg-tp-accent text-white hover:bg-tp-accent-dark transition-colors shadow-sm"
                     >
                       <Send className="h-3 w-3" />
@@ -350,6 +363,68 @@ export const AssignmentsPage: React.FC = () => {
         }
         isLoading={loadingSubmission}
       />
+
+      {/* Submit Assignment Modal */}
+      {submitModalOpen && submitTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-2xl shadow-xl border border-gray-100 w-full max-w-lg mx-4">
+            <div className="px-5 py-4 border-b border-gray-100">
+              <h3 className="text-[15px] font-semibold text-slate-900">
+                Submit: {submitTarget.title}
+              </h3>
+              <p className="text-[12px] text-gray-400 mt-0.5">
+                {submitTarget.course_title}
+              </p>
+            </div>
+            <div className="px-5 py-4">
+              <label className="block text-[13px] font-medium text-slate-700 mb-1.5">
+                Your response
+              </label>
+              <textarea
+                rows={6}
+                value={submissionText}
+                onChange={(e) => setSubmissionText(e.target.value)}
+                placeholder="Type your answer or reflection here..."
+                className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-[13px] focus:ring-2 focus:ring-orange-500/20 focus:border-orange-400 placeholder:text-gray-400 resize-none"
+              />
+            </div>
+            <div className="flex items-center justify-end gap-2 px-5 py-3.5 border-t border-gray-100">
+              <button
+                onClick={() => {
+                  setSubmitModalOpen(false);
+                  setSubmitTarget(null);
+                  setSubmissionText('');
+                }}
+                className="px-4 py-2 rounded-lg text-[13px] font-medium text-gray-600 hover:bg-gray-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() =>
+                  submitMutation.mutate({ id: submitTarget.id, text: submissionText })
+                }
+                disabled={submitMutation.isPending}
+                className={cn(
+                  'inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-[13px] font-semibold text-white bg-tp-accent hover:bg-orange-600 transition-colors shadow-sm',
+                  submitMutation.isPending && 'opacity-60 cursor-not-allowed',
+                )}
+              >
+                {submitMutation.isPending ? (
+                  <>
+                    <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                    Submitting...
+                  </>
+                ) : (
+                  <>
+                    <Send className="h-3.5 w-3.5" />
+                    Submit
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

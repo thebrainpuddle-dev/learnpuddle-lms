@@ -13,12 +13,16 @@ import {
   BookOpen,
   BarChart3,
   ClipboardList,
+  CalendarDays,
   Search,
   CheckCircle,
   XCircle,
   AlertCircle,
   Clock,
   Plus,
+  ChevronLeft,
+  ChevronRight,
+  Download,
 } from 'lucide-react';
 import { cn } from '../../design-system/theme/cn';
 import { usePageTitle } from '../../hooks/usePageTitle';
@@ -26,10 +30,14 @@ import {
   academicsService,
   type SectionDashboardResponse,
 } from '../../services/academicsService';
+import { AttendanceCard } from '../../components/attendance/AttendanceCard';
+import { AttendanceLoader } from '../../components/attendance/AttendanceLoader';
+import { ExportAttendanceModal } from '../../components/attendance/ExportAttendanceModal';
+import api from '../../config/api';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-type TabKey = 'students' | 'courses' | 'analytics' | 'assignments';
+type TabKey = 'students' | 'courses' | 'analytics' | 'assignments' | 'attendance';
 
 interface TabDefinition {
   key: TabKey;
@@ -42,6 +50,7 @@ const TABS: TabDefinition[] = [
   { key: 'courses', label: 'Courses', icon: BookOpen },
   { key: 'analytics', label: 'Analytics', icon: BarChart3 },
   { key: 'assignments', label: 'Assignments', icon: ClipboardList },
+  { key: 'attendance', label: 'Attendance', icon: CalendarDays },
 ];
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -92,6 +101,8 @@ function getBadgeCount(
       return null;
     case 'assignments':
       return data.assignments?.length ?? null;
+    case 'attendance':
+      return null;
     default:
       return null;
   }
@@ -540,6 +551,223 @@ function AssignmentsTab({ data }: { data: SectionDashboardResponse }) {
   );
 }
 
+// ─── Attendance Tab ─────────────────────────────────────────────────────────
+
+interface AttendanceStudent {
+  id: string;
+  first_name: string;
+  last_name: string;
+  student_id: string;
+  status: string;
+  remarks: string;
+}
+
+interface AttendanceResponse {
+  section_id: string;
+  date: string;
+  summary: {
+    total: number;
+    present: number;
+    late: number;
+    absent: number;
+    excused: number;
+    attendance_rate: number;
+    on_time_pct: number;
+    late_pct: number;
+    absent_pct: number;
+  };
+  bars: { status: string }[];
+  students: AttendanceStudent[];
+}
+
+const STATUS_BADGE: Record<string, { bg: string; text: string; label: string }> = {
+  PRESENT: { bg: 'bg-blue-50', text: 'text-blue-700', label: 'Present' },
+  LATE: { bg: 'bg-amber-50', text: 'text-amber-700', label: 'Late' },
+  ABSENT: { bg: 'bg-red-50', text: 'text-red-600', label: 'Absent' },
+  EXCUSED: { bg: 'bg-slate-100', text: 'text-slate-600', label: 'Excused' },
+};
+
+function AttendanceTab({ sectionId }: { sectionId: string }) {
+  const today = new Date();
+  const [selectedDate, setSelectedDate] = useState(
+    today.toISOString().split('T')[0],
+  );
+
+  const { data, isLoading } = useQuery<AttendanceResponse>({
+    queryKey: ['sectionAttendance', sectionId, selectedDate],
+    queryFn: async () => {
+      const res = await api.get(
+        `/v1/teacher/academics/sections/${sectionId}/attendance/`,
+        { params: { date: selectedDate } },
+      );
+      return res.data;
+    },
+    enabled: !!sectionId,
+    staleTime: 30_000,
+  });
+
+  const goToPrev = () => {
+    const d = new Date(selectedDate);
+    d.setDate(d.getDate() - 1);
+    setSelectedDate(d.toISOString().split('T')[0]);
+  };
+
+  const goToNext = () => {
+    const d = new Date(selectedDate);
+    d.setDate(d.getDate() + 1);
+    const todayStr = today.toISOString().split('T')[0];
+    if (d.toISOString().split('T')[0] <= todayStr) {
+      setSelectedDate(d.toISOString().split('T')[0]);
+    }
+  };
+
+  const isToday = selectedDate === today.toISOString().split('T')[0];
+  const [exportOpen, setExportOpen] = useState(false);
+
+  if (isLoading) {
+    return <AttendanceLoader />;
+  }
+
+  if (!data || data.summary.total === 0) {
+    return (
+      <div className="space-y-4">
+        {/* Date nav */}
+        <div className="flex items-center gap-3">
+          <button onClick={goToPrev} className="p-1.5 rounded-lg hover:bg-gray-100 transition-colors">
+            <ChevronLeft className="h-4 w-4 text-gray-500" />
+          </button>
+          <span className="text-sm font-semibold text-tp-text">
+            {new Date(selectedDate + 'T12:00:00').toLocaleDateString('en-US', {
+              weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
+            })}
+          </span>
+          <button
+            onClick={goToNext}
+            disabled={isToday}
+            className="p-1.5 rounded-lg hover:bg-gray-100 transition-colors disabled:opacity-30"
+          >
+            <ChevronRight className="h-4 w-4 text-gray-500" />
+          </button>
+        </div>
+
+        <EmptyState
+          icon={CalendarDays}
+          title="No attendance data for this date"
+          description="Attendance data will appear here once imported by the school administrator."
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6 animate-fade-in">
+      {/* Date nav + export */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <button onClick={goToPrev} className="p-1.5 rounded-lg hover:bg-gray-100 transition-colors">
+            <ChevronLeft className="h-4 w-4 text-gray-500" />
+          </button>
+          <span className="text-sm font-semibold text-tp-text">
+            {new Date(selectedDate + 'T12:00:00').toLocaleDateString('en-US', {
+              weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
+            })}
+          </span>
+          <button
+            onClick={goToNext}
+            disabled={isToday}
+            className="p-1.5 rounded-lg hover:bg-gray-100 transition-colors disabled:opacity-30"
+          >
+            <ChevronRight className="h-4 w-4 text-gray-500" />
+          </button>
+        </div>
+        <button
+          onClick={() => setExportOpen(true)}
+          className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-[13px] font-medium text-gray-600 hover:bg-gray-50 transition-colors"
+        >
+          <Download className="h-3.5 w-3.5" />
+          Export
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Attendance Card */}
+        <AttendanceCard
+          title="Section Attendance"
+          summary={data.summary}
+          bars={data.bars}
+        />
+
+        {/* Student list */}
+        <div className="lg:col-span-2 rounded-2xl border border-gray-100 bg-white overflow-hidden shadow-sm">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left">
+              <thead>
+                <tr className="border-b border-gray-100 bg-gray-50/60">
+                  <th className="px-5 py-3 text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
+                    Student
+                  </th>
+                  <th className="px-5 py-3 text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
+                    ID
+                  </th>
+                  <th className="px-5 py-3 text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
+                    Status
+                  </th>
+                  <th className="px-5 py-3 text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
+                    Remarks
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {data.students.map((student) => {
+                  const badge = STATUS_BADGE[student.status] || STATUS_BADGE.PRESENT;
+                  return (
+                    <tr key={student.id} className="hover:bg-orange-50/30 transition-colors">
+                      <td className="px-5 py-3.5">
+                        <div className="flex items-center gap-3">
+                          <div className="h-8 w-8 rounded-full bg-orange-50 flex items-center justify-center text-[12px] font-semibold text-tp-accent flex-shrink-0">
+                            {student.first_name.charAt(0)}{student.last_name.charAt(0)}
+                          </div>
+                          <span className="text-[13px] font-medium text-tp-text">
+                            {student.first_name} {student.last_name}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="px-5 py-3.5">
+                        <span className="text-[13px] text-tp-text-secondary font-mono">
+                          {student.student_id}
+                        </span>
+                      </td>
+                      <td className="px-5 py-3.5">
+                        <span className={cn(
+                          'inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold',
+                          badge.bg, badge.text,
+                        )}>
+                          {badge.label}
+                        </span>
+                      </td>
+                      <td className="px-5 py-3.5">
+                        <span className="text-[13px] text-tp-text-muted">
+                          {student.remarks || '—'}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <ExportAttendanceModal
+        open={exportOpen}
+        onClose={() => setExportOpen(false)}
+        portal="teacher"
+        sectionId={sectionId}
+      />
+    </div>
+  );
+}
+
 // ─── Main Page Component ─────────────────────────────────────────────────────
 
 export const SectionDashboardPage: React.FC = () => {
@@ -606,11 +834,17 @@ export const SectionDashboardPage: React.FC = () => {
 
   // ─── Resolve active tab data ─────────────────────────────────────────────
 
+  // Attendance tab has its own query within the AttendanceTab component,
+  // so we use a dummy SectionDashboardResponse to satisfy the tab framework.
+  const attendanceDummy: SectionDashboardResponse | undefined =
+    validTab === 'attendance' ? ({} as SectionDashboardResponse) : undefined;
+
   const tabDataMap: Record<TabKey, SectionDashboardResponse | undefined> = {
     students: studentsData,
     courses: coursesData,
     analytics: analyticsData,
     assignments: assignmentsData,
+    attendance: attendanceDummy,
   };
 
   const tabLoadingMap: Record<TabKey, boolean> = {
@@ -618,6 +852,7 @@ export const SectionDashboardPage: React.FC = () => {
     courses: coursesLoading,
     analytics: analyticsLoading,
     assignments: assignmentsLoading,
+    attendance: false,
   };
 
   const tabErrorMap: Record<TabKey, boolean> = {
@@ -625,6 +860,7 @@ export const SectionDashboardPage: React.FC = () => {
     courses: coursesError,
     analytics: analyticsError,
     assignments: assignmentsError,
+    attendance: false,
   };
 
   const tabErrorMsgMap: Record<TabKey, unknown> = {
@@ -632,6 +868,7 @@ export const SectionDashboardPage: React.FC = () => {
     courses: coursesErr,
     analytics: analyticsErr,
     assignments: assignmentsErr,
+    attendance: null,
   };
 
   const activeData = tabDataMap[validTab];
@@ -649,7 +886,8 @@ export const SectionDashboardPage: React.FC = () => {
     studentsData?.section ??
     coursesData?.section ??
     analyticsData?.section ??
-    assignmentsData?.section;
+    assignmentsData?.section ??
+    null;
 
   const sectionTitle = section
     ? `${section.grade_name} - ${section.name}`
@@ -777,6 +1015,7 @@ export const SectionDashboardPage: React.FC = () => {
             )}
             {validTab === 'analytics' && <AnalyticsTab data={activeData} />}
             {validTab === 'assignments' && <AssignmentsTab data={activeData} />}
+            {validTab === 'attendance' && <AttendanceTab sectionId={sectionId!} />}
           </>
         ) : null}
       </div>

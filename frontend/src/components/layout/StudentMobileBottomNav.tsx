@@ -37,7 +37,7 @@ export const StudentMobileBottomNav: React.FC = () => {
             <NavLink
               key={tab.label}
               to={tab.href}
-              className="relative flex flex-col items-center justify-center flex-1 h-full"
+              className="relative flex flex-col items-center justify-center flex-1 h-full min-h-[44px] min-w-[44px]"
               aria-label={tab.label}
             >
               <tab.icon

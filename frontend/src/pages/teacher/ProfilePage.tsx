@@ -1,6 +1,6 @@
 // src/pages/teacher/ProfilePage.tsx
 
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 import { useAuthStore } from '../../stores/authStore';
@@ -106,11 +106,26 @@ export const ProfilePage: React.FC = () => {
   });
 
   const [notifications, setNotifications] = useState({
-    email_course_updates: true,
-    email_assignment_reminders: true,
-    email_deadline_alerts: true,
-    browser_notifications: false,
+    email_courses: true,
+    email_assignments: true,
+    email_reminders: true,
+    email_announcements: true,
   });
+
+  // Fetch notification preferences from API
+  const { data: prefsData } = useQuery({
+    queryKey: ['notificationPreferences'],
+    queryFn: async () => {
+      const res = await api.get('/users/auth/preferences/');
+      return res.data;
+    },
+  });
+
+  useEffect(() => {
+    if (prefsData && typeof prefsData === 'object') {
+      setNotifications((prev) => ({ ...prev, ...prefsData }));
+    }
+  }, [prefsData]);
 
   const { data: gamification, isLoading: achievementsLoading } = useQuery({
     queryKey: ['teacherGamification'],
@@ -466,10 +481,10 @@ export const ProfilePage: React.FC = () => {
                 <h2 className="text-[15px] font-semibold text-slate-900 mb-6">Notification Preferences</h2>
                 <div className="space-y-4">
                   {[
-                    { key: 'email_course_updates', title: 'Course Updates', desc: 'Get notified when courses are updated' },
-                    { key: 'email_assignment_reminders', title: 'Assignment Reminders', desc: 'Receive reminders for pending assignments' },
-                    { key: 'email_deadline_alerts', title: 'Deadline Alerts', desc: 'Get alerts before deadlines approach' },
-                    { key: 'browser_notifications', title: 'Browser Notifications', desc: 'Enable desktop push notifications' },
+                    { key: 'email_courses', title: 'Course Updates', desc: 'Get notified when courses are updated' },
+                    { key: 'email_assignments', title: 'Assignment Reminders', desc: 'Receive reminders for pending assignments' },
+                    { key: 'email_reminders', title: 'Reminder Alerts', desc: 'Get alerts for upcoming reminders' },
+                    { key: 'email_announcements', title: 'Announcements', desc: 'Receive announcement notifications' },
                   ].map((item) => (
                     <div key={item.key} className="flex flex-col gap-3 border-b border-slate-200/80 py-3 sm:flex-row sm:items-center sm:justify-between last:border-0">
                       <div>

@@ -68,6 +68,7 @@ STUDENTS = [
         "grade_level": "Grade 10",
         "section": "A",
         "student_id": "KIS-S001",
+        "parent_email": "parent.mehta@keystoneeducation.in",
     },
     {
         "email": "diya.kapoor@keystoneeducation.in",
@@ -76,6 +77,7 @@ STUDENTS = [
         "grade_level": "Grade 10",
         "section": "A",
         "student_id": "KIS-S002",
+        "parent_email": "parent.kapoor@keystoneeducation.in",
     },
     {
         "email": "arjun.reddy@keystoneeducation.in",
@@ -84,6 +86,7 @@ STUDENTS = [
         "grade_level": "Grade 11",
         "section": "B",
         "student_id": "KIS-S003",
+        "parent_email": "parent.reddy@keystoneeducation.in",
     },
     {
         "email": "neha.iyer@keystoneeducation.in",
@@ -92,6 +95,7 @@ STUDENTS = [
         "grade_level": "Grade 11",
         "section": "A",
         "student_id": "KIS-S004",
+        "parent_email": "parent.iyer@keystoneeducation.in",
     },
     {
         "email": "rohan.gupta@keystoneeducation.in",
@@ -100,6 +104,7 @@ STUDENTS = [
         "grade_level": "Grade 12",
         "section": "A",
         "student_id": "KIS-S005",
+        "parent_email": "parent.gupta@keystoneeducation.in",
     },
 ]
 
@@ -659,18 +664,30 @@ class Command(BaseCommand):
                     "grade_level": data.get("grade_level", ""),
                     "section": data.get("section", ""),
                     "student_id": data.get("student_id", ""),
+                    "parent_email": data.get("parent_email", ""),
                 },
             )
             if created:
                 user.set_password("Student@123")
                 user.save()
+            else:
+                # Update parent_email on existing students if not already set
+                parent_email = data.get("parent_email", "")
+                if parent_email and not user.parent_email:
+                    user.parent_email = parent_email
+                    user.save(update_fields=["parent_email"])
             students.append(user)
 
-        # Include existing tenant student
+        # Include existing tenant student (e.g. student@keystoneeducation.in from seed_keystone)
         existing = User.objects.filter(tenant=tenant, role="STUDENT").exclude(
             email__in=[s["email"] for s in STUDENTS]
         )
-        students.extend(list(existing))
+        for student in existing:
+            # Set parent_email on base student if not set
+            if not student.parent_email:
+                student.parent_email = "parent@keystoneeducation.in"
+                student.save(update_fields=["parent_email"])
+            students.append(student)
 
         self.stdout.write(f"  Students: {len(students)} total ({len(STUDENTS)} seeded)")
         return students
@@ -809,7 +826,7 @@ class Command(BaseCommand):
         for kdata in CHATBOT_KNOWLEDGE:
             chatbot = chatbots[kdata["chatbot_index"]]
             for src in kdata["sources"]:
-                AIChatbotKnowledge.objects.get_or_create(
+                AIChatbotKnowledge.all_objects.get_or_create(
                     chatbot=chatbot,
                     title=src["title"],
                     defaults={
@@ -907,7 +924,8 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS(f"  Seed Complete — {tenant.name}"))
         self.stdout.write(self.style.SUCCESS("=" * 60))
 
-        self.stdout.write(f"\n  Login URL: http://{tenant.subdomain}.localhost:3000/login\n")
+        self.stdout.write(f"\n  Login URL:      http://{tenant.subdomain}.localhost:3000/login")
+        self.stdout.write(f"  Parent Portal:  http://{tenant.subdomain}.localhost:3000/parent\n")
 
         # Admin credentials
         admin = User.objects.filter(tenant=tenant, role="SCHOOL_ADMIN").first()
@@ -924,6 +942,12 @@ class Command(BaseCommand):
         for s in STUDENTS:
             self.stdout.write(f"  {'STUDENT':<15} {s['email']:<45} Student@123")
 
+        # Parent credentials
+        parent_emails = set(s.get("parent_email", "") for s in STUDENTS if s.get("parent_email"))
+        parent_emails.add("parent@keystoneeducation.in")
+        for pe in sorted(parent_emails):
+            self.stdout.write(f"  {'PARENT':<15} {pe:<45} (magic link)")
+
         # Stats
         ready_count = sum(1 for c in classrooms if c.status == "READY")
         public_count = sum(1 for c in classrooms if c.is_public)
@@ -938,6 +962,7 @@ class Command(BaseCommand):
             active_bots = sum(1 for b in chatbots if b.is_active)
             self.stdout.write(f"    AI Chatbots:     {len(chatbots)} total ({active_bots} active)")
         self.stdout.write(f"    AI Config:       {tenant.subdomain} — MAIC enabled")
+        self.stdout.write(f"    Parent Portal:   {len(parent_emails)} parent emails linked")
         self.stdout.write("")
         self.stdout.write(self.style.SUCCESS("=" * 60))
         self.stdout.write("")

@@ -273,6 +273,7 @@ export const DashboardPage: React.FC = () => {
   const navigate = useNavigate();
   const { user } = useAuthStore();
   const [calMonth, setCalMonth] = useState(new Date());
+  const [chartView, setChartView] = useState<'week' | 'month'>('week');
 
   // ─── Data queries ─────────────────────────────────────────────
 
@@ -315,6 +316,14 @@ export const DashboardPage: React.FC = () => {
     queryFn: () => teacherService.getCalendar(7, weekStartStr),
   });
 
+  // Monthly data for study chart — current month
+  const monthStartStr = format(startOfMonth(new Date()), 'yyyy-MM-dd');
+  const { data: monthData } = useQuery({
+    queryKey: ['teacherCalendarMonth', monthStartStr],
+    queryFn: () => teacherService.getCalendar(30, monthStartStr),
+    enabled: chartView === 'month',
+  });
+
   // ─── Derived data ────────────────────────────────────────────
 
   const continueCourse = dashboard?.continue_learning;
@@ -330,14 +339,27 @@ export const DashboardPage: React.FC = () => {
 
   const classroomCourses = courses.slice(0, 5);
 
-  // Weekly chart data from real API
+  // Chart data from real API — week or month view
   const chartData = useMemo(() => {
+    if (chartView === 'month') {
+      if (!monthData?.days?.length) return [];
+      // Group by week for month view
+      const weeks: Record<string, number> = {};
+      monthData.days.forEach((d) => {
+        const weekNum = `W${Math.ceil(new Date(d.date).getDate() / 7)}`;
+        weeks[weekNum] = (weeks[weekNum] || 0) + d.total_minutes;
+      });
+      return Object.entries(weeks).map(([week, mins]) => ({
+        day: week,
+        hours: Math.round((mins / 60) * 10) / 10,
+      }));
+    }
     if (!weekData?.days?.length) return [];
     return weekData.days.map((d) => ({
       day: d.short_weekday,
       hours: Math.round((d.total_minutes / 60) * 10) / 10,
     }));
-  }, [weekData]);
+  }, [weekData, monthData, chartView]);
 
   const totalWeeklyHours = useMemo(
     () => chartData.reduce((sum, d) => sum + d.hours, 0),
@@ -423,10 +445,26 @@ export const DashboardPage: React.FC = () => {
                 </p>
               </div>
               <div className="flex rounded-lg overflow-hidden border border-gray-200">
-                <button className="px-3 py-1.5 text-[11px] font-semibold bg-tp-accent text-white">
+                <button
+                  onClick={() => setChartView('week')}
+                  className={cn(
+                    'px-3 py-1.5 text-[11px] font-semibold transition-colors',
+                    chartView === 'week'
+                      ? 'bg-tp-accent text-white'
+                      : 'text-gray-400 hover:text-tp-text hover:bg-gray-50',
+                  )}
+                >
                   Week
                 </button>
-                <button className="px-3 py-1.5 text-[11px] font-medium text-gray-400 hover:text-tp-text hover:bg-gray-50 transition-colors">
+                <button
+                  onClick={() => setChartView('month')}
+                  className={cn(
+                    'px-3 py-1.5 text-[11px] font-semibold transition-colors',
+                    chartView === 'month'
+                      ? 'bg-tp-accent text-white'
+                      : 'text-gray-400 hover:text-tp-text hover:bg-gray-50',
+                  )}
+                >
                   Month
                 </button>
               </div>

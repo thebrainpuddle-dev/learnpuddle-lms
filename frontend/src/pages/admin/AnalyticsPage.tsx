@@ -55,6 +55,7 @@ const ENGAGEMENT_COLORS = ['#10b981', '#3b82f6', '#f59e0b', '#ef4444'];
 const ASSIGNMENT_COLORS = ['#6366f1', '#10b981', '#f59e0b'];
 
 type AnalyticsView = 'charts' | 'reports';
+type AnalyticsFocus = 'all' | 'teachers' | 'students';
 
 export const AnalyticsPage: React.FC = () => {
   usePageTitle('Analytics');
@@ -68,23 +69,37 @@ export const AnalyticsPage: React.FC = () => {
 
   /* ── View toggle: Charts vs Reports drill-down ─────────────── */
   const activeView: AnalyticsView = searchParams.get('view') === 'reports' ? 'reports' : 'charts';
+  const activeFocus: AnalyticsFocus = (searchParams.get('focus') as AnalyticsFocus) || 'all';
   const reportTab = (searchParams.get('tab') as 'COURSE' | 'ASSIGNMENT') || undefined;
   const reportCourseId = searchParams.get('course_id') || undefined;
   const reportAssignmentId = searchParams.get('assignment_id') || undefined;
   const reportStatus = searchParams.get('status') || undefined;
+  const reportRole = (searchParams.get('role') as 'teachers' | 'students') || undefined;
 
-  const switchToReports = (params?: { tab?: string; course_id?: string; assignment_id?: string; status?: string }) => {
+  const switchToReports = (params?: { tab?: string; course_id?: string; assignment_id?: string; status?: string; role?: string }) => {
     const sp = new URLSearchParams();
     sp.set('view', 'reports');
     if (params?.tab) sp.set('tab', params.tab);
     if (params?.course_id) sp.set('course_id', params.course_id);
     if (params?.assignment_id) sp.set('assignment_id', params.assignment_id);
     if (params?.status) sp.set('status', params.status);
+    if (params?.role) sp.set('role', params.role);
     setSearchParams(sp);
   };
 
-  const switchToCharts = () => {
-    setSearchParams({});
+  const switchToCharts = (focus?: AnalyticsFocus) => {
+    const sp = new URLSearchParams();
+    sp.set('view', 'charts');
+    if (focus && focus !== 'all') sp.set('focus', focus);
+    setSearchParams(sp);
+  };
+
+  const setFocus = (focus: AnalyticsFocus) => {
+    const sp = new URLSearchParams(searchParams);
+    sp.set('view', 'charts');
+    if (focus === 'all') sp.delete('focus');
+    else sp.set('focus', focus);
+    setSearchParams(sp);
   };
 
   const reminderMutation = useMutation({
@@ -140,7 +155,7 @@ export const AnalyticsPage: React.FC = () => {
 
   const isLoading = analyticsLoading || statsLoading;
 
-  const goToReports = (params: { tab?: string; assignment_id?: string; course_id?: string; status?: string }) => {
+  const goToReports = (params: { tab?: string; assignment_id?: string; course_id?: string; status?: string; role?: string }) => {
     switchToReports(params);
   };
 
@@ -150,6 +165,32 @@ export const AnalyticsPage: React.FC = () => {
   const ab = analytics?.assignment_breakdown ?? { total: 0, manual: 0, auto_quiz: 0, auto_reflection: 0 };
   const te = analytics?.teacher_engagement ?? { highly_active: 0, active: 0, low_activity: 0, inactive: 0 };
   const ds = useMemo(() => analytics?.department_stats ?? [], [analytics?.department_stats]);
+
+  /* ── Student analytics data ───────────────────────────────────── */
+  const sOverview = analytics?.student_overview ?? { total: 0, active_30d: 0, inactive: 0 };
+  const sEngagement = analytics?.student_engagement ?? { highly_active: 0, active: 0, low_activity: 0, inactive: 0 };
+  const sCourseProgress = analytics?.student_course_progress ?? { total_enrollments: 0, completed: 0, in_progress: 0, not_started: 0, avg_completion_pct: 0 };
+  const sPerformance = analytics?.student_performance ?? { total_submissions: 0, graded: 0, avg_score_pct: 0, pass_rate_pct: 0 };
+  const sGradeDist = useMemo(() => analytics?.student_grade_distribution ?? [], [analytics?.student_grade_distribution]);
+
+  const sEngagementValues = [sEngagement.highly_active, sEngagement.active, sEngagement.low_activity, sEngagement.inactive];
+  const sEngagementData = useMemo(() => [
+    { name: 'Highly Active', value: sEngagement.highly_active },
+    { name: 'Active', value: sEngagement.active },
+    { name: 'Low Activity', value: sEngagement.low_activity },
+    { name: 'Inactive', value: sEngagement.inactive },
+  ], [sEngagement.highly_active, sEngagement.active, sEngagement.low_activity, sEngagement.inactive]);
+
+  const sProgressData = useMemo(() => [
+    { name: 'Completed', value: sCourseProgress.completed, color: '#10b981' },
+    { name: 'In Progress', value: sCourseProgress.in_progress, color: '#3b82f6' },
+    { name: 'Not Started', value: sCourseProgress.not_started, color: '#e5e7eb' },
+  ], [sCourseProgress.completed, sCourseProgress.in_progress, sCourseProgress.not_started]);
+
+  const gradeDistData = useMemo(() =>
+    sGradeDist.map((g: any) => ({ name: g.grade, Students: g.count })),
+    [sGradeDist]
+  );
 
   /* ── Recharts data (transformed from API format) ────────────── */
 
@@ -246,31 +287,51 @@ export const AnalyticsPage: React.FC = () => {
             Real-time insights across your school's LMS activity
           </p>
         </div>
-        <div className="flex rounded-lg border border-gray-200 bg-white overflow-hidden">
-          <button
-            type="button"
-            onClick={switchToCharts}
-            className={`inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium transition-colors ${
-              activeView === 'charts'
-                ? 'bg-primary-50 text-primary-700 border-r border-gray-200'
-                : 'text-gray-600 hover:bg-gray-50 border-r border-gray-200'
-            }`}
-          >
-            <ChartBarIcon className="h-4 w-4" />
-            Charts
-          </button>
-          <button
-            type="button"
-            onClick={() => switchToReports()}
-            className={`inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium transition-colors ${
-              activeView === 'reports'
-                ? 'bg-primary-50 text-primary-700'
-                : 'text-gray-600 hover:bg-gray-50'
-            }`}
-          >
-            <TableCellsIcon className="h-4 w-4" />
-            Detailed Reports
-          </button>
+        <div className="flex items-center gap-3">
+          {/* Focus pills (visible in charts view) */}
+          {activeView === 'charts' && (
+            <div className="flex rounded-lg border border-gray-200 bg-white overflow-hidden">
+              {(['all', 'teachers', 'students'] as AnalyticsFocus[]).map((f) => (
+                <button
+                  key={f}
+                  type="button"
+                  onClick={() => setFocus(f)}
+                  className={`px-3 py-2 text-xs font-medium capitalize transition-colors border-r last:border-r-0 border-gray-200 ${
+                    activeFocus === f ? 'bg-primary-50 text-primary-700' : 'text-gray-600 hover:bg-gray-50'
+                  }`}
+                >
+                  {f}
+                </button>
+              ))}
+            </div>
+          )}
+          {/* View toggle */}
+          <div className="flex rounded-lg border border-gray-200 bg-white overflow-hidden">
+            <button
+              type="button"
+              onClick={() => switchToCharts()}
+              className={`inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium transition-colors ${
+                activeView === 'charts'
+                  ? 'bg-primary-50 text-primary-700 border-r border-gray-200'
+                  : 'text-gray-600 hover:bg-gray-50 border-r border-gray-200'
+              }`}
+            >
+              <ChartBarIcon className="h-4 w-4" />
+              Charts
+            </button>
+            <button
+              type="button"
+              onClick={() => switchToReports()}
+              className={`inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium transition-colors ${
+                activeView === 'reports'
+                  ? 'bg-primary-50 text-primary-700'
+                  : 'text-gray-600 hover:bg-gray-50'
+              }`}
+            >
+              <TableCellsIcon className="h-4 w-4" />
+              Detailed Reports
+            </button>
+          </div>
         </div>
       </div>
 
@@ -304,6 +365,7 @@ export const AnalyticsPage: React.FC = () => {
             defaultCourseId={reportCourseId}
             defaultAssignmentId={reportAssignmentId}
             defaultStatus={reportStatus}
+            defaultRole={reportRole}
           />
         </div>
       )}
@@ -357,184 +419,272 @@ export const AnalyticsPage: React.FC = () => {
             </div>
           </div>
 
-          {/* Row 1: Course Completion + Monthly Trend */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <div className="bg-white rounded-xl border border-gray-200 p-6">
-              <div className="flex items-center gap-2 mb-4">
-                <ChartBarIcon className="h-5 w-5 text-emerald-600" />
-                <h2 className="font-semibold text-gray-900">Course Completion by Course</h2>
+          {/* ── Course Completion + Monthly Trend (always shown) ──── */}
+          {activeFocus !== 'students' && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div className="bg-white rounded-xl border border-gray-200 p-6">
+                <div className="flex items-center gap-2 mb-4">
+                  <ChartBarIcon className="h-5 w-5 text-emerald-600" />
+                  <h2 className="font-semibold text-gray-900">Course Completion by Course</h2>
+                </div>
+                <div className="h-72">
+                  {cb.length > 0 ? (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={courseCompletionData} onClick={handleCourseBarClick}>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                        <XAxis dataKey="name" tick={{ fontSize: 12 }} />
+                        <YAxis />
+                        <Tooltip />
+                        <Legend iconSize={12} wrapperStyle={{ paddingTop: 8 }} />
+                        <Bar dataKey="Completed" stackId="a" fill="#10b981" radius={[0, 0, 0, 0]} />
+                        <Bar dataKey="In Progress" stackId="a" fill="#f59e0b" radius={[0, 0, 0, 0]} />
+                        <Bar dataKey="Not Started" stackId="a" fill="#e5e7eb" radius={[4, 4, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <EmptyChart message="No published courses yet" />
+                  )}
+                </div>
               </div>
-              <div className="h-72">
-                {cb.length > 0 ? (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={courseCompletionData} onClick={handleCourseBarClick}>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                      <XAxis dataKey="name" tick={{ fontSize: 12 }} />
-                      <YAxis />
-                      <Tooltip />
-                      <Legend iconSize={12} wrapperStyle={{ paddingTop: 8 }} />
-                      <Bar dataKey="Completed" stackId="a" fill="#10b981" radius={[0, 0, 0, 0]} />
-                      <Bar dataKey="In Progress" stackId="a" fill="#f59e0b" radius={[0, 0, 0, 0]} />
-                      <Bar dataKey="Not Started" stackId="a" fill="#e5e7eb" radius={[4, 4, 0, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                ) : (
-                  <EmptyChart message="No published courses yet" />
-                )}
+
+              <div className="bg-white rounded-xl border border-gray-200 p-6">
+                <div className="flex items-center gap-2 mb-4">
+                  <ArrowTrendingUpIcon className="h-5 w-5 text-indigo-600" />
+                  <h2 className="font-semibold text-gray-900">Monthly Completion Trend</h2>
+                </div>
+                <div className="h-72">
+                  {mt.length > 0 ? (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart data={monthlyTrendData}>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                        <XAxis dataKey="name" tick={{ fontSize: 12 }} />
+                        <YAxis allowDecimals={false} />
+                        <Tooltip />
+                        <Area type="monotone" dataKey="completions" name="Course Completions" stroke="#6366f1" fill="rgba(99,102,241,0.1)" strokeWidth={2} dot={{ fill: '#6366f1', r: 5 }} activeDot={{ r: 7 }} />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <EmptyChart message="No data yet" />
+                  )}
+                </div>
               </div>
             </div>
+          )}
 
-            <div className="bg-white rounded-xl border border-gray-200 p-6">
-              <div className="flex items-center gap-2 mb-4">
-                <ArrowTrendingUpIcon className="h-5 w-5 text-indigo-600" />
-                <h2 className="font-semibold text-gray-900">Monthly Completion Trend</h2>
-              </div>
-              <div className="h-72">
-                {mt.length > 0 ? (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={monthlyTrendData}>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                      <XAxis dataKey="name" tick={{ fontSize: 12 }} />
-                      <YAxis allowDecimals={false} />
-                      <Tooltip />
-                      <Area
-                        type="monotone"
-                        dataKey="completions"
-                        name="Course Completions"
-                        stroke="#6366f1"
-                        fill="rgba(99,102,241,0.1)"
-                        strokeWidth={2}
-                        dot={{ fill: '#6366f1', r: 5 }}
-                        activeDot={{ r: 7 }}
-                      />
-                    </AreaChart>
-                  </ResponsiveContainer>
-                ) : (
-                  <EmptyChart message="No data yet" />
-                )}
-              </div>
-            </div>
-          </div>
+          {/* ── Teacher Charts (focus=all or teachers) ──────────────── */}
+          {activeFocus !== 'students' && (
+            <>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                {/* Teacher Engagement */}
+                <div className="bg-white rounded-xl border border-gray-200 p-6">
+                  <div className="flex items-center gap-2 mb-4">
+                    <UserGroupIcon className="h-5 w-5 text-blue-600" />
+                    <h2 className="font-semibold text-gray-900">Teacher Engagement</h2>
+                  </div>
+                  <div className="h-56">
+                    {hasNonZero(engagementValues) ? (
+                      <ResponsiveContainer width="100%" height="100%">
+                        <PieChart>
+                          <Pie data={engagementData} cx="50%" cy="50%" innerRadius="55%" outerRadius="80%" paddingAngle={2} dataKey="value">
+                            {engagementData.map((_, index) => (<Cell key={`cell-${index}`} fill={ENGAGEMENT_COLORS[index]} />))}
+                          </Pie>
+                          <Tooltip formatter={(value: number, name: string) => [value, name]} />
+                        </PieChart>
+                      </ResponsiveContainer>
+                    ) : (
+                      <EmptyChart message="No teacher activity data yet" />
+                    )}
+                  </div>
+                  <div className="mt-4 grid grid-cols-1 gap-2 text-xs sm:grid-cols-2">
+                    <div className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-emerald-500" />Highly Active: {te.highly_active}</div>
+                    <div className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-blue-500" />Active: {te.active}</div>
+                    <div className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-amber-500" />Low Activity: {te.low_activity}</div>
+                    <div className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-red-500" />Inactive: {te.inactive}</div>
+                  </div>
+                </div>
 
-          {/* Row 2: Engagement + Assignments + Departments */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {/* Teacher Engagement */}
-            <div className="bg-white rounded-xl border border-gray-200 p-6">
-              <div className="flex items-center gap-2 mb-4">
-                <UserGroupIcon className="h-5 w-5 text-blue-600" />
-                <h2 className="font-semibold text-gray-900">Teacher Engagement</h2>
-              </div>
-              <div className="h-56">
-                {hasNonZero(engagementValues) ? (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={engagementData}
-                        cx="50%"
-                        cy="50%"
-                        innerRadius="55%"
-                        outerRadius="80%"
-                        paddingAngle={2}
-                        dataKey="value"
-                      >
-                        {engagementData.map((_, index) => (
-                          <Cell key={`cell-${index}`} fill={ENGAGEMENT_COLORS[index]} />
-                        ))}
-                      </Pie>
-                      <Tooltip formatter={(value: number, name: string) => [value, name]} />
-                    </PieChart>
-                  </ResponsiveContainer>
-                ) : (
-                  <EmptyChart message="No teacher activity data yet" />
-                )}
-              </div>
-              <div className="mt-4 grid grid-cols-1 gap-2 text-xs sm:grid-cols-2">
-                <div className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-emerald-500" />Highly Active: {te.highly_active}</div>
-                <div className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-blue-500" />Active: {te.active}</div>
-                <div className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-amber-500" />Low Activity: {te.low_activity}</div>
-                <div className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-red-500" />Inactive: {te.inactive}</div>
-              </div>
-            </div>
+                {/* Assignment Types */}
+                <div className="bg-white rounded-xl border border-gray-200 p-6">
+                  <div className="flex items-center gap-2 mb-4">
+                    <ClipboardDocumentListIcon className="h-5 w-5 text-amber-600" />
+                    <h2 className="font-semibold text-gray-900">Assignment Types</h2>
+                  </div>
+                  <div className="h-56">
+                    {hasNonZero(assignmentValues) ? (
+                      <ResponsiveContainer width="100%" height="100%">
+                        <PieChart>
+                          <Pie data={assignmentData} cx="50%" cy="50%" innerRadius="55%" outerRadius="80%" paddingAngle={2} dataKey="value">
+                            {assignmentData.map((_, index) => (<Cell key={`cell-${index}`} fill={ASSIGNMENT_COLORS[index]} />))}
+                          </Pie>
+                          <Tooltip formatter={(value: number, name: string) => [value, name]} />
+                        </PieChart>
+                      </ResponsiveContainer>
+                    ) : (
+                      <EmptyChart message="No assignments yet" />
+                    )}
+                  </div>
+                  <div className="mt-4 text-center">
+                    <span className="text-2xl font-bold text-gray-900">{ab.total}</span>
+                    <span className="text-sm text-gray-500 ml-1">total assignments</span>
+                  </div>
+                </div>
 
-            {/* Assignment Types */}
-            <div className="bg-white rounded-xl border border-gray-200 p-6">
-              <div className="flex items-center gap-2 mb-4">
-                <ClipboardDocumentListIcon className="h-5 w-5 text-amber-600" />
-                <h2 className="font-semibold text-gray-900">Assignment Types</h2>
+                {/* Department Distribution */}
+                <div className="bg-white rounded-xl border border-gray-200 p-6">
+                  <div className="flex items-center gap-2 mb-4">
+                    <BuildingLibraryIcon className="h-5 w-5 text-purple-600" />
+                    <h2 className="font-semibold text-gray-900">Department Distribution</h2>
+                  </div>
+                  <div className="h-56">
+                    {ds.length > 0 ? (
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={deptData} layout="vertical">
+                          <CartesianGrid strokeDasharray="3 3" horizontal={false} />
+                          <XAxis type="number" allowDecimals={false} />
+                          <YAxis dataKey="name" type="category" width={100} tick={{ fontSize: 12 }} />
+                          <Tooltip />
+                          <Bar dataKey="Teachers" fill="#8b5cf6" radius={[0, 6, 6, 0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    ) : (
+                      <EmptyChart message="No department data yet" />
+                    )}
+                  </div>
+                </div>
               </div>
-              <div className="h-56">
-                {hasNonZero(assignmentValues) ? (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={assignmentData}
-                        cx="50%"
-                        cy="50%"
-                        innerRadius="55%"
-                        outerRadius="80%"
-                        paddingAngle={2}
-                        dataKey="value"
-                      >
-                        {assignmentData.map((_, index) => (
-                          <Cell key={`cell-${index}`} fill={ASSIGNMENT_COLORS[index]} />
-                        ))}
-                      </Pie>
-                      <Tooltip formatter={(value: number, name: string) => [value, name]} />
-                    </PieChart>
-                  </ResponsiveContainer>
-                ) : (
-                  <EmptyChart message="No assignments yet" />
-                )}
-              </div>
-              <div className="mt-4 text-center">
-                <span className="text-2xl font-bold text-gray-900">{ab.total}</span>
-                <span className="text-sm text-gray-500 ml-1">total assignments</span>
-              </div>
-            </div>
 
-            {/* Department Distribution */}
-            <div className="bg-white rounded-xl border border-gray-200 p-6">
-              <div className="flex items-center gap-2 mb-4">
-                <BuildingLibraryIcon className="h-5 w-5 text-purple-600" />
-                <h2 className="font-semibold text-gray-900">Department Distribution</h2>
+              {/* Deadline Adherence + Cert Compliance */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <DeadlineAdherenceChart onViewDetails={() => switchToReports({ tab: 'COURSE' })} />
+                <CertComplianceChart onViewDetails={() => navigate('/admin/certifications?tab=ib-dashboard')} />
               </div>
-              <div className="h-56">
-                {ds.length > 0 ? (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={deptData} layout="vertical">
-                      <CartesianGrid strokeDasharray="3 3" horizontal={false} />
-                      <XAxis type="number" allowDecimals={false} />
-                      <YAxis dataKey="name" type="category" width={100} tick={{ fontSize: 12 }} />
-                      <Tooltip />
-                      <Bar dataKey="Teachers" fill="#8b5cf6" radius={[0, 6, 6, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                ) : (
-                  <EmptyChart message="No department data yet" />
-                )}
+
+              {/* Approval Trends + Course Effectiveness */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <ApprovalTrendsChart onViewDetails={() => switchToReports({ tab: 'ASSIGNMENT' })} />
+                <CourseEffectivenessChart onViewDetails={() => switchToReports({ tab: 'COURSE' })} />
               </div>
-            </div>
-          </div>
+            </>
+          )}
 
-          {/* Row 3: New Charts — Deadline Adherence + Certification Compliance */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <DeadlineAdherenceChart
-              onViewDetails={() => switchToReports({ tab: 'COURSE' })}
-            />
-            <CertComplianceChart
-              onViewDetails={() => switchToReports({ tab: 'COURSE' })}
-            />
-          </div>
+          {/* ── Student Analytics (focus=all or students) ───────────── */}
+          {activeFocus !== 'teachers' && sOverview.total > 0 && (
+            <>
+              {/* Section header */}
+              {activeFocus === 'all' && (
+                <div className="flex items-center gap-3 pt-2">
+                  <AcademicCapIcon className="h-5 w-5 text-emerald-600" />
+                  <h2 className="text-lg font-bold text-gray-900">Student Analytics</h2>
+                  <div className="flex-1 h-px bg-gray-200" />
+                </div>
+              )}
 
-          {/* Row 4: New Charts — Approval Trends + Course Effectiveness */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <ApprovalTrendsChart
-              onViewDetails={() => switchToReports({ tab: 'ASSIGNMENT' })}
-            />
-            <CourseEffectivenessChart
-              onViewDetails={() => switchToReports({ tab: 'COURSE' })}
-            />
-          </div>
+              {/* Student summary cards — clickable to drill down */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                <button type="button" onClick={() => navigate('/admin/students')} className="bg-white rounded-xl border border-gray-200 p-4 text-left hover:border-primary-300 hover:shadow-sm transition-all">
+                  <div className="text-xs text-gray-500 mb-1">Total Students</div>
+                  <div className="text-xl font-bold text-gray-900">{sOverview.total}</div>
+                  <div className="text-xs text-emerald-600 mt-1">{sOverview.active_30d} active (30d)</div>
+                </button>
+                <button type="button" onClick={() => goToReports({ tab: 'COURSE', role: 'students' })} className="bg-white rounded-xl border border-gray-200 p-4 text-left hover:border-primary-300 hover:shadow-sm transition-all">
+                  <div className="text-xs text-gray-500 mb-1">Avg Completion</div>
+                  <div className="text-xl font-bold text-gray-900">{sCourseProgress.avg_completion_pct}%</div>
+                  <div className="text-xs text-gray-400 mt-1">{sCourseProgress.completed} of {sCourseProgress.total_enrollments}</div>
+                </button>
+                <button type="button" onClick={() => goToReports({ tab: 'ASSIGNMENT', role: 'students' })} className="bg-white rounded-xl border border-gray-200 p-4 text-left hover:border-primary-300 hover:shadow-sm transition-all">
+                  <div className="text-xs text-gray-500 mb-1">Avg Score</div>
+                  <div className="text-xl font-bold text-gray-900">{sPerformance.avg_score_pct}%</div>
+                  <div className="text-xs text-gray-400 mt-1">{sPerformance.graded} graded</div>
+                </button>
+                <button type="button" onClick={() => goToReports({ tab: 'ASSIGNMENT', role: 'students' })} className="bg-white rounded-xl border border-gray-200 p-4 text-left hover:border-primary-300 hover:shadow-sm transition-all">
+                  <div className="text-xs text-gray-500 mb-1">Pass Rate</div>
+                  <div className="text-xl font-bold text-gray-900">{sPerformance.pass_rate_pct}%</div>
+                  <div className="text-xs text-gray-400 mt-1">{sPerformance.total_submissions} submissions</div>
+                </button>
+              </div>
+
+              {/* Student charts row */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                {/* Student Engagement Donut */}
+                <div className="bg-white rounded-xl border border-gray-200 p-6">
+                  <div className="flex items-center gap-2 mb-4">
+                    <AcademicCapIcon className="h-5 w-5 text-emerald-600" />
+                    <h2 className="font-semibold text-gray-900">Student Engagement</h2>
+                  </div>
+                  <div className="h-56">
+                    {hasNonZero(sEngagementValues) ? (
+                      <ResponsiveContainer width="100%" height="100%">
+                        <PieChart>
+                          <Pie data={sEngagementData} cx="50%" cy="50%" innerRadius="55%" outerRadius="80%" paddingAngle={2} dataKey="value">
+                            {sEngagementData.map((_, index) => (<Cell key={`scell-${index}`} fill={ENGAGEMENT_COLORS[index]} />))}
+                          </Pie>
+                          <Tooltip formatter={(value: number, name: string) => [value, name]} />
+                        </PieChart>
+                      </ResponsiveContainer>
+                    ) : (
+                      <EmptyChart message="No student activity data yet" />
+                    )}
+                  </div>
+                  <div className="mt-4 grid grid-cols-1 gap-2 text-xs sm:grid-cols-2">
+                    <div className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-emerald-500" />Highly Active: {sEngagement.highly_active}</div>
+                    <div className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-blue-500" />Active: {sEngagement.active}</div>
+                    <div className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-amber-500" />Low Activity: {sEngagement.low_activity}</div>
+                    <div className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-red-500" />Inactive: {sEngagement.inactive}</div>
+                  </div>
+                </div>
+
+                {/* Student Course Progress Donut */}
+                <div className="bg-white rounded-xl border border-gray-200 p-6">
+                  <div className="flex items-center gap-2 mb-4">
+                    <ArrowTrendingUpIcon className="h-5 w-5 text-blue-600" />
+                    <h2 className="font-semibold text-gray-900">Course Progress</h2>
+                  </div>
+                  <div className="h-56">
+                    {sCourseProgress.total_enrollments > 0 ? (
+                      <ResponsiveContainer width="100%" height="100%">
+                        <PieChart>
+                          <Pie data={sProgressData} cx="50%" cy="50%" innerRadius="55%" outerRadius="80%" paddingAngle={2} dataKey="value">
+                            {sProgressData.map((seg, index) => (<Cell key={`prog-${index}`} fill={seg.color} />))}
+                          </Pie>
+                          <Tooltip formatter={(value: number, name: string) => [value, name]} />
+                        </PieChart>
+                      </ResponsiveContainer>
+                    ) : (
+                      <EmptyChart message="No student enrollments yet" />
+                    )}
+                  </div>
+                  <div className="mt-4 grid grid-cols-1 gap-2 text-xs sm:grid-cols-3">
+                    <div className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-emerald-500" />Done: {sCourseProgress.completed}</div>
+                    <div className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-blue-500" />Active: {sCourseProgress.in_progress}</div>
+                    <div className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-gray-300" />Not Started: {sCourseProgress.not_started}</div>
+                  </div>
+                </div>
+
+                {/* Grade Distribution */}
+                <div className="bg-white rounded-xl border border-gray-200 p-6">
+                  <div className="flex items-center gap-2 mb-4">
+                    <BuildingLibraryIcon className="h-5 w-5 text-violet-600" />
+                    <h2 className="font-semibold text-gray-900">Grade Distribution</h2>
+                  </div>
+                  <div className="h-56">
+                    {gradeDistData.length > 0 ? (
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={gradeDistData} layout="vertical">
+                          <CartesianGrid strokeDasharray="3 3" horizontal={false} />
+                          <XAxis type="number" allowDecimals={false} />
+                          <YAxis dataKey="name" type="category" width={80} tick={{ fontSize: 11 }} />
+                          <Tooltip />
+                          <Bar dataKey="Students" fill="#10b981" radius={[0, 6, 6, 0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    ) : (
+                      <EmptyChart message="No grade level data" />
+                    )}
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
 
           {/* Needs Attention - expandable with details */}
           {stats && stats.inactive_teachers > 0 && (

@@ -15,7 +15,7 @@ import type { AIChatbot } from '../../types/chatbot';
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 export function StudentChatbotsPage() {
-  usePageTitle('AI Chatbots');
+  usePageTitle('AI Tutors');
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
 
@@ -38,7 +38,7 @@ export function StudentChatbotsPage() {
     <div className="space-y-6">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">AI Chatbots</h1>
+        <h1 className="text-2xl font-bold text-gray-900">AI Tutors</h1>
         <p className="mt-1 text-sm text-gray-500">
           Chat with AI tutors created by your teachers to help you learn.
         </p>
@@ -55,7 +55,7 @@ export function StudentChatbotsPage() {
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search chatbots..."
+              placeholder="Search tutors..."
               className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-indigo-500 focus:border-indigo-500"
             />
           </div>
@@ -65,7 +65,7 @@ export function StudentChatbotsPage() {
       {/* Error */}
       {error && (
         <div className="rounded-lg bg-red-50 border border-red-200 p-4 text-sm text-red-700">
-          {error instanceof Error ? error.message : 'Failed to load chatbots'}
+          {error instanceof Error ? error.message : 'Failed to load tutors'}
         </div>
       )}
 
@@ -79,12 +79,12 @@ export function StudentChatbotsPage() {
         <div className="text-center py-16">
           <Bot className="mx-auto h-12 w-12 text-gray-300" />
           <h3 className="mt-4 text-lg font-medium text-gray-900">
-            {search.trim() ? 'No matching chatbots' : 'No chatbots available'}
+            {search.trim() ? 'No matching tutors' : 'No tutors available'}
           </h3>
           <p className="mt-2 text-sm text-gray-500">
             {search.trim()
               ? 'Try a different search term.'
-              : 'Your teachers haven\'t created any chatbots for your section yet.'}
+              : 'Your teachers haven\'t created any tutors for your section yet.'}
           </p>
         </div>
       ) : (

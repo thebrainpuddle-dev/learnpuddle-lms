@@ -34,7 +34,7 @@ const contentTypeLabel = (type: ContentItem['content_type']) => {
   if (type === 'DOCUMENT') return 'Reading';
   if (type === 'LINK') return 'Link';
   if (type === 'AI_CLASSROOM') return 'AI Classroom';
-  if (type === 'CHATBOT') return 'AI Chatbot';
+  if (type === 'CHATBOT') return 'AI Tutor';
   return 'Reading';
 };
 
@@ -169,7 +169,15 @@ export const CourseViewPage: React.FC = () => {
     return null;
   }, [selectedContent, flatContentSequence]);
 
-  const chatContentContext: ContentContext | null = null;
+  const chatContentContext: ContentContext | null = React.useMemo(() => {
+    if (!selectedContent) return null;
+    return {
+      type: 'content' as const,
+      content_title: selectedContent.title,
+      course_title: course?.title,
+      content_type_label: contentTypeLabel(selectedContent.content_type),
+    };
+  }, [selectedContent, course?.title]);
 
   // ── Shared completion handler ──────────────────────────────────────────────
   const handleComplete = useCallback(async () => {

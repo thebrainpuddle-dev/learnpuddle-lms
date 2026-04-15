@@ -23,9 +23,6 @@ import {
   TrophyIcon,
   ClipboardDocumentListIcon,
   XMarkIcon,
-  HandThumbUpIcon,
-  HandThumbDownIcon,
-  FlagIcon,
 } from '@heroicons/react/24/outline';
 import { useTenantStore } from '../../stores/tenantStore';
 import { CheckCircleIcon as CheckCircleSolidIcon } from '@heroicons/react/24/solid';
@@ -39,7 +36,7 @@ const contentTypeLabel = (type: ContentItem['content_type']) => {
   if (type === 'DOCUMENT') return 'Reading';
   if (type === 'LINK') return 'Link';
   if (type === 'AI_CLASSROOM') return 'AI Classroom';
-  if (type === 'CHATBOT') return 'AI Chatbot';
+  if (type === 'CHATBOT') return 'AI Tutor';
   return 'Reading';
 };
 
@@ -179,7 +176,15 @@ export const CourseViewPage: React.FC = () => {
     [courseAssignments],
   );
 
-  const chatContentContext: ContentContext | null = null;
+  const chatContentContext: ContentContext | null = React.useMemo(() => {
+    if (!selectedContent) return null;
+    return {
+      type: 'content' as const,
+      content_title: selectedContent.title,
+      course_title: course?.title,
+      content_type_label: contentTypeLabel(selectedContent.content_type),
+    };
+  }, [selectedContent, course?.title]);
 
   const toggleModule = (moduleId: string) => {
     setExpandedModules((previous) =>
@@ -536,20 +541,6 @@ export const CourseViewPage: React.FC = () => {
                 Open Assignment
               </button>
 
-              <div className="mt-8 flex flex-wrap items-center gap-5 border-t border-slate-200 pt-5 text-tp-accent sm:mt-10 sm:gap-8">
-                <button type="button" className="inline-flex items-center gap-2 text-sm font-semibold">
-                  <HandThumbUpIcon className="h-5 w-5" />
-                  Like
-                </button>
-                <button type="button" className="inline-flex items-center gap-2 text-sm font-semibold">
-                  <HandThumbDownIcon className="h-5 w-5" />
-                  Dislike
-                </button>
-                <button type="button" className="inline-flex items-center gap-2 text-sm font-semibold">
-                  <FlagIcon className="h-5 w-5" />
-                  Report an issue
-                </button>
-              </div>
             </div>
           ) : (
             <div className="flex h-full items-center justify-center text-slate-500">Select an item to begin.</div>

@@ -10,6 +10,8 @@ export interface MAICSlideElement {
   width: number;
   height: number;
   content: string;
+  /** Image source URL — used when type is 'image' */
+  src?: string;
   style?: Record<string, string | number>;
 }
 
@@ -46,6 +48,8 @@ export interface MAICOutlineScene {
   type: 'introduction' | 'lecture' | 'discussion' | 'quiz' | 'activity' | 'summary';
   estimatedMinutes: number;
   agentIds: string[];
+  /** Number of slides for this scene (1 for legacy, 5-8 for multi-slide). Defaults to 1. */
+  slideCount?: number;
 }
 
 export interface MAICOutline {
@@ -90,6 +94,12 @@ export interface MAICSSEEvent {
 
 // ─── Classroom Metadata ──────────────────────────────────────────────────
 
+export interface MAICAssignedSection {
+  id: string;
+  name: string;
+  grade_name: string | null;
+}
+
 export interface MAICClassroomMeta {
   id: string;
   title: string;
@@ -100,6 +110,7 @@ export interface MAICClassroomMeta {
   scene_count: number;
   estimated_minutes: number;
   course_id: string | null;
+  assigned_sections?: MAICAssignedSection[];
   error_message?: string;
   language?: string;
   config?: Record<string, unknown>;

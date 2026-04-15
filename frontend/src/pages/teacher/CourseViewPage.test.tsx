@@ -6,20 +6,21 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { CourseViewPage } from './CourseViewPage';
 import { teacherService } from '../../services/teacherService';
 import { useTenantStore } from '../../stores/tenantStore';
+import { ToastProvider } from '../../components/common';
 
-jest.mock('../../stores/tenantStore');
-jest.mock('../../services/teacherService', () => ({
+vi.mock('../../stores/tenantStore');
+vi.mock('../../services/teacherService', () => ({
   teacherService: {
-    getCourse: jest.fn(),
-    listAssignments: jest.fn(),
-    updateContent: jest.fn(),
-    completeContent: jest.fn(),
-    getVideoTranscript: jest.fn(),
+    getCourse: vi.fn(),
+    listAssignments: vi.fn(),
+    updateContent: vi.fn(),
+    completeContent: vi.fn(),
+    getVideoTranscript: vi.fn(),
   },
 }));
 
-const mockedUseTenantStore = useTenantStore as unknown as jest.Mock;
-const mockedTeacherService = teacherService as jest.Mocked<typeof teacherService>;
+const mockedUseTenantStore = useTenantStore as unknown as ReturnType<typeof vi.fn>;
+const mockedTeacherService = teacherService as unknown as { [K in keyof typeof teacherService]: ReturnType<typeof vi.fn> };
 
 const courseResponse = {
   id: 'course-1',
@@ -103,9 +104,9 @@ const courseResponse = {
 
 describe('CourseViewPage locking behavior', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
     mockedUseTenantStore.mockReturnValue({
-      hasFeature: jest.fn(() => true),
+      hasFeature: vi.fn(() => true),
     });
     mockedTeacherService.getCourse.mockResolvedValue(courseResponse as any);
     mockedTeacherService.listAssignments.mockResolvedValue([] as any);
@@ -126,11 +127,13 @@ describe('CourseViewPage locking behavior', () => {
 
     return render(
       <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={['/teacher/courses/course-1']}>
-          <Routes>
-            <Route path="/teacher/courses/:courseId" element={<CourseViewPage />} />
-          </Routes>
-        </MemoryRouter>
+        <ToastProvider>
+          <MemoryRouter initialEntries={['/teacher/courses/course-1']}>
+            <Routes>
+              <Route path="/teacher/courses/:courseId" element={<CourseViewPage />} />
+            </Routes>
+          </MemoryRouter>
+        </ToastProvider>
       </QueryClientProvider>,
     );
   };

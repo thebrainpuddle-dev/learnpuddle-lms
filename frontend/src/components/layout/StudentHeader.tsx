@@ -155,7 +155,7 @@ export const StudentHeader: React.FC<StudentHeaderProps> = ({ onMenuClick }) => 
       {/* Mobile menu */}
       <button
         onClick={onMenuClick}
-        className="lg:hidden p-2 -ml-1 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-50 transition-colors mr-2"
+        className="lg:hidden p-2.5 -ml-1 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-50 transition-colors mr-2 min-h-[44px] min-w-[44px]"
       >
         <Menu className="h-5 w-5" />
       </button>
@@ -311,7 +311,7 @@ export const StudentHeader: React.FC<StudentHeaderProps> = ({ onMenuClick }) => 
           </button>
 
           {dropdownOpen && (
-            <div className="absolute right-0 mt-1.5 w-80 sm:w-[360px] rounded-xl bg-white border border-gray-200 shadow-dropdown z-50 overflow-hidden animate-scale-in origin-top-right">
+            <div className="absolute right-0 mt-1.5 w-[min(320px,calc(100vw-2rem))] sm:w-[360px] rounded-xl bg-white border border-gray-200 shadow-dropdown z-50 overflow-hidden animate-scale-in origin-top-right">
               <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
                 <h3 className="text-[13px] font-semibold text-tp-text">Notifications</h3>
                 {unreadCount > 0 && (

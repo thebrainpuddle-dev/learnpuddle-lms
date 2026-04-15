@@ -25,3 +25,6 @@ class CoursesConfig(AppConfig):
             sender=AIChatbot.sections.through,
             dispatch_uid='chatbot_auto_ingest_sections',
         )
+
+        # Connect file cleanup signal for Content deletion
+        import apps.courses.signals  # noqa: F401

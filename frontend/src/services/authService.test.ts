@@ -4,12 +4,25 @@ import { authService } from './authService';
 import api from '../config/api';
 
 // Mock the api module
-jest.mock('../config/api');
-const mockedApi = api as jest.Mocked<typeof api>;
+vi.mock('../config/api', () => ({
+  __esModule: true,
+  default: {
+    get: vi.fn(),
+    post: vi.fn(),
+    interceptors: {
+      request: { use: vi.fn() },
+      response: { use: vi.fn() },
+    },
+  },
+}));
+const mockedApi = api as unknown as {
+  post: ReturnType<typeof vi.fn>;
+  get: ReturnType<typeof vi.fn>;
+};
 
 describe('authService', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   describe('login', () => {
@@ -30,12 +43,12 @@ describe('authService', () => {
           },
         },
       };
-      
+
       mockedApi.post.mockResolvedValueOnce(mockResponse);
-      
+
       const credentials = { email: 'test@example.com', password: 'password123' };
       const result = await authService.login(credentials);
-      
+
       expect(mockedApi.post).toHaveBeenCalledWith('/users/auth/login/', credentials);
       expect(result).toEqual(mockResponse.data);
     });
@@ -43,9 +56,9 @@ describe('authService', () => {
     it('should throw error on invalid credentials', async () => {
       const error = new Error('Invalid credentials');
       mockedApi.post.mockRejectedValueOnce(error);
-      
+
       const credentials = { email: 'test@example.com', password: 'wrong' };
-      
+
       await expect(authService.login(credentials)).rejects.toThrow('Invalid credentials');
     });
   });
@@ -53,9 +66,9 @@ describe('authService', () => {
   describe('logout', () => {
     it('should call logout endpoint with refresh token', async () => {
       mockedApi.post.mockResolvedValueOnce({ data: {} });
-      
+
       await authService.logout('mock-refresh-token');
-      
+
       expect(mockedApi.post).toHaveBeenCalledWith('/users/auth/logout/', {
         refresh_token: 'mock-refresh-token',
       });
@@ -72,11 +85,11 @@ describe('authService', () => {
         role: 'TEACHER',
         is_active: true,
       };
-      
+
       mockedApi.get.mockResolvedValueOnce({ data: mockUser });
-      
+
       const result = await authService.getMe();
-      
+
       expect(mockedApi.get).toHaveBeenCalledWith('/users/auth/me/');
       expect(result).toEqual(mockUser);
     });
@@ -86,9 +99,9 @@ describe('authService', () => {
     it('should refresh access token', async () => {
       const mockResponse = { data: { access: 'new-access-token' } };
       mockedApi.post.mockResolvedValueOnce(mockResponse);
-      
+
       const result = await authService.refreshToken('mock-refresh-token');
-      
+
       expect(mockedApi.post).toHaveBeenCalledWith('/users/auth/refresh/', {
         refresh_token: 'mock-refresh-token',
       });
@@ -99,9 +112,9 @@ describe('authService', () => {
   describe('changePassword', () => {
     it('should call change password endpoint', async () => {
       mockedApi.post.mockResolvedValueOnce({ data: {} });
-      
+
       await authService.changePassword('oldPass123', 'newPass456');
-      
+
       expect(mockedApi.post).toHaveBeenCalledWith('/users/auth/change-password/', {
         old_password: 'oldPass123',
         new_password: 'newPass456',
@@ -113,9 +126,9 @@ describe('authService', () => {
   describe('requestPasswordReset', () => {
     it('should request password reset email', async () => {
       mockedApi.post.mockResolvedValueOnce({ data: {} });
-      
+
       await authService.requestPasswordReset('test@example.com');
-      
+
       expect(mockedApi.post).toHaveBeenCalledWith('/users/auth/request-password-reset/', {
         email: 'test@example.com',
       });
@@ -125,9 +138,9 @@ describe('authService', () => {
   describe('confirmPasswordReset', () => {
     it('should confirm password reset with uid and token', async () => {
       mockedApi.post.mockResolvedValueOnce({ data: {} });
-      
+
       await authService.confirmPasswordReset('user-uid', 'reset-token', 'newPassword123');
-      
+
       expect(mockedApi.post).toHaveBeenCalledWith('/users/auth/confirm-password-reset/', {
         uid: 'user-uid',
         token: 'reset-token',

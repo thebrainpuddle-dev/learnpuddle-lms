@@ -6,7 +6,14 @@
 
 import React, { useState, useRef, useCallback } from 'react';
 import { Upload, FileText, X, AlertCircle } from 'lucide-react';
+import * as pdfjsLib from 'pdfjs-dist';
 import { cn } from '../../lib/utils';
+
+// Configure worker — use the bundled worker from pdfjs-dist
+pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+  'pdfjs-dist/build/pdf.worker.min.mjs',
+  import.meta.url,
+).toString();
 
 interface PDFUploaderProps {
   onExtract: (text: string) => void;
@@ -21,55 +28,28 @@ interface UploadState {
 }
 
 /**
- * Basic client-side text extraction from PDF ArrayBuffer.
- * Scans for text stream objects and extracts readable text between
- * BT/ET markers. This is a lightweight extraction — not a full PDF parser.
+ * Extract text from a PDF using pdfjs-dist.
+ * Handles compressed streams, CIDFonts, embedded fonts, and Unicode —
+ * all cases where the previous regex-based parser silently failed.
  */
-function extractTextFromPDF(buffer: ArrayBuffer): { text: string; pageCount: number } {
-  const bytes = new Uint8Array(buffer);
-  const raw = new TextDecoder('latin1').decode(bytes);
+async function extractTextFromPDF(buffer: ArrayBuffer): Promise<{ text: string; pageCount: number }> {
+  const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
+  const pageCount = pdf.numPages;
+  const pageTexts: string[] = [];
 
-  // Count pages
-  const pageMatches = raw.match(/\/Type\s*\/Page[^s]/g);
-  const pageCount = pageMatches ? pageMatches.length : 1;
-
-  // Extract text between BT ... ET blocks (text objects)
-  const textBlocks: string[] = [];
-  const btEtRegex = /BT\s([\s\S]*?)ET/g;
-  let match: RegExpExecArray | null;
-
-  while ((match = btEtRegex.exec(raw)) !== null) {
-    const block = match[1];
-    // Extract text from Tj and TJ operators
-    const tjRegex = /\(([^)]*)\)\s*Tj/g;
-    let tj: RegExpExecArray | null;
-    while ((tj = tjRegex.exec(block)) !== null) {
-      textBlocks.push(tj[1]);
-    }
-
-    // TJ arrays: [(text) num (text) ...]
-    const tjArrayRegex = /\[(.*?)\]\s*TJ/g;
-    let tjArr: RegExpExecArray | null;
-    while ((tjArr = tjArrayRegex.exec(block)) !== null) {
-      const inner = tjArr[1];
-      const parts = inner.match(/\(([^)]*)\)/g);
-      if (parts) {
-        textBlocks.push(parts.map((p) => p.slice(1, -1)).join(''));
-      }
+  for (let i = 1; i <= pageCount; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    const pageText = content.items
+      .filter((item) => 'str' in item)
+      .map((item) => (item as { str: string }).str)
+      .join(' ');
+    if (pageText.trim()) {
+      pageTexts.push(pageText.trim());
     }
   }
 
-  // Decode common PDF escape sequences
-  const text = textBlocks
-    .join(' ')
-    .replace(/\\n/g, '\n')
-    .replace(/\\r/g, '')
-    .replace(/\\t/g, ' ')
-    .replace(/\\\(/g, '(')
-    .replace(/\\\)/g, ')')
-    .replace(/\\\\/g, '\\')
-    .trim();
-
+  const text = pageTexts.join('\n\n').trim();
   return { text: text || '(No extractable text found in PDF)', pageCount };
 }
 
@@ -109,7 +89,7 @@ export const PDFUploader = React.memo<PDFUploaderProps>(function PDFUploader({ o
         const buffer = await file.arrayBuffer();
         setState((prev) => ({ ...prev, progress: 60 }));
 
-        const { text, pageCount } = extractTextFromPDF(buffer);
+        const { text, pageCount } = await extractTextFromPDF(buffer);
         setState((prev) => ({ ...prev, progress: 90 }));
 
         setState({

@@ -14,7 +14,7 @@ import type {
   MAICGenerationConfig,
   MAICSSEEvent,
 } from '../types/maic';
-import type { MAICScene, MAICSceneType, MAICSlideContent, MAICQuizContent } from '../types/maic-scenes';
+import type { MAICScene, MAICSceneType, MAICSlideContent, MAICQuizContent, SceneSlideBounds } from '../types/maic-scenes';
 import type { MAICAction } from '../types/maic-actions';
 
 export type GenerationStep = 'idle' | 'outlining' | 'editing' | 'generating' | 'complete' | 'error';
@@ -47,7 +47,7 @@ export function useMAICGeneration(): UseMAICGenerationReturn {
 
   const abortRef = useRef<AbortController | null>(null);
   const { accessToken } = useAuthStore();
-  const { setSlides, setAgents, setScenes } = useMAICStageStore();
+  const { setSlides, setAgents, setScenes, setSceneSlideBounds } = useMAICStageStore();
 
   const cancel = useCallback(() => {
     abortRef.current?.abort();
@@ -145,8 +145,10 @@ export function useMAICGeneration(): UseMAICGenerationReturn {
 
       const generatedSlides: MAICSlide[] = [];
       const generatedScenes: MAICScene[] = [];
+      const sceneSlideBounds: SceneSlideBounds[] = [];
       const agents: MAICAgent[] = outline.agents;
       const totalSteps = outline.scenes.length * 2; // content + actions per scene
+      let currentSlideOffset = 0;
 
       try {
         // ── Phase 1: Generate slide content for each scene ──
@@ -161,21 +163,35 @@ export function useMAICGeneration(): UseMAICGenerationReturn {
             language: outline.language,
           });
 
-          const slide: MAICSlide | undefined = res.data?.slide;
-          if (slide) {
-            generatedSlides.push(slide);
-          }
+          // Support multi-slide response: `slides: [...]` array or legacy `slide: {...}`
+          const sceneSlides: MAICSlide[] = res.data?.slides
+            ? (res.data.slides as MAICSlide[])
+            : res.data?.slide
+              ? [res.data.slide as MAICSlide]
+              : [];
+
+          generatedSlides.push(...sceneSlides);
+
+          // Build scene-to-slide bounds mapping
+          sceneSlideBounds.push({
+            sceneIdx: i,
+            startSlide: currentSlideOffset,
+            endSlide: currentSlideOffset + Math.max(sceneSlides.length - 1, 0),
+          });
+          currentSlideOffset += sceneSlides.length;
 
           // Map outline type to scene type
           const sceneType = mapOutlineTypeToSceneType(outlineScene.type);
 
           // Build MAICScene from the outline + generated content
+          // For multi-slide, use the first slide as the primary content
+          const primarySlide = sceneSlides[0];
           const scene: MAICScene = {
             id: outlineScene.id,
             type: sceneType,
             title: outlineScene.title,
             order: i + 1,
-            content: buildSceneContent(sceneType, slide, res.data),
+            content: buildSceneContent(sceneType, primarySlide, res.data),
             actions: [],
             multiAgent: outlineScene.agentIds.length > 0
               ? { enabled: true, agentIds: outlineScene.agentIds }
@@ -225,20 +241,28 @@ export function useMAICGeneration(): UseMAICGenerationReturn {
           chatHistory: [],
           audioCache: {},
           config: {},
+          sceneSlideBounds,
           syncedAt: Date.now(),
         });
 
         // Update Django record — include agents in config for chat fallback
+        // Push full content so students can load it from the API
         await maicApi.updateClassroom(classroomId, {
           status: 'READY',
           scene_count: generatedScenes.length,
           estimated_minutes: outline.totalMinutes,
           config: { agents, language: outline.language },
+          content: {
+            slides: generatedSlides,
+            scenes: generatedScenes,
+            sceneSlideBounds,
+          },
         });
 
         setSlides(generatedSlides);
         setScenes(generatedScenes);
         setAgents(agents);
+        setSceneSlideBounds(sceneSlideBounds);
         setStep('complete');
         setProgress(100);
       } catch (err) {
@@ -252,7 +276,7 @@ export function useMAICGeneration(): UseMAICGenerationReturn {
         });
       }
     },
-    [outline, accessToken, setSlides, setScenes, setAgents]
+    [outline, accessToken, setSlides, setScenes, setAgents, setSceneSlideBounds]
   );
 
   return {

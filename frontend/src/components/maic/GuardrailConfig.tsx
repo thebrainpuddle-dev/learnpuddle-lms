@@ -41,7 +41,7 @@ export function GuardrailConfig({
           )}
         />
         <p className="mt-1 text-xs text-gray-400">
-          Extra instructions the chatbot must follow in every response.
+          Extra instructions the tutor must follow in every response.
         </p>
       </div>
 

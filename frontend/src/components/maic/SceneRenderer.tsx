@@ -3,12 +3,17 @@
 // Routes between different scene types (slide, quiz, interactive, pbl)
 // based on scene.type. This is the main entry point for rendering any
 // MAIC scene in the stage viewport.
+//
+// For slide-type scenes, the global slides[] array and currentSlideIndex
+// from the store determine which slide to render, enabling multi-slide
+// scene support.
 
 import React, { useMemo } from 'react';
 import { SlideRenderer } from './SlideRenderer';
 import { QuizRenderer } from './QuizRenderer';
 import { InteractiveRenderer } from './InteractiveRenderer';
 import { PBLRenderer } from './PBLRenderer';
+import { useMAICStageStore } from '../../stores/maicStageStore';
 import type {
   MAICScene,
   MAICSlideContent,
@@ -28,10 +33,29 @@ export const SceneRenderer = React.memo<SceneRendererProps>(function SceneRender
   mode = 'autonomous',
 }) {
   const content = scene.content;
+  const slides = useMAICStageStore((s) => s.slides);
+  const currentSlideIndex = useMAICStageStore((s) => s.currentSlideIndex);
+  const totalSlides = slides.length;
 
   const rendered = useMemo(() => {
     switch (content.type) {
       case 'slide': {
+        // Multi-slide support: use the current slide from the global slides
+        // array when available, falling back to building a slide from the
+        // scene content for single-slide or legacy scenes.
+        const currentSlide = slides[currentSlideIndex];
+
+        if (currentSlide) {
+          return (
+            <SlideRenderer
+              slide={currentSlide}
+              slideNumber={currentSlideIndex + 1}
+              totalSlides={totalSlides}
+            />
+          );
+        }
+
+        // Fallback: construct a slide from the scene's slide content
         const slideContent = content as MAICSlideContent;
         return (
           <SlideRenderer
@@ -87,7 +111,7 @@ export const SceneRenderer = React.memo<SceneRendererProps>(function SceneRender
           </div>
         );
     }
-  }, [content, scene.id, scene.title, mode]);
+  }, [content, scene.id, scene.title, mode, slides, currentSlideIndex, totalSlides]);
 
   return (
     <div className="relative w-full h-full overflow-hidden" role="region" aria-label={`Scene: ${scene.title}`}>

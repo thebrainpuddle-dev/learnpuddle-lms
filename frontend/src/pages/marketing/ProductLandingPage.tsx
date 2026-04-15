@@ -757,10 +757,10 @@ export const ProductLandingPage: React.FC = () => {
                 <BoltIcon className="lp-pill-icon" aria-hidden="true" />
                 Learning Management Platform
               </p>
-              <h1>The LMS that runs your entire training operation.</h1>
+              <h1>Learning that <em>talks back.</em></h1>
               <p>
-                From onboarding to compliance, LearnPuddle gives schools, enterprises, and academies
-                one platform to build courses, track progress, and prove outcomes.
+                LearnPuddle gives schools, enterprises, and academies one platform to build courses,
+                track real progress, and prove outcomes — not just assign content.
               </p>
               <ul className="lp-hero-outcomes">
                 {heroOutcomes.map((item) => (

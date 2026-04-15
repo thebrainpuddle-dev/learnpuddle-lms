@@ -122,6 +122,7 @@ class User(AbstractUser):
             models.Index(fields=['email']),
             models.Index(fields=['tenant', 'role']),
             models.Index(fields=['tenant', 'is_active']),
+            models.Index(fields=['tenant', 'role', 'is_active']),
             models.Index(fields=['is_deleted']),
             models.Index(fields=['tenant', 'is_deleted']),
             models.Index(fields=['tenant', 'grade_fk']),
@@ -130,9 +131,15 @@ class User(AbstractUser):
             models.Index(fields=['employee_id']),
         ]
     
+    def clean(self):
+        super().clean()
+        if self.role != 'SUPER_ADMIN' and not self.tenant_id:
+            from django.core.exceptions import ValidationError
+            raise ValidationError("Non-super-admin users must belong to a tenant.")
+
     def __str__(self):
         return f"{self.get_full_name()} ({self.email})"
-    
+
     def get_full_name(self):
         return f"{self.first_name} {self.last_name}".strip()
     

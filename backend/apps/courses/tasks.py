@@ -616,7 +616,7 @@ def _mark_failed(asset: VideoAsset, message: str):
     asset.save(update_fields=["status", "error_message", "updated_at"])
 
 
-@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
+@shared_task(bind=True, max_retries=3, default_retry_delay=60, acks_late=True)
 def validate_duration(self, video_asset_id: str) -> str:
     asset = VideoAsset.objects.select_related(
         "content",
@@ -661,12 +661,18 @@ def validate_duration(self, video_asset_id: str) -> str:
     except FileNotFoundError:
         _mark_failed(asset, "ffprobe not found on worker. Install ffmpeg/ffprobe.")
         return video_asset_id
-    except subprocess.TimeoutExpired:
-        _mark_failed(asset, "ffprobe timed out. Video file may be corrupt.")
-        return video_asset_id
+    except subprocess.TimeoutExpired as exc:
+        self.retry(exc=exc, countdown=120)
     except subprocess.CalledProcessError as e:
         _mark_failed(asset, f"ffprobe failed: {getattr(e, 'output', b'').decode('utf-8', 'ignore')}")
         return video_asset_id
+    except Exception as exc:
+        logger.exception(f"Video validation failed for asset {video_asset_id}")
+        try:
+            VideoAsset.objects.filter(id=video_asset_id).update(status='FAILED')
+        except Exception:
+            pass
+        raise
     finally:
         if local_path and os.path.exists(local_path):
             try:
@@ -675,7 +681,7 @@ def validate_duration(self, video_asset_id: str) -> str:
                 pass
 
 
-@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 2})
+@shared_task(bind=True, max_retries=3, default_retry_delay=60, acks_late=True)
 def transcode_to_hls(self, video_asset_id: str) -> str:
     asset = VideoAsset.objects.select_related(
         "content__module__course__tenant",
@@ -733,9 +739,18 @@ def transcode_to_hls(self, video_asset_id: str) -> str:
         except FileNotFoundError:
             _mark_failed(asset, "ffmpeg not found on worker. Install ffmpeg.")
             return video_asset_id
+        except subprocess.TimeoutExpired as exc:
+            self.retry(exc=exc, countdown=120)
         except subprocess.CalledProcessError as e:
             _mark_failed(asset, f"ffmpeg failed: {getattr(e, 'output', b'').decode('utf-8', 'ignore')}")
             return video_asset_id
+        except Exception as exc:
+            logger.exception(f"Video transcoding failed for asset {video_asset_id}")
+            try:
+                VideoAsset.objects.filter(id=video_asset_id).update(status='FAILED')
+            except Exception:
+                pass
+            raise
         finally:
             if local_in and os.path.exists(local_in):
                 try:
@@ -744,7 +759,7 @@ def transcode_to_hls(self, video_asset_id: str) -> str:
                     pass
 
 
-@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 2})
+@shared_task(bind=True, max_retries=3, default_retry_delay=60, acks_late=True)
 def generate_thumbnail(self, video_asset_id: str) -> str:
     asset = VideoAsset.objects.select_related("content__module__course__tenant").get(id=video_asset_id)
     if asset.status == "FAILED":
@@ -782,9 +797,18 @@ def generate_thumbnail(self, video_asset_id: str) -> str:
         except FileNotFoundError:
             _mark_failed(asset, "ffmpeg not found on worker. Install ffmpeg.")
             return video_asset_id
+        except subprocess.TimeoutExpired as exc:
+            self.retry(exc=exc, countdown=120)
         except subprocess.CalledProcessError as e:
             _mark_failed(asset, f"ffmpeg thumbnail failed: {getattr(e, 'output', b'').decode('utf-8', 'ignore')}")
             return video_asset_id
+        except Exception as exc:
+            logger.exception(f"Thumbnail generation failed for asset {video_asset_id}")
+            try:
+                VideoAsset.objects.filter(id=video_asset_id).update(status='FAILED')
+            except Exception:
+                pass
+            raise
         finally:
             if local_in and os.path.exists(local_in):
                 try:

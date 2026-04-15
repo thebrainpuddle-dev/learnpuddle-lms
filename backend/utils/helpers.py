@@ -74,6 +74,17 @@ def tenant_teachers_qs(tenant: "Tenant") -> "QuerySet":
     )
 
 
+def tenant_students_qs(tenant: "Tenant") -> "QuerySet":
+    """Return active students for *tenant*."""
+    from apps.users.models import User
+
+    return User.objects.filter(
+        tenant=tenant,
+        role="STUDENT",
+        is_active=True,
+    )
+
+
 def course_assigned_teachers(course: "Course") -> "QuerySet":
     """Return the queryset of teachers assigned to *course*.
 
@@ -90,3 +101,14 @@ def course_assigned_teachers(course: "Course") -> "QuerySet":
         models.Q(teacher_groups__in=course.assigned_groups.all())
         | models.Q(assigned_courses=course)
     ).distinct()
+
+
+def course_assigned_students(course: "Course") -> "QuerySet":
+    """Return the queryset of students assigned to *course*.
+
+    Handles ``assigned_to_all_students`` and explicit ``assigned_students``.
+    """
+    students = tenant_students_qs(course.tenant)
+    if course.assigned_to_all_students:
+        return students
+    return students.filter(student_assigned_courses=course).distinct()

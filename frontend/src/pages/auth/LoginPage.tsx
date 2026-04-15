@@ -108,23 +108,23 @@ export const LoginPage: React.FC = () => {
       <div
         className="hidden lg:flex lg:w-[45%] relative overflow-hidden"
         style={
-          isWhiteLabel && theme?.loginBgImage
+          theme?.loginBgImage
             ? { backgroundImage: `url(${theme.loginBgImage})`, backgroundSize: 'cover', backgroundPosition: 'center' }
             : undefined
         }
       >
-        {/* Default gradient background (non-white-label or no bg image) */}
-        {!(isWhiteLabel && theme?.loginBgImage) && (
+        {/* Default gradient background (no bg image) */}
+        {!theme?.loginBgImage && (
           <div className="absolute inset-0 bg-gradient-to-br from-amber-50 via-orange-50 to-yellow-50" />
         )}
 
-        {/* Overlay for readability on background images */}
-        {isWhiteLabel && theme?.loginBgImage && (
-          <div className="absolute inset-0 bg-black/30" />
+        {/* Gradient overlay for readability on background images */}
+        {theme?.loginBgImage && (
+          <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/30 to-black/40" />
         )}
 
-        {/* Background pattern (non-white-label only) */}
-        {!isWhiteLabel && (
+        {/* Background pattern (no bg image only) */}
+        {!theme?.loginBgImage && (
           <div className="absolute inset-0 opacity-30">
             <div className="absolute top-20 left-10 w-72 h-72 bg-accent/20 rounded-full blur-3xl" />
             <div className="absolute bottom-20 right-10 w-96 h-96 bg-orange-300/20 rounded-full blur-3xl" />
@@ -132,20 +132,20 @@ export const LoginPage: React.FC = () => {
         )}
 
         <div className="relative z-10 flex flex-col justify-between p-12 w-full">
-          {/* Top: Logo */}
+          {/* Top: Logo + School Name */}
           <div className="flex items-center gap-3">
             {theme?.logo ? (
               <img
                 src={theme.logo}
                 alt={tenantName}
-                className="h-10 w-10 rounded-xl object-cover"
+                className="h-12 w-12 rounded-full object-cover shadow-lg ring-2 ring-white/30"
               />
             ) : (
-              <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-accent to-accent-dark flex items-center justify-center">
+              <div className="h-12 w-12 rounded-full bg-gradient-to-br from-accent to-accent-dark flex items-center justify-center shadow-lg ring-2 ring-white/30">
                 <span className="text-white font-bold text-lg">{tenantInitial}</span>
               </div>
             )}
-            <span className={`text-xl font-semibold ${isWhiteLabel && theme?.loginBgImage ? 'text-white' : 'text-content'}`}>
+            <span className={`text-xl font-semibold ${theme?.loginBgImage ? 'text-white drop-shadow-md' : 'text-content'}`}>
               {tenantName}
             </span>
           </div>
@@ -154,11 +154,11 @@ export const LoginPage: React.FC = () => {
           <div className="space-y-8">
             {isWhiteLabel ? (
               <div>
-                <h2 className={`text-4xl font-bold leading-tight ${theme?.loginBgImage ? 'text-white' : 'text-content'}`}>
+                <h2 className={`text-4xl font-bold leading-tight ${theme?.loginBgImage ? 'text-white drop-shadow-lg' : 'text-content'}`}>
                   {theme?.welcomeMessage || `Welcome to ${tenantName}`}
                 </h2>
                 {theme?.schoolMotto && (
-                  <p className={`mt-4 text-lg max-w-md ${theme?.loginBgImage ? 'text-white/80' : 'text-content-secondary'}`}>
+                  <p className={`mt-4 text-lg max-w-md ${theme?.loginBgImage ? 'text-white/85 drop-shadow-md' : 'text-content-secondary'}`}>
                     {theme.schoolMotto}
                   </p>
                 )}
@@ -166,28 +166,28 @@ export const LoginPage: React.FC = () => {
             ) : (
               <>
                 <div>
-                  <h2 className="text-4xl font-bold text-content leading-tight">
+                  <h2 className={`text-4xl font-bold leading-tight ${theme?.loginBgImage ? 'text-white drop-shadow-lg' : 'text-content'}`}>
                     Train, Track,<br />
-                    <span className="text-gradient">
+                    <span className={theme?.loginBgImage ? 'text-amber-300' : 'text-gradient'}>
                       Transform.
                     </span>
                   </h2>
-                  <p className="mt-4 text-lg text-content-secondary max-w-md">
+                  <p className={`mt-4 text-lg max-w-md ${theme?.loginBgImage ? 'text-white/85 drop-shadow-md' : 'text-content-secondary'}`}>
                     Your complete training platform — courses, gamification, and analytics in one place.
                   </p>
                 </div>
 
                 <div className="space-y-4">
-                  <FeatureRow icon={BookOpen} text="Courses with video, quizzes, and certificates" />
-                  <FeatureRow icon={Trophy} text="Gamification with XP, badges, and streaks" />
-                  <FeatureRow icon={BarChart3} text="Analytics and progress tracking" />
+                  <FeatureRow icon={BookOpen} text="Courses with video, quizzes, and certificates" hasBg={!!theme?.loginBgImage} />
+                  <FeatureRow icon={Trophy} text="Gamification with XP, badges, and streaks" hasBg={!!theme?.loginBgImage} />
+                  <FeatureRow icon={BarChart3} text="Analytics and progress tracking" hasBg={!!theme?.loginBgImage} />
                 </div>
               </>
             )}
           </div>
 
           {/* Bottom: Branding */}
-          <p className={`text-sm ${isWhiteLabel && theme?.loginBgImage ? 'text-white/60' : 'text-content-muted'}`}>
+          <p className={`text-sm ${theme?.loginBgImage ? 'text-white/60' : 'text-content-muted'}`}>
             {isWhiteLabel
               ? `\u00A9 ${new Date().getFullYear()} ${tenantName}`
               : 'Powered by LearnPuddle'}
@@ -204,10 +204,10 @@ export const LoginPage: React.FC = () => {
               <img
                 src={theme.logo}
                 alt={tenantName}
-                className="mx-auto h-14 w-auto object-contain mb-3"
+                className="mx-auto h-14 w-14 rounded-full object-cover mb-3"
               />
             ) : (
-              <div className="mx-auto h-14 w-14 rounded-2xl bg-gradient-to-br from-accent to-accent-dark flex items-center justify-center mb-3">
+              <div className="mx-auto h-14 w-14 rounded-full bg-gradient-to-br from-accent to-accent-dark flex items-center justify-center mb-3">
                 <span className="text-2xl font-bold text-white">{tenantInitial}</span>
               </div>
             )}
@@ -217,7 +217,7 @@ export const LoginPage: React.FC = () => {
           {/* Welcome text */}
           <div className="mb-8">
             <h2 className="text-2xl font-bold text-content">
-              {isWhiteLabel && theme?.welcomeMessage ? theme.welcomeMessage : 'Welcome back'}
+              {theme?.welcomeMessage || `Welcome to ${tenantName}`}
             </h2>
             <p className="mt-1 text-content-secondary">
               Sign in to continue to your dashboard
@@ -263,7 +263,7 @@ export const LoginPage: React.FC = () => {
               label="Email or Student/Teacher ID"
               type="text"
               id="identifier"
-              autoComplete="username"
+              autoComplete="email"
               leftIcon={<Mail className="h-5 w-5 text-content-muted" />}
               placeholder="you@school.com or KIS-S-0001"
             />
@@ -321,13 +321,13 @@ export const LoginPage: React.FC = () => {
 
 // ─── Sub-components ──────────────────────────────────────────────────────────
 
-function FeatureRow({ icon: Icon, text }: { icon: React.ElementType; text: string }) {
+function FeatureRow({ icon: Icon, text, hasBg = false }: { icon: React.ElementType; text: string; hasBg?: boolean }) {
   return (
     <div className="flex items-center gap-4">
-      <div className="h-10 w-10 rounded-xl bg-white/80 border border-surface-border flex items-center justify-center flex-shrink-0 shadow-sm">
-        <Icon className="h-5 w-5 text-accent" />
+      <div className={`h-10 w-10 rounded-xl flex items-center justify-center flex-shrink-0 shadow-sm ${hasBg ? 'bg-white/20 backdrop-blur-sm border border-white/20' : 'bg-white/80 border border-surface-border'}`}>
+        <Icon className={`h-5 w-5 ${hasBg ? 'text-white' : 'text-accent'}`} />
       </div>
-      <p className="text-content-secondary text-sm">{text}</p>
+      <p className={`text-sm ${hasBg ? 'text-white/85' : 'text-content-secondary'}`}>{text}</p>
     </div>
   );
 }

@@ -184,10 +184,24 @@ class MAICClassroom(models.Model):
     # Generation config snapshot (agent count, scene count, params)
     config = models.JSONField(default=dict, blank=True)
 
-    # Visibility
+    # Visibility & assignment
     is_public = models.BooleanField(
         default=False,
         help_text="When True, students can browse and access this classroom",
+    )
+    assigned_sections = models.ManyToManyField(
+        "academics.Section",
+        blank=True,
+        related_name="maic_classrooms",
+        help_text="Sections that can access this classroom. If empty + is_public, all students see it.",
+    )
+
+    # Full classroom content (slides, scenes, sceneSlideBounds).
+    # Pushed by the teacher's browser after generation so students can
+    # retrieve it via the API without needing the teacher's IndexedDB.
+    content = models.JSONField(
+        default=dict, blank=True,
+        help_text="Full classroom content — slides, scenes, sceneSlideBounds",
     )
 
     # Scene/slide count (cached from client for listing)

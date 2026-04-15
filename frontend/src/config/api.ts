@@ -393,6 +393,13 @@ api.interceptors.response.use(
           // Persisted storage sync is best-effort
         }
 
+        // Broadcast token refresh to other tabs
+        try {
+          localStorage.setItem('token_refreshed', Date.now().toString());
+        } catch {
+          // Best-effort cross-tab notification
+        }
+
         isRefreshing = false;
         onRefreshed(access);
 

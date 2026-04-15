@@ -19,12 +19,17 @@ export interface TenantTheme {
 
 // Default theme (fallback)
 export const DEFAULT_THEME: TenantTheme = {
-  name: 'Default School',
+  name: 'Keystone School',
   subdomain: 'demo',
+  logo: '/keystone-logo.png',
   primaryColor: '#1F4788',
   secondaryColor: '#2E5C8A',
   fontFamily: 'Inter',
   tenantFound: true,
+  whiteLabel: true,
+  loginBgImage: '/keystone-bg.jpg',
+  welcomeMessage: 'Welcome to Keystone Learning',
+  schoolMotto: 'Powered by LearnPuddle',
 };
 
 /**
@@ -178,17 +183,17 @@ export async function loadTenantTheme(): Promise<TenantTheme> {
     return {
       name: data.name,
       subdomain: data.subdomain,
-      logo: data.logo_url || undefined,
+      logo: data.logo_url || DEFAULT_THEME.logo,
       primaryColor: data.primary_color || DEFAULT_THEME.primaryColor,
       secondaryColor: data.secondary_color || undefined,
       fontFamily: data.font_family || DEFAULT_THEME.fontFamily,
       tenantFound: data.tenant_found !== false,
       tenantErrorReason: data.tenant_found === false ? data.reason : undefined,
       tenantErrorMessage: data.tenant_found === false ? data.message : undefined,
-      whiteLabel: (data as any).white_label || false,
-      loginBgImage: (data as any).login_bg_image || undefined,
-      welcomeMessage: (data as any).welcome_message || undefined,
-      schoolMotto: (data as any).school_motto || undefined,
+      whiteLabel: (data as any).white_label ?? DEFAULT_THEME.whiteLabel ?? false,
+      loginBgImage: (data as any).login_bg_image || DEFAULT_THEME.loginBgImage,
+      welcomeMessage: (data as any).welcome_message || DEFAULT_THEME.welcomeMessage,
+      schoolMotto: (data as any).school_motto || DEFAULT_THEME.schoolMotto,
     };
   } catch {
     return DEFAULT_THEME;

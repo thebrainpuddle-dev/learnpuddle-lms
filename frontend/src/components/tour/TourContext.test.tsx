@@ -7,9 +7,9 @@ import type { TourStep } from './types';
 import { TOUR_STEPS } from './tourConfig';
 import { useAuthStore } from '../../stores/authStore';
 
-jest.mock('../../stores/authStore');
+vi.mock('../../stores/authStore');
 
-jest.mock('./tourConfig', () => ({
+vi.mock('./tourConfig', () => ({
   TOUR_STEPS: {
     SUPER_ADMIN: [],
     SCHOOL_ADMIN: [],
@@ -17,7 +17,7 @@ jest.mock('./tourConfig', () => ({
   },
 }));
 
-const mockedUseAuthStore = useAuthStore as jest.MockedFunction<typeof useAuthStore>;
+const mockedUseAuthStore = useAuthStore as unknown as ReturnType<typeof vi.fn>;
 const mockedTourSteps = TOUR_STEPS as Record<'SUPER_ADMIN' | 'SCHOOL_ADMIN' | 'TEACHER', TourStep[]>;
 
 const LocationProbe: React.FC = () => {
@@ -53,14 +53,14 @@ describe('TourContext', () => {
 
     Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
       writable: true,
-      value: jest.fn(),
+      value: vi.fn(),
     });
   });
 
   beforeEach(() => {
     localStorage.clear();
     sessionStorage.clear();
-    jest.clearAllMocks();
+    vi.clearAllMocks();
 
     mockedTourSteps.SUPER_ADMIN = [];
     mockedTourSteps.SCHOOL_ADMIN = [];
@@ -75,11 +75,11 @@ describe('TourContext', () => {
       refreshToken: 'refresh-a',
       isAuthenticated: true,
       isLoading: false,
-      setAuth: jest.fn(),
-      clearAuth: jest.fn(),
-      setUser: jest.fn(),
-      setLoading: jest.fn(),
-      initializeFromStorage: jest.fn(),
+      setAuth: vi.fn(),
+      clearAuth: vi.fn(),
+      setUser: vi.fn(),
+      setLoading: vi.fn(),
+      initializeFromStorage: vi.fn(),
     });
   });
 

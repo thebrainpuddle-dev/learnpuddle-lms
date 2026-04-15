@@ -31,9 +31,10 @@ import logging
 import requests as http_requests
 from django.http import StreamingHttpResponse, HttpResponse
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import UserRateThrottle
 
 from apps.courses.maic_models import TenantAIConfig, MAICClassroom
 from apps.courses.maic_generation_service import (
@@ -42,10 +43,42 @@ from apps.courses.maic_generation_service import (
     generate_scene_actions,
     generate_chat_sse,
     generate_tts_audio,
+    fallback_quiz_grade,
+    AGENT_VOICE_MAP,
 )
+from apps.courses.image_service import fetch_scene_image
+from apps.courses.content_guardrails import validate_topic, validate_pdf_content, validate_chat_message
 from utils.decorators import teacher_or_admin, student_or_admin, tenant_required, check_feature
+from utils.audit import log_audit
 
 logger = logging.getLogger(__name__)
+
+
+# ─── Rate Limiting ────────────────────────────────────────────────────────────
+
+class StudentGenerationThrottle(UserRateThrottle):
+    """Limit student AI classroom generation to 1 per 3 hours."""
+    rate = '1/3hour'
+    scope = 'student_maic_generation'
+
+    def parse_rate(self, rate):
+        """Support custom '1/3hour' format."""
+        if rate is None:
+            return (None, None)
+        num, period = rate.split('/')
+        num_requests = int(num)
+        # Parse period — e.g. "3hour" → 3 * 3600
+        import re
+        m = re.match(r'^(\d+)?(\w+)$', period)
+        if m:
+            multiplier = int(m.group(1)) if m.group(1) else 1
+            unit = m.group(2)
+            durations = {'sec': 1, 'min': 60, 'hour': 3600, 'day': 86400}
+            duration = durations.get(unit, 3600) * multiplier
+        else:
+            duration = 3600
+        return (num_requests, duration)
+
 
 OPENMAIC_BASE = "http://openmaic:3000"
 # Connection timeout (seconds) for sidecar reachability check.
@@ -213,6 +246,27 @@ def _proxy_binary(request, path, config):
     )
 
 
+def _fill_image_urls(data):
+    """Fill empty image src fields with actual image URLs.
+
+    After scene content generation, image elements may have ``src: ""``
+    because the LLM cannot produce real URLs.  This post-processor walks
+    every slide and resolves empty ``src`` fields via the image service
+    (Unsplash / Pexels / Pollinations / placeholder fallback).
+    """
+    slides = data.get("slides", [])
+    for slide in slides:
+        for element in slide.get("elements", []):
+            if element.get("type") == "image" and not element.get("src"):
+                keyword = element.get("content", "educational illustration")
+                try:
+                    url = fetch_scene_image(keyword)
+                    element["src"] = url
+                except Exception:
+                    pass
+    return data
+
+
 # ======================================================================
 # Teacher Proxy Endpoints
 # ======================================================================
@@ -335,6 +389,8 @@ def teacher_maic_generate_scene_content(request):
         config=config,
     )
     if data:
+        # Post-process: fill empty image src fields with real URLs
+        _fill_image_urls(data)
         return Response(data)
     return Response(
         {"error": "Failed to generate scene content."},
@@ -372,7 +428,14 @@ def teacher_maic_generate_tts(request):
             content_type="application/json",
         )
 
-    audio_bytes = generate_tts_audio(text, config)
+    # Resolve per-agent voice: explicit voiceId > agent role mapping > tenant default
+    voice_id = body.get("voiceId")
+    if not voice_id:
+        agent_role = body.get("agentRole", "")
+        if agent_role:
+            voice_id = AGENT_VOICE_MAP.get(agent_role)
+
+    audio_bytes = generate_tts_audio(text, config, voice_id=voice_id)
     if audio_bytes:
         return HttpResponse(audio_bytes, content_type="audio/mpeg")
 
@@ -429,6 +492,8 @@ def teacher_maic_classroom_list(request):
     if search:
         qs = qs.filter(title__icontains=search)
 
+    qs = qs.prefetch_related("assigned_sections__grade")
+
     classrooms = []
     for c in qs:
         classrooms.append({
@@ -441,6 +506,10 @@ def teacher_maic_classroom_list(request):
             "scene_count": c.scene_count,
             "estimated_minutes": c.estimated_minutes,
             "course_id": str(c.course_id) if c.course_id else None,
+            "assigned_sections": [
+                {"id": str(s.id), "name": s.name, "grade_name": s.grade.name if s.grade else None}
+                for s in c.assigned_sections.all()
+            ],
             "created_at": c.created_at.isoformat(),
             "updated_at": c.updated_at.isoformat(),
         })
@@ -516,6 +585,7 @@ def teacher_maic_classroom_detail(request, classroom_id):
     except MAICClassroom.DoesNotExist:
         return Response({"error": "Classroom not found."}, status=status.HTTP_404_NOT_FOUND)
 
+    sections = classroom.assigned_sections.select_related("grade").all()
     return Response({
         "id": str(classroom.id),
         "title": classroom.title,
@@ -528,6 +598,10 @@ def teacher_maic_classroom_detail(request, classroom_id):
         "scene_count": classroom.scene_count,
         "estimated_minutes": classroom.estimated_minutes,
         "course_id": str(classroom.course_id) if classroom.course_id else None,
+        "assigned_sections": [
+            {"id": str(s.id), "name": s.name, "grade_name": s.grade.name if s.grade else None}
+            for s in sections
+        ],
         "config": classroom.config,
         "created_at": classroom.created_at.isoformat(),
         "updated_at": classroom.updated_at.isoformat(),
@@ -549,7 +623,8 @@ def teacher_maic_classroom_update(request, classroom_id):
         return Response({"error": "Classroom not found."}, status=status.HTTP_404_NOT_FOUND)
 
     updatable = ["title", "description", "topic", "language", "status",
-                  "is_public", "scene_count", "estimated_minutes", "config", "error_message"]
+                  "is_public", "scene_count", "estimated_minutes", "config", "error_message",
+                  "content"]
     updated_fields = []
     for field in updatable:
         if field in request.data:
@@ -559,6 +634,16 @@ def teacher_maic_classroom_update(request, classroom_id):
     if updated_fields:
         updated_fields.append("updated_at")
         classroom.save(update_fields=updated_fields)
+
+    # Handle M2M assigned_sections separately
+    if "assigned_section_ids" in request.data:
+        section_ids = request.data["assigned_section_ids"]
+        if isinstance(section_ids, list):
+            from apps.academics.models import Section
+            sections = Section.objects.filter(
+                id__in=section_ids, tenant=request.tenant,
+            )
+            classroom.assigned_sections.set(sections)
 
     return Response({"id": str(classroom.id), "status": classroom.status})
 
@@ -590,11 +675,42 @@ def teacher_maic_classroom_delete(request, classroom_id):
 @tenant_required
 @check_feature("feature_maic")
 def teacher_maic_quiz_grade(request):
-    """JSON proxy to OpenMAIC /api/quiz-grade for AI-graded short answers."""
+    """JSON proxy to OpenMAIC /api/quiz-grade for AI-graded short answers.
+    Falls back to direct LLM grading when the sidecar is unavailable."""
     config, err = _get_ai_config(request.tenant)
     if err:
         return err
-    return _proxy_json(request, "/api/quiz-grade", config)
+
+    # Try sidecar first
+    result = _proxy_json(request, "/api/quiz-grade", config)
+    if result.status_code != 502:
+        return result
+
+    # Sidecar unavailable — grade directly via LLM
+    logger.info("Sidecar unavailable, using direct LLM quiz grading")
+    try:
+        body = json.loads(request.body) if request.body else {}
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        body = {}
+
+    # Accept both frontend format (question/answer) and canonical format (studentAnswer/expectedAnswer)
+    student_answer = body.get("studentAnswer") or body.get("answer", "")
+    expected_answer = body.get("expectedAnswer") or body.get("question", "")
+    rubric = body.get("rubric") or body.get("commentPrompt")
+
+    if not student_answer or not expected_answer:
+        return Response(
+            {"error": "studentAnswer and expectedAnswer are required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    grade_result = fallback_quiz_grade(
+        student_answer=student_answer,
+        expected_answer=expected_answer,
+        rubric=rubric,
+        config=config,
+    )
+    return Response(grade_result)
 
 
 # Export
@@ -700,10 +816,28 @@ def teacher_maic_generate_agent_profiles(request):
 @tenant_required
 @check_feature("feature_maic")
 def student_maic_classroom_list(request):
-    """Browse public READY classrooms for the student's tenant."""
+    """Browse READY classrooms visible to the student.
+
+    Visibility rules:
+    - is_public=True + no assigned_sections → visible to ALL students
+    - assigned_sections contains student's section → visible (regardless of is_public)
+    - is_public=False + no assigned_sections → not visible (teacher-only/draft)
+    """
+    from django.db.models import Q
+
     qs = MAICClassroom.objects.filter(
-        tenant=request.tenant, is_public=True, status="READY",
+        tenant=request.tenant, status="READY",
     ).order_by("-updated_at")
+
+    student_section = getattr(request.user, "section_fk", None)
+    if student_section:
+        qs = qs.filter(
+            Q(is_public=True, assigned_sections__isnull=True) |  # public to all
+            Q(assigned_sections=student_section)                 # assigned to student's section
+        ).distinct()
+    else:
+        # Student without a section — only see fully public classrooms
+        qs = qs.filter(is_public=True, assigned_sections__isnull=True)
 
     course_id = request.query_params.get("course_id")
     if course_id:
@@ -735,12 +869,21 @@ def student_maic_classroom_list(request):
 @tenant_required
 @check_feature("feature_maic")
 def student_maic_classroom_detail(request, classroom_id):
-    """Get a public classroom's metadata."""
+    """Get a classroom's metadata (respects section assignment + visibility)."""
     try:
         classroom = MAICClassroom.objects.get(
-            pk=classroom_id, tenant=request.tenant, is_public=True, status="READY",
+            pk=classroom_id, tenant=request.tenant, status="READY",
         )
     except MAICClassroom.DoesNotExist:
+        return Response({"error": "Classroom not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    # Check visibility: assigned sections grant access, otherwise must be public with no restrictions
+    assigned = classroom.assigned_sections.all()
+    student_section = getattr(request.user, "section_fk", None)
+    if assigned.exists():
+        if not student_section or student_section not in assigned:
+            return Response({"error": "Classroom not found."}, status=status.HTTP_404_NOT_FOUND)
+    elif not classroom.is_public:
         return Response({"error": "Classroom not found."}, status=status.HTTP_404_NOT_FOUND)
 
     return Response({
@@ -749,10 +892,12 @@ def student_maic_classroom_detail(request, classroom_id):
         "description": classroom.description,
         "topic": classroom.topic,
         "language": classroom.language,
+        "status": classroom.status,
         "scene_count": classroom.scene_count,
         "estimated_minutes": classroom.estimated_minutes,
         "course_id": str(classroom.course_id) if classroom.course_id else None,
         "config": classroom.config,
+        "content": classroom.content,
         "created_at": classroom.created_at.isoformat(),
     })
 
@@ -829,7 +974,14 @@ def student_maic_generate_tts(request):
     if not text:
         return HttpResponse(status=204)
 
-    audio_bytes = generate_tts_audio(text, config)
+    # Resolve per-agent voice: explicit voiceId > agent role mapping > tenant default
+    voice_id = body.get("voiceId")
+    if not voice_id:
+        agent_role = body.get("agentRole", "")
+        if agent_role:
+            voice_id = AGENT_VOICE_MAP.get(agent_role)
+
+    audio_bytes = generate_tts_audio(text, config, voice_id=voice_id)
     if audio_bytes:
         return HttpResponse(audio_bytes, content_type="audio/mpeg")
 
@@ -842,11 +994,418 @@ def student_maic_generate_tts(request):
 @tenant_required
 @check_feature("feature_maic")
 def student_maic_quiz_grade(request):
-    """Quiz grading proxy for student mode."""
+    """Quiz grading proxy for student mode.
+    Falls back to direct LLM grading when sidecar is unavailable."""
     config, err = _get_ai_config(request.tenant)
     if err:
         return err
-    return _proxy_json(request, "/api/quiz-grade", config)
+
+    # Try sidecar first
+    result = _proxy_json(request, "/api/quiz-grade", config)
+    if result.status_code != 502:
+        return result
+
+    # Sidecar unavailable — grade directly via LLM
+    logger.info("Sidecar unavailable, using direct LLM quiz grading (student)")
+    try:
+        body = json.loads(request.body) if request.body else {}
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        body = {}
+
+    # Accept both frontend format (question/answer) and canonical format (studentAnswer/expectedAnswer)
+    student_answer = body.get("studentAnswer") or body.get("answer", "")
+    expected_answer = body.get("expectedAnswer") or body.get("question", "")
+    rubric = body.get("rubric") or body.get("commentPrompt")
+
+    if not student_answer or not expected_answer:
+        return Response(
+            {"error": "studentAnswer and expectedAnswer are required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    grade_result = fallback_quiz_grade(
+        student_answer=student_answer,
+        expected_answer=expected_answer,
+        rubric=rubric,
+        config=config,
+    )
+    return Response(grade_result)
+
+
+# ======================================================================
+# Student AI Classroom Creation (with guardrails)
+# ======================================================================
+
+MAX_STUDENT_CLASSROOMS = 5  # per-student limit (much lower than teacher)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@throttle_classes([StudentGenerationThrottle])
+@student_or_admin
+@tenant_required
+@check_feature("feature_maic")
+def student_maic_validate_topic(request):
+    """Validate a topic or PDF text before allowing classroom creation.
+
+    POST body: { "topic": "...", "pdfText": "..." }
+    Returns: { "allowed": bool, "subject_area": "...", "reason": "..." }
+    """
+    config, err = _get_ai_config(request.tenant)
+    if err:
+        return err
+
+    topic = (request.data.get("topic") or "").strip()
+    pdf_text = (request.data.get("pdfText") or "").strip()
+
+    if not topic and not pdf_text:
+        return Response(
+            {"allowed": False, "reason": "Please enter a topic or upload a PDF."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Validate topic
+    if topic:
+        result = validate_topic(topic, config)
+        if not result.allowed:
+            log_audit(
+                "GUARDRAIL_BLOCK", "MAICClassroom",
+                target_repr=f"topic={topic[:100]}",
+                changes=result.to_dict(),
+                request=request,
+            )
+            return Response(result.to_dict(), status=status.HTTP_200_OK)
+
+    # Validate PDF content (if provided)
+    if pdf_text:
+        result = validate_pdf_content(pdf_text, config)
+        if not result.allowed:
+            log_audit(
+                "GUARDRAIL_BLOCK", "MAICClassroom",
+                target_repr="pdf_upload",
+                changes=result.to_dict(),
+                request=request,
+            )
+            return Response(result.to_dict(), status=status.HTTP_200_OK)
+
+    # Both passed (or only one was provided)
+    final = result if pdf_text else validate_topic(topic, config)
+    return Response(final.to_dict(), status=status.HTTP_200_OK)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@throttle_classes([StudentGenerationThrottle])
+@student_or_admin
+@tenant_required
+@check_feature("feature_maic")
+def student_maic_classroom_create(request):
+    """Create a new AI Classroom as a student — with guardrail validation.
+
+    Requires topic to pass educational content guardrails before creation.
+    Students are limited to MAX_STUDENT_CLASSROOMS active classrooms.
+    """
+    config, err = _get_ai_config(request.tenant)
+    if err:
+        return err
+
+    title = (request.data.get("title") or "").strip()
+    topic = (request.data.get("topic") or "").strip()
+    pdf_text = (request.data.get("pdfText") or "").strip()
+
+    if not title:
+        return Response({"error": "title is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Check student classroom limit
+    existing_count = MAICClassroom.objects.filter(
+        tenant=request.tenant, creator=request.user,
+    ).exclude(status="ARCHIVED").count()
+    if existing_count >= MAX_STUDENT_CLASSROOMS:
+        return Response(
+            {"error": f"You have reached the maximum of {MAX_STUDENT_CLASSROOMS} classrooms."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    # ── Guardrail gate ──
+    if topic:
+        topic_result = validate_topic(topic, config)
+        if not topic_result.allowed:
+            log_audit(
+                "GUARDRAIL_BLOCK", "MAICClassroom",
+                target_repr=f"create:topic={topic[:100]}",
+                changes=topic_result.to_dict(),
+                request=request,
+            )
+            return Response({
+                "error": "This topic was not approved for classroom generation.",
+                "guardrail": topic_result.to_dict(),
+            }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+
+    if pdf_text:
+        pdf_result = validate_pdf_content(pdf_text, config)
+        if not pdf_result.allowed:
+            log_audit(
+                "GUARDRAIL_BLOCK", "MAICClassroom",
+                target_repr="create:pdf_upload",
+                changes=pdf_result.to_dict(),
+                request=request,
+            )
+            return Response({
+                "error": "The uploaded document was not approved for classroom generation.",
+                "guardrail": pdf_result.to_dict(),
+            }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+
+    # ── Create classroom ──
+    classroom = MAICClassroom.objects.create(
+        tenant=request.tenant,
+        creator=request.user,
+        title=title,
+        description=request.data.get("description", ""),
+        topic=topic,
+        language=request.data.get("language", "en"),
+        config=request.data.get("config", {}),
+        status="DRAFT",
+        is_public=False,  # Student classrooms are always private
+    )
+
+    log_audit(
+        "CREATE", "MAICClassroom",
+        target_id=str(classroom.id),
+        target_repr=f"student_classroom:{title[:100]}",
+        changes={"topic": topic[:200]},
+        request=request,
+    )
+
+    return Response({
+        "id": str(classroom.id),
+        "title": classroom.title,
+        "status": classroom.status,
+        "created_at": classroom.created_at.isoformat(),
+    }, status=status.HTTP_201_CREATED)
+
+
+@api_view(["PATCH"])
+@permission_classes([IsAuthenticated])
+@student_or_admin
+@tenant_required
+@check_feature("feature_maic")
+def student_maic_classroom_update(request, classroom_id):
+    """Update a student's own classroom (content sync after generation)."""
+    try:
+        classroom = MAICClassroom.objects.get(
+            pk=classroom_id, tenant=request.tenant, creator=request.user,
+        )
+    except MAICClassroom.DoesNotExist:
+        return Response({"error": "Classroom not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    updatable = ["title", "description", "status", "scene_count",
+                  "estimated_minutes", "config", "content", "error_message"]
+    updated_fields = []
+    for field in updatable:
+        if field in request.data:
+            setattr(classroom, field, request.data[field])
+            updated_fields.append(field)
+
+    if updated_fields:
+        updated_fields.append("updated_at")
+        classroom.save(update_fields=updated_fields)
+
+    return Response({"id": str(classroom.id), "status": classroom.status})
+
+
+@api_view(["DELETE"])
+@permission_classes([IsAuthenticated])
+@student_or_admin
+@tenant_required
+@check_feature("feature_maic")
+def student_maic_classroom_delete(request, classroom_id):
+    """Delete (archive) a student's own classroom."""
+    try:
+        classroom = MAICClassroom.objects.get(
+            pk=classroom_id, tenant=request.tenant, creator=request.user,
+        )
+    except MAICClassroom.DoesNotExist:
+        return Response({"error": "Classroom not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    classroom.status = "ARCHIVED"
+    classroom.save(update_fields=["status", "updated_at"])
+
+    log_audit(
+        "ARCHIVE", "MAICClassroom",
+        target_id=str(classroom.id),
+        target_repr=f"student_classroom:{classroom.title[:100]}",
+        request=request,
+    )
+    return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+@student_or_admin
+@tenant_required
+@check_feature("feature_maic")
+def student_maic_my_classrooms(request):
+    """List classrooms created by the current student."""
+    qs = MAICClassroom.objects.filter(
+        tenant=request.tenant, creator=request.user,
+    ).exclude(status="ARCHIVED").order_by("-updated_at")
+
+    classrooms = [{
+        "id": str(c.id),
+        "title": c.title,
+        "description": c.description,
+        "topic": c.topic,
+        "status": c.status,
+        "scene_count": c.scene_count,
+        "estimated_minutes": c.estimated_minutes,
+        "created_at": c.created_at.isoformat(),
+    } for c in qs]
+
+    return Response(classrooms)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@throttle_classes([StudentGenerationThrottle])
+@student_or_admin
+@tenant_required
+@check_feature("feature_maic")
+def student_maic_generate_outlines(request):
+    """SSE outline generation for student — with guardrail check.
+
+    Same as teacher endpoint but validates topic/PDF first.
+    """
+    config, err = _get_ai_config(request.tenant)
+    if err:
+        return err
+
+    try:
+        body = json.loads(request.body) if request.body else {}
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        body = {}
+
+    topic = (body.get("topic") or "").strip()
+    pdf_text = (body.get("pdfText") or "").strip()
+
+    # ── Guardrail gate ──
+    if topic:
+        topic_result = validate_topic(topic, config)
+        if not topic_result.allowed:
+            log_audit(
+                "GUARDRAIL_BLOCK", "MAICClassroom",
+                target_repr=f"outline:topic={topic[:100]}",
+                changes=topic_result.to_dict(),
+                request=request,
+            )
+            return Response({
+                "error": "Topic not approved for classroom generation.",
+                "guardrail": topic_result.to_dict(),
+            }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+
+    if pdf_text:
+        pdf_result = validate_pdf_content(pdf_text, config)
+        if not pdf_result.allowed:
+            log_audit(
+                "GUARDRAIL_BLOCK", "MAICClassroom",
+                target_repr="outline:pdf_upload",
+                changes=pdf_result.to_dict(),
+                request=request,
+            )
+            return Response({
+                "error": "Document not approved for classroom generation.",
+                "guardrail": pdf_result.to_dict(),
+            }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+
+    log_audit(
+        "GENERATE_OUTLINE", "MAICClassroom",
+        target_repr=f"topic={topic[:100]}",
+        request=request,
+    )
+
+    # Try sidecar first
+    result = _proxy_sse(request, "/api/generate/scene-outlines-stream", config)
+    if result.status_code != 502:
+        return result
+
+    # Direct fallback
+    logger.info("Sidecar unavailable, using direct outline generation (student)")
+    response = StreamingHttpResponse(
+        generate_outline_sse(
+            topic=topic,
+            pdf_text=pdf_text,
+            language=body.get("language", "en"),
+            agent_count=min(int(body.get("agentCount", 3)), 4),  # Cap at 4 for students
+            scene_count=min(int(body.get("sceneCount", 5)), 8),  # Cap at 8 for students
+            config=config,
+        ),
+        content_type="text/event-stream",
+    )
+    response["Cache-Control"] = "no-cache"
+    response["X-Accel-Buffering"] = "no"
+    return response
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@throttle_classes([StudentGenerationThrottle])
+@student_or_admin
+@tenant_required
+@check_feature("feature_maic")
+def student_maic_generate_scene_content(request):
+    """Scene content generation for student — same as teacher endpoint."""
+    config, err = _get_ai_config(request.tenant)
+    if err:
+        return err
+
+    result = _proxy_json(request, "/api/generate/scene-content", config)
+    if result.status_code != 502:
+        return result
+
+    # Direct fallback
+    logger.info("Sidecar unavailable, using direct scene content generation (student)")
+    try:
+        body = json.loads(request.body) if request.body else {}
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        body = {}
+
+    scene = body.get("scene", {})
+    agents = body.get("agents", [])
+    language = body.get("language", "en")
+
+    data = generate_scene_content(scene, agents, language, config)
+    _fill_image_urls(data)
+    return Response(data)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@throttle_classes([StudentGenerationThrottle])
+@student_or_admin
+@tenant_required
+@check_feature("feature_maic")
+def student_maic_generate_scene_actions(request):
+    """Scene actions generation for student — same as teacher endpoint."""
+    config, err = _get_ai_config(request.tenant)
+    if err:
+        return err
+
+    result = _proxy_json(request, "/api/generate/scene-actions", config)
+    if result.status_code != 502:
+        return result
+
+    # Direct fallback
+    logger.info("Sidecar unavailable, using direct scene actions generation (student)")
+    try:
+        body = json.loads(request.body) if request.body else {}
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        body = {}
+
+    scene = body.get("scene", {})
+    agents = body.get("agents", [])
+    language = body.get("language", "en")
+
+    data = generate_scene_actions(scene, agents, language, config)
+    return Response(data)
 
 
 # ======================================================================

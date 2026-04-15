@@ -1,94 +1,113 @@
 // src/pages/student/StudyNotesPage.tsx
 //
-// Read-only course content browser — shows DOCUMENT and TEXT items
-// from all assigned courses, grouped by course → module.
+// Two-panel layout: left panel is a course content browser (accordion),
+// right panel shows the AI StudySummaryPanel for the selected content.
 
-import React, { useEffect, useMemo, useState } from 'react';
-import { FileText, Search, Download, ExternalLink, ChevronDown, ChevronRight, BookOpen } from 'lucide-react';
-import { usePageTitle } from '../../hooks/usePageTitle';
+import { useEffect, useMemo, useState } from 'react';
+import {
+  Search, BookOpen, FileText, Video, Type, ChevronDown, ChevronRight,
+  Sparkles, Check,
+} from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
 import { studentService, type StudentCourseListItem, type StudentCourseDetail } from '../../services/studentService';
+import { StudySummaryPanel } from '../../components/student/StudySummaryPanel';
+import { usePageTitle } from '../../hooks/usePageTitle';
+import { cn } from '../../design-system/theme/cn';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-interface NoteItem {
+interface ContentItem {
   id: string;
   title: string;
-  content_type: 'DOCUMENT' | 'TEXT';
-  file_url?: string;
-  text_content?: string;
-  moduleName: string;
-  moduleId: string;
+  content_type: 'VIDEO' | 'DOCUMENT' | 'TEXT';
+  has_transcript?: boolean;
+  moduleTitle: string;
 }
 
-interface CourseNotes {
-  courseId: string;
-  courseTitle: string;
-  items: NoteItem[];
+interface SelectedContent {
+  id: string;
+  title: string;
+  content_type: string;
+}
+
+const CONTENT_ICONS: Record<string, React.ElementType> = {
+  VIDEO: Video,
+  DOCUMENT: FileText,
+  TEXT: Type,
+};
+
+const CONTENT_COLORS: Record<string, string> = {
+  VIDEO: 'bg-purple-50 text-purple-500',
+  DOCUMENT: 'bg-blue-50 text-blue-500',
+  TEXT: 'bg-emerald-50 text-emerald-500',
+};
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function isSummarizable(ct: { content_type: string; has_transcript?: boolean }): boolean {
+  if (ct.content_type === 'DOCUMENT' || ct.content_type === 'TEXT') return true;
+  if (ct.content_type === 'VIDEO' && ct.has_transcript) return true;
+  return false;
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export function StudyNotesPage() {
-  usePageTitle('Study Notes');
+  usePageTitle('AI Study Summaries');
 
-  const [courses, setCourses] = useState<StudentCourseListItem[]>([]);
-  const [courseDetails, setCourseDetails] = useState<Map<string, StudentCourseDetail>>(new Map());
-  const [isLoading, setIsLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [expandedCourses, setExpandedCourses] = useState<Set<string>>(new Set());
-
+  const [courseDetails, setCourseDetails] = useState<Map<string, StudentCourseDetail>>(new Map());
   const [loadingCourses, setLoadingCourses] = useState<Set<string>>(new Set());
+  const [selectedContent, setSelectedContent] = useState<SelectedContent | null>(null);
+  const [summaryExistsMap, setSummaryExistsMap] = useState<Set<string>>(new Set());
+  const [isMobileBrowserOpen, setIsMobileBrowserOpen] = useState(true);
 
-  // Fetch only the course list on mount
+  // Fetch course list
+  const { data: courses = [], isLoading } = useQuery({
+    queryKey: ['student', 'courses'],
+    queryFn: () => studentService.getStudentCourses(),
+  });
+
+  // Fetch summary list to know which content has summaries
+  const { data: summaries = [] } = useQuery({
+    queryKey: ['student', 'study-summaries'],
+    queryFn: () => studentService.getStudySummaries(),
+  });
+
   useEffect(() => {
-    let cancelled = false;
+    const readyIds = new Set(
+      summaries
+        .filter((s) => s.status === 'READY')
+        .map((s) => s.content_id),
+    );
+    setSummaryExistsMap(readyIds);
+  }, [summaries]);
 
-    async function load() {
-      setIsLoading(true);
-      try {
-        const list = await studentService.getStudentCourses();
-        if (cancelled) return;
-        setCourses(list);
-      } catch {
-        // silent — empty state shown
-      } finally {
-        if (!cancelled) setIsLoading(false);
-      }
-    }
-
-    load();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  // Build grouped notes from course details — includes all enrolled courses
-  // so un-fetched ones still appear as expandable accordion items.
-  const courseNotes: CourseNotes[] = useMemo(() => {
-    const result: CourseNotes[] = [];
+  // Build course items grouped by course
+  const courseItems = useMemo(() => {
+    const result: Array<{
+      courseId: string;
+      courseTitle: string;
+      items: ContentItem[];
+    }> = [];
 
     for (const course of courses) {
       const detail = courseDetails.get(course.id);
+      const items: ContentItem[] = [];
 
-      if (!detail) {
-        // Detail not yet fetched — show the course with an empty item list
-        result.push({ courseId: course.id, courseTitle: course.title, items: [] });
-        continue;
-      }
-
-      const items: NoteItem[] = [];
-      for (const mod of detail.modules) {
-        for (const ct of mod.contents) {
-          if (ct.content_type === 'DOCUMENT' || ct.content_type === 'TEXT') {
-            items.push({
-              id: ct.id,
-              title: ct.title,
-              content_type: ct.content_type as 'DOCUMENT' | 'TEXT',
-              file_url: ct.file_url,
-              text_content: ct.text_content,
-              moduleName: mod.title,
-              moduleId: mod.id,
-            });
+      if (detail) {
+        for (const mod of detail.modules) {
+          for (const ct of mod.contents) {
+            if (isSummarizable(ct)) {
+              items.push({
+                id: ct.id,
+                title: ct.title,
+                content_type: ct.content_type as 'VIDEO' | 'DOCUMENT' | 'TEXT',
+                has_transcript: ct.has_transcript,
+                moduleTitle: mod.title,
+              });
+            }
           }
         }
       }
@@ -99,30 +118,26 @@ export function StudyNotesPage() {
     return result;
   }, [courses, courseDetails]);
 
-  // Filter by search — when searching, only include courses with matching items
+  // Filter by search
   const filtered = useMemo(() => {
-    if (!search.trim()) return courseNotes;
+    if (!search.trim()) return courseItems;
     const q = search.toLowerCase();
-    return courseNotes
-      .map((cn) => ({
-        ...cn,
-        items: cn.items.filter(
+    return courseItems
+      .map((c) => ({
+        ...c,
+        items: c.items.filter(
           (it) =>
             it.title.toLowerCase().includes(q) ||
-            cn.courseTitle.toLowerCase().includes(q) ||
-            it.moduleName.toLowerCase().includes(q),
+            c.courseTitle.toLowerCase().includes(q) ||
+            it.moduleTitle.toLowerCase().includes(q),
         ),
       }))
-      .filter((cn) => cn.items.length > 0 || cn.courseTitle.toLowerCase().includes(q));
-  }, [courseNotes, search]);
+      .filter((c) => c.items.length > 0 || c.courseTitle.toLowerCase().includes(q));
+  }, [courseItems, search]);
 
-  const totalNotes = courseNotes.reduce((sum, cn) => sum + cn.items.length, 0);
-
+  // Toggle course expansion and lazy-load details
   async function toggleCourse(courseId: string) {
-    const isCurrentlyExpanded = expandedCourses.has(courseId);
-
-    if (isCurrentlyExpanded) {
-      // Collapse
+    if (expandedCourses.has(courseId)) {
       setExpandedCourses((prev) => {
         const next = new Set(prev);
         next.delete(courseId);
@@ -131,7 +146,6 @@ export function StudyNotesPage() {
       return;
     }
 
-    // Expand — fetch detail if not cached
     if (!courseDetails.has(courseId)) {
       setLoadingCourses((prev) => new Set(prev).add(courseId));
       try {
@@ -142,7 +156,6 @@ export function StudyNotesPage() {
           return next;
         });
       } catch {
-        // Failed to load — don't expand
         setLoadingCourses((prev) => {
           const next = new Set(prev);
           next.delete(courseId);
@@ -161,6 +174,16 @@ export function StudyNotesPage() {
     setExpandedCourses((prev) => new Set(prev).add(courseId));
   }
 
+  function selectContent(item: ContentItem) {
+    setSelectedContent({
+      id: item.id,
+      title: item.title,
+      content_type: item.content_type,
+    });
+    // On mobile, collapse the browser
+    setIsMobileBrowserOpen(false);
+  }
+
   // ─── Loading ─────────────────────────────────────────────────────────────
 
   if (isLoading) {
@@ -175,127 +198,184 @@ export function StudyNotesPage() {
   // ─── Render ──────────────────────────────────────────────────────────────
 
   return (
-    <div className="space-y-6 max-w-4xl">
+    <div className="space-y-5">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">Study Notes</h1>
+        <h1 className="text-2xl font-bold text-gray-900">AI Study Summaries</h1>
         <p className="mt-1 text-sm text-gray-500">
-          Documents and text materials from your courses
-          {totalNotes > 0 && (
-            <span className="ml-1 text-gray-400">
-              ({totalNotes} item{totalNotes !== 1 ? 's' : ''})
-            </span>
-          )}
+          Generate AI-powered summaries, flashcards, and quiz prep from your course materials
         </p>
       </div>
 
-      {/* Search */}
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-        <input
-          type="text"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search by course, module, or content name..."
-          className="w-full pl-9 pr-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:ring-indigo-500 focus:border-indigo-500"
-        />
-      </div>
+      {/* Two-panel layout */}
+      <div className="flex flex-col lg:flex-row gap-5 min-h-[60vh]">
+        {/* Left Panel — Content Browser */}
+        <div
+          className={cn(
+            'lg:w-[40%] flex-shrink-0',
+            // On mobile, toggling browser visibility
+            !isMobileBrowserOpen && selectedContent && 'hidden lg:block',
+          )}
+        >
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+            {/* Search */}
+            <div className="p-3 border-b border-gray-100">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                <input
+                  type="text"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search courses and content..."
+                  className="w-full pl-9 pr-4 py-2 border border-gray-200 rounded-lg text-sm focus:ring-indigo-500 focus:border-indigo-500"
+                />
+              </div>
+            </div>
 
-      {/* Empty state */}
-      {filtered.length === 0 && (
-        <div className="text-center py-16 bg-white rounded-xl border border-gray-200">
-          <BookOpen className="mx-auto h-10 w-10 text-gray-300 mb-3" />
-          <p className="text-sm font-medium text-gray-500">
-            {search ? 'No materials match your search' : 'No study materials available yet'}
-          </p>
-          <p className="text-xs text-gray-400 mt-1">
-            {search
-              ? 'Try a different search term'
-              : 'Documents and text content from your courses will appear here'}
-          </p>
-        </div>
-      )}
-
-      {/* Course groups */}
-      <div className="space-y-3">
-        {filtered.map((cn) => {
-          const isExpanded = expandedCourses.has(cn.courseId);
-          const isCourseLoading = loadingCourses.has(cn.courseId);
-
-          return (
-            <div key={cn.courseId} className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-              {/* Course header */}
-              <button
-                type="button"
-                onClick={() => toggleCourse(cn.courseId)}
-                className="w-full flex items-center justify-between px-5 py-3.5 hover:bg-gray-50 transition-colors"
-              >
-                <div className="flex items-center gap-3 min-w-0">
-                  {isCourseLoading ? (
-                    <div className="h-4 w-4 animate-spin rounded-full border-2 border-indigo-600 border-t-transparent flex-shrink-0" />
-                  ) : isExpanded ? (
-                    <ChevronDown className="h-4 w-4 text-gray-400 flex-shrink-0" />
-                  ) : (
-                    <ChevronRight className="h-4 w-4 text-gray-400 flex-shrink-0" />
-                  )}
-                  <span className="text-sm font-semibold text-gray-900 truncate">{cn.courseTitle}</span>
-                </div>
-                <span className="text-xs text-gray-400 flex-shrink-0 ml-3">
-                  {cn.items.length} item{cn.items.length !== 1 ? 's' : ''}
-                </span>
-              </button>
-
-              {/* Content items */}
-              {isExpanded && (
-                <div className="border-t border-gray-100 divide-y divide-gray-50">
-                  {cn.items.map((item) => (
-                    <div key={item.id} className="flex items-center gap-3 px-5 py-3 hover:bg-gray-50 transition-colors">
-                      <div className={`h-8 w-8 rounded-lg flex items-center justify-center flex-shrink-0 ${
-                        item.content_type === 'DOCUMENT'
-                          ? 'bg-blue-50 text-blue-500'
-                          : 'bg-emerald-50 text-emerald-500'
-                      }`}>
-                        <FileText className="h-4 w-4" />
-                      </div>
-
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-gray-900 truncate">{item.title}</p>
-                        <p className="text-xs text-gray-400 truncate">{item.moduleName}</p>
-                      </div>
-
-                      <span className="text-[10px] font-medium uppercase tracking-wide text-gray-400 flex-shrink-0">
-                        {item.content_type === 'DOCUMENT' ? 'DOC' : 'TXT'}
-                      </span>
-
-                      {item.content_type === 'DOCUMENT' && item.file_url && (
-                        <a
-                          href={item.file_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="p-1.5 rounded-md text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
-                          title="Open document"
-                        >
-                          <ExternalLink className="h-4 w-4" />
-                        </a>
-                      )}
-
-                      {item.content_type === 'DOCUMENT' && item.file_url && (
-                        <a
-                          href={item.file_url}
-                          download
-                          className="p-1.5 rounded-md text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
-                          title="Download"
-                        >
-                          <Download className="h-4 w-4" />
-                        </a>
-                      )}
-                    </div>
-                  ))}
+            {/* Course accordion */}
+            <div className="max-h-[calc(60vh-60px)] overflow-y-auto">
+              {filtered.length === 0 && (
+                <div className="text-center py-12 px-4">
+                  <BookOpen className="mx-auto h-8 w-8 text-gray-300 mb-2" />
+                  <p className="text-sm text-gray-500">
+                    {search ? 'No matching content found' : 'No courses available'}
+                  </p>
                 </div>
               )}
+
+              {filtered.map((course) => {
+                const isExpanded = expandedCourses.has(course.courseId);
+                const isCourseLoading = loadingCourses.has(course.courseId);
+
+                return (
+                  <div key={course.courseId} className="border-b border-gray-100 last:border-0">
+                    {/* Course header */}
+                    <button
+                      type="button"
+                      onClick={() => toggleCourse(course.courseId)}
+                      className="w-full flex items-center justify-between px-4 py-3 hover:bg-gray-50 transition-colors"
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        {isCourseLoading ? (
+                          <div className="h-4 w-4 animate-spin rounded-full border-2 border-indigo-600 border-t-transparent flex-shrink-0" />
+                        ) : isExpanded ? (
+                          <ChevronDown className="h-4 w-4 text-gray-400 flex-shrink-0" />
+                        ) : (
+                          <ChevronRight className="h-4 w-4 text-gray-400 flex-shrink-0" />
+                        )}
+                        <span className="text-sm font-semibold text-gray-900 truncate">
+                          {course.courseTitle}
+                        </span>
+                      </div>
+                      {course.items.length > 0 && (
+                        <span className="text-xs text-gray-400 flex-shrink-0 ml-2">
+                          {course.items.length}
+                        </span>
+                      )}
+                    </button>
+
+                    {/* Content items */}
+                    {isExpanded && (
+                      <div className="bg-gray-50/50">
+                        {course.items.length === 0 && (
+                          <p className="px-4 py-3 text-xs text-gray-400 italic">
+                            No summarizable content in this course
+                          </p>
+                        )}
+                        {course.items.map((item) => {
+                          const Icon = CONTENT_ICONS[item.content_type] || FileText;
+                          const colorClass = CONTENT_COLORS[item.content_type] || 'bg-gray-50 text-gray-500';
+                          const isSelected = selectedContent?.id === item.id;
+                          const hasSummary = summaryExistsMap.has(item.id);
+
+                          return (
+                            <button
+                              key={item.id}
+                              type="button"
+                              onClick={() => selectContent(item)}
+                              className={cn(
+                                'w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors',
+                                isSelected
+                                  ? 'bg-indigo-50 border-l-2 border-indigo-600'
+                                  : 'hover:bg-gray-100 border-l-2 border-transparent',
+                              )}
+                            >
+                              <div className={cn('h-7 w-7 rounded-md flex items-center justify-center flex-shrink-0', colorClass)}>
+                                <Icon className="h-3.5 w-3.5" />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className={cn(
+                                  'text-sm truncate',
+                                  isSelected ? 'font-medium text-indigo-700' : 'text-gray-700',
+                                )}>
+                                  {item.title}
+                                </p>
+                                <p className="text-[11px] text-gray-400 truncate">{item.moduleTitle}</p>
+                              </div>
+                              {hasSummary && (
+                                <div className="h-5 w-5 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0" title="Summary available">
+                                  <Check className="h-3 w-3 text-emerald-600" />
+                                </div>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
-          );
-        })}
+          </div>
+        </div>
+
+        {/* Right Panel — Summary */}
+        <div
+          className={cn(
+            'flex-1 min-w-0',
+            // On mobile, show back button when panel is visible
+            isMobileBrowserOpen && selectedContent && 'hidden lg:block',
+          )}
+        >
+          {/* Mobile back button */}
+          {selectedContent && (
+            <button
+              onClick={() => setIsMobileBrowserOpen(true)}
+              className="lg:hidden flex items-center gap-1.5 text-sm text-indigo-600 font-medium mb-3"
+            >
+              <ChevronRight className="h-4 w-4 rotate-180" />
+              Back to content list
+            </button>
+          )}
+
+          {selectedContent ? (
+            <div className="animate-in slide-in-from-right-4 duration-300">
+              <StudySummaryPanel
+                contentId={selectedContent.id}
+                contentTitle={selectedContent.title}
+                contentType={selectedContent.content_type}
+                onClose={() => {
+                  setSelectedContent(null);
+                  setIsMobileBrowserOpen(true);
+                }}
+              />
+            </div>
+          ) : (
+            <div className="bg-white rounded-xl border border-gray-200 shadow-sm flex items-center justify-center min-h-[400px]">
+              <div className="text-center px-6">
+                <div className="h-14 w-14 rounded-xl bg-indigo-50 flex items-center justify-center mx-auto mb-4">
+                  <Sparkles className="h-7 w-7 text-indigo-400" />
+                </div>
+                <p className="text-sm font-medium text-gray-700 mb-1">
+                  Select a content item
+                </p>
+                <p className="text-xs text-gray-400 max-w-xs">
+                  Choose a video, document, or text from the left panel to generate AI study materials
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

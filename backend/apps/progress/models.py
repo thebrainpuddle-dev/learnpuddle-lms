@@ -263,6 +263,7 @@ class QuizSubmission(models.Model):
         ordering = ["-submitted_at"]
         indexes = [
             models.Index(fields=["tenant", "teacher", "submitted_at"]),
+            models.Index(fields=["tenant", "quiz"]),
         ]
 
     def __str__(self):

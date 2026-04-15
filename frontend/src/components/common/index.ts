@@ -12,6 +12,7 @@ export { BulkActionsBar } from './BulkActionsBar';
 export type { BulkAction } from './BulkActionsBar';
 export { ConfirmDialog } from './ConfirmDialog';
 export { ErrorBoundary, PageErrorBoundary, withErrorBoundary } from './ErrorBoundary';
+export { EmptyState } from './EmptyState';
 
 // Accessibility components
 export { SkipLink } from './SkipLink';

@@ -4,8 +4,8 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { OperationsPage } from './OperationsPage';
 import { superAdminService } from '../../services/superAdminService';
 
-jest.mock('../../hooks/usePageTitle', () => ({
-  usePageTitle: jest.fn(),
+vi.mock('../../hooks/usePageTitle', () => ({
+  usePageTitle: vi.fn(),
 }));
 
 describe('OperationsPage', () => {
@@ -14,7 +14,7 @@ describe('OperationsPage', () => {
   });
 
   beforeEach(() => {
-    jest.spyOn(superAdminService, 'getOpsOverview').mockResolvedValue({
+    vi.spyOn(superAdminService, 'getOpsOverview').mockResolvedValue({
       generated_at: new Date().toISOString(),
       data_freshness_seconds: 5,
       pipeline_lag_seconds: 5,
@@ -25,7 +25,7 @@ describe('OperationsPage', () => {
       open_incidents: [],
       top_failure_categories: [],
     });
-    jest.spyOn(superAdminService, 'listOpsTenants').mockResolvedValue({
+    vi.spyOn(superAdminService, 'listOpsTenants').mockResolvedValue({
       generated_at: new Date().toISOString(),
       data_freshness_seconds: 5,
       pipeline_lag_seconds: 5,
@@ -47,14 +47,14 @@ describe('OperationsPage', () => {
         },
       ],
     });
-    jest.spyOn(superAdminService, 'listOpsIncidents').mockResolvedValue({
+    vi.spyOn(superAdminService, 'listOpsIncidents').mockResolvedValue({
       generated_at: new Date().toISOString(),
       data_freshness_seconds: 5,
       pipeline_lag_seconds: 5,
       data_quality: 'ok',
       results: [],
     });
-    jest.spyOn(superAdminService, 'getReplayCases').mockResolvedValue({
+    vi.spyOn(superAdminService, 'getReplayCases').mockResolvedValue({
       generated_at: new Date().toISOString(),
       data_freshness_seconds: 5,
       pipeline_lag_seconds: 5,
@@ -71,14 +71,14 @@ describe('OperationsPage', () => {
         },
       ],
     });
-    jest.spyOn(superAdminService, 'getOpsErrors').mockResolvedValue({
+    vi.spyOn(superAdminService, 'getOpsErrors').mockResolvedValue({
       generated_at: new Date().toISOString(),
       data_freshness_seconds: 5,
       pipeline_lag_seconds: 5,
       data_quality: 'ok',
       results: [],
     });
-    jest.spyOn(superAdminService, 'getOpsTenantTimeline').mockResolvedValue({
+    vi.spyOn(superAdminService, 'getOpsTenantTimeline').mockResolvedValue({
       generated_at: new Date().toISOString(),
       data_freshness_seconds: 5,
       pipeline_lag_seconds: 5,
@@ -88,7 +88,7 @@ describe('OperationsPage', () => {
       category_counts: [],
       events: [],
     });
-    jest.spyOn(superAdminService, 'getOpsActionsCatalog').mockResolvedValue({
+    vi.spyOn(superAdminService, 'getOpsActionsCatalog').mockResolvedValue({
       results: [
         {
           key: 'recompute_tenant_analytics',
@@ -103,7 +103,7 @@ describe('OperationsPage', () => {
   });
 
   afterEach(() => {
-    jest.restoreAllMocks();
+    vi.restoreAllMocks();
     queryClient.clear();
   });
 

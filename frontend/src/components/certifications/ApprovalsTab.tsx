@@ -67,6 +67,8 @@ export const ApprovalsTab: React.FC<ApprovalsTabProps> = ({ courseId: initialCou
         action: reviewAction,
         admin_notes: adminNotes.trim() || undefined,
       });
+      const actionLabel = reviewAction === 'approve' ? 'approved' : 'rejected';
+      toast.success(`Request ${actionLabel}`);
       setReviewItem(null);
       setReviewAction(null);
       setAdminNotes('');

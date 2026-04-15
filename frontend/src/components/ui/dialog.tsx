@@ -69,7 +69,7 @@ const DialogContent = React.forwardRef<HTMLDivElement, DialogContentProps>(
     <DialogPanel
       ref={ref}
       className={cn(
-        'relative w-full max-w-lg rounded-xl bg-white p-6 shadow-xl transition-all',
+        'relative w-[calc(100vw-2rem)] sm:max-w-lg max-h-[85vh] overflow-y-auto rounded-xl bg-white p-6 shadow-xl transition-all',
         className,
       )}
       {...props}

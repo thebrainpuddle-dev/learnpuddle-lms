@@ -2,13 +2,14 @@
 
 import React from 'react';
 import { render, screen } from '@testing-library/react';
+import { vi, describe, it, expect, beforeEach } from 'vitest';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { ProtectedRoute } from './ProtectedRoute';
 import { useAuthStore } from '../../stores/authStore';
 
 // Mock the auth store
-jest.mock('../../stores/authStore');
-const mockedUseAuthStore = useAuthStore as jest.MockedFunction<typeof useAuthStore>;
+vi.mock('../../stores/authStore');
+const mockedUseAuthStore = useAuthStore as unknown as ReturnType<typeof vi.fn>;
 
 const TestComponent = () => <div>Protected Content</div>;
 const LoginPage = () => <div>Login Page</div>;
@@ -19,7 +20,7 @@ const SuperAdminDashboard = () => <div>Super Admin Dashboard</div>;
 
 describe('ProtectedRoute', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   describe('unauthenticated users', () => {
@@ -30,11 +31,11 @@ describe('ProtectedRoute', () => {
         accessToken: null,
         refreshToken: null,
         isLoading: false,
-        setAuth: jest.fn(),
-        clearAuth: jest.fn(),
-        setUser: jest.fn(),
-        setLoading: jest.fn(),
-        initializeFromStorage: jest.fn(),
+        setAuth: vi.fn(),
+        clearAuth: vi.fn(),
+        setUser: vi.fn(),
+        setLoading: vi.fn(),
+        initializeFromStorage: vi.fn(),
       });
     });
 
@@ -96,11 +97,11 @@ describe('ProtectedRoute', () => {
         accessToken: 'mock-token',
         refreshToken: 'mock-refresh',
         isLoading: false,
-        setAuth: jest.fn(),
-        clearAuth: jest.fn(),
-        setUser: jest.fn(),
-        setLoading: jest.fn(),
-        initializeFromStorage: jest.fn(),
+        setAuth: vi.fn(),
+        clearAuth: vi.fn(),
+        setUser: vi.fn(),
+        setLoading: vi.fn(),
+        initializeFromStorage: vi.fn(),
       });
     });
 
@@ -141,11 +142,11 @@ describe('ProtectedRoute', () => {
         accessToken: 'mock-token',
         refreshToken: 'mock-refresh',
         isLoading: false,
-        setAuth: jest.fn(),
-        clearAuth: jest.fn(),
-        setUser: jest.fn(),
-        setLoading: jest.fn(),
-        initializeFromStorage: jest.fn(),
+        setAuth: vi.fn(),
+        clearAuth: vi.fn(),
+        setUser: vi.fn(),
+        setLoading: vi.fn(),
+        initializeFromStorage: vi.fn(),
       });
 
       render(
@@ -180,11 +181,11 @@ describe('ProtectedRoute', () => {
         accessToken: 'mock-token',
         refreshToken: 'mock-refresh',
         isLoading: false,
-        setAuth: jest.fn(),
-        clearAuth: jest.fn(),
-        setUser: jest.fn(),
-        setLoading: jest.fn(),
-        initializeFromStorage: jest.fn(),
+        setAuth: vi.fn(),
+        clearAuth: vi.fn(),
+        setUser: vi.fn(),
+        setLoading: vi.fn(),
+        initializeFromStorage: vi.fn(),
       });
 
       render(
@@ -221,11 +222,11 @@ describe('ProtectedRoute', () => {
         accessToken: 'mock-token',
         refreshToken: 'mock-refresh',
         isLoading: false,
-        setAuth: jest.fn(),
-        clearAuth: jest.fn(),
-        setUser: jest.fn(),
-        setLoading: jest.fn(),
-        initializeFromStorage: jest.fn(),
+        setAuth: vi.fn(),
+        clearAuth: vi.fn(),
+        setUser: vi.fn(),
+        setLoading: vi.fn(),
+        initializeFromStorage: vi.fn(),
       });
 
       render(
@@ -262,11 +263,11 @@ describe('ProtectedRoute', () => {
         accessToken: 'mock-token',
         refreshToken: 'mock-refresh',
         isLoading: false,
-        setAuth: jest.fn(),
-        clearAuth: jest.fn(),
-        setUser: jest.fn(),
-        setLoading: jest.fn(),
-        initializeFromStorage: jest.fn(),
+        setAuth: vi.fn(),
+        clearAuth: vi.fn(),
+        setUser: vi.fn(),
+        setLoading: vi.fn(),
+        initializeFromStorage: vi.fn(),
       });
 
       render(
@@ -303,11 +304,11 @@ describe('ProtectedRoute', () => {
         accessToken: 'mock-token',
         refreshToken: 'mock-refresh',
         isLoading: false,
-        setAuth: jest.fn(),
-        clearAuth: jest.fn(),
-        setUser: jest.fn(),
-        setLoading: jest.fn(),
-        initializeFromStorage: jest.fn(),
+        setAuth: vi.fn(),
+        clearAuth: vi.fn(),
+        setUser: vi.fn(),
+        setLoading: vi.fn(),
+        initializeFromStorage: vi.fn(),
       });
 
       render(
@@ -342,11 +343,11 @@ describe('ProtectedRoute', () => {
         accessToken: 'mock-token',
         refreshToken: 'mock-refresh',
         isLoading: false,
-        setAuth: jest.fn(),
-        clearAuth: jest.fn(),
-        setUser: jest.fn(),
-        setLoading: jest.fn(),
-        initializeFromStorage: jest.fn(),
+        setAuth: vi.fn(),
+        clearAuth: vi.fn(),
+        setUser: vi.fn(),
+        setLoading: vi.fn(),
+        initializeFromStorage: vi.fn(),
       });
 
       render(

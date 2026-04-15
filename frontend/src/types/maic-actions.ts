@@ -12,7 +12,12 @@ export interface SpotlightAction {
 
 export interface LaserAction {
   type: 'laser';
+  /** Target element ID — used for element-based laser pointer */
   elementId: string;
+  /** Absolute x coordinate for free-position laser (0-100 percentage) */
+  x?: number;
+  /** Absolute y coordinate for free-position laser (0-100 percentage) */
+  y?: number;
   color?: string;
   duration?: number;
 }
@@ -147,8 +152,10 @@ export interface PauseAction {
 
 export interface TransitionAction {
   type: 'transition';
-  effect: 'fade' | 'slide';
+  effect?: 'fade' | 'slide';
   duration?: number;
+  /** Target slide index within the current scene (0-based). Used for multi-slide navigation. */
+  slideIndex?: number;
 }
 
 // ─── Union Type ─────────────────────────────────────────────────────────────

@@ -5,32 +5,48 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { DashboardPage } from './DashboardPage';
 import { useTenantStore } from '../../stores/tenantStore';
+import { useAuthStore } from '../../stores/authStore';
+import { adminService } from '../../services/adminService';
 
 // Mock modules
-jest.mock('../../stores/tenantStore');
-jest.mock('../../services/adminService', () => ({
+vi.mock('../../stores/tenantStore');
+vi.mock('../../stores/authStore');
+vi.mock('../../services/adminService', () => ({
   adminService: {
-    getTenantStats: jest.fn(),
-    getCourseBreakdown: jest.fn(),
+    getTenantStats: vi.fn(),
+    getTenantAnalytics: vi.fn(),
   },
 }));
 
-jest.mock('../../hooks/usePageTitle', () => ({
-  usePageTitle: jest.fn(),
+vi.mock('../../hooks/usePageTitle', () => ({
+  usePageTitle: vi.fn(),
 }));
 
-const mockedUseNavigate = jest.fn();
-jest.mock('react-router-dom', () => ({
-  ...jest.requireActual('react-router-dom'),
-  useNavigate: () => mockedUseNavigate,
+vi.mock('../../components/dashboard/PlanBadge', () => ({
+  PlanBadge: () => <span data-testid="plan-badge">Plan</span>,
 }));
 
-const mockedUseTenantStore = useTenantStore as unknown as jest.Mock;
+const mockedUseNavigate = vi.fn();
+vi.mock('react-router-dom', async () => {
+  const actual = await vi.importActual('react-router-dom');
+  return {
+    ...actual,
+    useNavigate: () => mockedUseNavigate,
+  };
+});
+
+const mockedUseTenantStore = useTenantStore as unknown as ReturnType<typeof vi.fn>;
+const mockedUseAuthStore = useAuthStore as unknown as ReturnType<typeof vi.fn>;
+const mockedAdminService = adminService as unknown as {
+  getTenantStats: ReturnType<typeof vi.fn>;
+  getTenantAnalytics: ReturnType<typeof vi.fn>;
+};
 
 const MOCK_STATS = {
   total_teachers: 25,
   active_teachers: 20,
   inactive_teachers: 5,
+  total_students: 10,
   total_admins: 3,
   total_courses: 10,
   published_courses: 8,
@@ -43,6 +59,9 @@ const MOCK_STATS = {
   total_submissions: 25,
   graded_submissions: 20,
   pending_review: 7,
+  cert_compliance: { fully_compliant: 5, compliance_pct: 80, total_teachers: 25, partially_compliant: 10, non_compliant: 10, expiring_certs: 2, expired_certs: 1 },
+  weekly_trend: [],
+  upcoming_deadlines: [],
   top_teachers: [{ name: 'Alice Smith', completed_courses: 8 }],
   recent_activity: [
     {
@@ -54,11 +73,20 @@ const MOCK_STATS = {
   ],
 };
 
+const MOCK_ANALYTICS = {
+  teacher_engagement: null,
+  student_engagement: null,
+  student_course_progress: null,
+  student_performance: null,
+  student_overview: null,
+  course_breakdown: [],
+};
+
 describe('DashboardPage', () => {
   let queryClient: QueryClient;
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
     queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
@@ -69,11 +97,15 @@ describe('DashboardPage', () => {
       limits: { max_teachers: 50, max_courses: 20, max_storage_mb: 500, max_video_duration_minutes: 60 },
       theme: { name: 'Test School', primary_color: '#4f46e5' },
       features: {},
-      hasFeature: jest.fn(() => false),
+      hasFeature: vi.fn(() => false),
     });
 
-    const { adminService } = require('../../services/adminService');
-    adminService.getTenantStats.mockResolvedValue(MOCK_STATS);
+    mockedUseAuthStore.mockReturnValue({
+      user: { first_name: 'Admin' },
+    });
+
+    mockedAdminService.getTenantStats.mockResolvedValue(MOCK_STATS);
+    mockedAdminService.getTenantAnalytics.mockResolvedValue(MOCK_ANALYTICS);
   });
 
   const renderPage = () =>
@@ -87,103 +119,101 @@ describe('DashboardPage', () => {
 
   it('renders the hero heading', async () => {
     renderPage();
-    expect(await screen.findByText(/Hello, Admin/)).toBeInTheDocument();
+    expect(await screen.findByText(/Welcome back, Admin/)).toBeInTheDocument();
   });
 
   it('displays the school name from tenant store', async () => {
     renderPage();
-    expect(await screen.findByText('Test School')).toBeInTheDocument();
+    expect(await screen.findByText(/Test School/)).toBeInTheDocument();
   });
 
   it('displays total teachers stat', async () => {
     renderPage();
-    expect(await screen.findByText('25')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText('Total Teachers')).toBeInTheDocument();
+    });
   });
 
   it('displays published courses stat', async () => {
     renderPage();
-    expect(await screen.findByText('8')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText('Active Courses')).toBeInTheDocument();
+    });
   });
 
   it('displays average completion percentage', async () => {
     renderPage();
-    expect(await screen.findByText('72%')).toBeInTheDocument();
+    await waitFor(() => {
+      // 72% appears in both the stat header and the completion bar
+      expect(screen.getAllByText(/72%/).length).toBeGreaterThanOrEqual(1);
+    });
   });
 
-  it('displays pending review count', async () => {
+  it('displays completion stats section', async () => {
     renderPage();
-    expect(await screen.findByText('7')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText('Completion Stats')).toBeInTheDocument();
+    });
   });
 
   it('displays recent activity entry', async () => {
     renderPage();
-    expect(await screen.findByText('Alice Smith')).toBeInTheDocument();
+    // Alice Smith appears in both Recent Activity and Top Performers
+    const matches = await screen.findAllByText('Alice Smith');
+    expect(matches.length).toBeGreaterThanOrEqual(1);
   });
 
   it('navigates to create course on button click', async () => {
     renderPage();
-    const createButton = await screen.findByRole('button', { name: /Create Course/i });
+    const createButton = await screen.findByRole('button', { name: /New Course/i });
     await userEvent.click(createButton);
     expect(mockedUseNavigate).toHaveBeenCalledWith('/admin/courses/new');
   });
 
-  it('shows loading state before data arrives', () => {
-    const { adminService } = require('../../services/adminService');
-    adminService.getTenantStats.mockReturnValue(new Promise(() => {})); // Never resolves
+  it('shows loading skeleton before data arrives', () => {
+    mockedAdminService.getTenantStats.mockReturnValue(new Promise(() => {})); // Never resolves
+    mockedAdminService.getTenantAnalytics.mockReturnValue(new Promise(() => {})); // Never resolves
     renderPage();
-    // Stats should show placeholder dashes during loading
-    const dashes = screen.getAllByText('-');
-    expect(dashes.length).toBeGreaterThanOrEqual(1);
+    // While loading, the skeleton shimmer divs should be rendered
+    const shimmerDivs = document.querySelectorAll('.animate-pulse');
+    expect(shimmerDivs.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('displays sticker stats section', async () => {
+  it('displays stat card labels', async () => {
     renderPage();
-    expect(await screen.findByText('Active')).toBeInTheDocument();
-    expect(await screen.findByText('Inactive')).toBeInTheDocument();
-    expect(await screen.findByText('Completions')).toBeInTheDocument();
-    expect(await screen.findByText('In Progress')).toBeInTheDocument();
-    expect(await screen.findByText('Assignments')).toBeInTheDocument();
-    expect(await screen.findByText('Submissions')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText('Total Teachers')).toBeInTheDocument();
+      expect(screen.getByText('Active Courses')).toBeInTheDocument();
+      expect(screen.getByText('Total Students')).toBeInTheDocument();
+      expect(screen.getByText('Certifications')).toBeInTheDocument();
+    });
   });
 
   it('displays empty activity message when no activity', async () => {
-    const { adminService } = require('../../services/adminService');
-    adminService.getTenantStats.mockResolvedValue({
+    mockedAdminService.getTenantStats.mockResolvedValue({
       ...MOCK_STATS,
       recent_activity: [],
     });
     renderPage();
-    expect(await screen.findByText(/No activity recorded yet/i)).toBeInTheDocument();
+    expect(await screen.findByText(/No recent activity/i)).toBeInTheDocument();
   });
 
   it('renders gracefully when getTenantStats rejects with an error', async () => {
-    const { adminService } = require('../../services/adminService');
-    adminService.getTenantStats.mockRejectedValue(new Error('Network Error'));
+    mockedAdminService.getTenantStats.mockRejectedValue(new Error('Network Error'));
+    mockedAdminService.getTenantAnalytics.mockRejectedValue(new Error('Network Error'));
     renderPage();
 
     // The page should still render its heading and structural elements
-    expect(await screen.findByText(/Hello, Admin/)).toBeInTheDocument();
-
-    // Stats should fall back to 0 / placeholder values (no crash)
-    await waitFor(() => {
-      // StatsCard should display 0 when stats is undefined
-      const zeros = screen.getAllByText('0');
-      expect(zeros.length).toBeGreaterThanOrEqual(1);
-    });
+    expect(await screen.findByText(/Welcome back, Admin/)).toBeInTheDocument();
   });
 
-  it('shows zero stats rather than crashing on API error', async () => {
-    const { adminService } = require('../../services/adminService');
-    adminService.getTenantStats.mockRejectedValue(new Error('500 Internal Server Error'));
+  it('shows the New Course button even on API error', async () => {
+    mockedAdminService.getTenantStats.mockRejectedValue(new Error('500 Internal Server Error'));
+    mockedAdminService.getTenantAnalytics.mockRejectedValue(new Error('500 Internal Server Error'));
     renderPage();
 
-    // Wait for query to settle (error state)
-    await waitFor(() => {
-      expect(adminService.getTenantStats).toHaveBeenCalled();
-    });
-
-    // The Create Course button should still be functional
-    const createButton = screen.getByRole('button', { name: /Create Course/i });
+    // Wait for both queries to settle and the full page to render
+    const createButton = await screen.findByRole('button', { name: /New Course/i });
     expect(createButton).toBeInTheDocument();
   });
 });

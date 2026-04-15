@@ -1,6 +1,7 @@
 # apps/academics/admin_urls.py
 from django.urls import path
 from . import admin_views
+from .attendance_urls import admin_urlpatterns as attendance_patterns
 
 app_name = "admin_academics"
 
@@ -46,4 +47,6 @@ urlpatterns = [
     # ─── Academic Year Promotion ──────────────────────────────────
     path("promotion/preview/", admin_views.promotion_preview, name="promotion_preview"),
     path("promotion/execute/", admin_views.promotion_execute, name="promotion_execute"),
-]
+
+    # ─── Attendance ─────────────────────────────────────────────────
+] + attendance_patterns

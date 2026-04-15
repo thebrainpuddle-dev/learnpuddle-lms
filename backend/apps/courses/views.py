@@ -2,7 +2,7 @@
 
 import logging
 from django.contrib.postgres.search import SearchQuery, SearchRank, SearchVector
-from django.db.models import Count, Q
+from django.db.models import Count, Prefetch, Q
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes, parser_classes
 from rest_framework.parsers import JSONParser, MultiPartParser, FormParser
@@ -218,8 +218,17 @@ def course_detail(request, course_id):
     if denied:
         return denied
 
-    course = get_object_or_404(_course_qs_for_request_user(request), id=course_id)
-    
+    course_qs = _course_qs_for_request_user(request)
+    if request.method == 'GET':
+        # Prefetch modules->contents->video_asset to avoid N+1 in ContentSerializer
+        course_qs = course_qs.prefetch_related(
+            Prefetch(
+                'modules__contents',
+                queryset=Content.objects.select_related('video_asset').order_by('order'),
+            ),
+        )
+    course = get_object_or_404(course_qs, id=course_id)
+
     if request.method == 'GET':
         serializer = CourseDetailSerializer(course, context={'request': request})
         return Response(serializer.data)
@@ -394,7 +403,12 @@ def module_list_create(request, course_id):
     course = get_object_or_404(_course_qs_for_request_user(request), id=course_id)
     
     if request.method == 'GET':
-        modules = course.modules.all().order_by('order')
+        modules = course.modules.prefetch_related(
+            Prefetch(
+                'contents',
+                queryset=Content.objects.select_related('video_asset').order_by('order'),
+            ),
+        ).all().order_by('order')
         serializer = ModuleSerializer(modules, many=True, context={'request': request})
         return Response(serializer.data)
     
@@ -471,7 +485,7 @@ def content_list_create(request, course_id, module_id):
     module = get_object_or_404(module_qs)
     
     if request.method == 'GET':
-        contents = module.contents.all().order_by('order')
+        contents = module.contents.select_related('video_asset').all().order_by('order')
         serializer = ContentSerializer(contents, many=True, context={'request': request})
         return Response(serializer.data)
     
@@ -501,7 +515,7 @@ def content_detail(request, course_id, module_id, content_id):
     if denied:
         return denied
 
-    content_qs = Content.objects.filter(
+    content_qs = Content.objects.select_related('video_asset').filter(
         id=content_id,
         module_id=module_id,
         module__course_id=course_id,

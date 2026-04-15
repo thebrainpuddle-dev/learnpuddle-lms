@@ -5,7 +5,14 @@ export interface User {
   email: string;
   first_name: string;
   last_name: string;
-  role: 'SUPER_ADMIN' | 'SCHOOL_ADMIN' | 'TEACHER' | 'HOD' | 'IB_COORDINATOR';
+  role: 'SUPER_ADMIN' | 'SCHOOL_ADMIN' | 'TEACHER' | 'HOD' | 'IB_COORDINATOR' | 'STUDENT';
+  // Student fields
+  student_id?: string;
+  grade_fk?: string;
+  section_fk?: string;
+  grade_name?: string;
+  section_name?: string;
+  // Teacher fields
   employee_id?: string;
   subjects?: string[];
   grades?: string[];

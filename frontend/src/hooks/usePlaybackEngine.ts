@@ -13,10 +13,11 @@ import { useAuthStore } from '../stores/authStore';
 import type { MAICAction } from '../types/maic-actions';
 import type { MAICScene } from '../types/maic-scenes';
 
-const TTS_ENDPOINT = '/api/v1/teacher/maic/generate/tts/';
+const TEACHER_TTS_ENDPOINT = '/api/v1/teacher/maic/generate/tts/';
+const STUDENT_TTS_ENDPOINT = '/api/v1/student/maic/generate/tts/';
 const SCENE_TRANSITION_DELAY_MS = 1200;
 
-export function usePlaybackEngine() {
+export function usePlaybackEngine(role: 'teacher' | 'student' = 'teacher') {
   const [playbackState, setPlaybackState] = useState<PlaybackState>('idle');
   const [currentActionIndex, setCurrentActionIndex] = useState(0);
   const [actionCount, setActionCount] = useState(0);
@@ -35,8 +36,9 @@ export function usePlaybackEngine() {
   useEffect(() => {
     if (!accessToken) return;
 
+    const ttsEndpoint = role === 'student' ? STUDENT_TTS_ENDPOINT : TEACHER_TTS_ENDPOINT;
     const actionEngine = new MAICActionEngine({
-      ttsEndpoint: TTS_ENDPOINT,
+      ttsEndpoint,
       token: accessToken,
       onSpeechStart: (agentId: string, text: string) => {
         useMAICStageStore.getState().setSpeakingAgent(agentId);
@@ -105,7 +107,7 @@ export function usePlaybackEngine() {
       engineRef.current = null;
       actionEngineRef.current = null;
     };
-  }, [accessToken, setEngineMode]);
+  }, [accessToken, setEngineMode, role]);
 
   // ─── Controls ───────────────────────────────────────────────────────
 
@@ -114,6 +116,8 @@ export function usePlaybackEngine() {
   }, []);
 
   const pause = useCallback(() => {
+    classStoppedRef.current = true;
+    autoAdvanceRef.current = false;
     engineRef.current?.pause();
   }, []);
 

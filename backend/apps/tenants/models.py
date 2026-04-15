@@ -284,3 +284,7 @@ class DemoBooking(models.Model):
 
     def __str__(self):
         return f"{self.name} ({self.email}) - {self.scheduled_at}"
+
+
+# Import accreditation models so Django discovers them via this module
+from .accreditation_models import SchoolAccreditation, AccreditationMilestone, RankingEntry, ComplianceItem, StaffCertification  # noqa: E402, F401

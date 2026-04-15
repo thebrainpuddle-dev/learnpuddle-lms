@@ -122,7 +122,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message }) => {
           <>
             <div
               className="text-sm prose-sm [&_p]:mb-2 [&_p:last-child]:mb-0 [&_code]:text-gray-800 [&_pre]:bg-white/60"
-              dangerouslySetInnerHTML={{ __html: renderMarkdown(message.content) }}
+              dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(renderMarkdown(message.content)) }}
             />
             {message.sources && <SourceCitations sources={message.sources} />}
           </>

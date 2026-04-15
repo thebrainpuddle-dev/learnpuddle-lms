@@ -10,6 +10,7 @@
 // - SessionStorage persistence scoped per user + tenant + mode + chatbot
 
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import ReactMarkdown from 'react-markdown';
 import {
   Send, Bot, User, Loader2, Trash2, BookOpen, ChevronDown, Sparkles,
 } from 'lucide-react';
@@ -235,9 +236,17 @@ export function ChatbotChat({
   suggestedPrompts = SUGGESTED_PROMPTS,
   mode = 'student',
 }: Props) {
+  const userId = useAuthStore((s) => s.user?.id) ?? null;
+
+  /** Build the scoped storage key for this chatbot + mode + user. */
+  const storageScope = useMemo<ChatStorageScope>(
+    () => ({ chatbotId, mode, userId, tenantSubdomain: getStoredTenantSubdomain() }),
+    [chatbotId, mode, userId],
+  );
+
   const [input, setInput] = useState('');
   const [localMessages, setLocalMessages] = useState<ChatMessage[]>(() =>
-    loadMessages(chatbotId),
+    loadMessages(storageScope),
   );
   const [error, setError] = useState<string | null>(null);
 
@@ -270,13 +279,13 @@ export function ChatbotChat({
 
   // Reload messages from sessionStorage when chatbotId changes
   useEffect(() => {
-    const persisted = loadMessages(chatbotId);
+    const persisted = loadMessages(storageScope);
     setLocalMessages(persisted);
     setError(null);
     setStreamingContent('');
     setStreaming(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatbotId]);
+  }, [chatbotId, storageScope]);
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -287,11 +296,13 @@ export function ChatbotChat({
 
   // Clear chat — wipes sessionStorage for this chatbot
   const handleClearChat = useCallback(() => {
-    sessionStorage.removeItem(storageKey(chatbotId));
+    saveMessages(storageScope, []);
+    clearConversationMeta(storageScope);
+    convIdRef.current = null;
     setLocalMessages([]);
     setError(null);
     setStreamingContent('');
-  }, [chatbotId, setStreamingContent]);
+  }, [storageScope, setStreamingContent]);
 
   const sendMessage = useCallback(
     async (text: string) => {
@@ -474,7 +485,7 @@ export function ChatbotChat({
 
         // Persist messages to sessionStorage after successful response
         setLocalMessages((prev) => {
-          saveMessages(chatbotId, prev);
+          saveMessages(storageScope, prev);
           return prev;
         });
       } catch (err: unknown) {
@@ -500,7 +511,7 @@ export function ChatbotChat({
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [chatbotId, localMessages, onConversationCreated, mode],
+    [chatbotId, localMessages, onConversationCreated, mode, storageScope],
   );
 
   // Retry: re-send the last user message after an error
@@ -617,13 +628,66 @@ export function ChatbotChat({
               <div className="space-y-2 min-w-0">
                 <div
                   className={cn(
-                    'rounded-2xl px-4 py-3 text-sm whitespace-pre-wrap break-words max-w-prose',
+                    'rounded-2xl px-4 py-3 text-sm break-words max-w-prose',
                     isUser
-                      ? 'bg-gradient-to-br from-indigo-600 to-indigo-700 text-white rounded-tr-md shadow-sm shadow-indigo-200'
+                      ? 'bg-gradient-to-br from-indigo-600 to-indigo-700 text-white rounded-tr-md shadow-sm shadow-indigo-200 whitespace-pre-wrap'
                       : 'bg-white border border-gray-100 text-gray-700 rounded-tl-md shadow-sm',
                   )}
                 >
-                  {msg.content || (isLastAssistant ? '' : '\u200B')}
+                  {isUser ? (
+                    msg.content || '\u200B'
+                  ) : msg.content ? (
+                    <div className="chat-markdown prose prose-sm prose-gray max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+                      <ReactMarkdown
+                        components={{
+                          p: ({ children }) => <p className="mb-2 last:mb-0 leading-relaxed">{children}</p>,
+                          strong: ({ children }) => <strong className="font-semibold text-gray-900">{children}</strong>,
+                          em: ({ children }) => <em className="italic">{children}</em>,
+                          ul: ({ children }) => <ul className="mb-2 ml-4 space-y-1 list-disc marker:text-gray-400">{children}</ul>,
+                          ol: ({ children }) => <ol className="mb-2 ml-4 space-y-1 list-decimal marker:text-gray-400">{children}</ol>,
+                          li: ({ children }) => <li className="leading-relaxed pl-1">{children}</li>,
+                          h1: ({ children }) => <h3 className="text-base font-bold text-gray-900 mt-3 mb-1.5">{children}</h3>,
+                          h2: ({ children }) => <h3 className="text-base font-bold text-gray-900 mt-3 mb-1.5">{children}</h3>,
+                          h3: ({ children }) => <h4 className="text-sm font-bold text-gray-900 mt-2.5 mb-1">{children}</h4>,
+                          code: ({ className, children, ...props }) => {
+                            const isBlock = className?.includes('language-');
+                            if (isBlock) {
+                              return (
+                                <pre className="bg-gray-50 border border-gray-200 rounded-lg p-3 overflow-x-auto my-2">
+                                  <code className="text-xs text-gray-800 font-mono">{children}</code>
+                                </pre>
+                              );
+                            }
+                            return (
+                              <code className="bg-gray-100 text-indigo-700 rounded px-1.5 py-0.5 text-xs font-mono" {...props}>
+                                {children}
+                              </code>
+                            );
+                          },
+                          blockquote: ({ children }) => (
+                            <blockquote className="border-l-3 border-indigo-300 pl-3 my-2 text-gray-600 italic">
+                              {children}
+                            </blockquote>
+                          ),
+                          hr: () => <hr className="my-3 border-gray-200" />,
+                          a: ({ href, children }) => (
+                            <a href={href} target="_blank" rel="noopener noreferrer" className="text-indigo-600 underline hover:text-indigo-800">
+                              {children}
+                            </a>
+                          ),
+                          table: ({ children }) => (
+                            <div className="overflow-x-auto my-2">
+                              <table className="min-w-full text-xs border border-gray-200 rounded-lg overflow-hidden">{children}</table>
+                            </div>
+                          ),
+                          th: ({ children }) => <th className="bg-gray-50 px-3 py-1.5 text-left font-semibold text-gray-700 border-b border-gray-200">{children}</th>,
+                          td: ({ children }) => <td className="px-3 py-1.5 border-b border-gray-100">{children}</td>,
+                        }}
+                      >
+                        {msg.content}
+                      </ReactMarkdown>
+                    </div>
+                  ) : isLastAssistant ? '' : '\u200B'}
 
                   {/* Typing indicator */}
                   {isLastAssistant && !msg.content && (

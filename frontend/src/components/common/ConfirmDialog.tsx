@@ -65,7 +65,7 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
               leaveFrom="opacity-100 scale-100"
               leaveTo="opacity-0 scale-95"
             >
-              <Dialog.Panel className="w-full max-w-md transform overflow-hidden rounded-2xl bg-white p-6 shadow-xl transition-all">
+              <Dialog.Panel className="w-[calc(100vw-2rem)] sm:max-w-md max-h-[85vh] overflow-y-auto transform rounded-2xl bg-white p-6 shadow-xl transition-all">
                 <div className="flex items-start gap-4">
                   <div className={`flex-shrink-0 p-2 rounded-full ${iconBg}`}>
                     <ExclamationTriangleIcon className={`h-6 w-6 ${iconColor}`} />

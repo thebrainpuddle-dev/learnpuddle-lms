@@ -2,8 +2,8 @@
 """
 Discussion forum models.
 
-Provides threaded discussions for courses and content items.
-Supports nested replies, moderation, and notifications.
+Student discussions scoped by section + content.
+Teachers monitor discussions in their assigned sections.
 """
 
 import uuid
@@ -13,23 +13,33 @@ from utils.tenant_manager import TenantManager
 
 class DiscussionThread(models.Model):
     """
-    A discussion thread attached to a course or content item.
+    A discussion thread scoped to a specific section + content item.
+
+    Students create threads about course content within their section.
+    Teachers see threads from their assigned sections.
     """
-    
+
     STATUS_CHOICES = [
         ('open', 'Open'),
         ('closed', 'Closed'),
         ('archived', 'Archived'),
     ]
-    
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     tenant = models.ForeignKey(
         'tenants.Tenant',
         on_delete=models.CASCADE,
         related_name='discussion_threads'
     )
-    
-    # Thread can be attached to course or specific content
+
+    # Section scoping (required — thread belongs to exactly one section)
+    section = models.ForeignKey(
+        'academics.Section',
+        on_delete=models.CASCADE,
+        related_name='discussion_threads',
+    )
+
+    # Content context (optional course, optional content)
     course = models.ForeignKey(
         'courses.Course',
         on_delete=models.CASCADE,
@@ -44,24 +54,24 @@ class DiscussionThread(models.Model):
         null=True,
         blank=True
     )
-    
+
     # Thread info
     title = models.CharField(max_length=300)
     body = models.TextField()
-    
-    # Author
+
+    # Author (student or teacher)
     author = models.ForeignKey(
         'users.User',
         on_delete=models.SET_NULL,
         null=True,
         related_name='started_threads'
     )
-    
+
     # Status & moderation
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='open')
     is_pinned = models.BooleanField(default=False)
     is_announcement = models.BooleanField(default=False)
-    
+
     # Statistics
     reply_count = models.PositiveIntegerField(default=0)
     view_count = models.PositiveIntegerField(default=0)
@@ -73,22 +83,23 @@ class DiscussionThread(models.Model):
         blank=True,
         related_name='+'
     )
-    
+
     # Metadata
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    
+
     objects = TenantManager()
-    
+
     class Meta:
         db_table = 'discussion_threads'
         ordering = ['-is_pinned', '-last_reply_at', '-created_at']
         indexes = [
+            models.Index(fields=['tenant', 'section', 'status']),
+            models.Index(fields=['tenant', 'section', 'content']),
             models.Index(fields=['tenant', 'course', 'status']),
-            models.Index(fields=['tenant', 'content', 'status']),
             models.Index(fields=['author', 'created_at']),
         ]
-    
+
     def __str__(self):
         return self.title
     

@@ -185,6 +185,7 @@ class Module(SoftDeleteMixin, models.Model):
         ordering = ['course', 'order']
         indexes = [
             models.Index(fields=['course', 'order']),
+            models.Index(fields=['course', 'is_active']),
         ]
 
     def __str__(self):
@@ -250,6 +251,8 @@ class Content(SoftDeleteMixin, models.Model):
         ordering = ['module', 'order']
         indexes = [
             models.Index(fields=['module', 'order']),
+            models.Index(fields=['module', 'is_active']),
+            models.Index(fields=['content_type']),
         ]
 
     def __str__(self):
@@ -302,3 +305,9 @@ from .maic_models import TenantAIConfig, MAICClassroom  # noqa: E402,F401
 from .chatbot_models import (  # noqa: E402,F401
     AIChatbot, AIChatbotKnowledge, AIChatbotChunk, AIChatbotConversation,
 )
+
+# AI Study Summary models
+from .study_summary_models import StudySummary  # noqa: E402,F401
+
+# Parent Portal models
+from .parent_models import ParentSession, ParentMagicToken  # noqa: E402,F401

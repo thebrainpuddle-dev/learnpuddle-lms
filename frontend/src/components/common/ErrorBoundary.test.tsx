@@ -82,7 +82,7 @@ describe('ErrorBoundary', () => {
   });
 
   it('calls onError callback when error is caught', () => {
-    const onError = jest.fn();
+    const onError = vi.fn();
     render(
       <ErrorBoundary onError={onError}>
         <ThrowingComponent />

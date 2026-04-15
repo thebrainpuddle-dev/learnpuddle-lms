@@ -100,7 +100,7 @@ export const TeacherHeader: React.FC<TeacherHeaderProps> = ({ onMenuClick }) => 
       {/* Mobile menu */}
       <button
         onClick={onMenuClick}
-        className="lg:hidden p-2 -ml-1 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-50 transition-colors mr-2"
+        className="lg:hidden p-2.5 -ml-1 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-50 transition-colors mr-2 min-h-[44px] min-w-[44px]"
       >
         <Menu className="h-5 w-5" />
       </button>

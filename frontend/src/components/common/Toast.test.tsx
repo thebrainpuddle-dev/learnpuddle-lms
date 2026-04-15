@@ -130,7 +130,7 @@ describe('ToastProvider', () => {
   });
 
   it('auto-dismisses toast after timeout', async () => {
-    jest.useFakeTimers();
+    vi.useFakeTimers();
 
     render(
       <ToastProvider>
@@ -143,12 +143,12 @@ describe('ToastProvider', () => {
 
     // Fast-forward past the 5-second auto-dismiss timer
     act(() => {
-      jest.advanceTimersByTime(5500);
+      vi.advanceTimersByTime(5500);
     });
 
     expect(screen.queryByText('Success!')).not.toBeInTheDocument();
 
-    jest.useRealTimers();
+    vi.useRealTimers();
   });
 });
 
@@ -160,7 +160,7 @@ describe('useToast outside provider', () => {
     };
 
     // Suppress console.error for expected error
-    const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     expect(() => render(<BrokenComponent />)).toThrow(
       'useToast must be used within a ToastProvider'

@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { render, screen, waitFor } from '@testing-library/react';
+import { vi, describe, it, expect, beforeEach } from 'vitest';
 import App from './App';
 import { useAuthStore } from './stores/authStore';
 import { useTenantStore } from './stores/tenantStore';
@@ -9,25 +10,24 @@ import api from './config/api';
 import { isPlatformRequest } from './utils/hostRouting';
 
 // Mock stores
-jest.mock('./stores/authStore');
-jest.mock('./stores/tenantStore');
-jest.mock('./utils/hostRouting', () => ({
-  isPlatformRequest: jest.fn(),
+vi.mock('./stores/authStore');
+vi.mock('./stores/tenantStore');
+vi.mock('./utils/hostRouting', () => ({
+  isPlatformRequest: vi.fn(),
 }));
 
-const mockedUseAuthStore = useAuthStore as jest.MockedFunction<typeof useAuthStore>;
-const mockedUseTenantStore = useTenantStore as jest.MockedFunction<typeof useTenantStore>;
-const mockedApi = api as jest.Mocked<typeof api>;
-const mockedIsPlatformRequest = isPlatformRequest as jest.MockedFunction<typeof isPlatformRequest>;
+const mockedUseAuthStore = useAuthStore as unknown as ReturnType<typeof vi.fn>;
+const mockedUseTenantStore = useTenantStore as unknown as ReturnType<typeof vi.fn>;
+const mockedIsPlatformRequest = isPlatformRequest as unknown as ReturnType<typeof vi.fn>;
 
 // Mock api to prevent actual network calls
-jest.mock('./config/api', () => {
+vi.mock('./config/api', () => {
   const shared = {
-    get: jest.fn(),
-    post: jest.fn(),
+    get: vi.fn(),
+    post: vi.fn(),
     interceptors: {
-      request: { use: jest.fn() },
-      response: { use: jest.fn() },
+      request: { use: vi.fn() },
+      response: { use: vi.fn() },
     },
   };
 
@@ -38,9 +38,11 @@ jest.mock('./config/api', () => {
   };
 });
 
+const mockedApi = api as unknown as { get: ReturnType<typeof vi.fn>; post: ReturnType<typeof vi.fn> };
+
 describe('App', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
     mockedApi.get.mockResolvedValue({
       data: {
         name: 'LearnPuddle',
@@ -60,11 +62,11 @@ describe('App', () => {
       accessToken: null,
       refreshToken: null,
       isLoading: false,
-      setAuth: jest.fn(),
-      clearAuth: jest.fn(),
-      setUser: jest.fn(),
-      setLoading: jest.fn(),
-      initializeFromStorage: jest.fn(),
+      setAuth: vi.fn(),
+      clearAuth: vi.fn(),
+      setUser: vi.fn(),
+      setLoading: vi.fn(),
+      initializeFromStorage: vi.fn(),
     });
 
     mockedUseTenantStore.mockReturnValue({
@@ -77,10 +79,10 @@ describe('App', () => {
         tenantFound: true,
         logo: null,
       },
-      setTheme: jest.fn(),
-      setConfig: jest.fn(),
-      hasFeature: jest.fn(() => true),
-      clearTheme: jest.fn(),
+      setTheme: vi.fn(),
+      setConfig: vi.fn(),
+      hasFeature: vi.fn(() => true),
+      clearTheme: vi.fn(),
     });
   });
 
@@ -95,7 +97,7 @@ describe('App', () => {
 
     await waitFor(() => {
       // The login page should be rendered for unauthenticated users
-      expect(screen.getByText(/sign in to your account/i)).toBeInTheDocument();
+      expect(screen.getByText(/sign in to continue to your dashboard/i)).toBeInTheDocument();
     });
   });
 
@@ -108,17 +110,17 @@ describe('App', () => {
       accessToken: 'stale-access-token',
       refreshToken: 'stale-refresh-token',
       isLoading: false,
-      setAuth: jest.fn(),
-      clearAuth: jest.fn(),
-      setUser: jest.fn(),
-      setLoading: jest.fn(),
-      initializeFromStorage: jest.fn(),
+      setAuth: vi.fn(),
+      clearAuth: vi.fn(),
+      setUser: vi.fn(),
+      setLoading: vi.fn(),
+      initializeFromStorage: vi.fn(),
     });
 
     render(<App />);
 
     await waitFor(() => {
-      expect(screen.getByText(/sign in to your account/i)).toBeInTheDocument();
+      expect(screen.getByText(/sign in to continue to your dashboard/i)).toBeInTheDocument();
     });
   });
 
@@ -131,9 +133,10 @@ describe('App', () => {
     await waitFor(() => {
       expect(
         screen.getByRole('heading', {
-          name: /the lms that runs your entire training operation/i,
+          level: 1,
         }),
       ).toBeInTheDocument();
+      expect(screen.getByText(/talks back/i)).toBeInTheDocument();
     });
   });
 
@@ -146,9 +149,10 @@ describe('App', () => {
     await waitFor(() => {
       expect(
         screen.getByRole('heading', {
-          name: /the lms that runs your entire training operation/i,
+          level: 1,
         }),
       ).toBeInTheDocument();
+      expect(screen.getByText(/talks back/i)).toBeInTheDocument();
     });
   });
 });

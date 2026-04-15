@@ -386,7 +386,7 @@ export const ModuleContentEditor: React.FC<ModuleContentEditorProps> = ({
               <option value="TEXT">Text</option>
               <option value="LINK">Link</option>
               <option value="AI_CLASSROOM">AI Classroom</option>
-              <option value="CHATBOT">AI Chatbot</option>
+              <option value="CHATBOT">AI Tutor</option>
             </select>
           </div>
 

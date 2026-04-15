@@ -49,7 +49,7 @@ export const TeacherLayout: React.FC = () => {
         <TeacherHeader onMenuClick={() => setSidebarOpen(true)} />
 
         <main className="flex-1 min-w-0">
-          <div className="py-6 pb-24 lg:pb-6">
+          <div className="py-6 pb-16 lg:pb-6">
             <div className="mx-auto max-w-[1400px] px-4 lg:px-6">
               <ErrorBoundary>
                 <Outlet />

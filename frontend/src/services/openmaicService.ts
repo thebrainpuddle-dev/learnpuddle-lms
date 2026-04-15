@@ -3,9 +3,9 @@
 // API service for OpenMAIC features: MAIC AI Classroom.
 
 import api from '../config/api';
-import type { MAICClassroomMeta, MAICOutlineScene, MAICAgent } from '../types/maic';
+import type { MAICClassroomMeta, MAICOutlineScene, MAICAgent, MAICSlide } from '../types/maic';
 import type { MAICAction } from '../types/maic-actions';
-import type { MAICScene } from '../types/maic-scenes';
+import type { MAICScene, SceneSlideBounds } from '../types/maic-scenes';
 import type { AIChatbot, AIChatbotKnowledge, AIChatbotCreatePayload, ChatbotAnalytics, Conversation, TeacherSection } from '../types/chatbot';
 
 // ─── MAIC AI Classroom API (Teacher) ─────────────────────────────────────────
@@ -21,7 +21,7 @@ export const maicApi = {
   getClassroom: (id: string) =>
     api.get<MAICClassroomMeta>(`/v1/teacher/maic/classrooms/${id}/`),
 
-  updateClassroom: (id: string, data: Partial<MAICClassroomMeta>) =>
+  updateClassroom: (id: string, data: Partial<MAICClassroomMeta> & { assigned_section_ids?: string[]; content?: Record<string, unknown> }) =>
     api.patch(`/v1/teacher/maic/classrooms/${id}/update/`, data),
 
   deleteClassroom: (id: string) =>
@@ -67,16 +67,53 @@ export const maicApi = {
     existingAgents?: MAICAgent[];
   }) =>
     api.post<{ agents: MAICAgent[] }>('/v1/teacher/maic/generate/agent-profiles/', data),
+
+  /** Push full classroom content to backend for student access */
+  syncContent: (classroomId: string, content: {
+    slides: MAICSlide[];
+    scenes: MAICScene[];
+    sceneSlideBounds: SceneSlideBounds[];
+  }) =>
+    api.patch(`/v1/teacher/maic/classrooms/${classroomId}/update/`, { content }),
 };
 
 // ─── MAIC AI Classroom API (Student) ─────────────────────────────────────────
 
 export const maicStudentApi = {
+  // Browse teacher-created public classrooms
   listClassrooms: (params?: { course_id?: string; search?: string }) =>
     api.get<MAICClassroomMeta[]>('/v1/student/maic/classrooms/', { params }),
 
   getClassroom: (id: string) =>
     api.get<MAICClassroomMeta>(`/v1/student/maic/classrooms/${id}/`),
+
+  // Student's own classrooms
+  myClassrooms: () =>
+    api.get<MAICClassroomMeta[]>('/v1/student/maic/my-classrooms/'),
+
+  createClassroom: (data: { title: string; description?: string; topic?: string; language?: string; config?: Record<string, unknown> }) =>
+    api.post<{ id: string; title: string; status: string; created_at: string }>('/v1/student/maic/classrooms/create/', data),
+
+  updateClassroom: (id: string, data: Partial<MAICClassroomMeta> & { content?: Record<string, unknown> }) =>
+    api.patch(`/v1/student/maic/classrooms/${id}/update/`, data),
+
+  deleteClassroom: (id: string) =>
+    api.delete(`/v1/student/maic/classrooms/${id}/delete/`),
+
+  // Topic validation (guardrail check)
+  validateTopic: (data: { topic?: string; pdfText?: string }) =>
+    api.post<{ allowed: boolean; is_educational: boolean; subject_area: string; confidence: number; reason: string }>('/v1/student/maic/validate-topic/', data),
+
+  // Generation proxies (with guardrails)
+  generateSceneContent: (data: { scene: MAICOutlineScene; agents: MAICAgent[]; language: string }) =>
+    api.post('/v1/student/maic/generate/scene-content/', data),
+
+  generateSceneActions: (data: {
+    scene: { id: string; type: string; title: string; content: MAICScene['content'] };
+    agents: MAICAgent[];
+    language: string;
+  }) =>
+    api.post<{ actions: MAICAction[] }>('/v1/student/maic/generate/scene-actions/', data),
 
   // Quiz grading (student)
   quizGrade: (data: { question: string; answer: string; commentPrompt?: string }) =>
@@ -141,6 +178,9 @@ export const chatbotApi = {
 export const chatbotStudentApi = {
   list: () =>
     api.get<AIChatbot[]>('/v1/student/chatbots/'),
+
+  detail: (chatbotId: string) =>
+    api.get<AIChatbot>(`/v1/student/chatbots/${chatbotId}/`),
 
   conversations: (chatbotId: string) =>
     api.get<Conversation[]>(`/v1/student/chatbots/${chatbotId}/conversations/`),

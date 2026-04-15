@@ -35,6 +35,7 @@ from apps.courses.maic_models import TenantAIConfig
 from utils.decorators import (
     teacher_or_admin, student_or_admin, tenant_required, check_feature,
 )
+from utils.audit import log_audit
 
 logger = logging.getLogger(__name__)
 
@@ -607,6 +608,21 @@ def student_chatbot_list(request):
     return Response(serializer.data)
 
 
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+@student_or_admin
+@tenant_required
+@check_feature("feature_maic")
+def student_chatbot_detail(request, chatbot_id):
+    """Get a single chatbot's details (if the student has access via section enrollment)."""
+    chatbot = _verify_student_chatbot_access(request, chatbot_id)
+    if isinstance(chatbot, Response):
+        return chatbot
+
+    serializer = AIChatbotStudentSerializer(chatbot)
+    return Response(serializer.data)
+
+
 @api_view(["GET", "POST"])
 @permission_classes([IsAuthenticated])
 @student_or_admin
@@ -681,6 +697,25 @@ def student_chat(request, chatbot_id):
         return Response({"error": "message is required"}, status=status.HTTP_400_BAD_REQUEST)
     if len(message) > 4000:
         return Response({"error": "Message too long (max 4000 characters)"}, status=status.HTTP_400_BAD_REQUEST)
+
+    # ── Content guardrail check ──
+    from apps.courses.content_guardrails import validate_chat_message as _validate_chat
+    try:
+        _ai_cfg = TenantAIConfig.objects.get(tenant=request.tenant)
+        guardrail = _validate_chat(message, _ai_cfg)
+        if not guardrail.allowed:
+            log_audit(
+                "GUARDRAIL_BLOCK", "AIChatbot",
+                target_id=str(chatbot_id),
+                target_repr=f"chat_msg:{message[:80]}",
+                changes={"reason": guardrail.reason or "blocked"},
+                request=request,
+            )
+            return Response({
+                "error": guardrail.reason or "This message was flagged by content safety. Please rephrase.",
+            }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+    except TenantAIConfig.DoesNotExist:
+        pass  # Will be caught below when ai_config is loaded
 
     sanitized_history = _sanitize_history(request.data.get("history", []))
 

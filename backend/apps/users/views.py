@@ -382,7 +382,7 @@ def request_password_reset_view(request):
             f"Hi {user.first_name},\n\n"
             f"Click the link below to reset your password:\n\n"
             f"  {reset_link}\n\n"
-            f"This link expires in 24 hours.\n\n"
+            f"This link expires in 30 minutes.\n\n"
             f"If you didn't request this, you can safely ignore this email."
         ),
         from_email=settings.DEFAULT_FROM_EMAIL,

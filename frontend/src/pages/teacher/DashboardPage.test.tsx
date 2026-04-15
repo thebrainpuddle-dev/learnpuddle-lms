@@ -8,28 +8,34 @@ import { teacherService } from '../../services/teacherService';
 import { notificationService } from '../../services/notificationService';
 import { useAuthStore } from '../../stores/authStore';
 
-jest.mock('../../stores/authStore');
-jest.mock('../../services/teacherService', () => ({
+vi.mock('../../stores/authStore');
+vi.mock('../../services/teacherService', () => ({
   teacherService: {
-    getDashboard: jest.fn(),
-    getCalendar: jest.fn(),
-    getGamificationSummary: jest.fn(),
+    getDashboard: vi.fn(),
+    getCalendar: vi.fn(),
+    getGamificationSummary: vi.fn(),
+    listCourses: vi.fn(),
+    listAssignments: vi.fn(),
   },
 }));
-jest.mock('../../services/notificationService', () => ({
+vi.mock('../../services/notificationService', () => ({
   notificationService: {
-    getNotifications: jest.fn(),
-    markAsRead: jest.fn(),
+    getNotifications: vi.fn(),
+    markAsRead: vi.fn(),
   },
 }));
 
-const mockedUseAuthStore = useAuthStore as unknown as jest.Mock;
-const mockedTeacherService = teacherService as jest.Mocked<typeof teacherService>;
-const mockedNotificationService = notificationService as jest.Mocked<typeof notificationService>;
+vi.mock('../../hooks/usePageTitle', () => ({
+  usePageTitle: vi.fn(),
+}));
+
+const mockedUseAuthStore = useAuthStore as unknown as ReturnType<typeof vi.fn>;
+const mockedTeacherService = teacherService as unknown as { [K in keyof typeof teacherService]: ReturnType<typeof vi.fn> };
+const mockedNotificationService = notificationService as unknown as { [K in keyof typeof notificationService]: ReturnType<typeof vi.fn> };
 
 describe('DashboardPage essentials layout', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
 
     mockedUseAuthStore.mockReturnValue({
       user: { first_name: 'Rakesh' },
@@ -51,6 +57,21 @@ describe('DashboardPage essentials layout', () => {
       },
       deadlines: [{ id: 'course-1', type: 'course', title: 'Course A', days_left: 2 }],
     } as any);
+
+    mockedTeacherService.listCourses.mockResolvedValue([] as any);
+
+    mockedTeacherService.listAssignments.mockResolvedValue([
+      {
+        id: 'assign-1',
+        title: 'Usability Heuristics',
+        course_title: 'Course A',
+        course_id: 'course-1',
+        submission_status: 'PENDING',
+        is_quiz: false,
+        due_date: null,
+        description: '',
+      },
+    ] as any);
 
     mockedTeacherService.getCalendar.mockResolvedValue({
       window: { start_date: '2026-02-22', end_date: '2026-02-26', days: 5 },
@@ -86,17 +107,7 @@ describe('DashboardPage essentials layout', () => {
         quest_bonus: 5,
       },
       streak: { current_days: 5, target_days: 5 },
-      quest: {
-        key: 'streak_5_days',
-        title: 'Log in 5 days straight',
-        description: 'Complete a five day streak',
-        reward_points: 5,
-        progress_current: 5,
-        progress_target: 5,
-        completed: true,
-        claimable: true,
-        claimed_today: false,
-      },
+      quest: null,
       badge_current: {
         level: 2,
         key: 'certified_teacher',
@@ -167,28 +178,34 @@ describe('DashboardPage essentials layout', () => {
     );
   };
 
-  it('renders lean essentials and removes legacy clutter', async () => {
+  it('renders the redesigned dashboard with key sections', async () => {
     renderPage();
 
-    expect(await screen.findByText(/welcome back, rakesh/i)).toBeInTheDocument();
-    expect(await screen.findByText('Current State')).toBeInTheDocument();
-    expect(await screen.findByText('5-Day Planner')).toBeInTheDocument();
-    expect(await screen.findByText('To Do')).toBeInTheDocument();
-    expect((await screen.findAllByText('Continue Learning')).length).toBeGreaterThan(0);
+    // Greeting with user name
+    expect(await screen.findByText(/Rakesh/)).toBeInTheDocument();
 
+    // Stat cards
+    expect(await screen.findByText('Overall Progress')).toBeInTheDocument();
+    expect(await screen.findByText('Completed')).toBeInTheDocument();
+
+    // Study Statistics section
+    expect(await screen.findByText('Study Statistics')).toBeInTheDocument();
+
+    // Continue Learning section
+    expect((await screen.findAllByText(/Continue Learning/i)).length).toBeGreaterThan(0);
+
+    // Upcoming assessments section
+    expect(await screen.findByText('Upcoming')).toBeInTheDocument();
+
+    // Legacy elements should not be present
     expect(screen.queryByText('Daily Quest')).not.toBeInTheDocument();
     expect(screen.queryByText('Ripple Badges')).not.toBeInTheDocument();
-    expect(screen.queryByText(/calm/i)).not.toBeInTheDocument();
   });
 
-  it('marks actionable item as read from to-do list', async () => {
+  it('displays pending assessment in upcoming section', async () => {
     renderPage();
 
-    const markDoneButtons = await screen.findAllByTitle('Mark as done');
-    await userEvent.click(markDoneButtons[0]);
-
-    await waitFor(() => {
-      expect(mockedNotificationService.markAsRead).toHaveBeenCalledWith('notif-1', expect.anything());
-    });
+    // The pending assignment "Usability Heuristics" should show in the Upcoming section
+    expect(await screen.findByText('Usability Heuristics')).toBeInTheDocument();
   });
 });

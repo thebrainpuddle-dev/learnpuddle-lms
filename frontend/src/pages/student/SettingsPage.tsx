@@ -1,8 +1,9 @@
 // src/pages/student/SettingsPage.tsx
 
-import React from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { usePageTitle } from '../../hooks/usePageTitle';
+import api from '../../config/api';
 import {
   ShieldCheckIcon,
   BellIcon,
@@ -12,30 +13,106 @@ import {
   ChatBubbleLeftIcon,
 } from '@heroicons/react/24/outline';
 
+/** Keys accepted by the backend preferences_view (apps/users/views.py). */
+type PrefKey =
+  | 'email_courses'
+  | 'email_assignments'
+  | 'email_reminders'
+  | 'email_announcements'
+  | 'in_app_courses'
+  | 'in_app_assignments'
+  | 'in_app_reminders'
+  | 'in_app_announcements';
+
+type NotificationPrefs = Partial<Record<PrefKey, boolean>>;
+
+interface ToggleConfig {
+  key: PrefKey;
+  label: string;
+  description: string;
+  icon: React.ForwardRefExoticComponent<
+    React.SVGProps<SVGSVGElement> & { title?: string; titleId?: string }
+  >;
+}
+
+const notificationToggles: ToggleConfig[] = [
+  {
+    key: 'email_courses',
+    label: 'Course Updates',
+    description: 'Get notified when new courses or content are available',
+    icon: EnvelopeIcon,
+  },
+  {
+    key: 'email_assignments',
+    label: 'Assignment Reminders',
+    description: 'Receive reminders for upcoming assignments and deadlines',
+    icon: ChatBubbleLeftIcon,
+  },
+  {
+    key: 'email_reminders',
+    label: 'General Reminders',
+    description: 'Get notified about general reminders and updates',
+    icon: BellIcon,
+  },
+];
+
 export const SettingsPage: React.FC = () => {
   usePageTitle('Settings');
   const navigate = useNavigate();
 
-  const notificationToggles = [
-    {
-      key: 'email_course_updates',
-      label: 'Course Updates',
-      description: 'Get notified when new courses or content are available',
-      icon: EnvelopeIcon,
+  const [prefs, setPrefs] = useState<NotificationPrefs>({});
+  const [loading, setLoading] = useState(true);
+  /** Tracks which keys are currently being saved so we can show per-toggle feedback. */
+  const [saving, setSaving] = useState<Set<PrefKey>>(new Set());
+
+  // Fetch current preferences on mount.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await api.get('/users/auth/preferences/');
+        if (!cancelled) {
+          setPrefs(res.data ?? {});
+        }
+      } catch {
+        // If the endpoint is unreachable fall back to empty prefs — toggles
+        // will default to "off" (false) and the user can still flip them.
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleToggle = useCallback(
+    async (key: PrefKey) => {
+      const newValue = !prefs[key];
+
+      // Optimistic update.
+      setPrefs((prev) => ({ ...prev, [key]: newValue }));
+      setSaving((prev) => new Set(prev).add(key));
+
+      try {
+        const res = await api.patch('/users/auth/preferences/', { [key]: newValue });
+        // Reconcile with server response to keep state accurate.
+        setPrefs(res.data ?? {});
+      } catch {
+        // Revert on failure.
+        setPrefs((prev) => ({ ...prev, [key]: !newValue }));
+      } finally {
+        setSaving((prev) => {
+          const next = new Set(prev);
+          next.delete(key);
+          return next;
+        });
+      }
     },
-    {
-      key: 'email_assignment_reminders',
-      label: 'Assignment Reminders',
-      description: 'Receive reminders for upcoming assignments and deadlines',
-      icon: ChatBubbleLeftIcon,
-    },
-    {
-      key: 'email_grade_notifications',
-      label: 'Grade Notifications',
-      description: 'Get notified when your assignments are graded',
-      icon: BellIcon,
-    },
-  ];
+    [prefs],
+  );
 
   return (
     <div className="space-y-6">
@@ -96,45 +173,59 @@ export const SettingsPage: React.FC = () => {
           </div>
 
           <div className="border-t border-slate-100 divide-y divide-slate-100">
-            {notificationToggles.map((item) => (
-              <div
-                key={item.key}
-                className="flex flex-col gap-3 px-5 py-4 sm:px-6 sm:flex-row sm:items-center sm:justify-between"
-              >
-                <div className="flex items-start gap-3">
-                  <div className="flex-shrink-0 h-10 w-10 rounded-lg bg-slate-50 flex items-center justify-center mt-0.5">
-                    <item.icon className="h-5 w-5 text-slate-400" />
-                  </div>
-                  <div>
-                    <p className="text-[13px] font-medium text-slate-900">{item.label}</p>
-                    <p className="text-[12px] text-slate-500">{item.description}</p>
-                  </div>
-                </div>
+            {loading ? (
+              <div className="px-5 py-6 sm:px-6 text-center">
+                <div className="inline-block h-5 w-5 animate-spin rounded-full border-2 border-indigo-600 border-t-transparent" />
+                <p className="mt-2 text-[12px] text-slate-400">Loading preferences...</p>
+              </div>
+            ) : (
+              notificationToggles.map((item) => {
+                const checked = !!prefs[item.key];
+                const isSaving = saving.has(item.key);
 
-                {/* Visually disabled toggle with "Coming soon" tooltip */}
-                <div className="relative group flex-shrink-0">
-                  <label className="relative inline-flex items-center cursor-not-allowed">
-                    <input
-                      type="checkbox"
-                      checked={false}
-                      readOnly
-                      disabled
-                      className="sr-only peer"
-                    />
-                    <div className="w-11 h-6 bg-slate-200 rounded-full opacity-50 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all" />
-                  </label>
-                  {/* Tooltip */}
-                  <div className="absolute bottom-full right-0 mb-2 hidden group-hover:block z-10">
-                    <div className="bg-slate-800 text-white text-[11px] font-medium px-2.5 py-1.5 rounded-lg whitespace-nowrap shadow-lg">
-                      Coming soon
-                      <div className="absolute top-full right-4 -mt-px">
-                        <div className="border-4 border-transparent border-t-slate-800" />
+                return (
+                  <div
+                    key={item.key}
+                    className="flex flex-col gap-3 px-5 py-4 sm:px-6 sm:flex-row sm:items-center sm:justify-between"
+                  >
+                    <div className="flex items-start gap-3">
+                      <div className="flex-shrink-0 h-10 w-10 rounded-lg bg-slate-50 flex items-center justify-center mt-0.5">
+                        <item.icon className="h-5 w-5 text-slate-400" />
+                      </div>
+                      <div>
+                        <p className="text-[13px] font-medium text-slate-900">{item.label}</p>
+                        <p className="text-[12px] text-slate-500">{item.description}</p>
                       </div>
                     </div>
+
+                    {/* Functional toggle */}
+                    <div className="flex-shrink-0">
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={checked}
+                        disabled={isSaving}
+                        onClick={() => handleToggle(item.key)}
+                        className={`
+                          relative inline-flex h-6 w-11 items-center rounded-full
+                          transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2
+                          ${checked ? 'bg-indigo-600' : 'bg-slate-200'}
+                          ${isSaving ? 'opacity-60 cursor-wait' : 'cursor-pointer'}
+                        `}
+                      >
+                        <span
+                          className={`
+                            inline-block h-5 w-5 transform rounded-full bg-white shadow-sm ring-1 ring-slate-200/50
+                            transition-transform duration-200 ease-in-out
+                            ${checked ? 'translate-x-[22px]' : 'translate-x-[2px]'}
+                          `}
+                        />
+                      </button>
+                    </div>
                   </div>
-                </div>
-              </div>
-            ))}
+                );
+              })
+            )}
           </div>
         </div>
 

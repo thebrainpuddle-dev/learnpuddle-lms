@@ -31,6 +31,10 @@ import {
 import { adminTeachersService } from '../../services/adminTeachersService';
 import { ApprovalsTab } from '../../components/certifications/ApprovalsTab';
 import { IBDashboard } from '../../components/certifications/IBDashboard';
+import { SchoolAccreditationsTab } from '../../components/certifications/SchoolAccreditationsTab';
+import { RankingsLinksTab } from '../../components/certifications/RankingsLinksTab';
+import { ComplianceTrackerTab } from '../../components/certifications/ComplianceTrackerTab';
+import { StaffPDTrackerTab } from '../../components/certifications/StaffPDTrackerTab';
 import {
   PlusIcon,
   PencilSquareIcon,
@@ -982,13 +986,17 @@ const CertificationsContent: React.FC = () => (
 
 // ── Top-level tab config ─────────────────────────────────────────────
 
-const TOP_TABS = ['certifications', 'approvals', 'ib-dashboard'] as const;
+const TOP_TABS = ['certifications', 'approvals', 'accreditations', 'rankings', 'compliance', 'staff-pd', 'ib-dashboard'] as const;
 type TopTab = typeof TOP_TABS[number];
 
 const TOP_TAB_LABELS: Record<TopTab, string> = {
   certifications: 'Certifications',
   approvals: 'Approvals',
-  'ib-dashboard': 'IB Dashboard',
+  accreditations: 'Accreditations',
+  rankings: 'Rankings & Links',
+  compliance: 'Compliance Tracker',
+  'staff-pd': 'Staff PD',
+  'ib-dashboard': 'IB Compliance',
 };
 
 // ── Main Page ────────────────────────────────────────────────────────
@@ -1026,9 +1034,9 @@ export const CertificationsPage: React.FC = () => {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">Certifications</h1>
+        <h1 className="text-2xl font-bold text-gray-900">Certifications & Compliance</h1>
         <p className="mt-1 text-sm text-gray-500">
-          Manage certification types, issue certifications to teachers, and monitor expirations.
+          Manage certifications, accreditations, rankings, and compliance for your institution.
         </p>
       </div>
 
@@ -1044,6 +1052,18 @@ export const CertificationsPage: React.FC = () => {
           </TabsContent>
           <TabsContent>
             <ApprovalsTab />
+          </TabsContent>
+          <TabsContent>
+            <SchoolAccreditationsTab />
+          </TabsContent>
+          <TabsContent>
+            <RankingsLinksTab />
+          </TabsContent>
+          <TabsContent>
+            <ComplianceTrackerTab />
+          </TabsContent>
+          <TabsContent>
+            <StaffPDTrackerTab />
           </TabsContent>
           <TabsContent>
             <IBDashboard />

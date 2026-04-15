@@ -320,7 +320,7 @@ export const ContentPlayer: React.FC<ContentPlayerProps> = ({
                 <ChatBubbleLeftRightIcon className="h-8 w-8 text-teal-600" />
               </div>
               <div>
-                <p className="text-sm font-semibold text-teal-600">AI Chatbot</p>
+                <p className="text-sm font-semibold text-teal-600">AI Tutor</p>
                 <h2 className="text-2xl font-semibold text-slate-900 sm:text-3xl lg:text-4xl">{content.title}</h2>
               </div>
             </div>
@@ -346,7 +346,7 @@ export const ContentPlayer: React.FC<ContentPlayerProps> = ({
               href={`${rolePrefix}/chatbots/${content.id}`}
               className="inline-flex items-center gap-2 rounded-lg bg-teal-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-teal-700"
             >
-              Open Chatbot
+              Open Tutor
               <ArrowTopRightOnSquareIcon className="h-4 w-4" />
             </a>
 

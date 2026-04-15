@@ -19,6 +19,8 @@ import {
   X,
   ClipboardList,
   ChevronDown,
+  GraduationCap,
+  Contact,
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '../theme/cn';
@@ -59,7 +61,9 @@ const ADMIN_NAV: NavEntry[] = [
     icon: Users,
     items: [
       { label: 'Teachers', href: '/admin/teachers', icon: Users },
+      { label: 'Students', href: '/admin/students', icon: GraduationCap },
       { label: 'Groups', href: '/admin/groups', icon: Grid3X3, feature: 'groups' },
+      { label: 'Directory', href: '/admin/directory', icon: Contact },
     ],
   },
   {
@@ -351,10 +355,10 @@ export function TopNav() {
                 <img
                   src={theme.logo}
                   alt={tenantName}
-                  className="h-9 w-9 rounded-xl object-cover"
+                  className="h-9 w-9 rounded-full object-cover"
                 />
               ) : (
-                <div className="h-9 w-9 rounded-xl bg-gradient-to-br from-accent to-accent-dark flex items-center justify-center">
+                <div className="h-9 w-9 rounded-full bg-gradient-to-br from-accent to-accent-dark flex items-center justify-center">
                   <span className="text-white font-bold text-sm">{tenantInitial}</span>
                 </div>
               )}

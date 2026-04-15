@@ -115,7 +115,7 @@ export const ChatbotCard = React.memo<Props>(function ChatbotCard({
             type="button"
             onClick={() => navigate(`/teacher/chatbots/${chatbot.id}`)}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium text-indigo-600 hover:bg-indigo-50 active:bg-indigo-100 transition-all duration-200"
-            aria-label={`Edit chatbot: ${chatbot.name}`}
+            aria-label={`Edit tutor: ${chatbot.name}`}
           >
             <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
             Edit
@@ -127,7 +127,7 @@ export const ChatbotCard = React.memo<Props>(function ChatbotCard({
             type="button"
             onClick={() => onClone(chatbot.id)}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-100 active:bg-gray-200 transition-all duration-200"
-            aria-label={`Clone chatbot: ${chatbot.name}`}
+            aria-label={`Clone tutor: ${chatbot.name}`}
           >
             <Copy className="h-3.5 w-3.5" aria-hidden="true" />
             Clone
@@ -139,7 +139,7 @@ export const ChatbotCard = React.memo<Props>(function ChatbotCard({
             type="button"
             onClick={() => onDelete(chatbot.id)}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium text-red-600 hover:bg-red-50 active:bg-red-100 transition-all duration-200 ml-auto"
-            aria-label={`Delete chatbot: ${chatbot.name}`}
+            aria-label={`Delete tutor: ${chatbot.name}`}
           >
             <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
             Delete

@@ -1,7 +1,8 @@
 // src/components/maic/AgentAvatar.tsx
 //
 // Circular avatar for MAIC agents. Shows agent initial or image with a
-// colored ring. Pulsing animation indicates the agent is currently speaking.
+// colored ring. When speaking, displays a sound wave animation (3 bars)
+// below the avatar and a subtle glow effect around the circle.
 
 import React from 'react';
 import type { MAICAgent } from '../../types/maic';
@@ -14,9 +15,9 @@ interface AgentAvatarProps {
 }
 
 const sizeMap = {
-  sm: { container: 'h-8 w-8', text: 'text-xs', ring: 'ring-2', pulse: 'h-10 w-10' },
-  md: { container: 'h-10 w-10', text: 'text-sm', ring: 'ring-2', pulse: 'h-12 w-12' },
-  lg: { container: 'h-14 w-14', text: 'text-lg', ring: 'ring-[3px]', pulse: 'h-16 w-16' },
+  sm: { container: 'h-8 w-8', text: 'text-xs', ring: 'ring-2', wave: 'h-3' },
+  md: { container: 'h-10 w-10', text: 'text-sm', ring: 'ring-2', wave: 'h-4' },
+  lg: { container: 'h-14 w-14', text: 'text-lg', ring: 'ring-[3px]', wave: 'h-5' },
 } as const;
 
 export const AgentAvatar = React.memo<AgentAvatarProps>(function AgentAvatar({
@@ -29,23 +30,11 @@ export const AgentAvatar = React.memo<AgentAvatarProps>(function AgentAvatar({
   const isImageUrl = agent.avatar && (agent.avatar.startsWith('http') || agent.avatar.startsWith('/'));
 
   return (
-    <div className="relative inline-flex items-center justify-center" role="img" aria-label={agent.name}>
-      {/* Pulsing ring when speaking */}
-      {isSpeaking && (
-        <span
-          className={cn(
-            'absolute inset-0 rounded-full animate-ping opacity-30',
-            s.pulse,
-          )}
-          style={{ backgroundColor: agent.color }}
-          aria-hidden="true"
-        />
-      )}
-
-      {/* Avatar circle */}
+    <div className="relative inline-flex flex-col items-center" role="img" aria-label={agent.name}>
+      {/* Avatar circle with glow when speaking */}
       <div
         className={cn(
-          'relative rounded-full flex items-center justify-center overflow-hidden font-semibold',
+          'relative rounded-full flex items-center justify-center overflow-hidden font-semibold transition-shadow duration-300',
           s.container,
           s.ring,
           isSpeaking && 'ring-offset-2',
@@ -53,7 +42,9 @@ export const AgentAvatar = React.memo<AgentAvatarProps>(function AgentAvatar({
         style={{
           '--tw-ring-color': agent.color,
           borderColor: agent.color,
-          boxShadow: `0 0 0 ${size === 'lg' ? '3px' : '2px'} ${agent.color}`,
+          boxShadow: isSpeaking
+            ? `0 0 0 ${size === 'lg' ? '3px' : '2px'} ${agent.color}, 0 0 12px ${agent.color}66`
+            : `0 0 0 ${size === 'lg' ? '3px' : '2px'} ${agent.color}`,
         } as React.CSSProperties}
       >
         {isImageUrl ? (
@@ -71,6 +62,50 @@ export const AgentAvatar = React.memo<AgentAvatarProps>(function AgentAvatar({
           </div>
         )}
       </div>
+
+      {/* Sound wave animation when speaking */}
+      {isSpeaking && (
+        <div
+          className={cn('flex items-end gap-[2px] mt-1', s.wave)}
+          aria-hidden="true"
+          style={{ color: agent.color }}
+        >
+          <span
+            className="w-[3px] bg-current rounded-full"
+            style={{
+              animation: 'maicSoundWave 0.4s ease-in-out infinite',
+              animationDelay: '0ms',
+              height: '4px',
+            }}
+          />
+          <span
+            className="w-[3px] bg-current rounded-full"
+            style={{
+              animation: 'maicSoundWave 0.4s ease-in-out infinite',
+              animationDelay: '150ms',
+              height: '4px',
+            }}
+          />
+          <span
+            className="w-[3px] bg-current rounded-full"
+            style={{
+              animation: 'maicSoundWave 0.4s ease-in-out infinite',
+              animationDelay: '300ms',
+              height: '4px',
+            }}
+          />
+        </div>
+      )}
+
+      {/* Inject keyframes via style tag (scoped via unique animation name) */}
+      {isSpeaking && (
+        <style>{`
+          @keyframes maicSoundWave {
+            0%, 100% { height: 4px; }
+            50% { height: 12px; }
+          }
+        `}</style>
+      )}
     </div>
   );
 });

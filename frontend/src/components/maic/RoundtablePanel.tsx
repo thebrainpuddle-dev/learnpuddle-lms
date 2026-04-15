@@ -4,8 +4,8 @@
 // types. Displays agent avatars with speaking indicators, speech bubbles,
 // and allows user participation via SSE streaming.
 
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { X, Send, Loader2 } from 'lucide-react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { X, Send, Loader2, MessageCircle, RotateCcw } from 'lucide-react';
 import { useMAICStageStore } from '../../stores/maicStageStore';
 import { useAuthStore } from '../../stores/authStore';
 import { streamMAIC } from '../../lib/maicSSE';
@@ -45,6 +45,8 @@ const SESSION_LABELS: Record<string, string> = {
 export const RoundtablePanel = React.memo<RoundtablePanelProps>(
   function RoundtablePanel({ sessionType, topic, agentIds, onClose }) {
     const allAgents = useMAICStageStore((s) => s.agents);
+    const scenes = useMAICStageStore((s) => s.scenes);
+    const currentSceneIndex = useMAICStageStore((s) => s.currentSceneIndex);
     const accessToken = useAuthStore((s) => s.accessToken);
 
     const [messages, setMessages] = useState<DiscussionMessage[]>([]);
@@ -63,6 +65,38 @@ export const RoundtablePanel = React.memo<RoundtablePanelProps>(
     discussionAgents.forEach((agent, idx) => {
       agentColorMap.set(agent.id, AGENT_BUBBLE_COLORS[idx % AGENT_BUBBLE_COLORS.length]);
     });
+
+    // ─── Suggested Topics ─────────────────────────────────────────────
+    const suggestedTopics = useMemo(() => {
+      const currentScene = scenes[currentSceneIndex];
+      if (!currentScene) return [];
+      const title = currentScene.title;
+      return [
+        `What are the key implications of ${title}?`,
+        `How does ${title} apply in practice?`,
+        `What are common misconceptions about ${title}?`,
+        `Can you explain the main concepts of ${title} in simpler terms?`,
+      ];
+    }, [scenes, currentSceneIndex]);
+
+    // ─── Turn-taking indicators ───────────────────────────────────────
+    const [respondingAgentIds, setRespondingAgentIds] = useState<string[]>([]);
+
+    useEffect(() => {
+      if (isSending && !speakingAgentId) {
+        // Show sequential response indicators for agents
+        const ids = discussionAgents.map((a) => a.id);
+        setRespondingAgentIds(ids);
+      } else {
+        setRespondingAgentIds([]);
+      }
+    }, [isSending, speakingAgentId, discussionAgents]);
+
+    // ─── Teacher Controls ─────────────────────────────────────────────
+    const handleNewTopic = useCallback(() => {
+      setMessages([]);
+      setInput('');
+    }, []);
 
     // Auto-scroll
     useEffect(() => {
@@ -170,30 +204,50 @@ export const RoundtablePanel = React.memo<RoundtablePanelProps>(
               </h3>
               <p className="text-xs text-gray-500 mt-0.5">{topic}</p>
             </div>
-            <button
-              type="button"
-              onClick={onClose}
-              className="p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
-              aria-label="End discussion"
-            >
-              <X className="h-4 w-4" />
-            </button>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={handleNewTopic}
+                className="flex items-center gap-1 px-2 py-1 rounded-md text-xs text-gray-500 hover:text-gray-700 hover:bg-gray-100 transition-colors"
+                title="Clear and start new topic"
+              >
+                <RotateCcw className="h-3 w-3" />
+                <span className="hidden sm:inline">New Topic</span>
+              </button>
+              <button
+                type="button"
+                onClick={onClose}
+                className="flex items-center gap-1 px-2 py-1 rounded-md text-xs text-red-500 hover:text-red-700 hover:bg-red-50 transition-colors"
+                aria-label="End discussion"
+              >
+                <X className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">End</span>
+              </button>
+            </div>
           </div>
 
           {/* Agent avatars row */}
           <div className="shrink-0 flex items-center justify-center gap-3 px-5 py-3 border-b border-gray-50">
             {discussionAgents.map((agent) => {
               const isSpeaking = speakingAgentId === agent.id;
+              const isResponding = respondingAgentIds.includes(agent.id) && !speakingAgentId;
               return (
-                <div key={agent.id} className="flex flex-col items-center gap-1">
+                <div key={agent.id} className="flex flex-col items-center gap-1 relative">
                   <AgentAvatar agent={agent} isSpeaking={isSpeaking} size="md" />
+                  {isResponding && !isSpeaking && (
+                    <div className="absolute -top-0.5 -right-0.5 h-3 w-3 rounded-full bg-amber-400 border-2 border-white animate-pulse" />
+                  )}
                   <span
                     className={cn(
                       'text-[10px] font-medium',
-                      isSpeaking ? 'text-gray-900' : 'text-gray-400',
+                      isSpeaking
+                        ? 'text-gray-900'
+                        : isResponding
+                          ? 'text-amber-600'
+                          : 'text-gray-400',
                     )}
                   >
-                    {agent.name}
+                    {isSpeaking ? 'Speaking...' : isResponding ? 'Thinking...' : agent.name}
                   </span>
                 </div>
               );
@@ -203,9 +257,37 @@ export const RoundtablePanel = React.memo<RoundtablePanelProps>(
           {/* Messages */}
           <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3" aria-live="polite">
             {messages.length === 0 && (
-              <p className="text-sm text-gray-400 text-center mt-8">
-                Type a message to start the discussion with the agents.
-              </p>
+              <div className="mt-4 space-y-4">
+                <p className="text-sm text-gray-400 text-center">
+                  Start the discussion or pick a suggested topic below.
+                </p>
+
+                {/* Suggested topics */}
+                {suggestedTopics.length > 0 && (
+                  <div className="space-y-2">
+                    <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide px-1">
+                      Suggested Topics
+                    </p>
+                    <div className="grid gap-1.5">
+                      {suggestedTopics.map((t, idx) => (
+                        <button
+                          key={idx}
+                          type="button"
+                          onClick={() => {
+                            setInput(t);
+                          }}
+                          className="flex items-start gap-2 text-left px-3 py-2.5 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 hover:border-gray-300 transition-colors group"
+                        >
+                          <MessageCircle className="h-3.5 w-3.5 text-gray-400 group-hover:text-primary-500 mt-0.5 shrink-0" />
+                          <span className="text-xs text-gray-600 group-hover:text-gray-900 leading-relaxed">
+                            {t}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
             )}
 
             {messages.map((msg) => {

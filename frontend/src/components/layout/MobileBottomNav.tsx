@@ -42,7 +42,7 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({ basePath = '/t
             <NavLink
               key={tab.label}
               to={fullHref}
-              className="relative flex flex-col items-center justify-center flex-1 h-full"
+              className="relative flex flex-col items-center justify-center flex-1 h-full min-h-[44px] min-w-[44px]"
               aria-label={tab.label}
             >
               <tab.icon

@@ -11,7 +11,10 @@ from rest_framework import status
 
 from utils.decorators import admin_only, tenant_required, check_feature
 from utils.responses import error_response
-from utils.helpers import course_assigned_teachers as _course_assigned_teachers
+from utils.helpers import (
+    course_assigned_teachers as _course_assigned_teachers,
+    course_assigned_students as _course_assigned_students,
+)
 
 from apps.courses.models import Course
 from apps.progress.models import Assignment, AssignmentSubmission, QuizSubmission
@@ -27,6 +30,7 @@ def course_progress_report(request):
     Course completion report.
     Query params:
       - course_id (required)
+      - role: teachers|students (optional, default: teachers)
       - status: COMPLETED|IN_PROGRESS|NOT_STARTED (optional)
       - search: name/email (optional)
     """
@@ -35,38 +39,49 @@ def course_progress_report(request):
         return error_response("course_id is required", status_code=status.HTTP_400_BAD_REQUEST)
 
     course = get_object_or_404(Course, id=course_id, tenant=request.tenant)
-    teachers = _course_assigned_teachers(course)
+    role = request.GET.get("role", "teachers")
+
+    if role == "students":
+        users = _course_assigned_students(course)
+    else:
+        users = _course_assigned_teachers(course)
 
     search = request.GET.get("search")
     if search:
-        teachers = teachers.filter(
+        q = (
             models.Q(email__icontains=search)
             | models.Q(first_name__icontains=search)
             | models.Q(last_name__icontains=search)
-            | models.Q(employee_id__icontains=search)
-            | models.Q(department__icontains=search)
         )
+        if role != "students":
+            q |= models.Q(employee_id__icontains=search) | models.Q(department__icontains=search)
+        else:
+            q |= models.Q(student_id__icontains=search)
+        users = users.filter(q)
 
-    teacher_ids = list(teachers.values_list("id", flat=True))
-    completion_snapshots = build_teacher_course_snapshots([course.id], teacher_ids)
+    user_ids = list(users.values_list("id", flat=True))
+    completion_snapshots = build_teacher_course_snapshots([course.id], user_ids)
 
     rows = []
-    for t in teachers.order_by("last_name", "first_name"):
-        snapshot = completion_snapshots.get((str(course.id), str(t.id)))
+    for u in users.order_by("last_name", "first_name"):
+        snapshot = completion_snapshots.get((str(course.id), str(u.id)))
         status_val = snapshot.status if snapshot else "NOT_STARTED"
         completed_at = snapshot.last_completed_at if snapshot else None
-        rows.append(
-            {
-                "teacher_id": t.id,
-                "teacher_name": t.get_full_name() or t.email,
-                "teacher_email": t.email,
-                "course_id": course.id,
-                "course_title": course.title,
-                "deadline": course.deadline,
-                "status": status_val,
-                "completed_at": completed_at,
-            }
-        )
+        row = {
+            "teacher_id": u.id,
+            "teacher_name": u.get_full_name() or u.email,
+            "teacher_email": u.email,
+            "course_id": course.id,
+            "course_title": course.title,
+            "deadline": course.deadline,
+            "status": status_val,
+            "completed_at": completed_at,
+            "role": u.role,
+        }
+        if role == "students":
+            row["grade_level"] = getattr(u, "grade_level", "") or ""
+            row["section"] = getattr(u, "section", "") or ""
+        rows.append(row)
 
     status_filter = request.GET.get("status")
     if status_filter:
@@ -84,6 +99,7 @@ def assignment_status_report(request):
     Assignment submission report.
     Query params:
       - assignment_id (required)
+      - role: teachers|students (optional, default: teachers)
       - status: PENDING|SUBMITTED|GRADED (optional)
       - search: name/email (optional)
     """
@@ -93,38 +109,49 @@ def assignment_status_report(request):
 
     assignment = get_object_or_404(Assignment, id=assignment_id, course__tenant=request.tenant)
     course = assignment.course
-    teachers = _course_assigned_teachers(course)
+    role = request.GET.get("role", "teachers")
+
+    if role == "students":
+        users = _course_assigned_students(course)
+    else:
+        users = _course_assigned_teachers(course)
 
     search = request.GET.get("search")
     if search:
-        teachers = teachers.filter(
+        q = (
             models.Q(email__icontains=search)
             | models.Q(first_name__icontains=search)
             | models.Q(last_name__icontains=search)
-            | models.Q(employee_id__icontains=search)
-            | models.Q(department__icontains=search)
         )
+        if role != "students":
+            q |= models.Q(employee_id__icontains=search) | models.Q(department__icontains=search)
+        else:
+            q |= models.Q(student_id__icontains=search)
+        users = users.filter(q)
 
-    submissions = AssignmentSubmission.objects.filter(assignment=assignment, teacher__in=teachers)
+    submissions = AssignmentSubmission.objects.filter(assignment=assignment, teacher__in=users)
     submission_map = {s.teacher_id: s for s in submissions}
 
     rows = []
-    for t in teachers.order_by("last_name", "first_name"):
-        s = submission_map.get(t.id)
+    for u in users.order_by("last_name", "first_name"):
+        s = submission_map.get(u.id)
         status_val = s.status if s else "PENDING"
         submitted_at = s.submitted_at if s else None
-        rows.append(
-            {
-                "teacher_id": t.id,
-                "teacher_name": t.get_full_name() or t.email,
-                "teacher_email": t.email,
-                "assignment_id": assignment.id,
-                "assignment_title": assignment.title,
-                "due_date": assignment.due_date,
-                "status": status_val,
-                "submitted_at": submitted_at,
-            }
-        )
+        row = {
+            "teacher_id": u.id,
+            "teacher_name": u.get_full_name() or u.email,
+            "teacher_email": u.email,
+            "assignment_id": assignment.id,
+            "assignment_title": assignment.title,
+            "due_date": assignment.due_date,
+            "status": status_val,
+            "submitted_at": submitted_at,
+            "role": u.role,
+        }
+        if role == "students":
+            row["grade_level"] = getattr(u, "grade_level", "") or ""
+            row["section"] = getattr(u, "section", "") or ""
+        rows.append(row)
 
     status_filter = request.GET.get("status")
     if status_filter:

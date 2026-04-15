@@ -56,33 +56,21 @@ export const SpeechSubtitles: React.FC<SpeechSubtitlesProps> = ({
   return (
     <div
       className={cn(
-        'absolute bottom-6 left-1/2 -translate-x-1/2 z-40',
-        'max-w-[80%] w-auto',
-        'pointer-events-none',
-        'transition-opacity duration-300 ease-in-out',
-        visible ? 'opacity-100' : 'opacity-0',
+        'flex justify-center px-4 pointer-events-none',
+        'transition-all duration-300 ease-in-out',
+        visible ? 'py-2 opacity-100' : 'py-0 opacity-0 h-0 overflow-hidden',
       )}
       role="status"
       aria-live="polite"
       aria-label="Speech subtitles"
     >
-      <div
-        className={cn(
-          'rounded-lg px-5 py-3',
-          'bg-black/75 backdrop-blur-sm',
-          'text-white text-base leading-relaxed',
-          'line-clamp-2',
-        )}
-      >
+      <div className="bg-gray-900/80 backdrop-blur-sm rounded-xl px-5 py-2.5 shadow-xl max-w-[80%]">
         {displayAgent && (
-          <span
-            className="font-semibold mr-2"
-            style={{ color: displayColor }}
-          >
-            {displayAgent}:
-          </span>
+          <p className="text-[10px] font-semibold mb-0.5" style={{ color: displayColor }}>
+            {displayAgent}
+          </p>
         )}
-        <span>{displayText}</span>
+        <p className="text-sm text-white leading-relaxed line-clamp-2">{displayText}</p>
       </div>
     </div>
   );

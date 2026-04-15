@@ -76,6 +76,19 @@ coverage.xml
 # Jupyter
 .ipynb_checkpoints
 
+# Claude Code tooling
+.claude/
+.mcp.json
+progress.txt
+scripts/agents/
+
+# Test results / reports
+.test-results/
+e2e/playwright-report/
+
+# TypeScript build info
+frontend/tsconfig.tsbuildinfo
+
 # Misc
 *.bak
 *.tmp

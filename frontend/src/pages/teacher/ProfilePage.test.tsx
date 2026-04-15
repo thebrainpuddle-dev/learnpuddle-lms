@@ -6,50 +6,50 @@ import { ProfilePage } from './ProfilePage';
 import { teacherService } from '../../services/teacherService';
 import { useAuthStore } from '../../stores/authStore';
 
-jest.mock('../../stores/authStore');
-jest.mock('../../services/teacherService', () => ({
+vi.mock('../../stores/authStore');
+vi.mock('../../services/teacherService', () => ({
   teacherService: {
-    getGamificationSummary: jest.fn(),
-    claimQuestReward: jest.fn(),
+    getGamificationSummary: vi.fn(),
+    claimQuestReward: vi.fn(),
   },
 }));
-jest.mock('../../config/api', () => ({
+vi.mock('../../config/api', () => ({
   __esModule: true,
   default: {
-    patch: jest.fn(),
+    patch: vi.fn(),
   },
 }));
-jest.mock('../../components/tour', () => ({
-  useGuidedTour: () => ({ startTour: jest.fn() }),
+vi.mock('../../components/tour', () => ({
+  useGuidedTour: () => ({ startTour: vi.fn() }),
 }));
-jest.mock('../../components/common', () => {
-  const actual = jest.requireActual('../../components/common');
+vi.mock('../../components/common', async () => {
+  const actual = await vi.importActual('../../components/common');
   return {
     ...actual,
     useToast: () => ({
-      success: jest.fn(),
-      error: jest.fn(),
+      success: vi.fn(),
+      error: vi.fn(),
     }),
   };
 });
 
-const mockedUseAuthStore = useAuthStore as unknown as jest.Mock;
-const mockedTeacherService = teacherService as jest.Mocked<typeof teacherService>;
+const mockedUseAuthStore = useAuthStore as unknown as ReturnType<typeof vi.fn>;
+const mockedTeacherService = teacherService as unknown as { [K in keyof typeof teacherService]: ReturnType<typeof vi.fn> };
 
 describe('ProfilePage achievements tab', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
     Object.defineProperty(window, 'matchMedia', {
       writable: true,
-      value: jest.fn().mockImplementation((query: string) => ({
+      value: vi.fn().mockImplementation((query: string) => ({
         matches: false,
         media: query,
         onchange: null,
-        addEventListener: jest.fn(),
-        removeEventListener: jest.fn(),
-        addListener: jest.fn(),
-        removeListener: jest.fn(),
-        dispatchEvent: jest.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(),
       })),
     });
 
@@ -62,7 +62,7 @@ describe('ProfilePage achievements tab', () => {
         subjects: [],
         grades: [],
       },
-      setUser: jest.fn(),
+      setUser: vi.fn(),
     });
 
     mockedTeacherService.getGamificationSummary.mockResolvedValue({

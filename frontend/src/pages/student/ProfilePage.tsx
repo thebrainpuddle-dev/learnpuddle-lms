@@ -83,12 +83,12 @@ export const ProfilePage: React.FC = () => {
     {
       icon: AcademicCapIcon,
       label: 'Grade',
-      value: studentUser?.grade_level || 'Not assigned',
+      value: user?.grade_name || studentUser?.grade_level || 'Not assigned',
     },
     {
       icon: UsersIcon,
       label: 'Section',
-      value: studentUser?.section || 'Not assigned',
+      value: user?.section_name || studentUser?.section || 'Not assigned',
     },
     {
       icon: EnvelopeIcon,

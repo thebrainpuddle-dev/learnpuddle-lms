@@ -53,7 +53,7 @@ export const SuperAdminLayout: React.FC = () => {
             type="button"
             onClick={() => setSidebarOpen(true)}
             data-tour="superadmin-mobile-menu"
-            className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-slate-600 hover:bg-slate-100 transition-colors"
+            className="inline-flex items-center justify-center rounded-lg text-slate-600 hover:bg-slate-100 transition-colors p-2.5 min-h-[44px] min-w-[44px]"
             aria-label="Open navigation"
           >
             <Bars3Icon className="h-5 w-5" />
@@ -65,7 +65,7 @@ export const SuperAdminLayout: React.FC = () => {
         </header>
 
         <main className="min-w-0 flex-1">
-          <div className="py-6 pb-24 lg:pb-6">
+          <div className="py-6 pb-16 lg:pb-6">
             <div className="mx-auto max-w-[1400px] px-4 lg:px-6">
               <ErrorBoundary>
                 <Outlet />

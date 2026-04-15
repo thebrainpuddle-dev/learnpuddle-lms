@@ -20,6 +20,7 @@ teacher_urlpatterns = [
 # Student chatbot URL patterns
 student_urlpatterns = [
     path("", chatbot_views.student_chatbot_list, name="student_chatbot_list"),
+    path("<uuid:chatbot_id>/", chatbot_views.student_chatbot_detail, name="student_chatbot_detail"),
     path("<uuid:chatbot_id>/chat/", chatbot_views.student_chat, name="student_chat"),
     path("<uuid:chatbot_id>/conversations/", chatbot_views.student_conversation_list_create, name="student_conversation_list_create"),
     path("<uuid:chatbot_id>/conversations/<uuid:conversation_id>/", chatbot_views.student_conversation_detail, name="student_conversation_detail"),

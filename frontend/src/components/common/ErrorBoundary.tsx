@@ -5,6 +5,7 @@
 // reports to Sentry.
 
 import React, { Component, ErrorInfo, ReactNode } from 'react';
+import * as Sentry from '@sentry/react';
 import { ExclamationTriangleIcon, ArrowPathIcon } from '@heroicons/react/24/outline';
 
 interface ErrorBoundaryProps {
@@ -50,13 +51,11 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     }
 
     // Report to Sentry if available
-    if (typeof window !== 'undefined' && (window as any).Sentry) {
-      (window as any).Sentry.captureException(error, {
-        extra: {
-          componentStack: errorInfo.componentStack,
-        },
-      });
-    }
+    Sentry.captureException(error, {
+      extra: {
+        componentStack: errorInfo.componentStack,
+      },
+    });
   }
 
   componentDidUpdate(prevProps: ErrorBoundaryProps): void {

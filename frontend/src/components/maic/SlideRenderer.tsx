@@ -5,6 +5,7 @@
 // container that preserves 16:9 aspect ratio.
 
 import React, { useRef, useState, useEffect, useCallback } from 'react';
+import DOMPurify from 'dompurify';
 import type { MAICSlide, MAICSlideElement } from '../../types/maic';
 import { cn } from '../../lib/utils';
 
@@ -14,6 +15,10 @@ const DESIGN_HEIGHT = 450;
 
 interface SlideRendererProps {
   slide: MAICSlide;
+  /** 1-based slide number for the counter indicator */
+  slideNumber?: number;
+  /** Total number of slides for the counter indicator */
+  totalSlides?: number;
 }
 
 // ─── Element renderers ──────────────────────────────────────────────────────
@@ -34,19 +39,56 @@ function renderTextElement(el: MAICSlideElement): React.ReactNode {
         textAlign: (el.style?.textAlign as string) as React.CSSProperties['textAlign'] || undefined,
         lineHeight: 1.5,
       }}
-      dangerouslySetInnerHTML={{ __html: html }}
+      dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(html) }}
     />
   );
 }
 
-function renderImageElement(el: MAICSlideElement): React.ReactNode {
+function ImageElement({ el }: { el: MAICSlideElement }) {
+  const alt = el.content || 'Slide image';
+  const [loaded, setLoaded] = React.useState(false);
+  const [error, setError] = React.useState(false);
+
+  // Resolve image src — use el.src if valid, otherwise generate from content keyword
+  const resolvedSrc = React.useMemo(() => {
+    const raw = el.src || '';
+    if (raw && (raw.startsWith('http') || raw.startsWith('/') || raw.startsWith('data:'))) {
+      return raw;
+    }
+    // No valid src — use Unsplash Source for a relevant stock photo
+    const keyword = encodeURIComponent((el.content || 'education').slice(0, 80));
+    return `https://source.unsplash.com/800x450/?${keyword}`;
+  }, [el.src, el.content]);
+
   return (
-    <img
-      src={el.content}
-      alt=""
-      className="h-full w-full object-contain"
-      loading="lazy"
-    />
+    <div className="relative h-full w-full">
+      {!loaded && !error && (
+        <div className="absolute inset-0 flex items-center justify-center bg-gray-100 rounded-lg animate-pulse">
+          <svg className="h-8 w-8 text-gray-300" fill="none" viewBox="0 0 24 24" strokeWidth={1} stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909M3.75 21h16.5a2.25 2.25 0 0 0 2.25-2.25V6.75a2.25 2.25 0 0 0-2.25-2.25H3.75A2.25 2.25 0 0 0 1.5 6.75v13.5A2.25 2.25 0 0 0 3.75 21Z" />
+          </svg>
+        </div>
+      )}
+      <img
+        src={resolvedSrc}
+        alt={alt}
+        className={cn(
+          'h-full w-full object-cover rounded-lg transition-opacity duration-300',
+          loaded ? 'opacity-100' : 'opacity-0',
+        )}
+        loading="lazy"
+        onLoad={() => setLoaded(true)}
+        onError={() => setError(true)}
+      />
+      {error && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-br from-slate-100 to-slate-200 rounded-lg p-3">
+          <svg className="h-8 w-8 text-slate-400 mb-1" fill="none" viewBox="0 0 24 24" strokeWidth={1} stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909M3.75 21h16.5a2.25 2.25 0 0 0 2.25-2.25V6.75a2.25 2.25 0 0 0-2.25-2.25H3.75A2.25 2.25 0 0 0 1.5 6.75v13.5A2.25 2.25 0 0 0 3.75 21Z" />
+          </svg>
+          <span className="text-[10px] text-slate-400 text-center line-clamp-2">{alt}</span>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -199,7 +241,7 @@ function renderVideoElement(el: MAICSlideElement): React.ReactNode {
 
 const elementRenderers: Record<MAICSlideElement['type'], (el: MAICSlideElement) => React.ReactNode> = {
   text: renderTextElement,
-  image: renderImageElement,
+  image: (el) => <ImageElement el={el} />,
   shape: renderShapeElement,
   chart: renderChartElement,
   latex: renderLatexElement,
@@ -210,9 +252,31 @@ const elementRenderers: Record<MAICSlideElement['type'], (el: MAICSlideElement) 
 
 // ─── SlideRenderer ──────────────────────────────────────────────────────────
 
-export const SlideRenderer = React.memo<SlideRendererProps>(function SlideRenderer({ slide }) {
+export const SlideRenderer = React.memo<SlideRendererProps>(function SlideRenderer({
+  slide,
+  slideNumber,
+  totalSlides,
+}) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
+
+  // ─── Slide transition state ────────────────────────────────────────────
+  const [isTransitioning, setIsTransitioning] = useState(false);
+  const [displaySlide, setDisplaySlide] = useState(slide);
+
+  useEffect(() => {
+    if (displaySlide.id === slide.id) {
+      // Same slide — just update content in-place without transition
+      setDisplaySlide(slide);
+      return;
+    }
+    setIsTransitioning(true);
+    const timer = setTimeout(() => {
+      setDisplaySlide(slide);
+      setIsTransitioning(false);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [slide]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const updateScale = useCallback(() => {
     const el = containerRef.current;
@@ -233,44 +297,59 @@ export const SlideRenderer = React.memo<SlideRendererProps>(function SlideRender
     <div
       ref={containerRef}
       className="relative w-full h-full overflow-hidden flex items-center justify-center"
-      style={{ background: slide.background || '#ffffff' }}
+      style={{ background: displaySlide.background || '#ffffff' }}
       role="region"
-      aria-label={`Slide: ${slide.title}`}
+      aria-label={`Slide: ${displaySlide.title}`}
     >
-      {/* Scaled design-space canvas */}
+      {/* Transition wrapper */}
       <div
-        className="relative"
-        style={{
-          width: DESIGN_WIDTH,
-          height: DESIGN_HEIGHT,
-          transform: `scale(${scale})`,
-          transformOrigin: 'top left',
-          position: 'absolute',
-          top: Math.max(0, (containerRef.current?.clientHeight ?? 0) - DESIGN_HEIGHT * scale) / 2,
-          left: Math.max(0, (containerRef.current?.clientWidth ?? 0) - DESIGN_WIDTH * scale) / 2,
-        }}
+        className={cn(
+          'transition-opacity duration-300 ease-in-out w-full h-full',
+          isTransitioning ? 'opacity-0' : 'opacity-100',
+        )}
       >
-        {slide.elements.map((el) => {
-          const renderer = elementRenderers[el.type];
-          if (!renderer) return null;
+        {/* Scaled design-space canvas */}
+        <div
+          className="relative"
+          style={{
+            width: DESIGN_WIDTH,
+            height: DESIGN_HEIGHT,
+            transform: `scale(${scale})`,
+            transformOrigin: 'top left',
+            position: 'absolute',
+            top: Math.max(0, (containerRef.current?.clientHeight ?? 0) - DESIGN_HEIGHT * scale) / 2,
+            left: Math.max(0, (containerRef.current?.clientWidth ?? 0) - DESIGN_WIDTH * scale) / 2,
+          }}
+        >
+          {displaySlide.elements.map((el) => {
+            const renderer = elementRenderers[el.type];
+            if (!renderer) return null;
 
-          return (
-            <div
-              key={el.id}
-              id={el.id}
-              className="absolute"
-              style={{
-                left: el.x,
-                top: el.y,
-                width: el.width,
-                height: el.height,
-              }}
-            >
-              {renderer(el)}
-            </div>
-          );
-        })}
+            return (
+              <div
+                key={el.id}
+                id={el.id}
+                className="absolute"
+                style={{
+                  left: el.x,
+                  top: el.y,
+                  width: el.width,
+                  height: el.height,
+                }}
+              >
+                {renderer(el)}
+              </div>
+            );
+          })}
+        </div>
       </div>
+
+      {/* Slide counter indicator */}
+      {slideNumber != null && totalSlides != null && totalSlides > 1 && (
+        <div className="absolute bottom-3 right-4 text-[10px] text-gray-300 font-mono tabular-nums select-none">
+          {slideNumber} / {totalSlides}
+        </div>
+      )}
     </div>
   );
 });

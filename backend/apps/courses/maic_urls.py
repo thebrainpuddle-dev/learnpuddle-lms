@@ -30,8 +30,23 @@ teacher_urlpatterns = [
 
 # Student MAIC URL patterns
 student_urlpatterns = [
+    # Browse (teacher-created public classrooms)
     path("classrooms/", maic_views.student_maic_classroom_list, name="student_maic_classroom_list"),
     path("classrooms/<uuid:classroom_id>/", maic_views.student_maic_classroom_detail, name="student_maic_classroom_detail"),
+
+    # Student's own classrooms (CRUD + generation)
+    path("my-classrooms/", maic_views.student_maic_my_classrooms, name="student_maic_my_classrooms"),
+    path("classrooms/create/", maic_views.student_maic_classroom_create, name="student_maic_classroom_create"),
+    path("classrooms/<uuid:classroom_id>/update/", maic_views.student_maic_classroom_update, name="student_maic_classroom_update"),
+    path("classrooms/<uuid:classroom_id>/delete/", maic_views.student_maic_classroom_delete, name="student_maic_classroom_delete"),
+    path("validate-topic/", maic_views.student_maic_validate_topic, name="student_maic_validate_topic"),
+
+    # Generation proxies (with guardrails)
+    path("generate/outlines/", maic_views.student_maic_generate_outlines, name="student_maic_generate_outlines"),
+    path("generate/scene-content/", maic_views.student_maic_generate_scene_content, name="student_maic_generate_scene_content"),
+    path("generate/scene-actions/", maic_views.student_maic_generate_scene_actions, name="student_maic_generate_scene_actions"),
+
+    # Chat, TTS, quiz (existing)
     path("chat/", maic_views.student_maic_chat, name="student_maic_chat"),
     path("generate/tts/", maic_views.student_maic_generate_tts, name="student_maic_generate_tts"),
     path("quiz-grade/", maic_views.student_maic_quiz_grade, name="student_maic_quiz_grade"),

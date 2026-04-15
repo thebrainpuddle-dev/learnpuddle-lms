@@ -6,7 +6,7 @@
 // RoundtablePanel, ExportMenu, SceneSidebar, and keyboard shortcuts
 // into a unified interactive stage.
 
-import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { useMAICStageStore } from '../../stores/maicStageStore';
 import { useMAICSettingsStore } from '../../stores/maicSettingsStore';
 import { usePlaybackEngine } from '../../hooks/usePlaybackEngine';
@@ -26,6 +26,7 @@ import { SpeechSubtitles } from './SpeechSubtitles';
 import { RoundtablePanel } from './RoundtablePanel';
 import { ExportMenu } from './ExportMenu';
 import { SceneSidebar } from './SceneSidebar';
+import { NotesPanel } from './NotesPanel';
 import { cn } from '../../lib/utils';
 
 interface StageProps {
@@ -49,6 +50,10 @@ export const Stage: React.FC<StageProps> = ({ role }) => {
   const nextScene = useMAICStageStore((s) => s.nextScene);
   const goToScene = useMAICStageStore((s) => s.goToScene);
 
+  const showNotesPanel = useMAICStageStore((s) => s.showNotesPanel);
+  const toggleNotesPanel = useMAICStageStore((s) => s.toggleNotesPanel);
+  const goToSlide = useMAICStageStore((s) => s.goToSlide);
+
   const showChatPanel = useMAICSettingsStore((s) => s.showChatPanel);
   const setShowChatPanel = useMAICSettingsStore((s) => s.setShowChatPanel);
   const showWhiteboard = useMAICSettingsStore((s) => s.showWhiteboard);
@@ -57,8 +62,23 @@ export const Stage: React.FC<StageProps> = ({ role }) => {
   const setAudioVolume = useMAICSettingsStore((s) => s.setAudioVolume);
 
   const [spotlightActive, setSpotlightActive] = useState(false);
-  const [laserActive, setLaserActive] = useState(false);
   const [showSceneSidebar, setShowSceneSidebar] = useState(false);
+
+  // ─── Mobile Swipe Navigation ──────────────────────────────────────
+  const touchStartRef = useRef<number>(0);
+  const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    touchStartRef.current = e.touches[0].clientX;
+  }, []);
+  const handleTouchEnd = useCallback(
+    (e: React.TouchEvent) => {
+      const diff = touchStartRef.current - e.changedTouches[0].clientX;
+      if (Math.abs(diff) > 50) {
+        if (diff > 0) goToSlide(currentSlideIndex + 1); // swipe left = next
+        else goToSlide(currentSlideIndex - 1); // swipe right = prev
+      }
+    },
+    [goToSlide, currentSlideIndex],
+  );
 
   // Playback engine
   const {
@@ -71,7 +91,7 @@ export const Stage: React.FC<StageProps> = ({ role }) => {
     startClass,
     playFromCurrent,
     stopClass,
-  } = usePlaybackEngine();
+  } = usePlaybackEngine(role);
 
   // Current scene & slide
   const hasScenes = scenes.length > 0;
@@ -159,6 +179,7 @@ export const Stage: React.FC<StageProps> = ({ role }) => {
     onMute: () => setAudioVolume(audioVolume > 0 ? 0 : 0.8),
     onToggleSceneSidebar: () => setShowSceneSidebar((v) => !v),
     onToggleDiscussion: handleToggleDiscussion,
+    onToggleNotes: toggleNotesPanel,
     enabled: true,
   });
 
@@ -183,11 +204,8 @@ export const Stage: React.FC<StageProps> = ({ role }) => {
       {/* Top toolbar */}
       <StageToolbar
         role={role}
-        onLaserToggle={() => setLaserActive((v) => !v)}
-        laserActive={laserActive}
         onDiscussionToggle={handleToggleDiscussion}
         discussionActive={!!discussionMode}
-        onExport={() => {}}
       />
 
       {/* Main content area */}
@@ -200,10 +218,15 @@ export const Stage: React.FC<StageProps> = ({ role }) => {
           />
         )}
 
-        {/* Viewport */}
-        <div className="flex-1 relative flex items-center justify-center bg-gray-900 p-4 min-w-0">
-          {/* 16:9 aspect ratio container */}
-          <div className="relative w-full max-w-5xl aspect-video bg-white rounded-lg shadow-lg overflow-hidden">
+        {/* Viewport wrapper (flex-col to stack video + subtitles) */}
+        <div className="flex-1 flex flex-col min-w-0">
+        <div
+          className="flex-1 relative flex items-center justify-center bg-gray-900 p-2 sm:p-3 min-w-0"
+          onTouchStart={handleTouchStart}
+          onTouchEnd={handleTouchEnd}
+        >
+          {/* 16:9 aspect ratio container — fill viewport as much as possible */}
+          <div className="relative w-full max-w-[95vw] max-h-[calc(100%-0.5rem)] aspect-video bg-white rounded-lg shadow-lg overflow-hidden">
             {/* Scene-based rendering (preferred) */}
             {hasScenes && currentScene ? (
               <div className="absolute inset-0">
@@ -237,7 +260,6 @@ export const Stage: React.FC<StageProps> = ({ role }) => {
             <SpotlightOverlay
               active={spotlightActive}
               onToggle={() => setSpotlightActive(false)}
-              laserActive={laserActive}
             />
 
             {/* Start Class overlay — shows when class hasn't started */}
@@ -259,13 +281,6 @@ export const Stage: React.FC<StageProps> = ({ role }) => {
                 </button>
               </div>
             )}
-
-            {/* Speech subtitles */}
-            <SpeechSubtitles
-              text={speechText}
-              agentName={speakingAgent?.name}
-              agentColor={speakingAgent?.color}
-            />
 
             {/* Discussion panel overlay */}
             {discussionMode && (
@@ -296,10 +311,27 @@ export const Stage: React.FC<StageProps> = ({ role }) => {
           )}
         </div>
 
-        {/* Chat panel (right sidebar) */}
-        {showChatPanel && classroomId && (
-          <div className="hidden md:flex w-80 shrink-0">
-            <ChatPanel role={role} classroomId={classroomId} />
+          {/* Speech subtitles (below the video viewport) */}
+          <SpeechSubtitles
+            text={speechText}
+            agentName={speakingAgent?.name}
+            agentColor={speakingAgent?.color}
+          />
+        </div>
+
+        {/* Right sidebar panels */}
+        {(showChatPanel || showNotesPanel) && (
+          <div className="hidden md:flex flex-col shrink-0">
+            {showChatPanel && classroomId && (
+              <div className={cn('flex w-80', showNotesPanel ? 'flex-1 min-h-0' : 'h-full')}>
+                <ChatPanel role={role} classroomId={classroomId} />
+              </div>
+            )}
+            {showNotesPanel && (
+              <div className={cn('flex', showChatPanel ? 'h-1/2 border-t border-gray-200' : 'h-full')}>
+                <NotesPanel />
+              </div>
+            )}
           </div>
         )}
       </div>

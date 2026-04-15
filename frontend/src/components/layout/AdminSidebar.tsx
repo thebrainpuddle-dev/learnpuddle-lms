@@ -19,6 +19,8 @@ import {
   BookOpenIcon,
   FolderIcon as FolderTreeIcon,
   BuildingLibraryIcon,
+  ClipboardDocumentListIcon,
+  CalendarDaysIcon,
 } from '@heroicons/react/24/outline';
 import { useAuthStore } from '../../stores/authStore';
 import { authService } from '../../services/authService';
@@ -57,12 +59,15 @@ const NAV_SECTIONS: NavSection[] = [
     label: 'PEOPLE',
     items: [
       { name: 'Teachers', href: '/admin/teachers', icon: UserGroupIcon, feature: null, tourId: 'admin-nav-teachers' },
+      { name: 'Students', href: '/admin/students', icon: UsersIcon, feature: null, tourId: 'admin-nav-students' },
       { name: 'Groups', href: '/admin/groups', icon: FolderTreeIcon, feature: 'groups' as const, tourId: 'admin-nav-groups' },
+      { name: 'Directory', href: '/admin/directory', icon: ClipboardDocumentListIcon, feature: null, tourId: 'admin-nav-directory' },
     ],
   },
   {
     label: 'INSIGHTS',
     items: [
+      { name: 'Attendance', href: '/admin/attendance', icon: CalendarDaysIcon, feature: null, tourId: 'admin-nav-attendance' },
       { name: 'Certifications', href: '/admin/certifications', icon: ShieldCheckIcon, feature: null, tourId: 'admin-nav-certifications' },
       { name: 'Analytics', href: '/admin/analytics', icon: ChartBarIcon, feature: null, tourId: 'admin-nav-analytics' },
     ],

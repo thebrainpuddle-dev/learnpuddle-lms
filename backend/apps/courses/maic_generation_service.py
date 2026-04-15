@@ -7,8 +7,10 @@ encrypted API keys stored in TenantAIConfig.
 
 Functions:
     generate_outline_sse()   → SSE text iterator for outline streaming
-    generate_scene_content() → dict with slide data
-    generate_scene_actions() → dict with action list
+    generate_scene_content() → dict with multi-slide data (5-8 slides per scene)
+    generate_scene_actions() → dict with rich action list (15-25 actions, 12 types)
+    generate_tts_audio()     → bytes for per-agent TTS voices
+    fallback_quiz_grade()    → LLM-based quiz grading when sidecar is down
 """
 
 import io
@@ -22,6 +24,15 @@ from json_repair import repair_json
 from apps.courses.maic_models import TenantAIConfig
 
 logger = logging.getLogger(__name__)
+
+# ─── Agent Voice Mapping ─────────────────────────────────────────────────────
+
+AGENT_VOICE_MAP = {
+    "professor": "en-US-GuyNeural",
+    "teaching_assistant": "en-US-JennyNeural",
+    "student_rep": "en-US-AriaNeural",
+    "moderator": "en-US-DavisNeural",
+}
 
 # ─── LLM Call Helpers ─────────────────────────────────────────────────────────
 
@@ -126,9 +137,11 @@ Return a valid JSON object with this exact structure:
       "id": "scene-1",
       "title": "Scene title",
       "description": "Brief description of what this scene covers",
-      "type": "lecture|discussion|quiz|activity|summary",
+      "type": "introduction|lecture|discussion|quiz|activity|pbl|case_study|summary",
       "estimatedMinutes": 3,
-      "agentIds": ["agent-1", "agent-2"]
+      "agentIds": ["agent-1", "agent-2"],
+      "slideCount": 6,
+      "questionCount": 0
     }
   ],
   "agents": [
@@ -136,7 +149,7 @@ Return a valid JSON object with this exact structure:
       "id": "agent-1",
       "name": "Professor Chen",
       "role": "professor",
-      "avatar": "👨‍🏫",
+      "avatar": "\\ud83d\\udc68\\u200d\\ud83c\\udfeb",
       "color": "#4F46E5",
       "personality": "Warm, authoritative, uses analogies to explain complex ideas",
       "expertise": "Subject matter expert who leads lectures"
@@ -147,11 +160,21 @@ Return a valid JSON object with this exact structure:
 
 Rules:
 - The FIRST scene MUST be type "introduction" — all agents introduce themselves and preview the class
+- The LAST scene MUST be type "summary" — wrap up key takeaways and next steps
+- Automatically insert a "quiz" scene after every 2-3 lecture/discussion scenes to reinforce learning
 - Create exactly the requested number of scenes and agents after the introduction
 - Each scene should have 2-5 minutes estimated time
 - Every scene MUST have at least 2 agents assigned (for dialogue)
 - Agents should have DISTINCT personalities — one might be enthusiastic, another analytical, another asks probing questions
-- Use diverse scene types: introduction → lectures → discussion → quiz → summary
+- Scene type distribution: introduction -> lectures -> quiz -> lectures/discussion -> quiz -> summary
+- For "lecture" scenes: set "slideCount" to 5-8 (number of slides to generate)
+- For "discussion" scenes: set "slideCount" to 3-5
+- For "introduction" scenes: set "slideCount" to 3-4
+- For "summary" scenes: set "slideCount" to 3-4
+- For "quiz" scenes: set "questionCount" to 3-5, "slideCount" to 1
+- For "activity" scenes: set "slideCount" to 3-5
+- For "pbl" scenes: set "slideCount" to 4-6, include project overview, milestones, deliverables
+- For "case_study" scenes: set "slideCount" to 4-6, include scenario, analysis, discussion points
 - Agent roles: professor (leads), teaching_assistant (supports, asks questions), student_rep (raises common confusions), moderator (guides discussion)
 - Agent names should be realistic full names (e.g. "Dr. Sarah Kim", "Professor James Rivera")
 - Agent colors should be visually distinct hex colors
@@ -176,7 +199,7 @@ Number of scenes: {scene_count}
 """
     if pdf_text:
         # Truncate to avoid token limits
-        excerpt = pdf_text[:6000]
+        excerpt = pdf_text[:15000]
         user_prompt += f"\nReference material (excerpt):\n{excerpt}\n"
 
     # Send a progress event first
@@ -234,74 +257,110 @@ Number of scenes: {scene_count}
 
 # ─── Scene Content Generation ────────────────────────────────────────────────
 
-SCENE_CONTENT_SYSTEM_PROMPT = """You are an expert educational content designer creating rich, visually appealing slides for an interactive AI classroom.
+SCENE_CONTENT_SYSTEM_PROMPT = """You are an expert educational content designer creating rich, visually appealing multi-slide presentations for an interactive AI classroom.
 
-Given a scene from a classroom outline, generate detailed slide content with well-laid-out elements.
+Given a scene from a classroom outline, generate an ARRAY of 5-8 slides with diverse layouts and content types.
 
 Return a valid JSON object:
 {
-  "slide": {
-    "id": "slide-<scene_id>",
-    "title": "Slide title",
-    "elements": [
-      {
-        "type": "text",
-        "id": "el-1",
-        "x": 40,
-        "y": 30,
-        "width": 720,
-        "height": 50,
-        "content": "Main Heading Text",
-        "style": {"fontSize": 32, "fontWeight": "bold", "color": "#1E293B"}
-      },
-      {
-        "type": "text",
-        "id": "el-2",
-        "x": 40,
-        "y": 90,
-        "width": 720,
-        "height": 20,
-        "content": "A brief subtitle or context line",
-        "style": {"fontSize": 16, "color": "#64748B", "fontStyle": "italic"}
-      },
-      {
-        "type": "text",
-        "id": "el-3",
-        "x": 40,
-        "y": 130,
-        "width": 720,
-        "height": 260,
-        "content": "• Key point one explained clearly\\n\\n• Key point two with detail\\n\\n• Key point three with example\\n\\n• Key point four — practical application",
-        "style": {"fontSize": 18, "color": "#334155", "lineHeight": 1.6}
-      },
-      {
-        "type": "text",
-        "id": "el-4",
-        "x": 40,
-        "y": 400,
-        "width": 720,
-        "height": 30,
-        "content": "💡 Key takeaway or memorable insight",
-        "style": {"fontSize": 15, "color": "#0F766E", "fontWeight": "600"}
-      }
-    ],
-    "background": "#FFFFFF",
-    "speakerScript": "A detailed 3-5 sentence script that the lead agent reads aloud. It should explain the content naturally, with context, transitions, and a conversational tone — as if teaching a real class.",
-    "duration": 45
-  }
+  "slides": [
+    {
+      "id": "slide-scene-1-1",
+      "title": "Introduction to the Topic",
+      "elements": [
+        {
+          "type": "text",
+          "id": "el-s1-1",
+          "x": 100, "y": 80, "width": 600, "height": 70,
+          "content": "Main Title Text",
+          "style": {"fontSize": 36, "fontWeight": "bold", "color": "#1E293B", "textAlign": "center"}
+        },
+        {
+          "type": "text",
+          "id": "el-s1-2",
+          "x": 150, "y": 170, "width": 500, "height": 30,
+          "content": "A compelling subtitle or tagline",
+          "style": {"fontSize": 18, "color": "#64748B", "fontStyle": "italic", "textAlign": "center"}
+        },
+        {
+          "type": "text",
+          "id": "el-s1-3",
+          "x": 100, "y": 250, "width": 600, "height": 120,
+          "content": "Brief overview of what we will cover in this lesson...",
+          "style": {"fontSize": 16, "color": "#475569", "lineHeight": 1.6}
+        }
+      ],
+      "background": "#FFFFFF",
+      "speakerScript": "Welcome everyone! Today we are going to explore a fascinating topic...",
+      "duration": 40
+    },
+    {
+      "id": "slide-scene-1-2",
+      "title": "Key Concepts",
+      "elements": [
+        {
+          "type": "text",
+          "id": "el-s2-1",
+          "x": 40, "y": 30, "width": 720, "height": 50,
+          "content": "Key Concepts",
+          "style": {"fontSize": 30, "fontWeight": "bold", "color": "#1E293B"}
+        },
+        {
+          "type": "text",
+          "id": "el-s2-2",
+          "x": 40, "y": 90, "width": 400, "height": 280,
+          "content": "\\u2022 First key point explained clearly\\n\\n\\u2022 Second key point with detail\\n\\n\\u2022 Third key point with example\\n\\n\\u2022 Fourth key point with application",
+          "style": {"fontSize": 18, "color": "#334155", "lineHeight": 1.6}
+        },
+        {
+          "type": "image",
+          "id": "el-s2-img",
+          "x": 460, "y": 90, "width": 300, "height": 240,
+          "content": "Descriptive prompt for a relevant diagram or illustration",
+          "src": ""
+        },
+        {
+          "type": "text",
+          "id": "el-s2-3",
+          "x": 40, "y": 390, "width": 720, "height": 30,
+          "content": "Key takeaway or memorable insight",
+          "style": {"fontSize": 15, "color": "#0F766E", "fontWeight": "600"}
+        }
+      ],
+      "background": "#FFFFFF",
+      "speakerScript": "Let me walk you through the key concepts...",
+      "duration": 50
+    }
+  ]
 }
 
+SLIDE LAYOUT GUIDELINES (follow this pattern for each slide position):
+- Slide 1: TITLE slide — large centered heading (36px), subtitle, brief overview. Clean and impactful.
+- Slide 2-3: CONTENT slides — heading + bullet points (left side) + image element (right side) + takeaway. Use split layout.
+- Slide 4: DIAGRAM/VISUAL slide — image placeholder element (centered, large) + descriptive caption. Primarily visual.
+- Slide 5-6: DEEP DIVE slides — detailed content with examples, code snippets, or step-by-step explanations. Can be text-heavy.
+- Slide 7: KEY CONCEPTS slide — summary grid or comparison table layout. Use multiple smaller text blocks arranged in a grid.
+- Slide 8: TRANSITION slide — summary of the scene + teaser for next scene. Clean, minimal text.
+
+IMAGE ELEMENTS:
+Include "type": "image" elements with "content" being a descriptive prompt for image generation (e.g., "Diagram showing the water cycle with evaporation, condensation, and precipitation labeled"), and "src" set to empty string "".
+
 Rules:
-- Coordinate space is 800x450 pixels
-- Create 3-5 text elements per slide (heading, optional subtitle, body content, takeaway)
+- Coordinate space is 800x450 pixels per slide
+- Generate the number of slides specified (default 5-8, minimum 3)
+- Each slide element MUST have a globally unique ID (use format "el-s{slideNum}-{elementNum}")
+- Each slide ID MUST be unique (use format "slide-{sceneId}-{slideNum}")
+- Create 3-6 elements per slide (mix of text and image types)
+- Include at least 2 image elements across all slides
 - Use \\n\\n for paragraph breaks in bullet content (NOT just \\n)
-- Heading: bold, 28-34px, dark color (#1E293B)
+- Heading: bold, 28-36px, dark color (#1E293B)
 - Body: 16-20px, readable color (#334155)
-- Takeaway/highlight: distinctive color, smaller font
-- Speaker script MUST be 3-5 sentences, written in first person as the presenting agent
-- Speaker script should add context BEYOND what's on the slide (don't just read the bullets)
+- Takeaway/highlight: distinctive color (#0F766E), smaller font
+- Speaker script MUST be 3-5 sentences per slide, written in first person as the presenting agent
+- Speaker script should add context BEYOND what is on the slide (do not just read the bullets)
 - For introduction scenes: the speaker script should introduce the agent and preview the lesson
 - Duration should be 30-60 seconds per slide
+- Vary the background colors subtly: #FFFFFF, #F8FAFC, #F1F5F9, #FFFBEB for visual interest
 
 For quiz scenes, return:
 {
@@ -322,22 +381,59 @@ For quiz scenes, return:
 }"""
 
 
+def _fill_image_urls(parsed: dict, scene_id: str) -> dict:
+    """Post-process slides to fill in image URLs using image_service."""
+    from apps.courses.image_service import fetch_scene_image
+
+    slides = parsed.get("slides", [])
+    for slide_idx, slide in enumerate(slides):
+        for element in slide.get("elements", []):
+            if element.get("type") == "image" and not element.get("src"):
+                keyword = element.get("content", "educational illustration")
+                try:
+                    url = fetch_scene_image(keyword)
+                    element["src"] = url
+                except Exception:
+                    # Keep src empty, frontend will show placeholder
+                    pass
+    return parsed
+
+
 def generate_scene_content(scene: dict, agents: list, language: str,
                            config: TenantAIConfig) -> dict | None:
-    """Generate slide content for a single scene. Returns parsed dict."""
+    """Generate multi-slide content for a single scene. Returns parsed dict with 'slides' array."""
     scene_type = scene.get("type", "lecture")
-    user_prompt = f"""Generate content for this classroom scene:
+    scene_id = scene.get("id", "scene-1")
+    slide_count = max(3, min(12, scene.get("slideCount", 6)))
+    question_count = max(2, min(8, scene.get("questionCount", 4)))
+
+    if scene_type == "quiz":
+        user_prompt = f"""Generate content for this classroom quiz scene:
+
+Scene title: {scene["title"]}
+Scene description: {scene.get("description", "")}
+Scene type: quiz
+Language: {language}
+Assigned agents: {json.dumps([a["name"] for a in agents if a["id"] in scene.get("agentIds", [])])}
+
+Generate {question_count} multiple choice questions that test understanding of the material covered so far.
+"""
+    else:
+        user_prompt = f"""Generate a multi-slide presentation for this classroom scene:
 
 Scene title: {scene["title"]}
 Scene description: {scene.get("description", "")}
 Scene type: {scene_type}
+Scene ID: {scene_id}
 Language: {language}
+Number of slides to generate: {slide_count}
 Assigned agents: {json.dumps([a["name"] for a in agents if a["id"] in scene.get("agentIds", [])])}
 
-{"Generate quiz questions (3-4 multiple choice questions)." if scene_type == "quiz" else "Generate a visual slide with text elements and a speaker script."}
+Generate exactly {slide_count} slides following the layout guidelines (title slide, content slides with images, diagram slide, deep dive, key concepts, transition). Include at least 2 image elements across the slides. Each slide must have a unique speakerScript.
 """
 
-    raw = _call_llm(config, SCENE_CONTENT_SYSTEM_PROMPT, user_prompt, temperature=0.6, max_tokens=3000)
+    raw = _call_llm(config, SCENE_CONTENT_SYSTEM_PROMPT, user_prompt,
+                    temperature=0.6, max_tokens=8192)
     if not raw:
         return _fallback_scene_content(scene)
 
@@ -345,105 +441,250 @@ Assigned agents: {json.dumps([a["name"] for a in agents if a["id"] in scene.get(
     if not parsed or not isinstance(parsed, dict):
         return _fallback_scene_content(scene)
 
-    # Ensure slide has required fields
-    if "slide" in parsed:
+    # Handle multi-slide response
+    if "slides" in parsed and isinstance(parsed["slides"], list):
+        for i, slide in enumerate(parsed["slides"]):
+            if not slide.get("id"):
+                slide["id"] = f"slide-{scene_id}-{i + 1}"
+            if not slide.get("title"):
+                slide["title"] = scene.get("title", "Untitled") if i == 0 else f"Slide {i + 1}"
+            if not slide.get("elements"):
+                slide["elements"] = []
+            if not slide.get("background"):
+                slide["background"] = "#FFFFFF"
+            if not slide.get("duration"):
+                slide["duration"] = 45
+            # Ensure each element has an id
+            for j, el in enumerate(slide["elements"]):
+                if not el.get("id"):
+                    el["id"] = f"el-s{i + 1}-{j + 1}"
+        # Backward compatibility: include "slide" key pointing to first slide
+        parsed["slide"] = parsed["slides"][0]
+    elif "slide" in parsed:
+        # Old format: single slide returned. Wrap in array for compatibility.
         slide = parsed["slide"]
         if not slide.get("id"):
-            slide["id"] = f"slide-{scene.get('id', uuid.uuid4().hex[:8])}"
+            slide["id"] = f"slide-{scene_id}-1"
         if not slide.get("title"):
             slide["title"] = scene.get("title", "Untitled")
         if not slide.get("elements"):
             slide["elements"] = []
-        # Ensure each element has an id
         for j, el in enumerate(slide["elements"]):
             if not el.get("id"):
                 el["id"] = f"el-{j + 1}"
+        parsed["slides"] = [slide]
 
+    _fill_image_urls(parsed, scene_id)
     return parsed
 
 
 def _fallback_scene_content(scene: dict) -> dict:
-    """Deterministic fallback when LLM fails."""
+    """Deterministic fallback when LLM fails. Returns multi-slide format (3 slides min)."""
     scene_id = scene.get("id", "scene-1")
-    return {
-        "slide": {
-            "id": f"slide-{scene_id}",
-            "title": scene.get("title", "Untitled"),
-            "elements": [
-                {
-                    "type": "text",
-                    "id": "el-heading",
-                    "x": 50, "y": 80, "width": 700, "height": 40,
-                    "content": scene.get("title", "Untitled"),
-                    "style": {"fontSize": 28, "fontWeight": "bold", "color": "#1F2937"},
-                },
-                {
-                    "type": "text",
-                    "id": "el-body",
-                    "x": 50, "y": 150, "width": 700, "height": 200,
-                    "content": scene.get("description", "Content for this scene."),
-                    "style": {"fontSize": 18, "color": "#4B5563"},
-                },
-            ],
-            "background": "#FFFFFF",
-            "speakerScript": scene.get("description", f"Let's talk about {scene.get('title', 'this topic')}."),
-            "duration": scene.get("estimatedMinutes", 3) * 60,
-        }
+    title = scene.get("title", "Untitled")
+    description = scene.get("description", "Content for this scene.")
+    duration_per_slide = max(30, (scene.get("estimatedMinutes", 3) * 60) // 3)
+
+    slide_1 = {
+        "id": f"slide-{scene_id}-1",
+        "title": title,
+        "elements": [
+            {
+                "type": "text",
+                "id": f"el-{scene_id}-s1-heading",
+                "x": 100, "y": 80, "width": 600, "height": 70,
+                "content": title,
+                "style": {"fontSize": 36, "fontWeight": "bold", "color": "#1E293B", "textAlign": "center"},
+            },
+            {
+                "type": "text",
+                "id": f"el-{scene_id}-s1-subtitle",
+                "x": 150, "y": 170, "width": 500, "height": 30,
+                "content": description[:120],
+                "style": {"fontSize": 18, "color": "#64748B", "fontStyle": "italic", "textAlign": "center"},
+            },
+        ],
+        "background": "#FFFFFF",
+        "speakerScript": f"Welcome! Let's explore {title}. {description}",
+        "duration": duration_per_slide,
     }
+
+    slide_2 = {
+        "id": f"slide-{scene_id}-2",
+        "title": f"Understanding {title}",
+        "elements": [
+            {
+                "type": "text",
+                "id": f"el-{scene_id}-s2-heading",
+                "x": 40, "y": 30, "width": 720, "height": 50,
+                "content": f"Understanding {title}",
+                "style": {"fontSize": 30, "fontWeight": "bold", "color": "#1E293B"},
+            },
+            {
+                "type": "text",
+                "id": f"el-{scene_id}-s2-body",
+                "x": 40, "y": 90, "width": 400, "height": 280,
+                "content": description,
+                "style": {"fontSize": 18, "color": "#4B5563", "lineHeight": 1.6},
+            },
+            {
+                "type": "image",
+                "id": f"el-{scene_id}-s2-img",
+                "x": 460, "y": 90, "width": 300, "height": 240,
+                "content": f"Educational diagram illustrating the concept of {title}",
+                "src": "",
+            },
+        ],
+        "background": "#F8FAFC",
+        "speakerScript": f"Now let me explain the key aspects of {title}. This is fundamental to understanding the broader topic.",
+        "duration": duration_per_slide,
+    }
+
+    slide_3 = {
+        "id": f"slide-{scene_id}-3",
+        "title": "Key Takeaways",
+        "elements": [
+            {
+                "type": "text",
+                "id": f"el-{scene_id}-s3-heading",
+                "x": 40, "y": 30, "width": 720, "height": 50,
+                "content": "Key Takeaways",
+                "style": {"fontSize": 30, "fontWeight": "bold", "color": "#1E293B"},
+            },
+            {
+                "type": "text",
+                "id": f"el-{scene_id}-s3-body",
+                "x": 40, "y": 100, "width": 720, "height": 250,
+                "content": f"\u2022 Core concepts of {title}\n\n\u2022 Practical applications and relevance\n\n\u2022 How this connects to what comes next",
+                "style": {"fontSize": 18, "color": "#334155", "lineHeight": 1.6},
+            },
+            {
+                "type": "text",
+                "id": f"el-{scene_id}-s3-takeaway",
+                "x": 40, "y": 380, "width": 720, "height": 30,
+                "content": f"Remember: {title} is a building block for everything that follows.",
+                "style": {"fontSize": 15, "color": "#0F766E", "fontWeight": "600"},
+            },
+        ],
+        "background": "#F1F5F9",
+        "speakerScript": f"Let's wrap up what we have learned about {title}. Keep these key points in mind as we move forward.",
+        "duration": duration_per_slide,
+    }
+
+    slides = [slide_1, slide_2, slide_3]
+    result = {
+        "slides": slides,
+        "slide": slides[0],  # Backward compatibility
+    }
+    _fill_image_urls(result, scene_id)
+    return result
 
 
 # ─── Scene Actions Generation ────────────────────────────────────────────────
 
-ACTIONS_SYSTEM_PROMPT = """You are an expert director choreographing a multi-agent interactive classroom. Your job is to create a dynamic, engaging sequence where MULTIPLE agents teach together — like a real classroom with a professor and teaching assistants.
+ACTIONS_SYSTEM_PROMPT = """You are an expert director choreographing a multi-agent interactive classroom. Your job is to create a dynamic, engaging sequence where MULTIPLE agents teach together across MULTIPLE SLIDES — like a real classroom with a professor and teaching assistants.
 
-Given a scene's content and agents, generate a sequence of playback actions that creates DIALOGUE between agents.
+Given a scene's multi-slide content and agents, generate a rich sequence of playback actions that creates DIALOGUE between agents AND navigates between slides.
 
 Return a valid JSON object:
 {
   "actions": [
-    {"type": "speech", "agentId": "agent-1", "text": "Welcome everyone! Today we're exploring..."},
-    {"type": "spotlight", "elementId": "el-1", "duration": 2500},
-    {"type": "speech", "agentId": "agent-1", "text": "Let me start by explaining the first key concept..."},
-    {"type": "highlight", "elementId": "el-3", "color": "#DBEAFE"},
-    {"type": "speech", "agentId": "agent-2", "text": "Great point! I'd like to add that many students find this confusing at first. Think of it like..."},
+    {"type": "speech", "agentId": "agent-1", "text": "Welcome everyone! Today we are exploring..."},
+    {"type": "spotlight", "elementId": "el-s1-1", "duration": 2500},
+    {"type": "speech", "agentId": "agent-2", "text": "I am excited to dive into this topic with you all!"},
     {"type": "pause", "duration": 800},
-    {"type": "speech", "agentId": "agent-1", "text": "Exactly! And building on that analogy..."},
-    {"type": "spotlight", "elementId": "el-4", "duration": 2000},
-    {"type": "speech", "agentId": "agent-2", "text": "So the key takeaway here is..."}
+    {"type": "transition", "slideIndex": 1},
+    {"type": "speech", "agentId": "agent-1", "text": "Now let us look at the key concepts..."},
+    {"type": "spotlight", "elementId": "el-s2-1", "duration": 2000},
+    {"type": "highlight", "elementId": "el-s2-2", "color": "#DBEAFE"},
+    {"type": "speech", "agentId": "agent-2", "text": "Students often find this part tricky. Think of it like..."},
+    {"type": "wb_open"},
+    {"type": "wb_draw_text", "text": "Key Formula: E = mc^2", "x": 200, "y": 100, "fontSize": 28, "color": "#1E293B"},
+    {"type": "speech", "agentId": "agent-1", "text": "Let me write this out on the board so it is clearer..."},
+    {"type": "wb_draw_shape", "shape": "arrow", "x": 200, "y": 160, "width": 200, "height": 40, "color": "#DC2626"},
+    {"type": "wb_close"},
+    {"type": "transition", "slideIndex": 2},
+    {"type": "speech", "agentId": "agent-1", "text": "Notice how this diagram shows..."},
+    {"type": "discussion", "sessionType": "qa", "topic": "Why is this important?", "agentIds": ["agent-1", "agent-2"]},
+    {"type": "transition", "slideIndex": 3},
+    {"type": "speech", "agentId": "agent-2", "text": "Let me summarize what we have covered..."}
   ]
 }
 
-Action types:
-- speech: Agent speaks text (requires agentId, text). Text should be 1-3 sentences, natural and conversational.
-- spotlight: Highlight an element (requires elementId, duration in ms)
-- highlight: Color-highlight an element (requires elementId, color hex like "#DBEAFE")
-- pause: Brief dramatic pause (requires duration in ms, typically 500-1500)
+ACTION TYPES (12 types — use all of these for maximum engagement):
+
+1. speech       — Agent speaks (requires: agentId, text). 1-3 sentences each.
+2. spotlight    — Highlight element glow (requires: elementId, duration in ms)
+3. highlight    — Color overlay on element (requires: elementId, color hex like "#DBEAFE")
+4. pause        — Dramatic pause (requires: duration in ms, 500-1500)
+5. transition   — Advance to next slide (requires: slideIndex — 0-based index of the target slide). CRITICAL for multi-slide scenes.
+6. wb_open      — Open whiteboard overlay (no params)
+7. wb_draw_text — Draw text on whiteboard (requires: text, x, y, fontSize, color)
+8. wb_draw_shape— Draw shape on whiteboard (requires: shape ["circle"|"rect"|"arrow"], x, y, width, height, color)
+9. wb_draw_line — Draw line on whiteboard (requires: x1, y1, x2, y2, color, strokeWidth)
+10. wb_close    — Close whiteboard overlay (no params)
+11. wb_clear    — Clear whiteboard content (no params)
+12. discussion  — Start discussion segment (requires: sessionType ["qa"|"roundtable"], topic, agentIds)
 
 CRITICAL RULES:
-- Generate 6-12 actions per scene (more is better for engagement)
-- EVERY assigned agent MUST speak at least twice
+- Generate 15-25 actions per scene (more is better for engagement)
+- EVERY assigned agent MUST speak at least 3 times
+- For multi-slide scenes, you MUST include "transition" actions between slides
+  - The first slide is slideIndex 0 (shown by default, no transition needed)
+  - To move to slide 2, use {"type": "transition", "slideIndex": 1}
+  - Include ALL transitions — one for each slide after the first
 - Create DIALOGUE: agents should respond to each other, not just monologue
-  - Agent A explains → Agent B adds perspective → Agent A builds on it
-  - Agent B asks "What about...?" → Agent A answers
-  - Agent A says fact → Agent B gives analogy → Agent A summarizes
+  - Agent A explains -> Agent B adds perspective -> Agent A builds on it
+  - Agent B asks "What about...?" -> Agent A answers
+  - Agent A says fact -> Agent B gives analogy -> Agent A summarizes
+- Use WHITEBOARD (wb_open/wb_draw_text/wb_draw_shape/wb_close) at least once per scene for formulas, diagrams, or key concepts
+- Include at least one DISCUSSION action for interactive engagement
 - Speech text should feel like a real conversation, not reading from notes
 - Each speech should be 1-3 sentences (short, punchy, conversational)
-- Use the speaker's NAME style: professors explain authoritatively, assistants ask clarifying questions, student reps voice common confusions
-- Spotlight the heading element first, then key content elements
+- Use the speaker's role style: professors explain authoritatively, assistants ask clarifying questions, student reps voice common confusions
+- Spotlight the heading element first, then key content elements on each slide
 - Add pauses (500-1000ms) between speaker changes for natural pacing
 - For introduction scenes: each agent introduces themselves personally
 - Use element IDs from the slide content for spotlight/highlight actions
-- End with a strong summary or transition statement"""
+- End with a strong summary or transition statement
+- The action flow should follow the slide order: discuss slide 0, transition to 1, discuss 1, transition to 2, etc."""
 
 
 def generate_scene_actions(scene: dict, agents: list, language: str,
                            config: TenantAIConfig) -> dict | None:
-    """Generate playback actions for a scene. Returns parsed dict."""
-    elements_desc = ""
+    """Generate rich playback actions for a multi-slide scene. Returns parsed dict."""
     content = scene.get("content", {})
-    if isinstance(content, dict) and content.get("type") == "slide":
-        elements = content.get("elements", [])
-        elements_desc = json.dumps([{"id": e.get("id"), "type": e.get("type"), "content": str(e.get("content", ""))[:100]} for e in elements])
+
+    # Build per-slide element descriptions for the prompt
+    slides_desc = []
+    total_slide_count = 1
+    if isinstance(content, dict):
+        slides = content.get("slides", [])
+        if slides:
+            total_slide_count = len(slides)
+            for si, slide in enumerate(slides):
+                elements = slide.get("elements", [])
+                el_summary = [{"id": e.get("id"), "type": e.get("type"),
+                               "content": str(e.get("content", ""))[:80]}
+                              for e in elements]
+                slides_desc.append({
+                    "slideIndex": si,
+                    "title": slide.get("title", ""),
+                    "speakerScript": slide.get("speakerScript", "")[:200],
+                    "elements": el_summary,
+                })
+        elif content.get("type") == "slide" or "elements" in content:
+            # Legacy single-slide format
+            elements = content.get("elements", [])
+            el_summary = [{"id": e.get("id"), "type": e.get("type"),
+                           "content": str(e.get("content", ""))[:80]}
+                          for e in elements]
+            slides_desc.append({
+                "slideIndex": 0,
+                "title": content.get("title", scene.get("title", "")),
+                "speakerScript": content.get("speakerScript", "")[:200],
+                "elements": el_summary,
+            })
 
     # Check both multiAgent.agentIds (frontend format) and agentIds (outline format)
     scene_agent_ids = (
@@ -462,21 +703,33 @@ def generate_scene_actions(scene: dict, agents: list, language: str,
         "personality": a.get("personality", ""),
     } for a in assigned_agents])
 
-    user_prompt = f"""Generate a rich, multi-agent dialogue sequence for this scene:
+    slides_json = json.dumps(slides_desc, indent=2) if slides_desc else "[]"
+
+    user_prompt = f"""Generate a rich, multi-agent dialogue sequence for this multi-slide scene:
 
 Scene title: {scene.get("title", "")}
-Scene type: {scene.get("type", "slide")}
+Scene type: {scene.get("type", "lecture")}
 Language: {language}
-Slide elements (use these IDs for spotlight/highlight): {elements_desc}
-Speaker script (use as basis for the lead agent's content): {scene.get("content", {}).get("speakerScript", "") if isinstance(scene.get("content"), dict) else ""}
+Total slides in this scene: {total_slide_count}
+
+Slides and their elements (use these IDs for spotlight/highlight):
+{slides_json}
 
 Agents in this scene:
 {agent_details}
 
-IMPORTANT: Generate 8-12 actions where ALL agents participate in dialogue. Create a back-and-forth conversation between the agents about this topic. Each agent should speak at least 2 times. Spotlight key elements as agents discuss them.
+IMPORTANT:
+- Generate 15-25 actions with rich variety (speech, spotlight, highlight, whiteboard, discussion, transitions)
+- Include a "transition" action (with slideIndex) between EACH slide. First slide (index 0) is shown by default.
+- ALL agents must participate in dialogue — each agent speaks at least 3 times
+- Use whiteboard (wb_open, wb_draw_text/shape, wb_close) at least once for a key concept
+- Include at least one discussion action
+- Create back-and-forth conversation, not monologue
+- Reference element IDs from the slides for spotlight and highlight actions
 """
 
-    raw = _call_llm(config, ACTIONS_SYSTEM_PROMPT, user_prompt, temperature=0.5, max_tokens=2000)
+    raw = _call_llm(config, ACTIONS_SYSTEM_PROMPT, user_prompt,
+                    temperature=0.5, max_tokens=4096)
     if not raw:
         return _fallback_actions(scene, assigned_agents)
 
@@ -488,39 +741,88 @@ IMPORTANT: Generate 8-12 actions where ALL agents participate in dialogue. Creat
 
 
 def _fallback_actions(scene: dict, agents: list) -> dict:
-    """Deterministic multi-agent fallback actions."""
+    """Deterministic multi-agent fallback actions with transitions and rich action types."""
     primary_id = agents[0]["id"] if agents else "agent-1"
     primary_name = agents[0].get("name", "Instructor") if agents else "Instructor"
     content = scene.get("content", {})
-    script = ""
-    if isinstance(content, dict):
-        script = content.get("speakerScript", "") or scene.get("description", "")
     title = scene.get("title", "this topic")
 
-    actions = [
-        {"type": "speech", "agentId": primary_id, "text": script or f"Let me walk you through {title}."},
-    ]
-
-    # Spotlight first element
+    # Gather slide data for multi-slide transitions
+    slides = []
     if isinstance(content, dict):
-        elements = content.get("elements", [])
-        if elements:
-            actions.append({"type": "spotlight", "elementId": elements[0].get("id", "el-1"), "duration": 2500})
+        slides = content.get("slides", [])
+        if not slides and "elements" in content:
+            # Single-slide legacy format
+            slides = [content]
 
-    # Second agent adds perspective
+    actions = []
+
+    # --- Slide 0: Introduction ---
+    slide0_script = ""
+    slide0_elements = []
+    if slides:
+        slide0_script = slides[0].get("speakerScript", "")
+        slide0_elements = slides[0].get("elements", [])
+
+    actions.append({"type": "speech", "agentId": primary_id,
+                    "text": slide0_script or f"Let me walk you through {title}."})
+
+    if slide0_elements:
+        actions.append({"type": "spotlight", "elementId": slide0_elements[0].get("id", "el-1"), "duration": 2500})
+
+    # Second agent responds
     if len(agents) > 1:
         second_id = agents[1]["id"]
         second_name = agents[1].get("name", "Assistant")
         actions.append({"type": "pause", "duration": 800})
         actions.append({"type": "speech", "agentId": second_id,
-                        "text": f"Great overview, {primary_name}! Students often ask about the practical applications of {title}. Let me add some context."})
-        # Spotlight another element if available
-        if isinstance(content, dict):
-            elements = content.get("elements", [])
-            if len(elements) > 1:
-                actions.append({"type": "highlight", "elementId": elements[-1].get("id", "el-2"), "color": "#DBEAFE"})
+                        "text": f"Great introduction, {primary_name}! I think this is a really important topic for our students."})
+
+    # --- Transitions for slides 1+ ---
+    for si in range(1, len(slides)):
+        slide = slides[si]
+        slide_elements = slide.get("elements", [])
+        slide_script = slide.get("speakerScript", "")
+
+        # Transition action
+        actions.append({"type": "transition", "slideIndex": si})
+
+        # Primary agent explains this slide
         actions.append({"type": "speech", "agentId": primary_id,
-                        "text": f"Thank you, {second_name}. That's an excellent point. Let's continue to the next part."})
+                        "text": slide_script or f"Moving on to {slide.get('title', 'the next topic')}."})
+
+        # Spotlight first element on this slide
+        if slide_elements:
+            actions.append({"type": "spotlight", "elementId": slide_elements[0].get("id", f"el-s{si+1}-1"), "duration": 2000})
+
+        # Highlight content element if available
+        if len(slide_elements) > 1:
+            actions.append({"type": "highlight", "elementId": slide_elements[1].get("id", f"el-s{si+1}-2"), "color": "#DBEAFE"})
+
+        # Second agent chimes in
+        if len(agents) > 1:
+            actions.append({"type": "pause", "duration": 600})
+            actions.append({"type": "speech", "agentId": agents[1]["id"],
+                            "text": f"That is a great point. I would add that this connects to what we discussed earlier about {title}."})
+
+    # --- Whiteboard segment ---
+    actions.append({"type": "wb_open"})
+    actions.append({"type": "wb_draw_text", "text": f"Key Concept: {title}", "x": 150, "y": 80, "fontSize": 24, "color": "#1E293B"})
+    actions.append({"type": "speech", "agentId": primary_id,
+                    "text": f"Let me write this on the board to make it clearer. This is the core idea behind {title}."})
+    actions.append({"type": "wb_draw_shape", "shape": "rect", "x": 120, "y": 60, "width": 560, "height": 60, "color": "#3B82F6"})
+    actions.append({"type": "wb_close"})
+
+    # --- Discussion ---
+    all_agent_ids = [a["id"] for a in agents]
+    actions.append({"type": "discussion", "sessionType": "qa", "topic": f"What questions do you have about {title}?", "agentIds": all_agent_ids})
+
+    # --- Closing ---
+    if len(agents) > 1:
+        actions.append({"type": "speech", "agentId": agents[1]["id"],
+                        "text": f"Excellent discussion! I think the key takeaway from {title} is really going to help in the next section."})
+    actions.append({"type": "speech", "agentId": primary_id,
+                    "text": f"Well said. Let us move on to see how these concepts apply in practice."})
 
     return {"actions": actions}
 
@@ -605,30 +907,51 @@ Respond with a JSON array. The first response should be from the lead professor,
 
 # ─── TTS Generation ─────────────────────────────────────────────────────────
 
-def generate_tts_audio(text: str, config: TenantAIConfig) -> bytes | None:
+def generate_tts_audio(text: str, config: TenantAIConfig,
+                       voice_id: str | None = None) -> bytes | None:
     """
     Generate TTS audio using the tenant's configured TTS provider.
     Returns MP3 bytes or None on failure.
+
+    Args:
+        text: The text to synthesize.
+        config: Tenant AI configuration with provider settings.
+        voice_id: Optional per-agent voice override. If provided, this takes
+                  priority over the tenant default (config.tts_voice_id).
+                  Can be an Edge TTS voice name (e.g. "en-US-JennyNeural")
+                  or a provider-specific voice ID.
     """
+    # Resolve effective voice: explicit override > tenant config default
+    effective_voice = voice_id or config.tts_voice_id
+
     tts_provider = config.tts_provider or "disabled"
     if tts_provider == "disabled":
         return None
 
+    # Edge TTS is free — no API key required
+    if tts_provider == "edge":
+        return _tts_edge(text, effective_voice)
+
     tts_key = config.get_tts_api_key()
     if not tts_key:
-        return None
+        # No API key configured — fall back to Edge TTS as a free alternative
+        logger.info("No TTS API key for %s, falling back to Edge TTS", tts_provider)
+        return _tts_edge(text, effective_voice)
 
     try:
         if tts_provider == "openai":
-            return _tts_openai(text, tts_key, config.tts_voice_id)
+            return _tts_openai(text, tts_key, effective_voice)
         elif tts_provider == "elevenlabs":
-            return _tts_elevenlabs(text, tts_key, config.tts_voice_id)
+            return _tts_elevenlabs(text, tts_key, effective_voice)
+        elif tts_provider == "azure":
+            # Azure TTS not yet implemented — fall back to Edge TTS
+            return _tts_edge(text, effective_voice)
         else:
-            logger.warning("Unsupported TTS provider: %s", tts_provider)
-            return None
+            logger.warning("Unsupported TTS provider: %s, falling back to Edge TTS", tts_provider)
+            return _tts_edge(text, effective_voice)
     except Exception as e:
-        logger.error("TTS generation failed (%s): %s", tts_provider, e)
-        return None
+        logger.error("TTS generation failed (%s): %s — falling back to Edge TTS", tts_provider, e)
+        return _tts_edge(text, effective_voice)
 
 
 def _tts_openai(text: str, api_key: str, voice_id: str | None) -> bytes | None:
@@ -666,3 +989,143 @@ def _tts_elevenlabs(text: str, api_key: str, voice_id: str | None) -> bytes | No
     resp = http_requests.post(url, headers=headers, json=payload, timeout=30)
     resp.raise_for_status()
     return resp.content
+
+
+def _tts_edge(text: str, voice_id: str | None) -> bytes | None:
+    """Generate TTS using Edge TTS (free Microsoft TTS). No API key needed."""
+    from apps.courses.tts_service import synthesize_speech
+
+    # Only use voice_id if it looks like an Edge TTS voice (e.g. "en-US-GuyNeural").
+    # ElevenLabs/OpenAI voice IDs are opaque strings — don't pass those to Edge TTS.
+    edge_voice = "en-US-GuyNeural"
+    if voice_id and "-" in voice_id and "Neural" in voice_id:
+        edge_voice = voice_id
+
+    try:
+        path = synthesize_speech(
+            text=text[:5000],
+            voice_id=edge_voice,
+            provider="edge_tts",
+        )
+        if not path:
+            return None
+        import os
+        try:
+            with open(path, "rb") as f:
+                return f.read()
+        finally:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+    except Exception as e:
+        logger.error("Edge TTS generation failed: %s", e)
+        return None
+
+
+# ─── Quiz Grading Fallback ──────────────────────────────────────────────────
+
+QUIZ_GRADE_SYSTEM_PROMPT = """You are a fair, encouraging teacher grading a student's answer.
+
+Given the student's answer and the expected answer (with optional rubric), evaluate the response.
+
+Return a valid JSON object:
+{
+  "score": 85,
+  "feedback": "Good understanding of the core concept. You correctly identified X and Y. To improve, consider also mentioning Z.",
+  "isCorrect": true
+}
+
+Rules:
+- score: integer 0-100
+- isCorrect: true if score >= 70, false otherwise
+- feedback: 1-3 sentences. Be encouraging but honest. Point out what was correct, what was missing, and how to improve.
+- For multiple choice questions: score is 100 (correct) or 0 (incorrect)
+- For short answer questions: grade on a scale based on completeness, accuracy, and understanding
+- Be lenient with minor spelling/grammar issues if the concept is correct
+- If the student answer is blank or clearly off-topic, score 0 with constructive feedback"""
+
+
+def fallback_quiz_grade(student_answer: str, expected_answer: str,
+                        rubric: str | None, config: TenantAIConfig) -> dict:
+    """
+    Grade a student's answer using the LLM when the OpenMAIC sidecar is down.
+    Returns {"score": int, "feedback": str, "isCorrect": bool}.
+    """
+    user_prompt = f"""Grade this student answer:
+
+Student's answer: {student_answer}
+
+Expected/correct answer: {expected_answer}
+"""
+    if rubric:
+        user_prompt += f"\nGrading rubric: {rubric}\n"
+
+    raw = _call_llm(config, QUIZ_GRADE_SYSTEM_PROMPT, user_prompt,
+                    temperature=0.3, max_tokens=512)
+    if not raw:
+        return _fallback_quiz_grade_deterministic(student_answer, expected_answer)
+
+    parsed = _parse_json_from_llm(raw)
+    if not parsed or not isinstance(parsed, dict):
+        return _fallback_quiz_grade_deterministic(student_answer, expected_answer)
+
+    # Validate and normalize the response
+    score = parsed.get("score", 0)
+    if not isinstance(score, (int, float)):
+        score = 0
+    score = max(0, min(100, int(score)))
+
+    return {
+        "score": score,
+        "feedback": parsed.get("feedback", "Thank you for your answer."),
+        "isCorrect": score >= 70,
+    }
+
+
+def _fallback_quiz_grade_deterministic(student_answer: str,
+                                        expected_answer: str) -> dict:
+    """Simple string-match fallback when even the LLM call fails."""
+    if not student_answer or not student_answer.strip():
+        return {
+            "score": 0,
+            "feedback": "No answer was provided. Please try again.",
+            "isCorrect": False,
+        }
+
+    student_norm = student_answer.strip().lower()
+    expected_norm = expected_answer.strip().lower()
+
+    # Exact match
+    if student_norm == expected_norm:
+        return {
+            "score": 100,
+            "feedback": "Correct! Great job.",
+            "isCorrect": True,
+        }
+
+    # Partial match — check if expected answer is contained in student answer
+    if expected_norm in student_norm or student_norm in expected_norm:
+        return {
+            "score": 75,
+            "feedback": "Good attempt! Your answer captures the main idea.",
+            "isCorrect": True,
+        }
+
+    # Word overlap heuristic
+    student_words = set(student_norm.split())
+    expected_words = set(expected_norm.split())
+    if expected_words:
+        overlap = len(student_words & expected_words) / len(expected_words)
+        if overlap >= 0.5:
+            return {
+                "score": 60,
+                "feedback": "Partial credit. You mentioned some key concepts but missed others. Review the expected answer for a more complete understanding.",
+                "isCorrect": False,
+            }
+
+    return {
+        "score": 20,
+        "feedback": "Your answer does not match the expected response. Please review the material and try again.",
+        "isCorrect": False,
+    }

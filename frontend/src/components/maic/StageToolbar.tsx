@@ -22,8 +22,6 @@ import {
   Play,
   Pause,
   Square,
-  Download,
-  Crosshair,
   MessagesSquare,
 } from 'lucide-react';
 import { useMAICStageStore } from '../../stores/maicStageStore';
@@ -34,11 +32,8 @@ import { cn } from '../../lib/utils';
 
 interface StageToolbarProps {
   role: MAICPlayerRole;
-  onLaserToggle?: () => void;
-  laserActive?: boolean;
   onDiscussionToggle?: () => void;
   discussionActive?: boolean;
-  onExport?: () => void;
 }
 
 const VIEW_MODES: { mode: MAICViewMode; icon: typeof Presentation; label: string }[] = [
@@ -62,13 +57,42 @@ const STROKE_WIDTHS = [1, 2, 4, 6, 8];
 
 const PLAYBACK_SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 
+/** Notes panel toggle — reads showNotesPanel from the stage store */
+function NotesToggleButton() {
+  const showNotesPanel = useMAICStageStore((s) => s.showNotesPanel);
+  const toggleNotesPanel = useMAICStageStore((s) => s.toggleNotesPanel);
+
+  return (
+    <button
+      type="button"
+      onClick={toggleNotesPanel}
+      className={cn(
+        'flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors',
+        'focus:outline-none focus:ring-2 focus:ring-primary-500',
+        showNotesPanel
+          ? 'bg-amber-50 text-amber-600'
+          : 'text-gray-500 hover:bg-gray-100 hover:text-gray-700',
+      )}
+      title="Toggle notes (N)"
+      aria-label="Toggle notes panel"
+      aria-pressed={showNotesPanel}
+    >
+      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z"
+        />
+      </svg>
+      <span className="hidden sm:inline">Notes</span>
+    </button>
+  );
+}
+
 export const StageToolbar = React.memo<StageToolbarProps>(function StageToolbar({
   role,
-  onLaserToggle,
-  laserActive = false,
   onDiscussionToggle,
   discussionActive = false,
-  onExport,
 }) {
   const viewMode = useMAICStageStore((s) => s.viewMode);
   const setViewMode = useMAICStageStore((s) => s.setViewMode);
@@ -283,26 +307,6 @@ export const StageToolbar = React.memo<StageToolbarProps>(function StageToolbar(
         {/* Divider */}
         <div className="w-px h-5 bg-gray-200 dark:bg-gray-700 mx-1" aria-hidden="true" />
 
-        {/* Laser pointer toggle */}
-        {onLaserToggle && (
-          <button
-            type="button"
-            onClick={onLaserToggle}
-            className={cn(
-              'p-1.5 rounded-md transition-colors',
-              'focus:outline-none focus:ring-2 focus:ring-primary-500',
-              laserActive
-                ? 'bg-red-100 text-red-600 dark:bg-red-900 dark:text-red-300'
-                : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:text-gray-200 dark:hover:bg-gray-800',
-            )}
-            title="Laser Pointer (L)"
-            aria-label="Toggle laser pointer"
-            aria-pressed={laserActive}
-          >
-            <Crosshair className="h-4 w-4" />
-          </button>
-        )}
-
         {/* Discussion mode toggle */}
         {onDiscussionToggle && (
           <button
@@ -323,22 +327,8 @@ export const StageToolbar = React.memo<StageToolbarProps>(function StageToolbar(
           </button>
         )}
 
-        {/* Export button (teacher only) */}
-        {role === 'teacher' && onExport && (
-          <button
-            type="button"
-            onClick={onExport}
-            className={cn(
-              'p-1.5 rounded-md transition-colors',
-              'focus:outline-none focus:ring-2 focus:ring-primary-500',
-              'text-gray-400 hover:text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:text-gray-200 dark:hover:bg-gray-800',
-            )}
-            title="Export (E)"
-            aria-label="Export classroom"
-          >
-            <Download className="h-4 w-4" />
-          </button>
-        )}
+        {/* Notes panel toggle */}
+        <NotesToggleButton />
 
         {/* Divider */}
         <div className="w-px h-5 bg-gray-200 dark:bg-gray-700 mx-1" aria-hidden="true" />
@@ -445,6 +435,7 @@ export const StageToolbar = React.memo<StageToolbarProps>(function StageToolbar(
                   <span>M</span><span>Mute</span>
                   <span>C</span><span>Chat panel</span>
                   <span>S</span><span>Scene sidebar</span>
+                  <span>N</span><span>Notes panel</span>
                 </div>
               </div>
             </div>

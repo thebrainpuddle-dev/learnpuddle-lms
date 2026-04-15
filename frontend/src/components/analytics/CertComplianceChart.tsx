@@ -2,14 +2,16 @@
 //
 // Horizontal bar chart showing compliance % per required certification.
 // Color coded: green (>80%), yellow (50-80%), red (<50%).
-// Uses placeholder data — TODO: wire to backend analytics endpoint.
+// Fetches real data from /tenants/staff-certifications/ endpoint.
 
 import React, { useMemo } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Cell,
   ResponsiveContainer,
 } from 'recharts';
 import { ShieldCheckIcon, EyeIcon } from '@heroicons/react/24/outline';
+import api from '../../config/api';
 
 /* ── Types ─────────────────────────────────────────────────────── */
 
@@ -24,15 +26,31 @@ interface CertComplianceChartProps {
   onViewDetails?: () => void;
 }
 
-/* ── Placeholder data (TODO: replace with API call) ──────────── */
+interface ComplianceCategory {
+  required: number;
+  completed: number;
+}
 
-const MOCK_DATA: CertComplianceItem[] = [
-  { certName: 'Child Safety', compliancePercent: 92, certified: 46, total: 50 },
-  { certName: 'First Aid', compliancePercent: 74, certified: 37, total: 50 },
-  { certName: 'IB Methods', compliancePercent: 60, certified: 30, total: 50 },
-  { certName: 'Digital Literacy', compliancePercent: 45, certified: 22, total: 49 },
-  { certName: 'Data Privacy', compliancePercent: 88, certified: 44, total: 50 },
-];
+interface StaffCertsSummary {
+  summary: {
+    total_teachers: number;
+    compliance_categories: Record<string, ComplianceCategory>;
+  };
+}
+
+/* ── Display labels for cert types ─────────────────────────────── */
+
+const CERT_LABELS: Record<string, string> = {
+  IB_CAT1: 'IB Cat 1 Workshop',
+  IB_CAT2: 'IB Cat 2 Workshop',
+  IB_CAT3: 'IB Cat 3 Workshop',
+  POCSO: 'POCSO Awareness',
+  FIRST_AID: 'First Aid',
+  FIRE_SAFETY: 'Fire Safety',
+  CHILD_SAFEGUARDING: 'Child Safeguarding',
+  POSH: 'POSH Training',
+  IB_LEADER: 'IB Leadership',
+};
 
 /* ── Helpers ───────────────────────────────────────────────────── */
 
@@ -60,9 +78,25 @@ const CustomTooltip = ({ active, payload }: any) => {
 export const CertComplianceChart: React.FC<CertComplianceChartProps> = ({
   onViewDetails,
 }) => {
-  // TODO: Replace with useQuery call to backend endpoint
-  // const { data } = useQuery({ queryKey: ['certCompliance'], queryFn: ... });
-  const data = MOCK_DATA;
+  const { data: certResponse, isLoading } = useQuery<StaffCertsSummary>({
+    queryKey: ['staffCertifications'],
+    queryFn: async () => {
+      const res = await api.get('/tenants/staff-certifications/');
+      return res.data;
+    },
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const data: CertComplianceItem[] = useMemo(() => {
+    const categories = certResponse?.summary?.compliance_categories;
+    if (!categories) return [];
+    return Object.entries(categories).map(([type, cat]) => ({
+      certName: CERT_LABELS[type] || type,
+      compliancePercent: cat.required > 0 ? Math.round((cat.completed / cat.required) * 100) : 0,
+      certified: cat.completed,
+      total: cat.required,
+    })).sort((a, b) => b.compliancePercent - a.compliancePercent);
+  }, [certResponse]);
 
   const chartData = useMemo(
     () => data.map((d) => ({ ...d, name: d.certName })),
@@ -95,7 +129,9 @@ export const CertComplianceChart: React.FC<CertComplianceChartProps> = ({
 
       {/* Summary stat */}
       <div className="mb-3 flex items-baseline gap-2">
-        <span className="text-2xl font-bold text-gray-900">{avgCompliance}%</span>
+        <span className="text-2xl font-bold text-gray-900">
+          {isLoading ? '—' : `${avgCompliance}%`}
+        </span>
         <span className="text-sm text-gray-500">average compliance</span>
       </div>
 
@@ -107,7 +143,11 @@ export const CertComplianceChart: React.FC<CertComplianceChartProps> = ({
       </div>
 
       <div className="h-56">
-        {data.length > 0 ? (
+        {isLoading ? (
+          <div className="flex items-center justify-center h-full">
+            <div className="h-6 w-6 border-2 border-indigo-300 border-t-indigo-600 rounded-full animate-spin" />
+          </div>
+        ) : data.length > 0 ? (
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={chartData} layout="vertical">
               <CartesianGrid strokeDasharray="3 3" horizontal={false} />
@@ -116,7 +156,7 @@ export const CertComplianceChart: React.FC<CertComplianceChartProps> = ({
                 domain={[0, 100]}
                 tickFormatter={(v) => `${v}%`}
               />
-              <YAxis dataKey="name" type="category" width={110} tick={{ fontSize: 12 }} />
+              <YAxis dataKey="name" type="category" width={120} tick={{ fontSize: 11 }} />
               <Tooltip content={<CustomTooltip />} />
               <Bar dataKey="compliancePercent" name="Compliance %" radius={[0, 4, 4, 0]} barSize={24}>
                 {chartData.map((entry, index) => (

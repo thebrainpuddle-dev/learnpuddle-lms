@@ -42,6 +42,20 @@ export default defineConfig(({ mode }) => {
     build: {
       outDir: 'build',
       sourcemap: true,
+      rollupOptions: {
+        output: {
+          manualChunks: {
+            'vendor-react': ['react', 'react-dom', 'react-router-dom'],
+            'vendor-ui': ['@headlessui/react', 'lucide-react', 'clsx', 'tailwind-merge'],
+            'vendor-charts': ['recharts'],
+            'vendor-query': ['@tanstack/react-query'],
+            'vendor-state': ['zustand', 'dexie'],
+            'vendor-utils': ['date-fns', 'axios', 'dompurify'],
+            'vendor-sentry': ['@sentry/react'],
+            'vendor-pdf': ['pdfjs-dist'],
+          },
+        },
+      },
     },
     test: {
       globals: true,

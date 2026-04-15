@@ -3,6 +3,23 @@
 import type { MAICAction } from './maic-actions';
 import type { MAICSlideElement } from './maic';
 
+// ─── Multi-Slide Scene Types ───────────────────────────────────────────────────
+
+/** Bounds mapping for a single scene within the flat slides array */
+export interface SceneSlideBounds {
+  sceneIdx: number;
+  startSlide: number;
+  endSlide: number;
+}
+
+/** Student notes attached to a specific slide within a scene */
+export interface MAICNote {
+  sceneIdx: number;
+  slideIdx: number;
+  text: string;
+  timestamp: number;
+}
+
 // ─── Mode & State Enums ─────────────────────────────────────────────────────
 
 export type MAICSceneType = 'slide' | 'quiz' | 'interactive' | 'pbl';
@@ -40,6 +57,8 @@ export interface MAICSlideContent {
   background?: string;
   speakerScript?: string;
   audioUrl?: string;
+  /** Index of this slide within its parent scene (0-based). Used for multi-slide scenes. */
+  slideIndex?: number;
 }
 
 export interface MAICQuizContent {

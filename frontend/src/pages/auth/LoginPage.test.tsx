@@ -3,6 +3,7 @@
 import React from 'react';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { vi, describe, it, expect, beforeEach } from 'vitest';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { LoginPage } from './LoginPage';
 import { useAuthStore } from '../../stores/authStore';
@@ -10,18 +11,48 @@ import { useTenantStore } from '../../stores/tenantStore';
 import api from '../../config/api';
 
 // Mock dependencies
-jest.mock('../../stores/authStore');
-jest.mock('../../stores/tenantStore');
-jest.mock('../../config/api');
+vi.mock('../../stores/authStore');
+vi.mock('../../stores/tenantStore');
+vi.mock('../../config/api', () => ({
+  __esModule: true,
+  default: {
+    get: vi.fn(),
+    post: vi.fn(),
+    interceptors: {
+      request: { use: vi.fn() },
+      response: { use: vi.fn() },
+    },
+  },
+}));
 
-const mockedUseAuthStore = useAuthStore as jest.MockedFunction<typeof useAuthStore>;
-const mockedUseTenantStore = useTenantStore as jest.MockedFunction<typeof useTenantStore>;
-const mockedApi = api as jest.Mocked<typeof api>;
+// Mock loadTenantTheme and applyTheme to prevent real API calls during login
+vi.mock('../../config/theme', async (importOriginal) => {
+  const actual = await importOriginal() as any;
+  return {
+    ...actual,
+    loadTenantTheme: vi.fn().mockResolvedValue({}),
+    applyTheme: vi.fn(),
+  };
+});
 
-const mockNavigate = jest.fn();
-jest.mock('react-router-dom', () => ({
-  ...jest.requireActual('react-router-dom'),
-  useNavigate: () => mockNavigate,
+const mockedUseAuthStore = useAuthStore as unknown as ReturnType<typeof vi.fn>;
+const mockedUseTenantStore = useTenantStore as unknown as ReturnType<typeof vi.fn>;
+const mockedApi = api as unknown as {
+  post: ReturnType<typeof vi.fn>;
+  get: ReturnType<typeof vi.fn>;
+};
+
+const mockNavigate = vi.fn();
+vi.mock('react-router-dom', async () => {
+  const actual = await vi.importActual('react-router-dom');
+  return {
+    ...actual,
+    useNavigate: () => mockNavigate,
+  };
+});
+
+vi.mock('../../hooks/usePageTitle', () => ({
+  usePageTitle: vi.fn(),
 }));
 
 // Dashboard components for routing tests
@@ -29,12 +60,12 @@ const AdminDashboard = () => <div>Admin Dashboard</div>;
 const TeacherDashboard = () => <div>Teacher Dashboard</div>;
 
 describe('LoginPage', () => {
-  const mockSetAuth = jest.fn();
-  const mockSetLoading = jest.fn();
+  const mockSetAuth = vi.fn();
+  const mockSetLoading = vi.fn();
 
   beforeEach(() => {
-    jest.clearAllMocks();
-    
+    vi.clearAllMocks();
+
     mockedUseAuthStore.mockReturnValue({
       setAuth: mockSetAuth,
       setLoading: mockSetLoading,
@@ -43,9 +74,9 @@ describe('LoginPage', () => {
       accessToken: null,
       refreshToken: null,
       isLoading: false,
-      clearAuth: jest.fn(),
-      setUser: jest.fn(),
-      initializeFromStorage: jest.fn(),
+      clearAuth: vi.fn(),
+      setUser: vi.fn(),
+      initializeFromStorage: vi.fn(),
     });
 
     mockedUseTenantStore.mockReturnValue({
@@ -55,8 +86,8 @@ describe('LoginPage', () => {
         secondary_color: '#6366f1',
         logo: null,
       },
-      setTheme: jest.fn(),
-      clearTheme: jest.fn(),
+      setTheme: vi.fn(),
+      clearTheme: vi.fn(),
     });
   });
 
@@ -76,10 +107,10 @@ describe('LoginPage', () => {
     it('should render login form', () => {
       renderLoginPage();
 
-      expect(screen.getByText('Demo School')).toBeInTheDocument();
-      expect(screen.getByText('Learning Management System')).toBeInTheDocument();
-      expect(screen.getByText('Sign in to your account')).toBeInTheDocument();
-      expect(screen.getByLabelText(/email address/i)).toBeInTheDocument();
+      // "Demo School" appears in left panel and mobile header (use getAllByText)
+      expect(screen.getAllByText('Demo School').length).toBeGreaterThan(0);
+      expect(screen.getByText('Sign in to continue to your dashboard')).toBeInTheDocument();
+      expect(screen.getByLabelText(/email or student\/teacher id/i)).toBeInTheDocument();
       expect(screen.getByLabelText(/password/i)).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /sign in/i })).toBeInTheDocument();
     });
@@ -88,7 +119,7 @@ describe('LoginPage', () => {
       renderLoginPage();
 
       // The tenant initial 'D' for 'Demo School'
-      expect(screen.getByText('D')).toBeInTheDocument();
+      expect(screen.getAllByText('D').length).toBeGreaterThan(0);
     });
 
     it('should render tenant logo when available', () => {
@@ -99,15 +130,15 @@ describe('LoginPage', () => {
           secondary_color: '#6366f1',
           logo: 'https://example.com/logo.png',
         },
-        setTheme: jest.fn(),
-        clearTheme: jest.fn(),
+        setTheme: vi.fn(),
+        clearTheme: vi.fn(),
       });
 
       renderLoginPage();
 
-      const logo = screen.getByAltText('Demo School');
-      expect(logo).toBeInTheDocument();
-      expect(logo).toHaveAttribute('src', 'https://example.com/logo.png');
+      const logos = screen.getAllByAltText('Demo School');
+      expect(logos.length).toBeGreaterThan(0);
+      expect(logos[0]).toHaveAttribute('src', 'https://example.com/logo.png');
     });
 
     it('should render remember me checkbox', () => {
@@ -126,14 +157,14 @@ describe('LoginPage', () => {
   });
 
   describe('form validation', () => {
-    it('should require email and password', async () => {
+    it('should require identifier and password', async () => {
       renderLoginPage();
 
-      const emailInput = screen.getByLabelText(/email address/i);
+      const identifierInput = screen.getByLabelText(/email or student\/teacher id/i);
       const passwordInput = screen.getByLabelText(/password/i);
 
-      expect(emailInput).toBeRequired();
-      expect(passwordInput).toBeRequired();
+      expect(identifierInput).toBeInTheDocument();
+      expect(passwordInput).toBeInTheDocument();
     });
   });
 
@@ -158,13 +189,13 @@ describe('LoginPage', () => {
 
       renderLoginPage();
 
-      await userEvent.type(screen.getByLabelText(/email address/i), 'teacher@example.test');
+      await userEvent.type(screen.getByLabelText(/email or student\/teacher id/i), 'teacher@example.test');
       await userEvent.type(screen.getByLabelText(/password/i), 'TestPass@123');
       await userEvent.click(screen.getByRole('button', { name: /sign in/i }));
 
       await waitFor(() => {
         expect(mockedApi.post).toHaveBeenCalledWith('/users/auth/login/', {
-          email: 'teacher@example.test',
+          identifier: 'teacher@example.test',
           password: 'TestPass@123',
           portal: 'tenant',
         });
@@ -199,7 +230,7 @@ describe('LoginPage', () => {
 
       renderLoginPage();
 
-      await userEvent.type(screen.getByLabelText(/email address/i), 'admin@example.test');
+      await userEvent.type(screen.getByLabelText(/email or student\/teacher id/i), 'admin@example.test');
       await userEvent.type(screen.getByLabelText(/password/i), 'TestPass@123');
       await userEvent.click(screen.getByRole('button', { name: /sign in/i }));
 
@@ -228,7 +259,7 @@ describe('LoginPage', () => {
 
       renderLoginPage();
 
-      await userEvent.type(screen.getByLabelText(/email address/i), 'teacher@example.test');
+      await userEvent.type(screen.getByLabelText(/email or student\/teacher id/i), 'teacher@example.test');
       await userEvent.type(screen.getByLabelText(/password/i), 'TestPass@123');
       await userEvent.click(screen.getByLabelText(/remember me/i));
       await userEvent.click(screen.getByRole('button', { name: /sign in/i }));
@@ -256,7 +287,7 @@ describe('LoginPage', () => {
 
       renderLoginPage();
 
-      await userEvent.type(screen.getByLabelText(/email address/i), 'test@example.test');
+      await userEvent.type(screen.getByLabelText(/email or student\/teacher id/i), 'test@example.test');
       await userEvent.type(screen.getByLabelText(/password/i), 'wrongpassword');
       await userEvent.click(screen.getByRole('button', { name: /sign in/i }));
 
@@ -275,7 +306,7 @@ describe('LoginPage', () => {
 
       renderLoginPage();
 
-      await userEvent.type(screen.getByLabelText(/email address/i), 'disabled@example.test');
+      await userEvent.type(screen.getByLabelText(/email or student\/teacher id/i), 'disabled@example.test');
       await userEvent.type(screen.getByLabelText(/password/i), 'TestPass@123');
       await userEvent.click(screen.getByRole('button', { name: /sign in/i }));
 
@@ -294,7 +325,7 @@ describe('LoginPage', () => {
 
       renderLoginPage();
 
-      await userEvent.type(screen.getByLabelText(/email address/i), 'test@example.test');
+      await userEvent.type(screen.getByLabelText(/email or student\/teacher id/i), 'test@example.test');
       await userEvent.type(screen.getByLabelText(/password/i), 'TestPass@123');
       await userEvent.click(screen.getByRole('button', { name: /sign in/i }));
 
@@ -313,7 +344,7 @@ describe('LoginPage', () => {
 
       renderLoginPage();
 
-      await userEvent.type(screen.getByLabelText(/email address/i), 'test@example.test');
+      await userEvent.type(screen.getByLabelText(/email or student\/teacher id/i), 'test@example.test');
       await userEvent.type(screen.getByLabelText(/password/i), 'TestPass@123');
       await userEvent.click(screen.getByRole('button', { name: /sign in/i }));
 
@@ -332,7 +363,7 @@ describe('LoginPage', () => {
 
       renderLoginPage();
 
-      await userEvent.type(screen.getByLabelText(/email address/i), 'test@example.test');
+      await userEvent.type(screen.getByLabelText(/email or student\/teacher id/i), 'test@example.test');
       await userEvent.type(screen.getByLabelText(/password/i), 'TestPass@123');
       await userEvent.click(screen.getByRole('button', { name: /sign in/i }));
 

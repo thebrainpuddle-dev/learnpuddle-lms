@@ -5,6 +5,7 @@ import {
   buildLoginRedirectUrl,
   broadcastLogout,
   clearAuthArtifacts,
+  getAccessToken,
   getIdleTimeoutMs,
   getLastActivityTimestamp,
   getRefreshToken,
@@ -83,6 +84,14 @@ export function useSessionLifecycle() {
         const ts = Number(event.newValue);
         if (Number.isFinite(ts) && ts > lastActivityWriteRef.current) {
           lastActivityWriteRef.current = ts;
+        }
+      }
+
+      // Re-read tokens when another tab refreshes them
+      if (event.key === 'token_refreshed' && event.newValue) {
+        const freshToken = getAccessToken();
+        if (freshToken) {
+          useAuthStore.setState({ accessToken: freshToken });
         }
       }
     };

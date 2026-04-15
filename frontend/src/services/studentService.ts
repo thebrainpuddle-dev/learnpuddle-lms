@@ -1,4 +1,5 @@
 import api from '../config/api';
+import type { StudySummaryListItem, StudySummaryDetail } from '../types/studySummary';
 
 // ─── Dashboard ────────────────────────────────────────────────────────────────
 
@@ -158,70 +159,6 @@ export interface StudentGamificationSummary {
   }>;
 }
 
-// ─── Podcasts ─────────────────────────────────────────────────────────────────
-
-export interface StudentPodcast {
-  id: string;
-  title: string;
-  description: string;
-  audio_url: string;
-  duration: number | null;
-  created_at: string;
-}
-
-// ─── Notes ────────────────────────────────────────────────────────────────────
-
-export interface StudentNotes {
-  id: string;
-  title: string;
-  content: string;
-  created_at: string;
-  updated_at: string;
-}
-
-// ─── Personas ─────────────────────────────────────────────────────────────────
-
-export interface Persona {
-  id: string;
-  name: string;
-  description: string;
-  avatar_url: string | null;
-}
-
-export interface PersonaSession {
-  id: string;
-  persona_id: string;
-  persona_name: string;
-  course_id: string;
-  created_at: string;
-  updated_at: string;
-  messages: Array<{
-    id: string;
-    role: 'user' | 'assistant';
-    content: string;
-    created_at: string;
-  }>;
-}
-
-// ─── Classroom ────────────────────────────────────────────────────────────────
-
-export interface ClassroomSession {
-  id: string;
-  title: string;
-  course_id: string;
-  course_title: string;
-  created_by: string;
-  participants_count: number;
-  is_active: boolean;
-  created_at: string;
-  notes: Array<{
-    id: string;
-    content: string;
-    author: string;
-    created_at: string;
-  }>;
-}
-
 // ─── Service ──────────────────────────────────────────────────────────────────
 
 export const studentService = {
@@ -316,85 +253,6 @@ export const studentService = {
     return res.data;
   },
 
-  // Podcasts
-  async getCoursePodcasts(courseId: string): Promise<StudentPodcast[]> {
-    const res = await api.get(`/v1/student/podcasts/${courseId}/`);
-    return res.data;
-  },
-
-  async getPodcastDetail(podcastId: string): Promise<StudentPodcast> {
-    const res = await api.get(`/v1/student/podcasts/detail/${podcastId}/`);
-    return res.data;
-  },
-
-  // Notes
-  async getCourseNotes(courseId: string): Promise<StudentNotes[]> {
-    const res = await api.get('/v1/student/notes/', { params: { course_id: courseId } });
-    return res.data;
-  },
-
-  async getNotesDetail(notesId: string): Promise<StudentNotes> {
-    const res = await api.get(`/v1/student/notes/${notesId}/`);
-    return res.data;
-  },
-
-  // Personas
-  async getPersonaList(): Promise<Persona[]> {
-    const res = await api.get('/v1/student/personas/');
-    return res.data;
-  },
-
-  async getPersonaSessions(courseId: string): Promise<PersonaSession[]> {
-    const res = await api.get('/v1/student/personas/sessions/', { params: { course_id: courseId } });
-    return res.data;
-  },
-
-  async createPersonaSession(data: { persona_id: string; course_id: string }): Promise<PersonaSession> {
-    const res = await api.post('/v1/student/personas/sessions/create/', data);
-    return res.data;
-  },
-
-  async getPersonaSessionDetail(sessionId: string): Promise<PersonaSession> {
-    const res = await api.get(`/v1/student/personas/sessions/${sessionId}/`);
-    return res.data;
-  },
-
-  async sendPersonaMessage(sessionId: string, message: string) {
-    const res = await api.post(`/v1/student/personas/sessions/${sessionId}/message/`, { content: message });
-    return res.data;
-  },
-
-  // Classroom
-  async getCourseClassrooms(courseId: string): Promise<ClassroomSession[]> {
-    const res = await api.get(`/v1/student/classroom/${courseId}/`);
-    return res.data;
-  },
-
-  async createClassroom(data: { title: string; course_id: string }): Promise<ClassroomSession> {
-    const res = await api.post('/v1/student/classroom/create/', data);
-    return res.data;
-  },
-
-  async getClassroomDetail(sessionId: string): Promise<ClassroomSession> {
-    const res = await api.get(`/v1/student/classroom/session/${sessionId}/`);
-    return res.data;
-  },
-
-  async joinClassroom(sessionId: string) {
-    const res = await api.post(`/v1/student/classroom/session/${sessionId}/join/`);
-    return res.data;
-  },
-
-  async leaveClassroom(sessionId: string) {
-    const res = await api.post(`/v1/student/classroom/session/${sessionId}/leave/`);
-    return res.data;
-  },
-
-  async addClassroomNote(sessionId: string, content: string) {
-    const res = await api.post(`/v1/student/classroom/session/${sessionId}/note/`, { content });
-    return res.data;
-  },
-
   // Video Transcript
   async getVideoTranscript(contentId: string) {
     const res = await api.get(`/v1/student/videos/${contentId}/transcript/`);
@@ -405,5 +263,34 @@ export const studentService = {
   async getAssignmentSubmission(assignmentId: string) {
     const res = await api.get(`/v1/student/assignments/${assignmentId}/submission/`);
     return res.data as StudentAssignmentSubmission;
+  },
+
+  // Study Summaries
+  async getStudySummaries(courseId?: string): Promise<StudySummaryListItem[]> {
+    const res = await api.get('/v1/student/study-summaries/', { params: courseId ? { course_id: courseId } : undefined });
+    return res.data;
+  },
+
+  async getStudySummaryDetail(summaryId: string): Promise<StudySummaryDetail> {
+    const res = await api.get(`/v1/student/study-summaries/${summaryId}/`);
+    return res.data;
+  },
+
+  async getStudySummaryForContent(contentId: string): Promise<StudySummaryDetail | null> {
+    try {
+      const summaries = await api.get('/v1/student/study-summaries/', { params: { content_id: contentId } });
+      const match = (summaries.data as StudySummaryListItem[]).find((s) => s.content_id === contentId && s.status === 'READY');
+      if (match) {
+        const detail = await api.get(`/v1/student/study-summaries/${match.id}/`);
+        return detail.data;
+      }
+    } catch {
+      // No summaries found
+    }
+    return null;
+  },
+
+  async deleteStudySummary(summaryId: string): Promise<void> {
+    await api.delete(`/v1/student/study-summaries/${summaryId}/delete/`);
   },
 };

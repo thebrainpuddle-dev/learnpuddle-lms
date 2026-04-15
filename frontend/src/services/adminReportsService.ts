@@ -22,6 +22,9 @@ export interface CourseProgressRow {
   deadline: string | null;
   status: string;
   completed_at: string | null;
+  role?: string;
+  grade_level?: string;
+  section?: string;
 }
 
 export interface AssignmentStatusRow {
@@ -33,6 +36,9 @@ export interface AssignmentStatusRow {
   due_date: string | null;
   status: string;
   submitted_at: string | null;
+  role?: string;
+  grade_level?: string;
+  section?: string;
 }
 
 export const adminReportsService = {
@@ -46,12 +52,12 @@ export const adminReportsService = {
     return res.data;
   },
 
-  async courseProgress(params: { course_id: string; status?: string; search?: string }): Promise<{ results: CourseProgressRow[] }> {
+  async courseProgress(params: { course_id: string; role?: string; status?: string; search?: string }): Promise<{ results: CourseProgressRow[] }> {
     const res = await api.get('/reports/course-progress/', { params });
     return res.data;
   },
 
-  async assignmentStatus(params: { assignment_id: string; status?: string; search?: string }): Promise<{ results: AssignmentStatusRow[] }> {
+  async assignmentStatus(params: { assignment_id: string; role?: string; status?: string; search?: string }): Promise<{ results: AssignmentStatusRow[] }> {
     const res = await api.get('/reports/assignment-status/', { params });
     return res.data;
   },

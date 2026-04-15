@@ -4,10 +4,11 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { teacherService } from '../../services/teacherService';
 import { usePageTitle } from '../../hooks/usePageTitle';
 import { ArrowLeftIcon } from '@heroicons/react/24/outline';
-import { Button } from '../../components/common';
+import { Button, useToast } from '../../components/common';
 
 export const QuizPage: React.FC = () => {
   usePageTitle('Quiz');
+  const toast = useToast();
   const { assignmentId } = useParams<{ assignmentId: string }>();
   const navigate = useNavigate();
 
@@ -26,8 +27,10 @@ export const QuizPage: React.FC = () => {
   const submitMutation = useMutation({
     mutationFn: () => teacherService.submitQuiz(assignmentId as string, answers),
     onSuccess: () => {
-      // refetch by hard reload of query is fine; react-query will update
       navigate('/teacher/assignments');
+    },
+    onError: () => {
+      toast.error('Submission failed', 'Could not submit quiz. Please try again.');
     },
   });
 

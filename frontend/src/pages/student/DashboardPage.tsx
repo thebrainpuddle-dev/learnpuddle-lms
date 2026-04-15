@@ -19,7 +19,7 @@ import { format } from 'date-fns';
 import { cn } from '../../design-system/theme/cn';
 import { useAuthStore } from '../../stores/authStore';
 import { useTenantStore } from '../../stores/tenantStore';
-import { studentService } from '../../services/studentService';
+import { studentService, type StudentCourseListItem } from '../../services/studentService';
 import { usePageTitle } from '../../hooks/usePageTitle';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -85,8 +85,26 @@ export const DashboardPage: React.FC = () => {
     queryFn: studentService.getStudentDashboard,
   });
 
+  const { data: courses = [], isLoading: coursesLoading } = useQuery({
+    queryKey: ['studentCourses'],
+    queryFn: studentService.getStudentCourses,
+  });
+
   const continueCourse = dashboard?.continue_learning;
   const deadlines = dashboard?.deadlines ?? [];
+
+  // Show up to 4 courses on the dashboard, sorted by in-progress first, then by progress descending
+  const dashboardCourses = [...courses]
+    .sort((a, b) => {
+      const pa = Number(a.progress_percentage || 0);
+      const pb = Number(b.progress_percentage || 0);
+      // In-progress courses first (0 < p < 100), then not started, then completed
+      const rankA = pa > 0 && pa < 100 ? 0 : pa === 0 ? 1 : 2;
+      const rankB = pb > 0 && pb < 100 ? 0 : pb === 0 ? 1 : 2;
+      if (rankA !== rankB) return rankA - rankB;
+      return pb - pa;
+    })
+    .slice(0, 4);
 
   return (
     <div className="space-y-6">
@@ -98,6 +116,12 @@ export const DashboardPage: React.FC = () => {
           </h1>
           <p className="mt-0.5 text-[13px] text-gray-400">
             {format(new Date(), 'EEEE, MMMM d')}
+            {(user?.grade_name || user?.section_name) && (
+              <span className="text-gray-400">
+                {' · '}
+                {[user.grade_name, user.section_name && `Section ${user.section_name}`].filter(Boolean).join(', ')}
+              </span>
+            )}
             {(dashboard?.stats.pending_assignments ?? 0) > 0 && (
               <span className="text-indigo-600 font-medium">
                 {' '}
@@ -188,7 +212,7 @@ export const DashboardPage: React.FC = () => {
             </button>
           )}
 
-          {/* Recent Courses placeholder */}
+          {/* My Courses */}
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
             <div className="flex items-center justify-between px-5 py-3.5 border-b border-gray-50">
               <h2 className="text-[13px] font-semibold text-tp-text">My Courses</h2>
@@ -200,17 +224,17 @@ export const DashboardPage: React.FC = () => {
               </button>
             </div>
 
-            {isLoading ? (
+            {coursesLoading ? (
               <div className="p-4 space-y-2">
                 {[1, 2, 3].map((i) => (
                   <div key={i} className="h-14 tp-skeleton rounded-xl" />
                 ))}
               </div>
-            ) : (
+            ) : dashboardCourses.length === 0 ? (
               <div className="py-10 text-center">
                 <BookOpen className="h-8 w-8 mx-auto text-gray-200 mb-2" />
                 <p className="text-[13px] text-gray-400">
-                  View all your courses
+                  No courses assigned yet
                 </p>
                 <button
                   onClick={() => navigate('/student/courses')}
@@ -219,6 +243,89 @@ export const DashboardPage: React.FC = () => {
                   <BookOpen className="h-3.5 w-3.5" />
                   Browse Courses
                 </button>
+              </div>
+            ) : (
+              <div className="divide-y divide-gray-50">
+                {dashboardCourses.map((course) => {
+                  const progress = Math.min(100, Number(course.progress_percentage || 0));
+                  const isCompleted = progress >= 100;
+                  const isInProgress = progress > 0 && progress < 100;
+                  return (
+                    <button
+                      key={course.id}
+                      onClick={() => navigate(`/student/courses/${course.id}`)}
+                      className="w-full text-left flex items-center gap-3.5 px-5 py-3.5 hover:bg-gray-50/60 transition-colors group"
+                    >
+                      {/* Thumbnail */}
+                      <div className="h-10 w-10 rounded-lg bg-gray-50 border border-gray-100 flex items-center justify-center flex-shrink-0 overflow-hidden">
+                        {course.thumbnail ? (
+                          <img
+                            src={course.thumbnail}
+                            alt=""
+                            className="h-10 w-10 object-cover"
+                          />
+                        ) : (
+                          <BookOpen className="h-4 w-4 text-gray-300" />
+                        )}
+                      </div>
+
+                      {/* Info */}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <p className="text-[13px] font-medium text-tp-text truncate leading-tight">
+                            {course.title}
+                          </p>
+                          {isCompleted && (
+                            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 flex-shrink-0" />
+                          )}
+                        </div>
+
+                        {/* Progress bar */}
+                        <div className="flex items-center gap-2.5">
+                          <div className="flex-1 h-[5px] bg-gray-100 rounded-full overflow-hidden">
+                            <div
+                              className={cn(
+                                'h-full rounded-full transition-all duration-700',
+                                isCompleted
+                                  ? 'bg-emerald-500'
+                                  : 'bg-gradient-to-r from-indigo-500 to-violet-400',
+                              )}
+                              style={{ width: `${progress}%` }}
+                            />
+                          </div>
+                          <span className="text-[11px] font-semibold tabular-nums text-tp-text-secondary w-8 text-right">
+                            {Math.round(progress)}%
+                          </span>
+                        </div>
+
+                        {/* Meta */}
+                        <div className="flex items-center gap-3 mt-1 text-[10px] text-gray-400">
+                          <span>
+                            {course.completed_content_count}/{course.total_content_count} lessons
+                          </span>
+                          {course.deadline && (
+                            <span className="flex items-center gap-0.5 text-amber-500">
+                              <Clock className="h-2.5 w-2.5" />
+                              {new Date(course.deadline).toLocaleDateString('en-US', {
+                                month: 'short',
+                                day: 'numeric',
+                              })}
+                            </span>
+                          )}
+                          {isInProgress && (
+                            <span className="flex items-center gap-0.5 text-indigo-500 font-medium">
+                              <Play className="h-2.5 w-2.5" />
+                              In Progress
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Arrow */}
+                      <ArrowRight className="h-3.5 w-3.5 text-gray-300 group-hover:text-indigo-500 transition-colors flex-shrink-0" />
+                    </button>
+                  );
+                })}
               </div>
             )}
           </div>

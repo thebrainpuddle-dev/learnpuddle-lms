@@ -114,6 +114,9 @@ const StudentsPage = React.lazy(() =>
 const DirectoryPage = React.lazy(() =>
   import('./pages/admin/DirectoryPage').then((m) => ({ default: m.DirectoryPage }))
 );
+const AdminAttendancePage = React.lazy(() =>
+  import('./pages/admin/AttendancePage').then((m) => ({ default: m.AdminAttendancePage }))
+);
 
 // Teacher pages
 const TeacherDashboardPage = React.lazy(() =>
@@ -180,6 +183,9 @@ const StudentMAICPlayerPage = React.lazy(() =>
 const StudentMAICCreatePage = React.lazy(() =>
   import('./pages/student/StudentMAICCreatePage').then((m) => ({ default: m.StudentMAICCreatePage }))
 );
+const StudentAttendancePage = React.lazy(() =>
+  import('./pages/student/AttendancePage').then((m) => ({ default: m.StudentAttendancePage }))
+);
 
 // AI Chatbot
 const ChatbotListPage = React.lazy(() =>
@@ -222,6 +228,12 @@ const StudentAchievementsPage = React.lazy(() =>
 );
 const StudyNotesPage = React.lazy(() =>
   import('./pages/student/StudyNotesPage').then((m) => ({ default: m.StudyNotesPage }))
+);
+const StudentDiscussionPage = React.lazy(() =>
+  import('./pages/student/DiscussionPage').then((m) => ({ default: m.StudentDiscussionPage }))
+);
+const StudentDiscussionThreadPage = React.lazy(() =>
+  import('./pages/student/DiscussionThreadPage').then((m) => ({ default: m.StudentDiscussionThreadPage }))
 );
 // Super Admin pages
 const SuperAdminDashboardPage = React.lazy(() =>
@@ -416,6 +428,7 @@ function AppContent() {
         <Route path="school" element={<RoutePage><SchoolViewPage /></RoutePage>} />
         <Route path="school/grade/:gradeId" element={<RoutePage><GradeDetailPage /></RoutePage>} />
         <Route path="school/section/:sectionId" element={<RoutePage><AdminSectionDetailPage /></RoutePage>} />
+        <Route path="attendance" element={<RoutePage><AdminAttendancePage /></RoutePage>} />
         <Route path="analytics" element={<RoutePage><AnalyticsPage /></RoutePage>} />
         <Route path="billing" element={<RoutePage><BillingPage /></RoutePage>} />
         <Route path="settings" element={<RoutePage><SettingsPage /></RoutePage>} />
@@ -477,10 +490,13 @@ function AppContent() {
         <Route path="assignments" element={<RoutePage><StudentAssignmentsPage /></RoutePage>} />
         <Route path="quizzes/:assignmentId" element={<RoutePage><StudentQuizPage /></RoutePage>} />
         <Route path="achievements" element={<RoutePage><StudentAchievementsPage /></RoutePage>} />
+        <Route path="attendance" element={<RoutePage><StudentAttendancePage /></RoutePage>} />
         <Route path="study-notes" element={<RoutePage><StudyNotesPage /></RoutePage>} />
         <Route path="ai-classroom" element={<RoutePage><MAICBrowsePage /></RoutePage>} />
         <Route path="ai-classroom/new" element={<RoutePage><StudentMAICCreatePage /></RoutePage>} />
         <Route path="ai-classroom/:id" element={<RoutePage><StudentMAICPlayerPage /></RoutePage>} />
+        <Route path="discussions" element={<RoutePage><StudentDiscussionPage /></RoutePage>} />
+        <Route path="discussions/:threadId" element={<RoutePage><StudentDiscussionThreadPage /></RoutePage>} />
         <Route path="chatbots" element={<RoutePage><StudentChatbotsPage /></RoutePage>} />
         <Route path="chatbots/:id" element={<RoutePage><StudentChatPage /></RoutePage>} />
         <Route path="profile" element={<RoutePage><StudentProfilePage /></RoutePage>} />

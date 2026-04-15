@@ -51,17 +51,17 @@ export const AdminLayout: React.FC = () => {
       {!isDesktop && <AdminSidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />}
       
       {/* Desktop sidebar */}
-      <div className="hidden lg:fixed lg:inset-y-0 lg:flex lg:w-64 lg:flex-col">
+      <div className="hidden lg:fixed lg:inset-y-0 lg:flex lg:w-[240px] lg:flex-col">
         <AdminSidebar open={true} />
       </div>
       
       {/* Main content */}
-      <div className="flex min-w-0 flex-1 flex-col lg:pl-64">
+      <div className="flex min-w-0 flex-1 flex-col lg:pl-[240px]">
         <AdminHeader onMenuClick={() => setSidebarOpen(true)} />
         
         <main className="flex-1 min-w-0">
           <div className="py-4 sm:py-6">
-            <div className="mx-auto max-w-7xl px-3 sm:px-6 md:px-8">
+            <div className="mx-auto max-w-[1400px] px-3 sm:px-6 md:px-8">
               <ErrorBoundary>
                 <Outlet />
               </ErrorBoundary>

@@ -1,10 +1,13 @@
 # utils/tenant_middleware.py
 
+import logging
 import re
 import contextvars
 from django.core.exceptions import PermissionDenied
 from django.http import JsonResponse
 from .tenant_utils import get_tenant_from_request
+
+logger = logging.getLogger(__name__)
 
 
 # Context-var storage for current tenant (safe for both WSGI and ASGI).
@@ -90,6 +93,17 @@ class TenantMiddleware:
                                 {'error': 'Access denied: User does not belong to this tenant'},
                                 status=403
                             )
+                    elif tenant is not None and request.user.tenant_id != tenant.id:
+                        # Audit log: super admin accessing a different tenant
+                        logger.info(
+                            "Super admin %s accessing tenant %s",
+                            request.user.email,
+                            tenant.subdomain,
+                            extra={
+                                'user_id': str(request.user.id),
+                                'tenant_id': str(tenant.id),
+                            },
+                        )
             
             # Process request
             response = self.get_response(request)

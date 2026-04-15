@@ -16,7 +16,7 @@ import type { AIChatbot } from '../../types/chatbot';
 // ─── Main Component ──────────────────────────────────────────────────────────
 
 export function ChatbotListPage() {
-  usePageTitle('AI Chatbots');
+  usePageTitle('AI Tutors');
   const navigate = useNavigate();
   const toast = useToast();
 
@@ -40,7 +40,7 @@ export function ChatbotListPage() {
         }
       } catch (err: unknown) {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : 'Failed to load chatbots');
+          setError(err instanceof Error ? err.message : 'Failed to load tutors');
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -85,12 +85,12 @@ export function ChatbotListPage() {
 
   // Delete handler
   async function handleDelete(id: string) {
-    if (!window.confirm('Are you sure you want to delete this chatbot?')) return;
+    if (!window.confirm('Are you sure you want to delete this tutor?')) return;
     try {
       await chatbotApi.delete(id);
       removeChatbot(id);
     } catch (err: unknown) {
-      toast.error('Delete failed', err instanceof Error ? err.message : 'Could not delete chatbot.');
+      toast.error('Delete failed', err instanceof Error ? err.message : 'Could not delete tutor.');
     }
   }
 
@@ -99,9 +99,9 @@ export function ChatbotListPage() {
     try {
       const res = await chatbotApi.clone(id);
       addChatbot(res.data);
-      toast.success('Cloned', 'Chatbot cloned successfully. Knowledge sources were not copied.');
+      toast.success('Cloned', 'Tutor cloned successfully. Knowledge sources were not copied.');
     } catch (err: unknown) {
-      toast.error('Clone failed', err instanceof Error ? err.message : 'Could not clone chatbot.');
+      toast.error('Clone failed', err instanceof Error ? err.message : 'Could not clone tutor.');
     }
   }
 
@@ -110,9 +110,9 @@ export function ChatbotListPage() {
       {/* Header */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">AI Chatbots</h1>
+          <h1 className="text-2xl font-bold text-gray-900">AI Tutors</h1>
           <p className="mt-1 text-sm text-gray-500">
-            Create and manage AI-powered chatbots for your students
+            Create and manage AI-powered tutors for your students
           </p>
         </div>
         <button
@@ -120,7 +120,7 @@ export function ChatbotListPage() {
           className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 transition-colors shadow-sm"
         >
           <Plus className="h-4 w-4" />
-          New Chatbot
+          New Tutor
         </button>
       </div>
 
@@ -134,7 +134,7 @@ export function ChatbotListPage() {
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search chatbots..."
+            placeholder="Search tutors..."
             className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-indigo-500 focus:border-indigo-500"
           />
         </div>
@@ -175,12 +175,12 @@ export function ChatbotListPage() {
         <div className="text-center py-16">
           <Bot className="mx-auto h-12 w-12 text-gray-300" />
           <h3 className="mt-4 text-lg font-medium text-gray-900">
-            {search.trim() || sectionFilter ? 'No chatbots match your filters' : 'No chatbots yet'}
+            {search.trim() || sectionFilter ? 'No tutors match your filters' : 'No tutors yet'}
           </h3>
           <p className="mt-2 text-sm text-gray-500">
             {search.trim() || sectionFilter
               ? 'Try a different search term or section filter.'
-              : 'Create your first AI Chatbot to get started.'}
+              : 'Create your first AI Tutor to get started.'}
           </p>
           {!search.trim() && !sectionFilter && (
             <button
@@ -188,7 +188,7 @@ export function ChatbotListPage() {
               className="mt-6 inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 transition-colors"
             >
               <Plus className="h-4 w-4" />
-              Create Chatbot
+              Create Tutor
             </button>
           )}
         </div>

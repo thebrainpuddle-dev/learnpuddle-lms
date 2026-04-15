@@ -113,7 +113,7 @@ describe('FormField', () => {
   });
 
   it('updates form value on user input', async () => {
-    const onSubmit = jest.fn();
+    const onSubmit = vi.fn();
     render(
       <TestFormWrapper onSubmit={onSubmit}>
         {(control) => (

@@ -18,9 +18,12 @@ import {
   MagnifyingGlassIcon,
   LockClosedIcon,
   ArrowDownTrayIcon,
+  UserGroupIcon,
+  AcademicCapIcon,
 } from '@heroicons/react/24/outline';
 
 type Tab = 'COURSE' | 'ASSIGNMENT';
+type RoleFilter = 'teachers' | 'students';
 
 interface ReportDrillDownProps {
   /** Optional: pre-select a tab */
@@ -31,6 +34,8 @@ interface ReportDrillDownProps {
   defaultAssignmentId?: string;
   /** Optional: pre-select a status filter */
   defaultStatus?: string;
+  /** Optional: pre-select role filter */
+  defaultRole?: RoleFilter;
 }
 
 export const ReportDrillDown: React.FC<ReportDrillDownProps> = ({
@@ -38,10 +43,12 @@ export const ReportDrillDown: React.FC<ReportDrillDownProps> = ({
   defaultCourseId = '',
   defaultAssignmentId = '',
   defaultStatus = '',
+  defaultRole = 'teachers',
 }) => {
   const toast = useToast();
 
   const [tab, setTab] = useState<Tab>(defaultTab);
+  const [role, setRole] = useState<RoleFilter>(defaultRole);
   const [courseId, setCourseId] = useState<string>(defaultCourseId);
   const [courseStatus, setCourseStatus] = useState<string>(defaultStatus);
   const [courseSearch, setCourseSearch] = useState<string>('');
@@ -51,6 +58,10 @@ export const ReportDrillDown: React.FC<ReportDrillDownProps> = ({
   const [assignmentStatus, setAssignmentStatus] = useState<string>(defaultStatus);
   const [assignmentSearch, setAssignmentSearch] = useState<string>('');
   const [selectedAssignmentTeacherIds, setSelectedAssignmentTeacherIds] = useState<string[]>([]);
+
+  const isStudents = role === 'students';
+  const personLabel = isStudents ? 'Student' : 'Teacher';
+  const searchPlaceholder = isStudents ? 'Search student name/email/ID...' : 'Search teacher name/email...';
 
   const { data: courses } = useQuery({
     queryKey: ['reportCourses'],
@@ -63,10 +74,11 @@ export const ReportDrillDown: React.FC<ReportDrillDownProps> = ({
   });
 
   const { data: courseReport, isLoading: courseLoading } = useQuery({
-    queryKey: ['courseProgressReport', courseId, courseStatus, courseSearch],
+    queryKey: ['courseProgressReport', courseId, courseStatus, courseSearch, role],
     queryFn: () =>
       adminReportsService.courseProgress({
         course_id: courseId,
+        role,
         status: courseStatus || undefined,
         search: courseSearch || undefined,
       }),
@@ -75,10 +87,11 @@ export const ReportDrillDown: React.FC<ReportDrillDownProps> = ({
   });
 
   const { data: assignmentReport, isLoading: assignmentLoading } = useQuery({
-    queryKey: ['assignmentStatusReport', assignmentId, assignmentStatus, assignmentSearch],
+    queryKey: ['assignmentStatusReport', assignmentId, assignmentStatus, assignmentSearch, role],
     queryFn: () =>
       adminReportsService.assignmentStatus({
         assignment_id: assignmentId,
+        role,
         status: assignmentStatus || undefined,
         search: assignmentSearch || undefined,
       }),
@@ -123,6 +136,12 @@ export const ReportDrillDown: React.FC<ReportDrillDownProps> = ({
     [assignmentRows.length, selectedAssignmentTeacherIds.length]
   );
 
+  // Clear selections when switching role
+  useEffect(() => {
+    setSelectedTeacherIds([]);
+    setSelectedAssignmentTeacherIds([]);
+  }, [role]);
+
   // CSV export helper
   const handleExportCSV = () => {
     const rows = tab === 'COURSE' ? courseRows : assignmentRows;
@@ -130,34 +149,41 @@ export const ReportDrillDown: React.FC<ReportDrillDownProps> = ({
 
     const headers =
       tab === 'COURSE'
-        ? ['Teacher', 'Email', 'Status', 'Completed At']
-        : ['Teacher', 'Email', 'Status', 'Submitted At'];
+        ? isStudents
+          ? [personLabel, 'Email', 'Grade', 'Section', 'Status', 'Completed At']
+          : [personLabel, 'Email', 'Status', 'Completed At']
+        : isStudents
+          ? [personLabel, 'Email', 'Grade', 'Section', 'Status', 'Submitted At']
+          : [personLabel, 'Email', 'Status', 'Submitted At'];
 
     const csvContent = [
       headers.join(','),
-      ...rows.map((r: any) =>
-        [
+      ...rows.map((r: any) => {
+        const base = [
           `"${r.teacher_name}"`,
           `"${r.teacher_email}"`,
-          r.status,
-          r.completed_at || r.submitted_at || '',
-        ].join(',')
-      ),
+        ];
+        if (isStudents) {
+          base.push(`"${r.grade_level || ''}"`, `"${r.section || ''}"`);
+        }
+        base.push(r.status, r.completed_at || r.submitted_at || '');
+        return base.join(',');
+      }),
     ].join('\n');
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `report-${tab.toLowerCase()}-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.download = `report-${tab.toLowerCase()}-${role}-${new Date().toISOString().slice(0, 10)}.csv`;
     link.click();
     URL.revokeObjectURL(url);
   };
 
   return (
     <div className="space-y-6">
-      {/* Tab navigation */}
-      <div className="border-b border-gray-200">
+      {/* Tab navigation + Role toggle */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-b border-gray-200 pb-0">
         <nav className="-mb-px flex gap-4 overflow-x-auto whitespace-nowrap">
           <button
             className={`py-4 px-1 border-b-2 font-medium text-sm ${
@@ -180,6 +206,30 @@ export const ReportDrillDown: React.FC<ReportDrillDownProps> = ({
             Assignments
           </button>
         </nav>
+
+        {/* Role toggle */}
+        <div className="flex rounded-lg border border-gray-200 bg-white overflow-hidden mb-px">
+          <button
+            type="button"
+            onClick={() => setRole('teachers')}
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors border-r border-gray-200 ${
+              role === 'teachers' ? 'bg-primary-50 text-primary-700' : 'text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            <UserGroupIcon className="h-3.5 w-3.5" />
+            Teachers
+          </button>
+          <button
+            type="button"
+            onClick={() => setRole('students')}
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors ${
+              role === 'students' ? 'bg-primary-50 text-primary-700' : 'text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            <AcademicCapIcon className="h-3.5 w-3.5" />
+            Students
+          </button>
+        </div>
       </div>
 
       {/* Course report */}
@@ -225,7 +275,7 @@ export const ReportDrillDown: React.FC<ReportDrillDownProps> = ({
                 <Input
                   value={courseSearch}
                   onChange={(e) => setCourseSearch(e.target.value)}
-                  placeholder="Search teacher name/email..."
+                  placeholder={searchPlaceholder}
                   leftIcon={<MagnifyingGlassIcon className="h-5 w-5" />}
                 />
               </div>
@@ -255,11 +305,11 @@ export const ReportDrillDown: React.FC<ReportDrillDownProps> = ({
 
           <div className="card overflow-x-auto">
             {!courseId ? (
-              <div className="p-8 text-sm text-gray-500">Pick a course to view assigned teachers.</div>
+              <div className="p-8 text-sm text-gray-500">Pick a course to view assigned {role}.</div>
             ) : courseLoading ? (
               <div className="p-8 text-sm text-gray-500">Loading...</div>
             ) : courseRows.length === 0 ? (
-              <div className="p-8 text-sm text-gray-500">No assigned teachers found for this course.</div>
+              <div className="p-8 text-sm text-gray-500">No assigned {role} found for this course.</div>
             ) : (
               <>
                 {/* Mobile */}
@@ -280,6 +330,11 @@ export const ReportDrillDown: React.FC<ReportDrillDownProps> = ({
                         <div className="min-w-0">
                           <p className="text-sm font-semibold text-gray-900">{r.teacher_name}</p>
                           <p className="break-all text-xs text-gray-500">{r.teacher_email}</p>
+                          {isStudents && (r.grade_level || r.section) && (
+                            <p className="text-xs text-gray-400 mt-0.5">
+                              {r.grade_level}{r.grade_level && r.section ? ' · ' : ''}{r.section}
+                            </p>
+                          )}
                         </div>
                         <input
                           type="checkbox"
@@ -319,8 +374,10 @@ export const ReportDrillDown: React.FC<ReportDrillDownProps> = ({
                           }
                         />
                       </th>
-                      <th className="py-3 pr-6">Teacher</th>
+                      <th className="py-3 pr-6">{personLabel}</th>
                       <th className="py-3 pr-6">Email</th>
+                      {isStudents && <th className="py-3 pr-6">Grade</th>}
+                      {isStudents && <th className="py-3 pr-6">Section</th>}
                       <th className="py-3 pr-6">Status</th>
                       <th className="py-3 pr-6">Completed</th>
                     </tr>
@@ -343,7 +400,17 @@ export const ReportDrillDown: React.FC<ReportDrillDownProps> = ({
                         </td>
                         <td className="py-3 pr-6 font-medium">{r.teacher_name}</td>
                         <td className="py-3 pr-6">{r.teacher_email}</td>
-                        <td className="py-3 pr-6">{r.status}</td>
+                        {isStudents && <td className="py-3 pr-6">{r.grade_level || '-'}</td>}
+                        {isStudents && <td className="py-3 pr-6">{r.section || '-'}</td>}
+                        <td className="py-3 pr-6">
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                            r.status === 'COMPLETED' ? 'bg-emerald-50 text-emerald-700' :
+                            r.status === 'IN_PROGRESS' ? 'bg-blue-50 text-blue-700' :
+                            'bg-gray-100 text-gray-600'
+                          }`}>
+                            {r.status === 'NOT_STARTED' ? 'Not Started' : r.status === 'IN_PROGRESS' ? 'In Progress' : 'Completed'}
+                          </span>
+                        </td>
                         <td className="py-3 pr-6">
                           {r.completed_at ? new Date(r.completed_at).toLocaleString() : '-'}
                         </td>
@@ -351,6 +418,14 @@ export const ReportDrillDown: React.FC<ReportDrillDownProps> = ({
                     ))}
                   </tbody>
                 </table>
+
+                {/* Summary bar */}
+                <div className="mt-4 flex flex-wrap gap-4 text-xs text-gray-500 border-t border-gray-100 pt-3">
+                  <span>Total: <strong className="text-gray-700">{courseRows.length}</strong></span>
+                  <span>Completed: <strong className="text-emerald-600">{courseRows.filter(r => r.status === 'COMPLETED').length}</strong></span>
+                  <span>In Progress: <strong className="text-blue-600">{courseRows.filter(r => r.status === 'IN_PROGRESS').length}</strong></span>
+                  <span>Not Started: <strong className="text-gray-600">{courseRows.filter(r => r.status === 'NOT_STARTED').length}</strong></span>
+                </div>
               </>
             )}
           </div>
@@ -400,7 +475,7 @@ export const ReportDrillDown: React.FC<ReportDrillDownProps> = ({
                 <Input
                   value={assignmentSearch}
                   onChange={(e) => setAssignmentSearch(e.target.value)}
-                  placeholder="Search teacher name/email..."
+                  placeholder={searchPlaceholder}
                   leftIcon={<MagnifyingGlassIcon className="h-5 w-5" />}
                 />
               </div>
@@ -441,7 +516,7 @@ export const ReportDrillDown: React.FC<ReportDrillDownProps> = ({
 
           <div className="card overflow-x-auto">
             {!assignmentId ? (
-              <div className="p-8 text-sm text-gray-500">Pick an assignment to view teacher statuses.</div>
+              <div className="p-8 text-sm text-gray-500">Pick an assignment to view {role} statuses.</div>
             ) : assignmentLoading ? (
               <div className="p-8 text-sm text-gray-500">Loading...</div>
             ) : assignmentRows.length === 0 ? (
@@ -468,6 +543,11 @@ export const ReportDrillDown: React.FC<ReportDrillDownProps> = ({
                         <div className="min-w-0">
                           <p className="text-sm font-semibold text-gray-900">{r.teacher_name}</p>
                           <p className="break-all text-xs text-gray-500">{r.teacher_email}</p>
+                          {isStudents && (r.grade_level || r.section) && (
+                            <p className="text-xs text-gray-400 mt-0.5">
+                              {r.grade_level}{r.grade_level && r.section ? ' · ' : ''}{r.section}
+                            </p>
+                          )}
                         </div>
                         <input
                           type="checkbox"
@@ -511,8 +591,10 @@ export const ReportDrillDown: React.FC<ReportDrillDownProps> = ({
                           }
                         />
                       </th>
-                      <th className="py-3 pr-6">Teacher</th>
+                      <th className="py-3 pr-6">{personLabel}</th>
                       <th className="py-3 pr-6">Email</th>
+                      {isStudents && <th className="py-3 pr-6">Grade</th>}
+                      {isStudents && <th className="py-3 pr-6">Section</th>}
                       <th className="py-3 pr-6">Status</th>
                       <th className="py-3 pr-6">Submitted</th>
                     </tr>
@@ -535,7 +617,17 @@ export const ReportDrillDown: React.FC<ReportDrillDownProps> = ({
                         </td>
                         <td className="py-3 pr-6 font-medium">{r.teacher_name}</td>
                         <td className="py-3 pr-6">{r.teacher_email}</td>
-                        <td className="py-3 pr-6">{r.status}</td>
+                        {isStudents && <td className="py-3 pr-6">{r.grade_level || '-'}</td>}
+                        {isStudents && <td className="py-3 pr-6">{r.section || '-'}</td>}
+                        <td className="py-3 pr-6">
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                            r.status === 'GRADED' ? 'bg-emerald-50 text-emerald-700' :
+                            r.status === 'SUBMITTED' ? 'bg-blue-50 text-blue-700' :
+                            'bg-amber-50 text-amber-700'
+                          }`}>
+                            {r.status}
+                          </span>
+                        </td>
                         <td className="py-3 pr-6">
                           {r.submitted_at ? new Date(r.submitted_at).toLocaleString() : '-'}
                         </td>
@@ -543,6 +635,14 @@ export const ReportDrillDown: React.FC<ReportDrillDownProps> = ({
                     ))}
                   </tbody>
                 </table>
+
+                {/* Summary bar */}
+                <div className="mt-4 flex flex-wrap gap-4 text-xs text-gray-500 border-t border-gray-100 pt-3">
+                  <span>Total: <strong className="text-gray-700">{assignmentRows.length}</strong></span>
+                  <span>Graded: <strong className="text-emerald-600">{assignmentRows.filter(r => r.status === 'GRADED').length}</strong></span>
+                  <span>Submitted: <strong className="text-blue-600">{assignmentRows.filter(r => r.status === 'SUBMITTED').length}</strong></span>
+                  <span>Pending: <strong className="text-amber-600">{assignmentRows.filter(r => r.status === 'PENDING').length}</strong></span>
+                </div>
               </>
             )}
           </div>

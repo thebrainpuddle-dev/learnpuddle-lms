@@ -31,10 +31,34 @@ export interface PendingReviewDetail {
   is_quiz: boolean;
 }
 
+export interface CertComplianceSummary {
+  total_teachers: number;
+  fully_compliant: number;
+  partially_compliant: number;
+  non_compliant: number;
+  compliance_pct: number;
+  expiring_certs: number;
+  expired_certs: number;
+}
+
+export interface WeeklyTrend {
+  week: string;
+  completions: number;
+}
+
+export interface UpcomingDeadline {
+  id: string;
+  title: string;
+  course_title: string;
+  due_date: string;
+  is_mandatory: boolean;
+}
+
 export interface TenantStats {
   total_teachers: number;
   active_teachers: number;
   inactive_teachers: number;
+  total_students: number;
   total_admins: number;
   total_courses: number;
   published_courses: number;
@@ -51,6 +75,9 @@ export interface TenantStats {
   pending_review_detail?: PendingReviewDetail[];
   top_teachers: TopTeacher[];
   recent_activity: RecentActivityItem[];
+  cert_compliance: CertComplianceSummary;
+  weekly_trend: WeeklyTrend[];
+  upcoming_deadlines: UpcomingDeadline[];
 }
 
 export interface CourseBreakdown {
@@ -62,12 +89,45 @@ export interface CourseBreakdown {
   not_started: number;
 }
 
+export interface StudentOverview {
+  total: number;
+  active_30d: number;
+  inactive: number;
+}
+
+export interface StudentCourseProgress {
+  total_enrollments: number;
+  completed: number;
+  in_progress: number;
+  not_started: number;
+  avg_completion_pct: number;
+}
+
+export interface StudentPerformance {
+  total_submissions: number;
+  graded: number;
+  avg_score_pct: number;
+  pass_rate_pct: number;
+}
+
+export interface EngagementBreakdown {
+  highly_active: number;
+  active: number;
+  low_activity: number;
+  inactive: number;
+}
+
 export interface TenantAnalytics {
   course_breakdown: CourseBreakdown[];
   monthly_trend: Array<{ month: string; completions: number }>;
   assignment_breakdown: { total: number; manual: number; auto_quiz: number; auto_reflection: number };
-  teacher_engagement: { highly_active: number; active: number; low_activity: number; inactive: number };
+  teacher_engagement: EngagementBreakdown;
   department_stats: Array<{ department: string; count: number }>;
+  student_overview: StudentOverview;
+  student_grade_distribution: Array<{ grade: string; count: number }>;
+  student_engagement: EngagementBreakdown;
+  student_course_progress: StudentCourseProgress;
+  student_performance: StudentPerformance;
 }
 
 export interface VideoStatusResponse {

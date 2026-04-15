@@ -17,6 +17,7 @@ interface UseKeyboardShortcutsOptions {
   onMute: () => void;
   onToggleSceneSidebar?: () => void;
   onToggleDiscussion?: () => void;
+  onToggleNotes?: () => void;
   enabled?: boolean;
 }
 
@@ -42,6 +43,7 @@ export function useKeyboardShortcuts(opts: UseKeyboardShortcutsOptions): void {
     onMute,
     onToggleSceneSidebar,
     onToggleDiscussion,
+    onToggleNotes,
     enabled = true,
   } = opts;
 
@@ -122,6 +124,12 @@ export function useKeyboardShortcuts(opts: UseKeyboardShortcutsOptions): void {
           onToggleDiscussion?.();
           break;
 
+        case 'n':
+        case 'N':
+          e.preventDefault();
+          onToggleNotes?.();
+          break;
+
         default:
           break;
       }
@@ -139,6 +147,7 @@ export function useKeyboardShortcuts(opts: UseKeyboardShortcutsOptions): void {
       onMute,
       onToggleSceneSidebar,
       onToggleDiscussion,
+      onToggleNotes,
     ],
   );
 

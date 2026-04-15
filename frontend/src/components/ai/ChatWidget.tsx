@@ -21,8 +21,10 @@ import { cn } from '../../lib/utils';
 import { useToast } from '../common';
 
 export interface ContentContext {
-  type: 'interactive_lesson' | 'scenario';
+  type: 'interactive_lesson' | 'scenario' | 'content';
   content_title: string;
+  course_title?: string;
+  content_type_label?: string;
   scene_title?: string;
   scene_narrative?: string;
   reflection_prompt?: string;
@@ -225,8 +227,9 @@ export const ChatWidget: React.FC<ChatWidgetProps> = ({ courseId, contentContext
                 <h2 className="text-sm font-semibold">AI Course Assistant</h2>
                 {contentContext && (
                   <p className="truncate text-[10px] font-medium text-white/70">
-                    {contentContext.type === 'interactive_lesson' ? 'Lesson' : 'Scenario'}:{' '}
-                    {contentContext.scene_title || contentContext.content_title}
+                    {contentContext.type === 'content'
+                      ? `${contentContext.content_type_label || 'Content'}: ${contentContext.content_title}`
+                      : `${contentContext.type === 'interactive_lesson' ? 'Lesson' : 'Scenario'}: ${contentContext.scene_title || contentContext.content_title}`}
                   </p>
                 )}
               </div>
@@ -331,6 +334,8 @@ export const ChatWidget: React.FC<ChatWidgetProps> = ({ courseId, contentContext
                       contentContext
                         ? contentContext.type === 'interactive_lesson'
                           ? 'Ask about this lesson...'
+                          : contentContext.type === 'content'
+                          ? 'Ask about this content...'
                           : 'Ask about this scenario...'
                         : 'Ask about this course...'
                     }

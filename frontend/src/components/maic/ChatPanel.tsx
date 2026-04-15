@@ -1,20 +1,51 @@
 // src/components/maic/ChatPanel.tsx
 //
 // Right sidebar panel for multi-agent classroom chat. Displays conversation
-// history with agent avatars and allows user participation via SSE streaming.
+// history with agent-colored bubbles, role badges, relative timestamps,
+// typing indicator, and allows user participation via SSE streaming.
 
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { Send } from 'lucide-react';
 import { useMAICStageStore } from '../../stores/maicStageStore';
 import { useAuthStore } from '../../stores/authStore';
 import { streamMAIC } from '../../lib/maicSSE';
-import type { MAICChatMessage, MAICPlayerRole, MAICSSEEvent } from '../../types/maic';
+import { updateClassroomChat } from '../../lib/maicDb';
+import type { MAICChatMessage, MAICPlayerRole, MAICSSEEvent, MAICAgent } from '../../types/maic';
 import { AgentAvatar } from './AgentAvatar';
 import { cn } from '../../lib/utils';
 
 interface ChatPanelProps {
   role: MAICPlayerRole;
   classroomId: string;
+}
+
+// ─── Role badge labels ─────────────────────────────────────────────────────
+const ROLE_LABELS: Record<string, string> = {
+  professor: 'Professor',
+  teaching_assistant: 'TA',
+  assistant: 'Assistant',
+  student: 'Student',
+  student_rep: 'Student Rep',
+  moderator: 'Moderator',
+};
+
+/** Format a timestamp as a relative time string (e.g., "2m ago", "just now"). */
+function formatRelativeTime(ts: number): string {
+  const diff = Math.max(0, Date.now() - ts);
+  const seconds = Math.floor(diff / 1000);
+  if (seconds < 10) return 'just now';
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
+/** Derive a subtle background tint from an agent color for message bubbles. */
+function agentBubbleBg(color: string): string {
+  // Append low opacity — works for hex colors
+  return `${color}0D`; // ~5% opacity
 }
 
 export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({ role, classroomId }) {
@@ -34,9 +65,16 @@ export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({ role, c
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatMessages.length]);
 
+  // Persist chat history to IndexedDB when messages change
+  useEffect(() => {
+    if (chatMessages.length > 0 && classroomId) {
+      updateClassroomChat(classroomId, chatMessages).catch(() => {});
+    }
+  }, [chatMessages.length, classroomId]);
+
   // Resolve agent by id
   const getAgent = useCallback(
-    (agentId?: string) => {
+    (agentId?: string): MAICAgent | null => {
       if (!agentId) return null;
       return agents.find((a) => a.id === agentId) || null;
     },
@@ -124,6 +162,13 @@ export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({ role, c
     };
   }, []);
 
+  // Re-render timestamps periodically (every 30s)
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const interval = setInterval(() => setTick((t) => t + 1), 30000);
+    return () => clearInterval(interval);
+  }, []);
+
   return (
     <div className="flex flex-col h-full bg-white border-l border-gray-200" role="complementary" aria-label="Chat panel">
       {/* Header */}
@@ -155,6 +200,8 @@ export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({ role, c
             );
           }
 
+          const roleLabel = agent ? (ROLE_LABELS[agent.role] || agent.role) : null;
+
           return (
             <div
               key={msg.id}
@@ -173,14 +220,27 @@ export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({ role, c
 
               {/* Bubble */}
               <div className={cn('max-w-[80%] min-w-0')}>
-                {/* Name */}
+                {/* Name + Role badge */}
                 {!isUser && (
-                  <p
-                    className="text-xs font-medium mb-0.5 px-1"
-                    style={{ color: agent?.color || '#6B7280' }}
-                  >
-                    {msg.agentName || agent?.name || 'Assistant'}
-                  </p>
+                  <div className="flex items-center gap-1.5 mb-0.5 px-1">
+                    <p
+                      className="text-xs font-medium"
+                      style={{ color: agent?.color || '#6B7280' }}
+                    >
+                      {msg.agentName || agent?.name || 'Assistant'}
+                    </p>
+                    {roleLabel && (
+                      <span
+                        className="text-[9px] px-1.5 py-0.5 rounded-full font-medium"
+                        style={{
+                          backgroundColor: agent ? `${agent.color}1A` : '#F3F4F6',
+                          color: agent?.color || '#6B7280',
+                        }}
+                      >
+                        {roleLabel}
+                      </span>
+                    )}
+                  </div>
                 )}
                 <div
                   className={cn(
@@ -189,12 +249,26 @@ export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({ role, c
                       ? 'bg-primary-600 text-white rounded-br-md'
                       : 'bg-gray-100 text-gray-800 rounded-bl-md',
                   )}
+                  style={
+                    !isUser && agent
+                      ? {
+                          borderLeft: `3px solid ${agent.color}`,
+                          backgroundColor: agentBubbleBg(agent.color),
+                        }
+                      : undefined
+                  }
                 >
                   {msg.content}
                 </div>
-                {isUser && (
-                  <p className="text-[10px] text-gray-300 text-right mt-0.5 px-1">You</p>
-                )}
+                {/* Timestamp */}
+                <p
+                  className={cn(
+                    'text-[10px] text-gray-300 mt-0.5 px-1',
+                    isUser ? 'text-right' : 'text-left',
+                  )}
+                >
+                  {isUser ? 'You' : ''}{isUser ? ' \u00b7 ' : ''}{formatRelativeTime(msg.timestamp)}
+                </p>
               </div>
             </div>
           );
@@ -202,17 +276,13 @@ export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({ role, c
 
         {/* Typing indicator */}
         {isSending && (
-          <div className="flex gap-2 items-center">
-            <div className="h-8 w-8 rounded-full bg-gray-200 flex items-center justify-center text-xs text-gray-500">
-              AI
+          <div className="flex items-center gap-2 px-4 py-2 text-xs text-gray-400">
+            <div className="flex gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-gray-300 animate-bounce" style={{ animationDelay: '0ms' }} />
+              <span className="w-1.5 h-1.5 rounded-full bg-gray-300 animate-bounce" style={{ animationDelay: '150ms' }} />
+              <span className="w-1.5 h-1.5 rounded-full bg-gray-300 animate-bounce" style={{ animationDelay: '300ms' }} />
             </div>
-            <div className="bg-gray-100 rounded-2xl rounded-bl-md px-4 py-2.5">
-              <div className="flex items-center gap-1.5">
-                <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
-              </div>
-            </div>
+            <span>Agents are thinking...</span>
           </div>
         )}
 

@@ -25,6 +25,7 @@ import {
 } from '@heroicons/react/24/outline';
 import type { User } from '../../types';
 import { usePageTitle } from '../../hooks/usePageTitle';
+import { EmptyState } from '../../components/common/EmptyState';
 
 // ── Zod Schemas ──────────────────────────────────────────────────────
 
@@ -394,7 +395,13 @@ export const TeachersPage: React.FC = () => {
             {isLoading ? (
               <tr><td className="py-6 text-gray-500" colSpan={7}>Loading...</td></tr>
             ) : rows.length === 0 ? (
-              <tr><td className="py-6 text-gray-500" colSpan={7}>No teachers found.</td></tr>
+              <tr><td colSpan={7}>
+                <EmptyState
+                  icon={<UserPlusIcon className="h-10 w-10" />}
+                  title={search ? 'No teachers found' : 'No teachers yet'}
+                  description={search ? 'Try adjusting your search term.' : 'Create or invite teachers to get started.'}
+                />
+              </td></tr>
             ) : (
               rows.map((t) => (
                 <tr key={t.id} className={`text-gray-800 hover:bg-gray-50 ${selectedIds.has(t.id) ? 'bg-emerald-50' : ''}`}>
@@ -442,7 +449,13 @@ export const TeachersPage: React.FC = () => {
         {isLoading ? (
           <div className="card text-sm text-gray-500">Loading...</div>
         ) : rows.length === 0 ? (
-          <div className="card text-sm text-gray-500">No teachers found.</div>
+          <div className="card">
+            <EmptyState
+              icon={<UserPlusIcon className="h-10 w-10" />}
+              title={search ? 'No teachers found' : 'No teachers yet'}
+              description={search ? 'Try adjusting your search term.' : 'Create or invite teachers to get started.'}
+            />
+          </div>
         ) : (
           rows.map((t) => (
             <div key={t.id} className={`card ${selectedIds.has(t.id) ? 'ring-2 ring-emerald-200' : ''}`}>

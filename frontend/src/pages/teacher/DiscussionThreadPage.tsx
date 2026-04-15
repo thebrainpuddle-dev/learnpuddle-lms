@@ -1,8 +1,9 @@
 // src/pages/teacher/DiscussionThreadPage.tsx
 //
-// Single discussion thread view — nested replies, likes, subscribe.
+// Teacher view of a single student discussion thread.
+// Includes moderation controls (close, pin, hide replies) plus reply capability.
 
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { cn } from '../../design-system/theme/cn';
@@ -14,11 +15,17 @@ import api from '../../config/api';
 // Types
 // ---------------------------------------------------------------------------
 
+interface Author {
+  id: string | null;
+  name: string;
+  role: string | null;
+  avatar: string | null;
+}
+
 interface DiscussionReply {
   id: string;
   body: string;
-  author_name: string;
-  author_id: string;
+  author: Author;
   like_count: number;
   is_liked: boolean;
   is_edited: boolean;
@@ -32,12 +39,19 @@ interface ThreadDetail {
   id: string;
   title: string;
   body: string;
-  author_name: string;
-  author_id: string;
+  author: Author;
+  section_id: string;
+  section_name: string | null;
+  grade_name: string | null;
+  course_id: string | null;
+  course_title: string | null;
+  content_id: string | null;
+  content_title: string | null;
   status: 'open' | 'closed' | 'archived';
   is_pinned: boolean;
   is_announcement: boolean;
   is_subscribed: boolean;
+  can_moderate: boolean;
   reply_count: number;
   view_count: number;
   created_at: string;
@@ -50,40 +64,27 @@ interface ThreadDetail {
 // ---------------------------------------------------------------------------
 
 function relativeTime(dateStr: string): string {
-  const now = Date.now();
-  const then = new Date(dateStr).getTime();
-  const diff = now - then;
-
+  const diff = Date.now() - new Date(dateStr).getTime();
   const seconds = Math.floor(diff / 1000);
   if (seconds < 60) return 'just now';
-
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `${minutes}m ago`;
-
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours}h ago`;
-
   const days = Math.floor(hours / 24);
   if (days < 30) return `${days}d ago`;
-
   const months = Math.floor(days / 30);
-  if (months < 12) return `${months}mo ago`;
-
-  return `${Math.floor(months / 12)}y ago`;
+  return months < 12 ? `${months}mo ago` : `${Math.floor(months / 12)}y ago`;
 }
 
 function formatFullDate(dateStr: string): string {
   return new Date(dateStr).toLocaleDateString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
+    month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
   });
 }
 
 // ---------------------------------------------------------------------------
-// SVG Icons (inline)
+// SVG Icons
 // ---------------------------------------------------------------------------
 
 const ArrowLeftIcon = () => (
@@ -110,15 +111,9 @@ const ReplyIcon = () => (
   </svg>
 );
 
-const PencilIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5">
-    <path d="M2.695 14.763l-1.262 3.154a.5.5 0 00.65.65l3.155-1.262a4 4 0 001.343-.885L17.5 5.5a2.121 2.121 0 00-3-3L3.58 13.42a4 4 0 00-.885 1.343z" />
-  </svg>
-);
-
-const TrashIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5">
-    <path fillRule="evenodd" d="M8.75 1A2.75 2.75 0 006 3.75v.443c-.795.077-1.584.176-2.365.298a.75.75 0 10.23 1.482l.149-.022.841 10.518A2.75 2.75 0 007.596 19h4.807a2.75 2.75 0 002.742-2.53l.841-10.519.149.023a.75.75 0 00.23-1.482A41.03 41.03 0 0014 4.193V3.75A2.75 2.75 0 0011.25 1h-2.5zM10 4c.84 0 1.673.025 2.5.075V3.75c0-.69-.56-1.25-1.25-1.25h-2.5c-.69 0-1.25.56-1.25 1.25v.325C8.327 4.025 9.16 4 10 4zM8.58 7.72a.75.75 0 00-1.5.06l.3 7.5a.75.75 0 101.5-.06l-.3-7.5zm4.34.06a.75.75 0 10-1.5-.06l-.3 7.5a.75.75 0 101.5.06l.3-7.5z" clipRule="evenodd" />
+const SendIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4">
+    <path d="M3.105 2.289a.75.75 0 00-.826.95l1.414 4.925A1.5 1.5 0 005.135 9.25h6.115a.75.75 0 010 1.5H5.135a1.5 1.5 0 00-1.442 1.086l-1.414 4.926a.75.75 0 00.826.95 28.896 28.896 0 0015.293-7.154.75.75 0 000-1.115A28.897 28.897 0 003.105 2.289z" />
   </svg>
 );
 
@@ -133,6 +128,12 @@ const BellIcon = ({ filled }: { filled?: boolean }) =>
     </svg>
   );
 
+const XIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4">
+    <path d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z" />
+  </svg>
+);
+
 const ChatBubbleIcon = () => (
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4">
     <path fillRule="evenodd" d="M3.43 2.524A41.29 41.29 0 0110 2c2.236 0 4.43.18 6.57.524 1.437.231 2.43 1.49 2.43 2.902v5.148c0 1.413-.993 2.67-2.43 2.902a41.102 41.102 0 01-3.55.414c-.28.02-.521.18-.643.413l-1.712 3.293a.75.75 0 01-1.33 0l-1.713-3.293a.783.783 0 00-.642-.413 41.108 41.108 0 01-3.55-.414C1.993 13.245 1 11.986 1 10.574V5.426c0-1.413.993-2.67 2.43-2.902z" clipRule="evenodd" />
@@ -146,20 +147,8 @@ const EyeIcon = () => (
   </svg>
 );
 
-const XIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4">
-    <path d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z" />
-  </svg>
-);
-
-const SendIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4">
-    <path d="M3.105 2.289a.75.75 0 00-.826.95l1.414 4.925A1.5 1.5 0 005.135 9.25h6.115a.75.75 0 010 1.5H5.135a1.5 1.5 0 00-1.442 1.086l-1.414 4.926a.75.75 0 00.826.95 28.896 28.896 0 0015.293-7.154.75.75 0 000-1.115A28.897 28.897 0 003.105 2.289z" />
-  </svg>
-);
-
 // ---------------------------------------------------------------------------
-// Like button with animation
+// Like button
 // ---------------------------------------------------------------------------
 
 const LikeButton: React.FC<{
@@ -183,41 +172,21 @@ const LikeButton: React.FC<{
       disabled={disabled}
       className={cn(
         'inline-flex items-center gap-1 text-[12px] font-medium transition-colors',
-        isLiked
-          ? 'text-rose-500 hover:text-rose-600'
-          : 'text-gray-400 hover:text-rose-400',
+        isLiked ? 'text-rose-500 hover:text-rose-600' : 'text-gray-400 hover:text-rose-400',
         disabled && 'opacity-50 cursor-not-allowed',
       )}
     >
-      <span
-        className={cn(
-          'transition-transform',
-          animating && 'animate-[like-pop_0.4s_ease-out]',
-        )}
-      >
-        {isLiked ? (
-          <HeartFilledIcon className="h-3.5 w-3.5" />
-        ) : (
-          <HeartOutlineIcon className="h-3.5 w-3.5" />
-        )}
+      <span className={cn('transition-transform', animating && 'animate-[like-pop_0.4s_ease-out]')}>
+        {isLiked ? <HeartFilledIcon className="h-3.5 w-3.5" /> : <HeartOutlineIcon className="h-3.5 w-3.5" />}
       </span>
       {count > 0 && <span className="tabular-nums">{count}</span>}
-
-      {/* Keyframes injected once via style tag */}
-      <style>{`
-        @keyframes like-pop {
-          0% { transform: scale(1); }
-          30% { transform: scale(1.35); }
-          60% { transform: scale(0.9); }
-          100% { transform: scale(1); }
-        }
-      `}</style>
+      <style>{`@keyframes like-pop { 0% { transform: scale(1); } 30% { transform: scale(1.35); } 60% { transform: scale(0.9); } 100% { transform: scale(1); } }`}</style>
     </button>
   );
 };
 
 // ---------------------------------------------------------------------------
-// Reply component (recursive for nesting)
+// Reply card (recursive)
 // ---------------------------------------------------------------------------
 
 const MAX_NESTING_DEPTH = 3;
@@ -228,139 +197,75 @@ const ReplyCard: React.FC<{
   currentUserId: string | undefined;
   onReplyTo: (replyId: string, authorName: string) => void;
   onLikeToggle: (replyId: string, isLiked: boolean) => void;
-  onEdit: (replyId: string, body: string) => void;
-  onDelete: (replyId: string) => void;
+  onHide: (replyId: string) => void;
   likingIds: Set<string>;
-}> = ({
-  reply,
-  threadId,
-  currentUserId,
-  onReplyTo,
-  onLikeToggle,
-  onEdit,
-  onDelete,
-  likingIds,
-}) => {
-  const [editing, setEditing] = useState(false);
-  const [editBody, setEditBody] = useState(reply.body);
-  const isOwn = currentUserId === reply.author_id;
+  canModerate: boolean;
+}> = ({ reply, threadId, currentUserId, onReplyTo, onLikeToggle, onHide, likingIds, canModerate }) => {
   const canNest = reply.depth < MAX_NESTING_DEPTH;
-
-  const handleSaveEdit = () => {
-    if (!editBody.trim()) return;
-    onEdit(reply.id, editBody);
-    setEditing(false);
-  };
-
   const indentPx = Math.min(reply.depth, MAX_NESTING_DEPTH) * 24;
+  const isTeacher = reply.author.role && reply.author.role !== 'STUDENT';
 
   return (
     <div style={{ marginLeft: indentPx > 0 ? `${indentPx}px` : undefined }}>
       <div
         className={cn(
           'rounded-xl border p-3.5 mb-2 transition-colors',
-          reply.depth > 0
-            ? 'border-gray-100 bg-gray-50/50'
-            : 'border-gray-100 bg-white',
+          isTeacher
+            ? 'border-orange-100 bg-orange-50/30'
+            : reply.depth > 0
+              ? 'border-gray-100 bg-gray-50/50'
+              : 'border-gray-100 bg-white',
         )}
       >
         {/* Author line */}
         <div className="flex items-center gap-2 mb-2">
-          <div className="h-6 w-6 rounded-full bg-gradient-to-br from-tp-accent/20 to-tp-accent/40 flex items-center justify-center text-[10px] font-bold text-tp-accent flex-shrink-0">
-            {reply.author_name.charAt(0).toUpperCase()}
+          <div className={cn(
+            'h-6 w-6 rounded-full flex items-center justify-center text-[10px] font-bold flex-shrink-0',
+            isTeacher
+              ? 'bg-gradient-to-br from-orange-200 to-orange-300 text-orange-700'
+              : 'bg-gradient-to-br from-tp-accent/20 to-tp-accent/40 text-tp-accent',
+          )}>
+            {reply.author.name.charAt(0).toUpperCase()}
           </div>
-          <span className="text-[12px] font-semibold text-tp-text">
-            {reply.author_name}
-          </span>
-          <span className="text-[11px] text-gray-400">
-            {relativeTime(reply.created_at)}
-          </span>
-          {reply.is_edited && (
-            <span className="text-[10px] text-gray-400 italic">(edited)</span>
+          <span className="text-[12px] font-semibold text-tp-text">{reply.author.name}</span>
+          {isTeacher && (
+            <span className="px-1.5 py-[1px] rounded text-[9px] font-semibold uppercase bg-orange-100 text-orange-600">
+              Teacher
+            </span>
           )}
+          <span className="text-[11px] text-gray-400">{relativeTime(reply.created_at)}</span>
+          {reply.is_edited && <span className="text-[10px] text-gray-400 italic">(edited)</span>}
         </div>
 
-        {/* Body or edit mode */}
-        {editing ? (
-          <div className="space-y-2">
-            <textarea
-              value={editBody}
-              onChange={(e) => setEditBody(e.target.value)}
-              rows={3}
-              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-[13px] text-tp-text focus:outline-none focus:ring-2 focus:ring-tp-accent/20 focus:border-tp-accent resize-none"
-              autoFocus
-            />
-            <div className="flex gap-2">
-              <button
-                onClick={handleSaveEdit}
-                disabled={!editBody.trim()}
-                className="px-3 py-1 rounded-lg text-[11px] font-semibold bg-tp-accent text-white hover:bg-tp-accent-dark transition-colors disabled:bg-gray-300"
-              >
-                Save
-              </button>
-              <button
-                onClick={() => {
-                  setEditing(false);
-                  setEditBody(reply.body);
-                }}
-                className="px-3 py-1 rounded-lg text-[11px] font-medium text-gray-500 hover:bg-gray-100 transition-colors"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        ) : (
-          <p className="text-[13px] text-gray-700 leading-relaxed whitespace-pre-wrap mb-2.5">
-            {reply.body}
-          </p>
-        )}
+        <p className="text-[13px] text-gray-700 leading-relaxed whitespace-pre-wrap mb-2.5">{reply.body}</p>
 
         {/* Actions */}
-        {!editing && (
-          <div className="flex items-center gap-3">
-            <LikeButton
-              isLiked={reply.is_liked}
-              count={reply.like_count}
-              onToggle={() => onLikeToggle(reply.id, reply.is_liked)}
-              disabled={likingIds.has(reply.id)}
-            />
-
-            {canNest && (
-              <button
-                onClick={() => onReplyTo(reply.id, reply.author_name)}
-                className="inline-flex items-center gap-1 text-[12px] font-medium text-gray-400 hover:text-tp-accent transition-colors"
-              >
-                <ReplyIcon />
-                Reply
-              </button>
-            )}
-
-            {isOwn && (
-              <>
-                <button
-                  onClick={() => {
-                    setEditBody(reply.body);
-                    setEditing(true);
-                  }}
-                  className="inline-flex items-center gap-1 text-[12px] font-medium text-gray-400 hover:text-blue-500 transition-colors"
-                >
-                  <PencilIcon />
-                  Edit
-                </button>
-                <button
-                  onClick={() => onDelete(reply.id)}
-                  className="inline-flex items-center gap-1 text-[12px] font-medium text-gray-400 hover:text-red-500 transition-colors"
-                >
-                  <TrashIcon />
-                  Delete
-                </button>
-              </>
-            )}
-          </div>
-        )}
+        <div className="flex items-center gap-3">
+          <LikeButton
+            isLiked={reply.is_liked}
+            count={reply.like_count}
+            onToggle={() => onLikeToggle(reply.id, reply.is_liked)}
+            disabled={likingIds.has(reply.id)}
+          />
+          {canNest && (
+            <button
+              onClick={() => onReplyTo(reply.id, reply.author.name)}
+              className="inline-flex items-center gap-1 text-[12px] font-medium text-gray-400 hover:text-tp-accent transition-colors"
+            >
+              <ReplyIcon /> Reply
+            </button>
+          )}
+          {canModerate && (
+            <button
+              onClick={() => onHide(reply.id)}
+              className="inline-flex items-center gap-1 text-[12px] font-medium text-gray-400 hover:text-red-500 transition-colors"
+            >
+              Hide
+            </button>
+          )}
+        </div>
       </div>
 
-      {/* Children (recursive) */}
       {reply.children.length > 0 && (
         <div>
           {reply.children.map((child) => (
@@ -371,9 +276,9 @@ const ReplyCard: React.FC<{
               currentUserId={currentUserId}
               onReplyTo={onReplyTo}
               onLikeToggle={onLikeToggle}
-              onEdit={onEdit}
-              onDelete={onDelete}
+              onHide={onHide}
               likingIds={likingIds}
+              canModerate={canModerate}
             />
           ))}
         </div>
@@ -389,46 +294,35 @@ const ReplyCard: React.FC<{
 export const DiscussionThreadPage: React.FC = () => {
   usePageTitle('Discussion');
   const navigate = useNavigate();
-  const { courseId, threadId } = useParams<{
-    courseId?: string;
-    threadId: string;
-  }>();
+  const { threadId } = useParams<{ threadId: string }>();
   const queryClient = useQueryClient();
   const user = useAuthStore((s) => s.user);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Local state
   const [replyBody, setReplyBody] = useState('');
-  const [replyingTo, setReplyingTo] = useState<{
-    id: string;
-    name: string;
-  } | null>(null);
+  const [replyingTo, setReplyingTo] = useState<{ id: string; name: string } | null>(null);
   const [likingIds, setLikingIds] = useState<Set<string>>(new Set());
 
-  // Fetch thread detail
+  // Fetch thread
   const { data: thread, isLoading } = useQuery<ThreadDetail>({
-    queryKey: ['discussion-thread', threadId],
+    queryKey: ['teacher-discussion-thread', threadId],
     enabled: Boolean(threadId),
     queryFn: async () => {
-      const res = await api.get(`/v1/discussions/threads/${threadId}/`);
+      const res = await api.get(`/v1/teacher/discussions/threads/${threadId}/`);
       return res.data;
     },
   });
 
-  // Subscribe / unsubscribe
+  // Subscribe/unsubscribe
   const subscribeMutation = useMutation({
     mutationFn: async () => {
       if (thread?.is_subscribed) {
-        await api.delete(`/v1/discussions/threads/${threadId}/subscribe/`);
+        await api.delete(`/v1/teacher/discussions/threads/${threadId}/subscribe/`);
       } else {
-        await api.post(`/v1/discussions/threads/${threadId}/subscribe/`);
+        await api.post(`/v1/teacher/discussions/threads/${threadId}/subscribe/`);
       }
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: ['discussion-thread', threadId],
-      });
-    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['teacher-discussion-thread', threadId] }),
   });
 
   // Post reply
@@ -436,50 +330,32 @@ export const DiscussionThreadPage: React.FC = () => {
     mutationFn: async () => {
       const payload: Record<string, string> = { body: replyBody };
       if (replyingTo) payload.parent_id = replyingTo.id;
-      return api.post(`/v1/discussions/threads/${threadId}/replies/`, payload);
+      return api.post(`/v1/teacher/discussions/threads/${threadId}/replies/`, payload);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: ['discussion-thread', threadId],
-      });
+      queryClient.invalidateQueries({ queryKey: ['teacher-discussion-thread', threadId] });
       setReplyBody('');
       setReplyingTo(null);
     },
   });
 
-  // Edit reply
-  const editReplyMutation = useMutation({
-    mutationFn: async ({
-      replyId,
-      body,
-    }: {
-      replyId: string;
-      body: string;
-    }) => {
-      return api.put(
-        `/v1/discussions/threads/${threadId}/replies/${replyId}/`,
-        { body },
-      );
+  // Moderate thread
+  const moderateMutation = useMutation({
+    mutationFn: async (data: Record<string, unknown>) => {
+      return api.patch(`/v1/teacher/discussions/threads/${threadId}/moderate/`, data);
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: ['discussion-thread', threadId],
-      });
-    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['teacher-discussion-thread', threadId] }),
   });
 
-  // Delete reply
-  const deleteReplyMutation = useMutation({
+  // Hide reply
+  const hideReplyMutation = useMutation({
     mutationFn: async (replyId: string) => {
-      return api.delete(
-        `/v1/discussions/threads/${threadId}/replies/${replyId}/`,
-      );
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: ['discussion-thread', threadId],
+      return api.post(`/v1/teacher/discussions/threads/${threadId}/replies/${replyId}/moderate/`, {
+        action: 'hide',
+        reason: 'Hidden by teacher',
       });
     },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['teacher-discussion-thread', threadId] }),
   });
 
   // Like toggle
@@ -488,17 +364,11 @@ export const DiscussionThreadPage: React.FC = () => {
       setLikingIds((prev) => new Set(prev).add(replyId));
       try {
         if (currentlyLiked) {
-          await api.delete(
-            `/v1/discussions/threads/${threadId}/replies/${replyId}/like/`,
-          );
+          await api.delete(`/v1/teacher/discussions/threads/${threadId}/replies/${replyId}/like/`);
         } else {
-          await api.post(
-            `/v1/discussions/threads/${threadId}/replies/${replyId}/like/`,
-          );
+          await api.post(`/v1/teacher/discussions/threads/${threadId}/replies/${replyId}/like/`);
         }
-        queryClient.invalidateQueries({
-          queryKey: ['discussion-thread', threadId],
-        });
+        queryClient.invalidateQueries({ queryKey: ['teacher-discussion-thread', threadId] });
       } finally {
         setLikingIds((prev) => {
           const next = new Set(prev);
@@ -510,41 +380,23 @@ export const DiscussionThreadPage: React.FC = () => {
     [threadId, queryClient],
   );
 
-  // Reply-to handler
-  const handleReplyTo = useCallback(
-    (replyId: string, authorName: string) => {
-      setReplyingTo({ id: replyId, name: authorName });
-      textareaRef.current?.focus();
-    },
-    [],
-  );
+  const handleReplyTo = useCallback((replyId: string, authorName: string) => {
+    setReplyingTo({ id: replyId, name: authorName });
+    textareaRef.current?.focus();
+  }, []);
 
-  const handleEdit = useCallback(
-    (replyId: string, body: string) => {
-      editReplyMutation.mutate({ replyId, body });
-    },
-    [editReplyMutation],
-  );
+  const handleHide = useCallback((replyId: string) => {
+    if (window.confirm('Hide this reply? It will no longer be visible to students.')) {
+      hideReplyMutation.mutate(replyId);
+    }
+  }, [hideReplyMutation]);
 
-  const handleDelete = useCallback(
-    (replyId: string) => {
-      if (window.confirm('Are you sure you want to delete this reply?')) {
-        deleteReplyMutation.mutate(replyId);
-      }
-    },
-    [deleteReplyMutation],
-  );
+  const handleSubmitReply = useCallback((e: React.FormEvent) => {
+    e.preventDefault();
+    if (!replyBody.trim()) return;
+    replyMutation.mutate();
+  }, [replyBody, replyMutation]);
 
-  const handleSubmitReply = useCallback(
-    (e: React.FormEvent) => {
-      e.preventDefault();
-      if (!replyBody.trim()) return;
-      replyMutation.mutate();
-    },
-    [replyBody, replyMutation],
-  );
-
-  // Auto-resize textarea
   const handleTextareaInput = useCallback(() => {
     const el = textareaRef.current;
     if (el) {
@@ -563,7 +415,6 @@ export const DiscussionThreadPage: React.FC = () => {
         <div className="h-8 w-32 tp-skeleton rounded-lg" />
         <div className="h-48 tp-skeleton rounded-2xl" />
         <div className="h-24 tp-skeleton rounded-2xl" />
-        <div className="h-24 tp-skeleton rounded-2xl" />
       </div>
     );
   }
@@ -571,42 +422,48 @@ export const DiscussionThreadPage: React.FC = () => {
   if (!thread) {
     return (
       <div className="space-y-4">
-        <button
-          onClick={() => navigate(-1)}
-          className="inline-flex items-center gap-1.5 text-[13px] text-gray-500 hover:text-tp-text transition-colors"
-        >
-          <ArrowLeftIcon />
-          Back
+        <button onClick={() => navigate(-1)} className="inline-flex items-center gap-1.5 text-[13px] text-gray-500 hover:text-tp-text transition-colors">
+          <ArrowLeftIcon /> Back
         </button>
         <div className="bg-white rounded-2xl border border-gray-100 p-8 text-center shadow-sm">
-          <h2 className="text-[15px] font-semibold text-tp-text">
-            Thread not found
-          </h2>
-          <p className="text-[13px] text-gray-400 mt-1">
-            This discussion thread may have been deleted or moved.
-          </p>
+          <h2 className="text-[15px] font-semibold text-tp-text">Thread not found</h2>
+          <p className="text-[13px] text-gray-400 mt-1">This discussion thread may have been deleted.</p>
         </div>
       </div>
     );
   }
 
-  const backPath = courseId
-    ? `/teacher/courses/${courseId}/discussions`
-    : '/teacher/discussions';
-
   return (
     <div className="space-y-4">
-      {/* Back button */}
+      {/* Back */}
       <button
-        onClick={() => navigate(backPath)}
+        onClick={() => navigate('/teacher/discussions')}
         className="inline-flex items-center gap-1.5 text-[13px] text-gray-500 hover:text-tp-text transition-colors"
       >
-        <ArrowLeftIcon />
-        Back to Discussions
+        <ArrowLeftIcon /> Back to Discussions
       </button>
 
-      {/* Thread header card */}
+      {/* Thread header */}
       <div className="bg-white rounded-2xl border border-gray-100 p-5 shadow-sm">
+        {/* Labels */}
+        <div className="flex flex-wrap items-center gap-1.5 mb-3">
+          {thread.grade_name && thread.section_name && (
+            <span className="px-2 py-[2px] rounded-md text-[10px] font-semibold bg-blue-50 text-blue-600 uppercase tracking-wide">
+              {thread.grade_name} - {thread.section_name}
+            </span>
+          )}
+          {thread.course_title && (
+            <span className="px-2 py-[2px] rounded-md text-[10px] font-semibold bg-purple-50 text-purple-600">
+              {thread.course_title}
+            </span>
+          )}
+          {thread.content_title && (
+            <span className="px-2 py-[2px] rounded-md text-[10px] font-medium bg-gray-50 text-gray-500">
+              {thread.content_title}
+            </span>
+          )}
+        </div>
+
         <div className="flex items-start justify-between gap-3 mb-3">
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 mb-1">
@@ -617,89 +474,98 @@ export const DiscussionThreadPage: React.FC = () => {
                   </svg>
                 </span>
               )}
-              <span
-                className={cn(
-                  'px-2 py-[3px] rounded-md text-[10px] font-semibold uppercase tracking-wide leading-none',
-                  thread.status === 'open'
-                    ? 'bg-emerald-50 text-emerald-600'
-                    : thread.status === 'closed'
-                      ? 'bg-gray-100 text-gray-500'
-                      : 'bg-amber-50 text-amber-600',
-                )}
-              >
+              <span className={cn(
+                'px-2 py-[3px] rounded-md text-[10px] font-semibold uppercase tracking-wide leading-none',
+                thread.status === 'open' ? 'bg-emerald-50 text-emerald-600'
+                  : thread.status === 'closed' ? 'bg-gray-100 text-gray-500'
+                  : 'bg-amber-50 text-amber-600',
+              )}>
                 {thread.status}
               </span>
             </div>
-            <h1 className="text-[20px] font-bold text-tp-text tracking-tight leading-tight">
-              {thread.title}
-            </h1>
+            <h1 className="text-[20px] font-bold text-tp-text tracking-tight leading-tight">{thread.title}</h1>
           </div>
 
-          {/* Subscribe button */}
-          <button
-            onClick={() => subscribeMutation.mutate()}
-            disabled={subscribeMutation.isPending}
-            className={cn(
-              'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[12px] font-semibold border transition-colors flex-shrink-0',
-              thread.is_subscribed
-                ? 'bg-tp-accent/10 border-tp-accent/20 text-tp-accent hover:bg-tp-accent/20'
-                : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300 hover:text-tp-text',
-              subscribeMutation.isPending && 'opacity-50 cursor-not-allowed',
-            )}
-          >
-            <BellIcon filled={thread.is_subscribed} />
-            {thread.is_subscribed ? 'Subscribed' : 'Subscribe'}
-          </button>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {/* Subscribe */}
+            <button
+              onClick={() => subscribeMutation.mutate()}
+              disabled={subscribeMutation.isPending}
+              className={cn(
+                'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[12px] font-semibold border transition-colors',
+                thread.is_subscribed
+                  ? 'bg-tp-accent/10 border-tp-accent/20 text-tp-accent hover:bg-tp-accent/20'
+                  : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300',
+                subscribeMutation.isPending && 'opacity-50 cursor-not-allowed',
+              )}
+            >
+              <BellIcon filled={thread.is_subscribed} />
+              {thread.is_subscribed ? 'Subscribed' : 'Subscribe'}
+            </button>
+          </div>
         </div>
 
-        {/* Author info */}
+        {/* Author */}
         <div className="flex items-center gap-2 mb-3">
           <div className="h-7 w-7 rounded-full bg-gradient-to-br from-tp-accent/20 to-tp-accent/40 flex items-center justify-center text-[11px] font-bold text-tp-accent">
-            {thread.author_name.charAt(0).toUpperCase()}
+            {thread.author.name.charAt(0).toUpperCase()}
           </div>
           <div>
-            <span className="text-[13px] font-semibold text-tp-text">
-              {thread.author_name}
-            </span>
-            <span className="text-[12px] text-gray-400 ml-2">
-              {formatFullDate(thread.created_at)}
-            </span>
+            <span className="text-[13px] font-semibold text-tp-text">{thread.author.name}</span>
+            {thread.author.role === 'STUDENT' && (
+              <span className="ml-1.5 px-1.5 py-[1px] rounded text-[9px] font-semibold uppercase bg-green-50 text-green-600">
+                Student
+              </span>
+            )}
+            <span className="text-[12px] text-gray-400 ml-2">{formatFullDate(thread.created_at)}</span>
           </div>
         </div>
 
         {/* Body */}
-        <div className="text-[14px] text-gray-700 leading-relaxed whitespace-pre-wrap mb-4">
-          {thread.body}
-        </div>
+        <div className="text-[14px] text-gray-700 leading-relaxed whitespace-pre-wrap mb-4">{thread.body}</div>
 
-        {/* Metadata */}
-        <div className="flex items-center gap-4 text-[12px] text-gray-400 border-t border-gray-100 pt-3">
-          <span className="inline-flex items-center gap-1.5">
-            <EyeIcon />
-            {thread.view_count} {thread.view_count === 1 ? 'view' : 'views'}
-          </span>
-          <span className="inline-flex items-center gap-1.5">
-            <ChatBubbleIcon />
-            {thread.reply_count}{' '}
-            {thread.reply_count === 1 ? 'reply' : 'replies'}
-          </span>
-          {thread.last_reply_at && (
-            <span>Last reply {relativeTime(thread.last_reply_at)}</span>
+        {/* Meta + moderation */}
+        <div className="flex items-center justify-between border-t border-gray-100 pt-3">
+          <div className="flex items-center gap-4 text-[12px] text-gray-400">
+            <span className="inline-flex items-center gap-1.5"><EyeIcon /> {thread.view_count} views</span>
+            <span className="inline-flex items-center gap-1.5"><ChatBubbleIcon /> {thread.reply_count} replies</span>
+            {thread.last_reply_at && <span>Last reply {relativeTime(thread.last_reply_at)}</span>}
+          </div>
+
+          {/* Moderation controls */}
+          {thread.can_moderate && (
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => moderateMutation.mutate({ status: thread.status === 'open' ? 'closed' : 'open' })}
+                disabled={moderateMutation.isPending}
+                className="px-3 py-1 rounded-lg text-[11px] font-semibold border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors disabled:opacity-50"
+              >
+                {thread.status === 'open' ? 'Close Thread' : 'Reopen Thread'}
+              </button>
+              <button
+                onClick={() => moderateMutation.mutate({ is_pinned: !thread.is_pinned })}
+                disabled={moderateMutation.isPending}
+                className={cn(
+                  'px-3 py-1 rounded-lg text-[11px] font-semibold border transition-colors disabled:opacity-50',
+                  thread.is_pinned
+                    ? 'border-tp-accent/30 text-tp-accent bg-tp-accent/5 hover:bg-tp-accent/10'
+                    : 'border-gray-200 text-gray-600 hover:bg-gray-50',
+                )}
+              >
+                {thread.is_pinned ? 'Unpin' : 'Pin'}
+              </button>
+            </div>
           )}
         </div>
       </div>
 
       {/* Replies heading */}
       <div className="flex items-center gap-2">
-        <h2 className="text-[15px] font-bold text-tp-text">
-          Replies
-        </h2>
-        <span className="text-[12px] text-gray-400 tabular-nums">
-          ({thread.reply_count})
-        </span>
+        <h2 className="text-[15px] font-bold text-tp-text">Replies</h2>
+        <span className="text-[12px] text-gray-400 tabular-nums">({thread.reply_count})</span>
       </div>
 
-      {/* Replies list */}
+      {/* Replies */}
       {thread.replies.length === 0 ? (
         <div className="text-center py-12 bg-white rounded-2xl border border-gray-100 shadow-sm">
           <div className="text-gray-200 mb-2 flex justify-center">
@@ -707,9 +573,7 @@ export const DiscussionThreadPage: React.FC = () => {
               <path strokeLinecap="round" strokeLinejoin="round" d="M8.625 9.75a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375m-13.5 3.01c0 1.6 1.123 2.994 2.707 3.227 1.087.16 2.185.283 3.293.369V21l4.184-4.183a1.14 1.14 0 01.778-.332 48.294 48.294 0 005.83-.498c1.585-.233 2.708-1.626 2.708-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z" />
             </svg>
           </div>
-          <p className="text-[13px] text-gray-400">
-            No replies yet. Be the first to respond!
-          </p>
+          <p className="text-[13px] text-gray-400">No replies yet.</p>
         </div>
       ) : (
         <div className="space-y-1">
@@ -721,73 +585,61 @@ export const DiscussionThreadPage: React.FC = () => {
               currentUserId={user?.id}
               onReplyTo={handleReplyTo}
               onLikeToggle={handleLikeToggle}
-              onEdit={handleEdit}
-              onDelete={handleDelete}
+              onHide={handleHide}
               likingIds={likingIds}
+              canModerate={thread.can_moderate}
             />
           ))}
         </div>
       )}
 
       {/* Reply input */}
-      <div className="bg-white rounded-2xl border border-gray-100 p-4 shadow-sm sticky bottom-4">
-        {/* Replying-to indicator */}
-        {replyingTo && (
-          <div className="flex items-center justify-between mb-2 px-1">
-            <span className="text-[12px] text-gray-500">
-              Replying to{' '}
-              <span className="font-semibold text-tp-accent">
-                {replyingTo.name}
+      {thread.status === 'open' && (
+        <div className="bg-white rounded-2xl border border-gray-100 p-4 shadow-sm sticky bottom-4">
+          {replyingTo && (
+            <div className="flex items-center justify-between mb-2 px-1">
+              <span className="text-[12px] text-gray-500">
+                Replying to <span className="font-semibold text-tp-accent">{replyingTo.name}</span>
               </span>
-            </span>
+              <button onClick={() => setReplyingTo(null)} className="text-gray-400 hover:text-gray-600 transition-colors">
+                <XIcon />
+              </button>
+            </div>
+          )}
+          <form onSubmit={handleSubmitReply} className="flex gap-2">
+            <textarea
+              ref={textareaRef}
+              value={replyBody}
+              onChange={(e) => { setReplyBody(e.target.value); handleTextareaInput(); }}
+              placeholder="Reply to this discussion..."
+              rows={1}
+              className="flex-1 rounded-xl border border-gray-200 px-3.5 py-2.5 text-[13px] text-tp-text placeholder:text-gray-300 focus:outline-none focus:ring-2 focus:ring-tp-accent/20 focus:border-tp-accent transition-colors resize-none min-h-[40px]"
+            />
             <button
-              onClick={() => setReplyingTo(null)}
-              className="text-gray-400 hover:text-gray-600 transition-colors"
+              type="submit"
+              disabled={replyMutation.isPending || !replyBody.trim()}
+              className={cn(
+                'self-end px-4 py-2.5 rounded-xl text-white font-semibold text-[13px] transition-colors shadow-sm flex-shrink-0',
+                replyMutation.isPending || !replyBody.trim()
+                  ? 'bg-gray-300 cursor-not-allowed'
+                  : 'bg-tp-accent hover:bg-tp-accent-dark',
+              )}
             >
-              <XIcon />
+              {replyMutation.isPending ? (
+                <span className="inline-flex items-center gap-1">
+                  <svg className="animate-spin h-3.5 w-3.5" viewBox="0 0 24 24" fill="none">
+                    <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
+                    <path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" className="opacity-75" />
+                  </svg>
+                  Sending
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1"><SendIcon /> Reply</span>
+              )}
             </button>
-          </div>
-        )}
-
-        <form onSubmit={handleSubmitReply} className="flex gap-2">
-          <textarea
-            ref={textareaRef}
-            value={replyBody}
-            onChange={(e) => {
-              setReplyBody(e.target.value);
-              handleTextareaInput();
-            }}
-            placeholder="Write a reply..."
-            rows={1}
-            className="flex-1 rounded-xl border border-gray-200 px-3.5 py-2.5 text-[13px] text-tp-text placeholder:text-gray-300 focus:outline-none focus:ring-2 focus:ring-tp-accent/20 focus:border-tp-accent transition-colors resize-none min-h-[40px]"
-          />
-          <button
-            type="submit"
-            disabled={replyMutation.isPending || !replyBody.trim()}
-            className={cn(
-              'self-end px-4 py-2.5 rounded-xl text-white font-semibold text-[13px] transition-colors shadow-sm flex-shrink-0',
-              replyMutation.isPending || !replyBody.trim()
-                ? 'bg-gray-300 cursor-not-allowed'
-                : 'bg-tp-accent hover:bg-tp-accent-dark',
-            )}
-          >
-            {replyMutation.isPending ? (
-              <span className="inline-flex items-center gap-1">
-                <svg className="animate-spin h-3.5 w-3.5" viewBox="0 0 24 24" fill="none">
-                  <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
-                  <path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" className="opacity-75" />
-                </svg>
-                Sending
-              </span>
-            ) : (
-              <span className="inline-flex items-center gap-1">
-                <SendIcon />
-                Reply
-              </span>
-            )}
-          </button>
-        </form>
-      </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 };

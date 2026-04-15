@@ -7,29 +7,32 @@ import { CourseEditorPage } from './CourseEditorPage';
 import api from '../../config/api';
 import { useTenantStore } from '../../stores/tenantStore';
 
-jest.mock('../../stores/tenantStore');
-jest.mock('../../config/api', () => ({
+vi.mock('../../stores/tenantStore');
+vi.mock('../../config/api', () => ({
   __esModule: true,
   default: {
-    get: jest.fn(),
-    post: jest.fn(),
-    patch: jest.fn(),
-    delete: jest.fn(),
+    get: vi.fn(),
+    post: vi.fn(),
+    patch: vi.fn(),
+    delete: vi.fn(),
   },
 }));
 
-jest.mock('../../components/common', () => ({
-  ...jest.requireActual('../../components/common'),
-  useToast: () => ({
-    success: jest.fn(),
-    error: jest.fn(),
-    warning: jest.fn(),
-    info: jest.fn(),
-  }),
-}));
+vi.mock('../../components/common', async () => {
+  const actual = await vi.importActual('../../components/common');
+  return {
+    ...actual,
+    useToast: () => ({
+      success: vi.fn(),
+      error: vi.fn(),
+      warning: vi.fn(),
+      info: vi.fn(),
+    }),
+  };
+});
 
-const mockedApi = api as jest.Mocked<typeof api>;
-const mockedUseTenantStore = useTenantStore as unknown as jest.Mock;
+const mockedApi = api as unknown as { [K in keyof typeof api]: ReturnType<typeof vi.fn> };
+const mockedUseTenantStore = useTenantStore as unknown as ReturnType<typeof vi.fn>;
 
 const LocationProbe: React.FC = () => {
   const location = useLocation();
@@ -38,10 +41,10 @@ const LocationProbe: React.FC = () => {
 
 describe('CourseEditorPage tab URL stability', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
 
     mockedUseTenantStore.mockReturnValue({
-      hasFeature: jest.fn(() => true),
+      hasFeature: vi.fn(() => true),
     });
 
     mockedApi.get.mockImplementation(async (url: string) => {
@@ -100,33 +103,7 @@ describe('CourseEditorPage tab URL stability', () => {
       }
       return { data: {} } as any;
     });
-    mockedApi.post.mockImplementation(async (url: string) => {
-      if (url === '/courses/abc/assignments/') {
-        return {
-          data: {
-            id: 'assignment-1',
-            title: 'Generated Assignment',
-            description: '',
-            instructions: '',
-            due_date: null,
-            max_score: '100',
-            passing_score: '70',
-            is_mandatory: true,
-            is_active: true,
-            scope_type: 'COURSE',
-            module_id: null,
-            module_title: null,
-            assignment_type: 'QUIZ',
-            generation_source: 'MANUAL',
-            generation_metadata: {},
-            questions: [],
-            created_at: '2026-01-01T00:00:00Z',
-            updated_at: '2026-01-01T00:00:00Z',
-          },
-        } as any;
-      }
-      return { data: {} } as any;
-    });
+    mockedApi.post.mockResolvedValue({ data: {} } as any);
     mockedApi.patch.mockResolvedValue({ data: {} } as any);
     mockedApi.delete.mockResolvedValue({ data: {} } as any);
   });
@@ -167,25 +144,26 @@ describe('CourseEditorPage tab URL stability', () => {
     });
   });
 
-  it('maps legacy assignment tab param to audience tab on edit routes', async () => {
+  it('maps unknown tab param to details on edit routes', async () => {
     renderPage('/admin/courses/abc?tab=assignment');
 
     expect(await screen.findByRole('button', { name: 'Save Changes' })).toBeInTheDocument();
 
+    // 'assignment' is not a valid tab, so it normalizes to 'details'
     await waitFor(() => {
-      expect(screen.getByTestId('search')).toHaveTextContent('?tab=audience');
+      expect(screen.getByTestId('search')).toHaveTextContent('?tab=details');
     });
   });
 
-  it('changes URL tab param when selecting assignment builder tab', async () => {
+  it('changes URL tab param when selecting audience tab', async () => {
     renderPage('/admin/courses/abc?tab=details');
 
     expect(await screen.findByRole('button', { name: 'Save Changes' })).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole('button', { name: 'Assignment Builder' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Course Audience' }));
 
     await waitFor(() => {
-      expect(screen.getByTestId('search')).toHaveTextContent('?tab=assignments');
+      expect(screen.getByTestId('search')).toHaveTextContent('?tab=audience');
     });
   });
 
@@ -199,38 +177,5 @@ describe('CourseEditorPage tab URL stability', () => {
         screen.queryByText(/Need reusable assets across courses/i),
       ).not.toBeInTheDocument();
     });
-  });
-
-  it('submits assignment builder payload for manual written assignment', async () => {
-    renderPage('/admin/courses/abc?tab=assignments');
-
-    expect(await screen.findByRole('button', { name: 'Save Changes' })).toBeInTheDocument();
-
-    const titleInput = await screen.findByLabelText('Assignment Title');
-    await userEvent.clear(titleInput);
-    await userEvent.type(titleInput, 'Written Reflection');
-
-    await userEvent.selectOptions(screen.getByLabelText('Type'), 'WRITTEN');
-    await userEvent.click(screen.getByRole('button', { name: 'Create Assignment' }));
-
-    await waitFor(() => {
-      expect(mockedApi.post).toHaveBeenCalledWith(
-        '/courses/abc/assignments/',
-        expect.objectContaining({
-          title: 'Written Reflection',
-          assignment_type: 'WRITTEN',
-          scope_type: 'COURSE',
-        }),
-      );
-    });
-  });
-
-  it('disables AI generation when source content is not available', async () => {
-    renderPage('/admin/courses/abc?tab=assignments');
-
-    expect(await screen.findByRole('button', { name: 'Save Changes' })).toBeInTheDocument();
-
-    const aiButton = await screen.findByRole('button', { name: 'Generate with AI' });
-    expect(aiButton).toBeDisabled();
   });
 });

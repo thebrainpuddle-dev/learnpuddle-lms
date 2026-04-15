@@ -173,6 +173,9 @@ AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator'},
 ]
 
+# Password reset token expiration (Django default is 3 days = 259200 seconds)
+PASSWORD_RESET_TIMEOUT = config('PASSWORD_RESET_TIMEOUT', default=1800, cast=int)  # 30 minutes
+
 # Internationalization
 LANGUAGE_CODE = 'en-us'
 TIME_ZONE = 'Asia/Kolkata'
@@ -419,23 +422,26 @@ The tenant is determined from the `Host` header or `X-Tenant-Subdomain` header.
 }
 
 # JWT Configuration
+JWT_SIGNING_KEY = config('JWT_SIGNING_KEY', default=SECRET_KEY)
+
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=config('JWT_ACCESS_TOKEN_LIFETIME', default=15, cast=int)),
     'REFRESH_TOKEN_LIFETIME': timedelta(minutes=config('JWT_REFRESH_TOKEN_LIFETIME', default=10080, cast=int)),
     'ROTATE_REFRESH_TOKENS': True,
     'BLACKLIST_AFTER_ROTATION': True,
     'ALGORITHM': 'HS256',
-    'SIGNING_KEY': config('JWT_SIGNING_KEY', default=SECRET_KEY),  # Separate from SECRET_KEY in prod
+    'SIGNING_KEY': JWT_SIGNING_KEY,
     'AUTH_HEADER_TYPES': ('Bearer',),
 }
 
-# Warn if JWT signing key is the same as SECRET_KEY (should be separate in production)
-import logging as _logging
-_settings_logger = _logging.getLogger('config.settings')
-if SIMPLE_JWT['SIGNING_KEY'] == SECRET_KEY:
-    _settings_logger.warning(
-        "SECURITY WARNING: JWT_SIGNING_KEY is the same as SECRET_KEY. "
-        "Set a separate JWT_SIGNING_KEY in production."
+# Enforce separate JWT signing key in production
+if not DEBUG and JWT_SIGNING_KEY == SECRET_KEY:
+    import warnings
+    warnings.warn(
+        "SECURITY: JWT_SIGNING_KEY should be different from SECRET_KEY in production. "
+        "Set JWT_SIGNING_KEY in environment variables.",
+        RuntimeWarning,
+        stacklevel=1,
     )
 
 # CORS Configuration (for frontend)
@@ -479,6 +485,15 @@ _cors_regex = config(
 )
 if _cors_regex:
     CORS_ALLOWED_ORIGIN_REGEXES = [_cors_regex]
+
+# Safety check: warn if no CORS origins are configured in production
+if not DEBUG and not CORS_ALLOWED_ORIGINS and not CORS_ALLOWED_ORIGIN_REGEXES:
+    import warnings
+    warnings.warn(
+        "CORS: No allowed origins configured for production. "
+        "Set CORS_ALLOWED_ORIGINS or CORS_ALLOWED_ORIGIN_REGEX.",
+        RuntimeWarning,
+    )
 
 # -----------------------------------------------------------------------------
 # Logging - Structured JSON logging for production, simple format for dev
@@ -650,7 +665,7 @@ CHANNEL_LAYERS = {
 
 # Email Configuration
 EMAIL_BACKEND = config('EMAIL_BACKEND', default='django.core.mail.backends.console.EmailBackend')
-EMAIL_HOST = config('EMAIL_HOST', default='')
+EMAIL_HOST = config('EMAIL_HOST', default='smtp.resend.com')
 EMAIL_PORT = config('EMAIL_PORT', default=587, cast=int)
 EMAIL_USE_TLS = config('EMAIL_USE_TLS', default=True, cast=bool)
 EMAIL_USE_SSL = config('EMAIL_USE_SSL', default=False, cast=bool)
@@ -706,11 +721,20 @@ SENTRY_DSN = config('SENTRY_DSN', default='')
 if SENTRY_DSN:
     try:
         import sentry_sdk
+        from sentry_sdk.integrations.django import DjangoIntegration
+        from sentry_sdk.integrations.celery import CeleryIntegration
+        from sentry_sdk.integrations.redis import RedisIntegration
+
         sentry_sdk.init(
             dsn=SENTRY_DSN,
-            traces_sample_rate=config('SENTRY_TRACES_RATE', default=0.1, cast=float),
+            integrations=[
+                DjangoIntegration(),
+                CeleryIntegration(),
+                RedisIntegration(),
+            ],
+            traces_sample_rate=config('SENTRY_TRACES_RATE', default=0.1 if not DEBUG else 1.0, cast=float),
             send_default_pii=False,
-            environment=config('SENTRY_ENVIRONMENT', default='production'),
+            environment=config('SENTRY_ENVIRONMENT', default='development' if DEBUG else 'production'),
         )
     except ImportError:
         pass  # sentry-sdk not installed; silently skip
