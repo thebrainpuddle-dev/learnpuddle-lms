@@ -448,6 +448,21 @@ export function ChatbotChat({
                 break;
 
               case 'done': {
+                // Attach sources and persist messages BEFORE notifying the
+                // parent, because the parent changes the React `key` prop
+                // which unmounts this component — aborting the stream before
+                // the post-loop save can execute.
+                setLocalMessages((prev) => {
+                  const updated = [...prev];
+                  const last = updated[updated.length - 1];
+                  if (last && last.role === 'assistant' && streamSources) {
+                    updated[updated.length - 1] = { ...last, sources: streamSources };
+                    streamSources = null; // consumed
+                  }
+                  saveMessages(storageScope, updated);
+                  return updated;
+                });
+
                 if (evt.conversation_id && !convIdRef.current) {
                   convIdRef.current = evt.conversation_id;
                   onConversationCreated?.(evt.conversation_id);
