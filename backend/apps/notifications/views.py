@@ -17,16 +17,20 @@ from .serializers import NotificationSerializer
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
-@teacher_or_admin
 @tenant_required
 def notification_list(request):
     """
-    List notifications for the current teacher.
+    List notifications for the current user.
+    Returns empty list for students (notification system is teacher-only).
     Query params:
       - unread_only: true/false (default false)
       - type: REMINDER|COURSE_ASSIGNED|ASSIGNMENT_DUE|ANNOUNCEMENT|SYSTEM (optional)
       - limit: number (default 20)
     """
+    # Students don't have notifications yet — return empty list
+    if getattr(request.user, 'role', '') == 'STUDENT':
+        return Response([], status=status.HTTP_200_OK)
+
     qs = Notification.objects.filter(teacher=request.user, tenant=request.tenant)
     
     unread_only = request.GET.get('unread_only', '').lower() == 'true'
@@ -52,14 +56,18 @@ def notification_list(request):
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
-@teacher_or_admin
 @tenant_required
 def notification_unread_count(request):
     """
-    Get count of unread notifications for the current teacher.
+    Get count of unread notifications for the current user.
+    Returns 0 for students (notification system is teacher-only).
     Query params:
       - type: REMINDER|COURSE_ASSIGNED|ASSIGNMENT_DUE|ANNOUNCEMENT|SYSTEM (optional)
     """
+    # Students don't have notifications yet — return 0 to avoid 403
+    if getattr(request.user, 'role', '') == 'STUDENT':
+        return Response({'count': 0, 'actionable_count': 0}, status=status.HTTP_200_OK)
+
     base_qs = Notification.objects.filter(
         teacher=request.user,
         tenant=request.tenant,
