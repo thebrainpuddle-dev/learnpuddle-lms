@@ -99,13 +99,14 @@ function terminateSession(reason: 'session_expired' | 'tenant_access_denied') {
     return;
   }
   sessionTerminationInProgress = true;
+  const userEmail = useAuthStore.getState().user?.email;
   try {
     useAuthStore.getState().clearAuth();
   } catch {
     // In-memory store cleanup is best-effort.
   }
   clearAuthArtifacts();
-  broadcastLogout(reason);
+  broadcastLogout(reason, undefined, userEmail);
   if (!isLoginPath()) {
     window.location.href = buildLoginRedirectUrl(reason);
     return;
@@ -377,27 +378,20 @@ api.interceptors.response.use(
         // Update Zustand in-memory state so subsequent requests use new token
         useAuthStore.setState({ accessToken: access });
 
-        // Update Zustand persisted storage (best-effort)
+        // Update Zustand persisted storage — only in the ACTIVE storage
+        // for this session (not both), to avoid corrupting another user's
+        // persisted auth state in a different tab.
         try {
-          for (const storage of [sessionStorage, localStorage]) {
-            const authData = storage.getItem('auth-storage');
-            if (authData) {
-              const parsed = JSON.parse(authData);
-              if (parsed?.state) {
-                parsed.state.accessToken = access;
-                storage.setItem('auth-storage', JSON.stringify(parsed));
-              }
+          const authData = tokenStorage.getItem('auth-storage');
+          if (authData) {
+            const parsed = JSON.parse(authData);
+            if (parsed?.state) {
+              parsed.state.accessToken = access;
+              tokenStorage.setItem('auth-storage', JSON.stringify(parsed));
             }
           }
         } catch {
           // Persisted storage sync is best-effort
-        }
-
-        // Broadcast token refresh to other tabs
-        try {
-          localStorage.setItem('token_refreshed', Date.now().toString());
-        } catch {
-          // Best-effort cross-tab notification
         }
 
         isRefreshing = false;

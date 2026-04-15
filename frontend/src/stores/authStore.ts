@@ -71,19 +71,19 @@ export const useAuthStore = create<AuthState>()(
       isLoading: false,
       
       setAuth: (user, tokens, rememberMe = false) => {
-        // Clear any existing tokens from both storages first
-        localStorage.removeItem(ACCESS_TOKEN_KEY);
-        localStorage.removeItem(REFRESH_TOKEN_KEY);
+        // Clear tokens from the tab-local sessionStorage (always safe)
         sessionStorage.removeItem(ACCESS_TOKEN_KEY);
         sessionStorage.removeItem(REFRESH_TOKEN_KEY);
-        
-        // Store remember me preference
+
+        // Only clear localStorage tokens when *this* tab is switching to
+        // localStorage ("remember me").  Blindly clearing localStorage
+        // would destroy another tab's persistent session.
         if (rememberMe) {
           localStorage.setItem(REMEMBER_ME_KEY, 'true');
-        } else {
-          localStorage.removeItem(REMEMBER_ME_KEY);
+          localStorage.removeItem(ACCESS_TOKEN_KEY);
+          localStorage.removeItem(REFRESH_TOKEN_KEY);
         }
-        
+
         // Choose storage based on remember me
         const storage = rememberMe ? localStorage : sessionStorage;
         storage.setItem(ACCESS_TOKEN_KEY, tokens.access);
@@ -104,15 +104,22 @@ export const useAuthStore = create<AuthState>()(
       },
       
       clearAuth: () => {
-        // Clear from both storages to ensure complete logout
-        localStorage.removeItem(ACCESS_TOKEN_KEY);
-        localStorage.removeItem(REFRESH_TOKEN_KEY);
-        localStorage.removeItem(REMEMBER_ME_KEY);
+        // Always clear tab-local sessionStorage
         sessionStorage.removeItem(ACCESS_TOKEN_KEY);
         sessionStorage.removeItem(REFRESH_TOKEN_KEY);
-        localStorage.removeItem(SESSION_LAST_ACTIVITY_KEY);
-        localStorage.removeItem('tenant_subdomain');
         sessionStorage.removeItem('tenant_subdomain');
+
+        // Only clear localStorage tokens if *this* session uses "remember me"
+        // (i.e. tokens were stored in localStorage). This prevents a logout
+        // in one tab from wiping another user's persistent session.
+        const wasRememberMe = localStorage.getItem(REMEMBER_ME_KEY) === 'true';
+        if (wasRememberMe) {
+          localStorage.removeItem(ACCESS_TOKEN_KEY);
+          localStorage.removeItem(REFRESH_TOKEN_KEY);
+          localStorage.removeItem(REMEMBER_ME_KEY);
+          localStorage.removeItem('tenant_subdomain');
+        }
+        localStorage.removeItem(SESSION_LAST_ACTIVITY_KEY);
 
         set({
           user: null,

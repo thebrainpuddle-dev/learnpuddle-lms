@@ -18,6 +18,7 @@ export interface LogoutEventPayload {
   reason: LogoutReason;
   at: number;
   sourceTabId?: string;
+  userEmail?: string;
 }
 
 export function getAccessToken(): string | null {
@@ -91,11 +92,12 @@ export function buildLoginRedirectUrl(
   return `${loginPath}?reason=${encodeURIComponent(reason)}`;
 }
 
-export function broadcastLogout(reason: LogoutReason, sourceTabId?: string) {
+export function broadcastLogout(reason: LogoutReason, sourceTabId?: string, userEmail?: string) {
   const payload: LogoutEventPayload = {
     reason,
     at: Date.now(),
     sourceTabId,
+    userEmail,
   };
   localStorage.setItem(SESSION_LOGOUT_EVENT_KEY, JSON.stringify(payload));
 }

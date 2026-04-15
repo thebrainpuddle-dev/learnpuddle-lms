@@ -27,7 +27,7 @@ interface SuperAdminSidebarProps {
 }
 
 export const SuperAdminSidebar: React.FC<SuperAdminSidebarProps> = ({ open, onClose }) => {
-  const { clearAuth } = useAuthStore();
+  const { user, clearAuth } = useAuthStore();
   const { startTour } = useGuidedTour();
 
   const SidebarContent = () => (
@@ -96,7 +96,7 @@ export const SuperAdminSidebar: React.FC<SuperAdminSidebarProps> = ({ open, onCl
         </button>
         <button
           onClick={() => {
-            broadcastLogout('manual_logout');
+            broadcastLogout('manual_logout', undefined, user?.email);
             clearAuth();
             window.location.href = '/super-admin/login';
           }}

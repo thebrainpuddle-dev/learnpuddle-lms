@@ -106,7 +106,7 @@ export const StudentSidebar: React.FC<StudentSidebarProps> = ({ open, onClose })
     } catch {
       // proceed regardless
     } finally {
-      broadcastLogout('manual_logout');
+      broadcastLogout('manual_logout', undefined, user?.email);
       clearAuth();
       window.location.href = '/login';
     }

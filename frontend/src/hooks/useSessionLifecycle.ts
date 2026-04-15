@@ -16,6 +16,7 @@ import {
   setLastActivityTimestamp,
   type LogoutReason,
 } from '../utils/authSession';
+import { isGenerationActive } from '../utils/generationLock';
 
 const ACTIVITY_EVENTS: Array<keyof WindowEventMap> = [
   'mousedown',
@@ -77,6 +78,11 @@ export function useSessionLifecycle() {
         if (payload.sourceTabId === tabIdRef.current) {
           return;
         }
+        // Only logout if the broadcast is for the same user (or unscoped for backward compat)
+        const currentEmail = useAuthStore.getState().user?.email;
+        if (payload.userEmail && currentEmail && payload.userEmail !== currentEmail) {
+          return;
+        }
         localLogout('external_logout');
       }
 
@@ -98,6 +104,7 @@ export function useSessionLifecycle() {
 
     const terminateForIdleTimeout = async () => {
       logoutInProgressRef.current = true;
+      const userEmail = useAuthStore.getState().user?.email;
       const refreshToken = getRefreshToken();
       try {
         if (refreshToken) {
@@ -108,7 +115,7 @@ export function useSessionLifecycle() {
       } finally {
         clearAuth();
         clearAuthArtifacts();
-        broadcastLogout('idle_timeout', tabIdRef.current);
+        broadcastLogout('idle_timeout', tabIdRef.current, userEmail);
         redirectToLogin('idle_timeout');
       }
     };
@@ -116,6 +123,14 @@ export function useSessionLifecycle() {
     const checkIdleTimeout = async (): Promise<boolean> => {
       if (logoutInProgressRef.current) {
         return true;
+      }
+
+      // Never timeout during active MAIC classroom generation
+      if (isGenerationActive()) {
+        const now = Date.now();
+        lastActivityWriteRef.current = now;
+        setLastActivityTimestamp(now);
+        return false;
       }
 
       const lastActivity = getLastActivityTimestamp();

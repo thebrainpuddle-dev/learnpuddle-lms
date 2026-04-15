@@ -9,6 +9,8 @@ import { useMAICStageStore } from '../stores/maicStageStore';
 import { streamMAIC } from '../lib/maicSSE';
 import { saveClassroom } from '../lib/maicDb';
 import { maicStudentApi } from '../services/openmaicService';
+import { setGenerationActive } from '../utils/generationLock';
+import { setLastActivityTimestamp } from '../utils/authSession';
 import type {
   MAICOutline,
   MAICOutlineScene,
@@ -19,6 +21,19 @@ import type {
 } from '../types/maic';
 import type { MAICScene, MAICSceneType, MAICSlideContent, MAICQuizContent, SceneSlideBounds } from '../types/maic-scenes';
 import type { MAICAction } from '../types/maic-actions';
+
+/** Retry an async operation with exponential backoff. */
+async function withRetry<T>(fn: () => Promise<T>, retries = 2, baseDelayMs = 2000): Promise<T> {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (attempt === retries) throw err;
+      await new Promise((r) => setTimeout(r, baseDelayMs * (attempt + 1)));
+    }
+  }
+  throw new Error('Unreachable');
+}
 
 export type StudentGenerationStep = 'idle' | 'validating' | 'outlining' | 'editing' | 'generating' | 'complete' | 'error';
 export type StudentGenerationPhase = 'idle' | 'validation' | 'outline' | 'content' | 'actions' | 'saving';
@@ -201,18 +216,27 @@ export function useStudentMAICGeneration(): UseStudentMAICGenerationReturn {
       const totalSteps = outline.scenes.length * 2;
       let currentSlideOffset = 0;
 
+      // Lock: prevent idle timeout and keep session alive during generation
+      setGenerationActive(true);
+      const heartbeat = window.setInterval(() => {
+        setLastActivityTimestamp(Date.now());
+      }, 30_000);
+
       try {
         // Phase 1: Generate slide content
         for (let i = 0; i < outline.scenes.length; i++) {
           const outlineScene = outline.scenes[i];
           setCurrentSceneIdx(i);
           setProgress(Math.round(((i + 1) / totalSteps) * 100));
+          setLastActivityTimestamp(Date.now());
 
-          const res = await maicStudentApi.generateSceneContent({
-            scene: outlineScene,
-            agents,
-            language: outline.language,
-          });
+          const res = await withRetry(() =>
+            maicStudentApi.generateSceneContent({
+              scene: outlineScene,
+              agents,
+              language: outline.language,
+            }),
+          );
 
           const sceneSlides: MAICSlide[] = res.data?.slides
             ? (res.data.slides as MAICSlide[])
@@ -253,18 +277,21 @@ export function useStudentMAICGeneration(): UseStudentMAICGenerationReturn {
           const scene = generatedScenes[i];
           setCurrentSceneIdx(i);
           setProgress(Math.round(((outline.scenes.length + i + 1) / totalSteps) * 100));
+          setLastActivityTimestamp(Date.now());
 
           try {
-            const actionsRes = await maicStudentApi.generateSceneActions({
-              scene: {
-                id: scene.id,
-                type: scene.type,
-                title: scene.title,
-                content: scene.content,
-              },
-              agents,
-              language: outline.language,
-            });
+            const actionsRes = await withRetry(() =>
+              maicStudentApi.generateSceneActions({
+                scene: {
+                  id: scene.id,
+                  type: scene.type,
+                  title: scene.title,
+                  content: scene.content,
+                },
+                agents,
+                language: outline.language,
+              }),
+            );
 
             if (actionsRes.data?.actions?.length) {
               scene.actions = actionsRes.data.actions;
@@ -291,17 +318,19 @@ export function useStudentMAICGeneration(): UseStudentMAICGenerationReturn {
         });
 
         // Update Django record
-        await maicStudentApi.updateClassroom(classroomId, {
-          status: 'READY',
-          scene_count: generatedScenes.length,
-          estimated_minutes: outline.totalMinutes,
-          config: { agents, language: outline.language },
-          content: {
-            slides: generatedSlides,
-            scenes: generatedScenes,
-            sceneSlideBounds,
-          },
-        });
+        await withRetry(() =>
+          maicStudentApi.updateClassroom(classroomId, {
+            status: 'READY',
+            scene_count: generatedScenes.length,
+            estimated_minutes: outline.totalMinutes,
+            config: { agents, language: outline.language },
+            content: {
+              slides: generatedSlides,
+              scenes: generatedScenes,
+              sceneSlideBounds,
+            },
+          }),
+        );
 
         setSlides(generatedSlides);
         setScenes(generatedScenes);
@@ -318,6 +347,9 @@ export function useStudentMAICGeneration(): UseStudentMAICGenerationReturn {
           status: 'FAILED',
           error_message: message,
         }).catch(() => {});
+      } finally {
+        window.clearInterval(heartbeat);
+        setGenerationActive(false);
       }
     },
     [outline, accessToken, setSlides, setScenes, setAgents, setSceneSlideBounds],

@@ -103,7 +103,7 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({ open, onClose }) => 
     } catch {
       // Logout API call failed; proceed with local session cleanup
     } finally {
-      broadcastLogout('manual_logout');
+      broadcastLogout('manual_logout', undefined, user?.email);
       clearAuth();
       window.location.href = '/login';
     }
