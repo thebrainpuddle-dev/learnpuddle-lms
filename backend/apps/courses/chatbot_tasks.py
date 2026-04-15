@@ -270,6 +270,19 @@ def ingest_chatbot_knowledge(self, knowledge_id: str):
 
         api_key = ai_config.get_llm_api_key()
         base_url = ai_config.llm_base_url or ""
+
+        # OpenRouter doesn't support the /embeddings endpoint.
+        # Use a dedicated OpenAI key for embeddings when available.
+        embedding_key = os.environ.get("OPENAI_EMBEDDING_API_KEY", "").strip()
+        if embedding_key:
+            api_key = embedding_key
+            base_url = "https://api.openai.com/v1"
+        elif ai_config.llm_provider == "openrouter":
+            raise ValueError(
+                "OpenRouter does not support embeddings. "
+                "Set OPENAI_EMBEDDING_API_KEY env var with an OpenAI key."
+            )
+
         if not api_key:
             raise ValueError("No API key configured for AI provider.")
 

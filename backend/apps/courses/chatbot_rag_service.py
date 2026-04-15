@@ -236,10 +236,14 @@ def stream_chat_response(
     base_url = ai_config.llm_base_url or ""
 
     # Step 1: Embed query (skip if pgvector unavailable — saves API cost)
+    # OpenRouter doesn't support /embeddings — use dedicated OpenAI key if set.
+    import os
+    embed_key = os.environ.get("OPENAI_EMBEDDING_API_KEY", "").strip() or api_key
+    embed_url = "https://api.openai.com/v1" if os.environ.get("OPENAI_EMBEDDING_API_KEY", "").strip() else base_url
     query_embedding = []
     if _has_embedding_column():
         try:
-            query_embedding = _embed_query(user_message, api_key, base_url)
+            query_embedding = _embed_query(user_message, embed_key, embed_url)
         except Exception:
             logger.warning("Embedding query failed; falling back to keyword search", exc_info=True)
 

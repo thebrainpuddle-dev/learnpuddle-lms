@@ -31,10 +31,9 @@ import logging
 import requests as http_requests
 from django.http import StreamingHttpResponse, HttpResponse
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes, throttle_classes
+from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.throttling import UserRateThrottle
 
 from apps.courses.maic_models import TenantAIConfig, MAICClassroom
 from apps.courses.maic_generation_service import (
@@ -55,29 +54,7 @@ logger = logging.getLogger(__name__)
 
 
 # ─── Rate Limiting ────────────────────────────────────────────────────────────
-
-class StudentGenerationThrottle(UserRateThrottle):
-    """Limit student AI classroom generation to 1 per 3 hours."""
-    rate = '1/3hour'
-    scope = 'student_maic_generation'
-
-    def parse_rate(self, rate):
-        """Support custom '1/3hour' format."""
-        if rate is None:
-            return (None, None)
-        num, period = rate.split('/')
-        num_requests = int(num)
-        # Parse period — e.g. "3hour" → 3 * 3600
-        import re
-        m = re.match(r'^(\d+)?(\w+)$', period)
-        if m:
-            multiplier = int(m.group(1)) if m.group(1) else 1
-            unit = m.group(2)
-            durations = {'sec': 1, 'min': 60, 'hour': 3600, 'day': 86400}
-            duration = durations.get(unit, 3600) * multiplier
-        else:
-            duration = 3600
-        return (num_requests, duration)
+# StudentGenerationThrottle removed — no rate limit for student classroom generation
 
 
 OPENMAIC_BASE = "http://openmaic:3000"
@@ -1036,12 +1013,10 @@ def student_maic_quiz_grade(request):
 # Student AI Classroom Creation (with guardrails)
 # ======================================================================
 
-MAX_STUDENT_CLASSROOMS = 5  # per-student limit (much lower than teacher)
 
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
-@throttle_classes([StudentGenerationThrottle])
 @student_or_admin
 @tenant_required
 @check_feature("feature_maic")
@@ -1050,11 +1025,9 @@ def student_maic_validate_topic(request):
 
     POST body: { "topic": "...", "pdfText": "..." }
     Returns: { "allowed": bool, "subject_area": "...", "reason": "..." }
-    """
-    config, err = _get_ai_config(request.tenant)
-    if err:
-        return err
 
+    Guardrails removed — all topics are allowed.
+    """
     topic = (request.data.get("topic") or "").strip()
     pdf_text = (request.data.get("pdfText") or "").strip()
 
@@ -1064,47 +1037,22 @@ def student_maic_validate_topic(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    # Validate topic
-    if topic:
-        result = validate_topic(topic, config)
-        if not result.allowed:
-            log_audit(
-                "GUARDRAIL_BLOCK", "MAICClassroom",
-                target_repr=f"topic={topic[:100]}",
-                changes=result.to_dict(),
-                request=request,
-            )
-            return Response(result.to_dict(), status=status.HTTP_200_OK)
-
-    # Validate PDF content (if provided)
-    if pdf_text:
-        result = validate_pdf_content(pdf_text, config)
-        if not result.allowed:
-            log_audit(
-                "GUARDRAIL_BLOCK", "MAICClassroom",
-                target_repr="pdf_upload",
-                changes=result.to_dict(),
-                request=request,
-            )
-            return Response(result.to_dict(), status=status.HTTP_200_OK)
-
-    # Both passed (or only one was provided)
-    final = result if pdf_text else validate_topic(topic, config)
-    return Response(final.to_dict(), status=status.HTTP_200_OK)
+    return Response({
+        "allowed": True,
+        "is_educational": True,
+        "subject_area": "general",
+        "confidence": 1.0,
+        "reason": "Approved",
+    }, status=status.HTTP_200_OK)
 
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
-@throttle_classes([StudentGenerationThrottle])
 @student_or_admin
 @tenant_required
 @check_feature("feature_maic")
 def student_maic_classroom_create(request):
-    """Create a new AI Classroom as a student — with guardrail validation.
-
-    Requires topic to pass educational content guardrails before creation.
-    Students are limited to MAX_STUDENT_CLASSROOMS active classrooms.
-    """
+    """Create a new AI Classroom as a student."""
     config, err = _get_ai_config(request.tenant)
     if err:
         return err
@@ -1115,45 +1063,6 @@ def student_maic_classroom_create(request):
 
     if not title:
         return Response({"error": "title is required."}, status=status.HTTP_400_BAD_REQUEST)
-
-    # Check student classroom limit
-    existing_count = MAICClassroom.objects.filter(
-        tenant=request.tenant, creator=request.user,
-    ).exclude(status="ARCHIVED").count()
-    if existing_count >= MAX_STUDENT_CLASSROOMS:
-        return Response(
-            {"error": f"You have reached the maximum of {MAX_STUDENT_CLASSROOMS} classrooms."},
-            status=status.HTTP_403_FORBIDDEN,
-        )
-
-    # ── Guardrail gate ──
-    if topic:
-        topic_result = validate_topic(topic, config)
-        if not topic_result.allowed:
-            log_audit(
-                "GUARDRAIL_BLOCK", "MAICClassroom",
-                target_repr=f"create:topic={topic[:100]}",
-                changes=topic_result.to_dict(),
-                request=request,
-            )
-            return Response({
-                "error": "This topic was not approved for classroom generation.",
-                "guardrail": topic_result.to_dict(),
-            }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
-
-    if pdf_text:
-        pdf_result = validate_pdf_content(pdf_text, config)
-        if not pdf_result.allowed:
-            log_audit(
-                "GUARDRAIL_BLOCK", "MAICClassroom",
-                target_repr="create:pdf_upload",
-                changes=pdf_result.to_dict(),
-                request=request,
-            )
-            return Response({
-                "error": "The uploaded document was not approved for classroom generation.",
-                "guardrail": pdf_result.to_dict(),
-            }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
 
     # ── Create classroom ──
     classroom = MAICClassroom.objects.create(
@@ -1266,15 +1175,11 @@ def student_maic_my_classrooms(request):
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
-@throttle_classes([StudentGenerationThrottle])
 @student_or_admin
 @tenant_required
 @check_feature("feature_maic")
 def student_maic_generate_outlines(request):
-    """SSE outline generation for student — with guardrail check.
-
-    Same as teacher endpoint but validates topic/PDF first.
-    """
+    """SSE outline generation for student — same as teacher endpoint."""
     config, err = _get_ai_config(request.tenant)
     if err:
         return err
@@ -1286,35 +1191,6 @@ def student_maic_generate_outlines(request):
 
     topic = (body.get("topic") or "").strip()
     pdf_text = (body.get("pdfText") or "").strip()
-
-    # ── Guardrail gate ──
-    if topic:
-        topic_result = validate_topic(topic, config)
-        if not topic_result.allowed:
-            log_audit(
-                "GUARDRAIL_BLOCK", "MAICClassroom",
-                target_repr=f"outline:topic={topic[:100]}",
-                changes=topic_result.to_dict(),
-                request=request,
-            )
-            return Response({
-                "error": "Topic not approved for classroom generation.",
-                "guardrail": topic_result.to_dict(),
-            }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
-
-    if pdf_text:
-        pdf_result = validate_pdf_content(pdf_text, config)
-        if not pdf_result.allowed:
-            log_audit(
-                "GUARDRAIL_BLOCK", "MAICClassroom",
-                target_repr="outline:pdf_upload",
-                changes=pdf_result.to_dict(),
-                request=request,
-            )
-            return Response({
-                "error": "Document not approved for classroom generation.",
-                "guardrail": pdf_result.to_dict(),
-            }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
 
     log_audit(
         "GENERATE_OUTLINE", "MAICClassroom",
@@ -1347,7 +1223,6 @@ def student_maic_generate_outlines(request):
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
-@throttle_classes([StudentGenerationThrottle])
 @student_or_admin
 @tenant_required
 @check_feature("feature_maic")
@@ -1379,7 +1254,6 @@ def student_maic_generate_scene_content(request):
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
-@throttle_classes([StudentGenerationThrottle])
 @student_or_admin
 @tenant_required
 @check_feature("feature_maic")

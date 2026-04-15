@@ -16,7 +16,6 @@ from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.throttling import UserRateThrottle
 
 from apps.courses.maic_models import TenantAIConfig
 from apps.courses.models import Content
@@ -32,27 +31,8 @@ from utils.decorators import student_or_admin, tenant_required, check_feature
 logger = logging.getLogger(__name__)
 
 
-class StudySummaryGenerateThrottle(UserRateThrottle):
-    rate = '10/hour'
-
-
 def _check_generation_throttle(request):
-    """Manually check the throttle and return a 429 Response or None if OK."""
-    throttle = StudySummaryGenerateThrottle()
-    if not throttle.allow_request(request, None):
-        wait = throttle.wait()
-        if wait is not None:
-            minutes = int(wait // 60)
-            if minutes > 0:
-                msg = f"You can generate again in {minutes} minute{'s' if minutes != 1 else ''}."
-            else:
-                msg = f"You can generate again in {int(wait)} seconds."
-        else:
-            msg = "Please wait before generating again."
-        return Response(
-            {"error": msg, "retry_after": int(wait or 60)},
-            status=status.HTTP_429_TOO_MANY_REQUESTS,
-        )
+    """Throttle removed — always allow generation."""
     return None
 
 
