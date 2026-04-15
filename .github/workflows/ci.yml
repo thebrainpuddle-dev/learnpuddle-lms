@@ -51,7 +51,7 @@ jobs:
       # Current achievable threshold. Target: 60% — increase as tests are added.
       COV_FAIL_UNDER: "45"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -141,7 +141,7 @@ jobs:
   frontend-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: actions/setup-node@v4
         with:
           node-version: "18"
@@ -178,7 +178,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [backend-test, frontend-test]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       
       - uses: actions/setup-node@v4
         with:
@@ -220,7 +220,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -303,7 +303,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
