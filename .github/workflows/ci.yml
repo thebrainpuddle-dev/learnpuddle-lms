@@ -173,39 +173,56 @@ jobs:
           REACT_APP_API_URL: /api
           CI: "false"  # don't treat warnings as errors
 
-  # ── E2E tests (blocking — runs on PRs and pushes to main/develop) ────────
+  # ── E2E tests (requires a running deployment) ────────────────────────────
+  # Set the E2E_BASE_URL repository secret to your staging/preview URL.
+  # When no URL is configured the job is skipped — backend + frontend unit
+  # tests and the pip-audit still gate merges.
   e2e-test:
     runs-on: ubuntu-latest
     needs: [backend-test, frontend-test]
     steps:
       - uses: actions/checkout@v4
-      
+
+      - name: Check E2E target is configured
+        id: check
+        run: |
+          if [ -z "$E2E_URL" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::E2E_BASE_URL secret not set — skipping e2e tests. Set it to your staging URL to enable."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          E2E_URL: ${{ secrets.E2E_BASE_URL }}
+
       - uses: actions/setup-node@v4
+        if: steps.check.outputs.skip == 'false'
         with:
           node-version: "18"
           cache: npm
           cache-dependency-path: e2e/package-lock.json
-      
+
       - name: Install Playwright
+        if: steps.check.outputs.skip == 'false'
         run: |
           npm ci
           npx playwright install --with-deps chromium
         working-directory: e2e
-      
+
       - name: Run E2E tests
+        if: steps.check.outputs.skip == 'false'
         run: npm test -- --project=chromium
         working-directory: e2e
         env:
-          BASE_URL: ${{ secrets.E2E_BASE_URL || 'http://localhost:3000' }}
+          BASE_URL: ${{ secrets.E2E_BASE_URL }}
           E2E_TEACHER_EMAIL: ${{ secrets.E2E_TEACHER_EMAIL }}
           E2E_TEACHER_PASSWORD: ${{ secrets.E2E_TEACHER_PASSWORD }}
           E2E_ADMIN_EMAIL: ${{ secrets.E2E_ADMIN_EMAIL }}
           E2E_ADMIN_PASSWORD: ${{ secrets.E2E_ADMIN_PASSWORD }}
-        # E2E tests are blocking — failures prevent merge to main/develop
-      
+
       - name: Upload Playwright Report
         uses: actions/upload-artifact@v4
-        if: always()
+        if: always() && steps.check.outputs.skip == 'false'
         with:
           name: playwright-report
           path: e2e/playwright-report/
