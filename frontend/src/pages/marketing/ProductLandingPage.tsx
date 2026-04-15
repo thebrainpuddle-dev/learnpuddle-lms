@@ -723,9 +723,6 @@ export const ProductLandingPage: React.FC = () => {
             <a href="#security" onClick={closeMobileMenu}>Security</a>
             <a href="#demo" onClick={closeMobileMenu}>Demo</a>
             <a href="#faq" onClick={closeMobileMenu}>FAQ</a>
-            <CTAButton onClick={openBookDemo} className="lp-btn lp-btn-primary lp-nav-mobile-cta">
-              Book Demo
-            </CTAButton>
           </nav>
           <div className="lp-header-actions">
             <CTAButton onClick={openBookDemo} className="lp-btn lp-btn-primary lp-header-cta-desktop">
@@ -829,24 +826,32 @@ export const ProductLandingPage: React.FC = () => {
               title="Everything you need to design, deliver, and optimize learning."
               description="A complete platform covering course creation, video delivery, compliance tracking, analytics, and multi-tenant governance."
             />
-            <div className="lp-card-grid lp-card-grid-3">
-              {platformCapabilities.map((cap) => (
-                <article key={cap.title} className="lp-card lp-card-feature">
-                  {featureIllustMap[cap.title] && (
-                    <div className="lp-card-illust-wrap">
-                      <FeatureIllustration variant={featureIllustMap[cap.title]} />
+            <div className="lp-stack-container">
+              {platformCapabilities.map((cap, index) => (
+                <article
+                  key={cap.title}
+                  className="lp-stack-card lp-card-feature"
+                  style={{ '--stack-index': index } as React.CSSProperties}
+                >
+                  <div className="lp-stack-card-inner">
+                    {featureIllustMap[cap.title] && (
+                      <div className="lp-stack-illust">
+                        <FeatureIllustration variant={featureIllustMap[cap.title]} />
+                      </div>
+                    )}
+                    <div className="lp-stack-content">
+                      <div className="lp-icon-badge">
+                        <cap.Icon className="lp-icon-badge-svg" aria-hidden="true" />
+                      </div>
+                      <h3>{cap.title}</h3>
+                      <p>{cap.description}</p>
+                      <ul className="lp-card-bullets">
+                        {cap.bullets.map((bullet) => (
+                          <li key={bullet}>{bullet}</li>
+                        ))}
+                      </ul>
                     </div>
-                  )}
-                  <div className="lp-icon-badge">
-                    <cap.Icon className="lp-icon-badge-svg" aria-hidden="true" />
                   </div>
-                  <h3>{cap.title}</h3>
-                  <p>{cap.description}</p>
-                  <ul className="lp-card-bullets">
-                    {cap.bullets.map((bullet) => (
-                      <li key={bullet}>{bullet}</li>
-                    ))}
-                  </ul>
                 </article>
               ))}
             </div>
