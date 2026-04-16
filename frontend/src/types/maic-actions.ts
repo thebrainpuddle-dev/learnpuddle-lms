@@ -29,7 +29,12 @@ export interface SpeechAction {
   agentId: string;
   text: string;
   ssml?: string;
-  audioUrl?: string;   // Pre-generated TTS URL from backend
+  // Stamped at publish time by the pre-gen pipeline (Chunk 4). All optional
+  // until the backend starts emitting them; the playback engine falls back
+  // to live TTS when these are absent.
+  audioId?: string;
+  audioUrl?: string;
+  voiceId?: string;
 }
 
 // ─── Video ──────────────────────────────────────────────────────────────────

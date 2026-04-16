@@ -24,12 +24,15 @@ import { VoiceWaveIndicator } from './VoiceWaveIndicator';
 import { Reasoning } from './Reasoning';
 import { useAudioRecorder } from '../../hooks/useAudioRecorder';
 import { cn } from '../../lib/utils';
+import { maicChatUrl, type MAICRole } from '../../lib/maic/endpoints';
 
 interface RoundtablePanelProps {
   sessionType: 'qa' | 'roundtable' | 'classroom';
   topic: string;
   agentIds: string[];
   onClose: () => void;
+  /** Role-aware URL selection. Defaults to 'teacher' for backward compatibility. */
+  role?: MAICRole;
 }
 
 interface DiscussionMessage {
@@ -58,7 +61,7 @@ const SPEED_OPTIONS = [1, 1.5, 2] as const;
 type SpeedOption = (typeof SPEED_OPTIONS)[number];
 
 export const RoundtablePanel = React.memo<RoundtablePanelProps>(
-  function RoundtablePanel({ sessionType, topic, agentIds, onClose }) {
+  function RoundtablePanel({ sessionType, topic, agentIds, onClose, role }) {
     const allAgents = useMAICStageStore((s) => s.agents);
     const scenes = useMAICStageStore((s) => s.scenes);
     const currentSceneIndex = useMAICStageStore((s) => s.currentSceneIndex);
@@ -141,6 +144,7 @@ export const RoundtablePanel = React.memo<RoundtablePanelProps>(
       startOrchestration,
       stopOrchestration,
     } = useOrchestration({
+      role: role ?? 'teacher',
       onAgentStart: (agentId, agentName) => {
         setSpeakingAgentId(agentId);
         setThinkingAgentId(null);
@@ -302,7 +306,7 @@ export const RoundtablePanel = React.memo<RoundtablePanelProps>(
       abortRef.current = controller;
 
       await streamMAIC({
-        url: '/api/v1/teacher/maic/chat/',
+        url: maicChatUrl(role ?? 'teacher'),
         body: {
           message: trimmed,
           sessionType,
@@ -353,7 +357,7 @@ export const RoundtablePanel = React.memo<RoundtablePanelProps>(
       });
 
       setIsSending(false);
-    }, [input, isSending, accessToken, sessionType, topic, agentIds, speed, isRecording, cancelRecording]);
+    }, [input, isSending, accessToken, sessionType, topic, agentIds, speed, isRecording, cancelRecording, role]);
 
     const handleKeyDown = useCallback(
       (e: React.KeyboardEvent) => {

@@ -1,5 +1,7 @@
 // types/maic.ts — OpenMAIC AI Classroom type definitions
 
+import type { MAICScene, AudioManifest } from './maic-scenes';
+
 // ─── Slide Types ──────────────────────────────────────────────────────────
 
 /** Slide transition animation mode */
@@ -38,9 +40,37 @@ export interface MAICAgent {
   role: 'professor' | 'student' | 'assistant' | 'moderator' | 'teaching_assistant' | 'student_rep';
   avatar: string;
   color: string;
-  voice?: string;
   personality?: string;
   expertise?: string;
+  /**
+   * Azure en-IN neural voice ID (e.g. "en-IN-PrabhatNeural").
+   * Optional until the wizard (Chunk 3) populates it on every new agent.
+   */
+  voiceId?: string;
+  /** TTS provider. Only "azure" today; kept for future-proofing. */
+  voiceProvider?: 'azure';
+  /** 1-2 sentence description of the agent's delivery style. */
+  speakingStyle?: string;
+  /**
+   * Backward-compat alias for voiceId. Older content may have set `voice`
+   * before the wizard was added; kept optional/readable so legacy payloads
+   * still parse.
+   */
+  voice?: string;
+}
+
+// ─── Classroom Content ─────────────────────────────────────────────────────
+
+/**
+ * The shape of the `content` JSONField on MAICClassroom. Contains the entire
+ * playable classroom payload: agents, scenes, and (once the pre-gen pipeline
+ * lands) an audio manifest describing the state of cached TTS clips.
+ */
+export interface MAICContent {
+  agents: MAICAgent[];
+  scenes: MAICScene[];
+  /** Present only after the publish pipeline has run; optional for drafts. */
+  audioManifest?: AudioManifest;
 }
 
 // ─── Outline Types ────────────────────────────────────────────────────────

@@ -330,7 +330,7 @@ export class MAICActionEngine {
       if (useConfiguredProvider) {
         try {
           const baseUrl = import.meta.env.VITE_API_BASE_URL || '';
-          const ttsProviderUrl = `${baseUrl}/api/v1/teacher/maic/generate/tts/`;
+          const ttsProviderUrl = `${baseUrl}${this.ttsEndpoint}`;
 
           const headers: Record<string, string> = {
             'Content-Type': 'application/json',

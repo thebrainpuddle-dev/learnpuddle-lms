@@ -367,6 +367,7 @@ export const Stage: React.FC<StageProps> = ({ role }) => {
                 topic={discussionTopic || currentScene?.title || 'Discussion'}
                 agentIds={discussionAgentIds.length > 0 ? discussionAgentIds : agents.map((a) => a.id)}
                 onClose={handleCloseDiscussion}
+                role={role}
               />
             )}
           </div>

@@ -20,6 +20,7 @@ import { streamMAIC } from '../../lib/maicSSE';
 import type { MAICSSEEvent } from '../../types/maic';
 import type { MAICPBLContent } from '../../types/maic-scenes';
 import { cn } from '../../lib/utils';
+import { maicChatUrl, type MAICRole } from '../../lib/maic/endpoints';
 
 // ─── Issue Board Types ───────────────────────────────────────────────────────
 
@@ -41,6 +42,8 @@ interface PBLRendererProps {
   content: MAICPBLContent;
   sceneId: string;
   mode?: 'autonomous' | 'playback';
+  /** Role-aware URL selection. Defaults to 'teacher' for backward compatibility. */
+  role?: MAICRole;
 }
 
 interface ChatMessage {
@@ -79,6 +82,7 @@ export const PBLRenderer = React.memo<PBLRendererProps>(function PBLRenderer({
   content,
   sceneId,
   mode = 'autonomous',
+  role,
 }) {
   const accessToken = useAuthStore((s) => s.accessToken);
 
@@ -186,7 +190,7 @@ export const PBLRenderer = React.memo<PBLRendererProps>(function PBLRenderer({
     abortRef.current = controller;
 
     await streamMAIC({
-      url: '/api/v1/teacher/maic/chat/',
+      url: maicChatUrl(role ?? 'teacher'),
       body: {
         message: trimmed,
         sceneId,
@@ -221,7 +225,7 @@ export const PBLRenderer = React.memo<PBLRendererProps>(function PBLRenderer({
     });
 
     setIsSending(false);
-  }, [chatInput, isSending, accessToken, sceneId, selectedRole, completedMilestoneIds]);
+  }, [chatInput, isSending, accessToken, sceneId, selectedRole, completedMilestoneIds, role]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {

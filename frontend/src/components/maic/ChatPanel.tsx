@@ -18,6 +18,7 @@ import { StreamMarkdown } from './StreamMarkdown';
 import { PromptInput } from './PromptInput';
 import { ConversationContainer } from './ConversationContainer';
 import { cn } from '../../lib/utils';
+import { maicChatUrl } from '../../lib/maic/endpoints';
 import {
   ChainOfThought,
   ChainOfThoughtTrigger,
@@ -186,9 +187,7 @@ export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({ role, c
     const controller = new AbortController();
     abortRef.current = controller;
 
-    const endpoint = role === 'teacher'
-      ? '/api/v1/teacher/maic/chat/'
-      : '/api/v1/student/maic/chat/';
+    const endpoint = maicChatUrl(role);
 
     await streamMAIC({
       url: endpoint,

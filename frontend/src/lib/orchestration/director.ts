@@ -11,6 +11,7 @@
 import { streamMAIC } from '../maicSSE';
 import { getAccessToken } from '../../utils/authSession';
 import { buildAgentSystemPrompt } from './prompt-builder';
+import { maicChatUrl, type MAICRole } from '../maic/endpoints';
 import type {
   AgentConfig,
   DirectorDecision,
@@ -40,6 +41,9 @@ export class DirectorGraph {
   // Optional: trigger a specific agent first
   private triggerAgentId: string | null;
 
+  // Player role — decides which chat endpoint to hit.
+  private role: MAICRole;
+
   // Slide context for building prompts
   private slideContext?: {
     currentSceneTitle?: string;
@@ -54,6 +58,7 @@ export class DirectorGraph {
       maxTurns?: number;
       discussionContext?: { topic: string; prompt?: string };
       triggerAgentId?: string;
+      role?: MAICRole;
       slideContext?: {
         currentSceneTitle?: string;
         slideContent?: string;
@@ -64,6 +69,7 @@ export class DirectorGraph {
     this.agents = agents;
     this.callbacks = callbacks;
     this.triggerAgentId = options?.triggerAgentId ?? null;
+    this.role = options?.role ?? 'teacher';
     this.slideContext = options?.slideContext;
 
     // Build turn order — if triggerAgentId is specified, put it first
@@ -234,7 +240,7 @@ export class DirectorGraph {
     let actionCount = 0;
 
     await streamMAIC({
-      url: '/v1/teacher/maic/chat/',
+      url: maicChatUrl(this.role),
       body: {
         agentId: agent.id,
         messages,

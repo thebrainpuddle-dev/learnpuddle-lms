@@ -3,6 +3,26 @@
 import type { MAICAction } from './maic-actions';
 import type { MAICSlideElement } from './maic';
 
+// ─── Audio Manifest (pre-generation pipeline state) ─────────────────────────
+
+export type AudioManifestStatus = 'idle' | 'generating' | 'ready' | 'partial' | 'failed';
+
+/**
+ * Tracks the state of the pre-generated TTS audio for a classroom.
+ * Populated by the backend pre-gen pipeline (Chunk 4) and exposed on
+ * MAICContent so the UI can gate student visibility on `status === 'ready'`.
+ */
+export interface AudioManifest {
+  status: AudioManifestStatus;
+  /** 0-100. */
+  progress: number;
+  totalActions: number;
+  completedActions: number;
+  failedAudioIds: string[];
+  /** ISO timestamp when the manifest last transitioned to `ready`. */
+  generatedAt: string | null;
+}
+
 // ─── Multi-Slide Scene Types ───────────────────────────────────────────────────
 
 /** Bounds mapping for a single scene within the flat slides array */

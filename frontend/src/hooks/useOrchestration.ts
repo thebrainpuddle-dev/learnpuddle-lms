@@ -8,6 +8,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { DirectorGraph } from '../lib/orchestration/director';
 import { useMAICStageStore } from '../stores/maicStageStore';
 import type { AgentConfig, OrchestrationCallbacks } from '../lib/orchestration/types';
+import type { MAICRole } from '../lib/maic/endpoints';
 
 // ─── Hook Options ────────────────────────────────────────────────────────────
 
@@ -18,6 +19,11 @@ interface UseOrchestrationOptions {
   onComplete?: () => void;
   onError?: (message: string) => void;
   onThinking?: (stage: string, agentId?: string) => void;
+  /**
+   * Player role — decides which chat endpoint the underlying DirectorGraph
+   * hits. Defaults to 'teacher' for backward compatibility.
+   */
+  role?: MAICRole;
 }
 
 // ─── Hook Return ─────────────────────────────────────────────────────────────
@@ -146,6 +152,7 @@ export function useOrchestration(
           : undefined,
         triggerAgentId: startOptions?.triggerAgentId,
         slideContext: startOptions?.slideContext,
+        role: optionsRef.current?.role,
       });
 
       directorRef.current = director;
