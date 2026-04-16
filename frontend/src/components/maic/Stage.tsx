@@ -117,6 +117,7 @@ export const Stage: React.FC<StageProps> = ({ role }) => {
     startClass,
     playFromCurrent,
     stopClass,
+    seekToSlide,
   } = usePlaybackEngine(role);
 
   // Current scene & slide
@@ -434,7 +435,7 @@ export const Stage: React.FC<StageProps> = ({ role }) => {
       </div>
 
       {/* Bottom navigation bar */}
-      <SlideNavigator />
+      <SlideNavigator onSlideClick={seekToSlide} />
 
       {/* Headless audio player */}
       <AudioPlayer audioUrl={audioUrl} />

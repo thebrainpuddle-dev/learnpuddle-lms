@@ -146,6 +146,34 @@ export class MAICPlaybackEngine {
   }
 
   /**
+   * Jump to the first action of the `transition` that targets `slideIndex`,
+   * then start playing from there.
+   *
+   * Flow:
+   *   1. stop() — sets mode to 'idle' and calls abortCurrentAction() which
+   *      bumps the action engine's generationToken. Any in-flight speech
+   *      callback from the previous slide becomes stale immediately.
+   *   2. Move the cursor to the transition action.
+   *   3. Set mode to 'playing' and call processNext() with a fresh token.
+   *
+   * If no transition action matches `slideIndex`, this is a no-op — callers
+   * that want a hard jump (e.g. scene-switch) should use `goToScene()` on
+   * the stage store instead.
+   */
+  seekToSlide(slideIndex: number): void {
+    const target = this.actions.findIndex(
+      (a) =>
+        a.type === 'transition' &&
+        (a as import('../types/maic-actions').TransitionAction).slideIndex === slideIndex,
+    );
+    if (target === -1) return;
+    this.stop(); // token++, synchronous clean teardown
+    this.currentActionIndex = target;
+    this.setMode('playing');
+    void this.processNext();
+  }
+
+  /**
    * Resume playback after a discussion ends. Restores the checkpoint
    * (saved action index) so playback continues from where it was
    * interrupted by the discussion trigger.
@@ -287,7 +315,11 @@ export class MAICPlaybackEngine {
         }
 
         this.consumedDiscussions.add(idx);
-        this.checkpoint = { actionIndex: this.currentActionIndex };
+        // Rewind -1 so the interrupted sentence replays on resume (matches
+        // upstream OpenMAIC). Note: currentActionIndex has already been
+        // post-incremented above, so subtracting 1 lands us at the discussion
+        // action itself — whose consumedDiscussions entry prevents re-triggering.
+        this.checkpoint = { actionIndex: Math.max(0, this.currentActionIndex - 1) };
         this.discussionPending = true;
 
         try {

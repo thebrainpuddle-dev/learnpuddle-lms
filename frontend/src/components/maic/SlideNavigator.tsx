@@ -74,7 +74,22 @@ function buildSceneGroups(
   return groups;
 }
 
-export const SlideNavigator = React.memo(function SlideNavigator() {
+/**
+ * Props for SlideNavigator.
+ *
+ * - `onSlideClick`: optional override for thumbnail clicks. When set, the
+ *   parent can invoke `playbackEngine.seekToSlide(idx)` so the action engine
+ *   bumps its generationToken and starts the new slide's audio cleanly.
+ *   When absent, the component falls back to the stage store's `goToSlide`
+ *   (pure state change, no playback reset) — same behaviour as before.
+ */
+export interface SlideNavigatorProps {
+  onSlideClick?: (slideIndex: number) => void;
+}
+
+export const SlideNavigator = React.memo(function SlideNavigator({
+  onSlideClick,
+}: SlideNavigatorProps = {}) {
   const slides = useMAICStageStore((s) => s.slides);
   const scenes = useMAICStageStore((s) => s.scenes);
   const sceneSlideBounds = useMAICStageStore((s) => s.sceneSlideBounds);
@@ -85,6 +100,58 @@ export const SlideNavigator = React.memo(function SlideNavigator() {
   const goToScene = useMAICStageStore((s) => s.goToScene);
   const isPlaying = useMAICStageStore((s) => s.isPlaying);
   const setPlaying = useMAICStageStore((s) => s.setPlaying);
+
+  // Delegate thumbnail clicks. The clicked `idx` is an absolute slide index
+  // (0-based across all scenes). We route as follows:
+  //
+  //   1. `onSlideClick` prop override → caller is responsible for the policy.
+  //   2. Click within the current scene → call `playbackEngine.seekToSlide(rel)`
+  //      with a scene-relative index so the engine finds the matching
+  //      `transition` action and restarts audio cleanly (generationToken
+  //      invalidates the old slide's audio mid-playback).
+  //   3. Click in a different scene → fall back to the stage store's
+  //      `goToSlide(idx)`. This updates `currentSceneIndex`, which Stage's
+  //      useEffect observes and calls `loadScene()` on the new scene — which
+  //      itself goes through `stop()` → abortCurrentAction → token bump.
+  //      So the no-audio-overlap guarantee still holds.
+  //   4. No engine available (production build, pre-mount) → pure goToSlide
+  //      (legacy behaviour).
+  const handleSlideClick = useCallback(
+    (absoluteIdx: number) => {
+      if (onSlideClick) {
+        onSlideClick(absoluteIdx);
+        return;
+      }
+
+      // Locate the scene this slide belongs to, and its relative offset.
+      const bounds = sceneSlideBounds.find(
+        (b) => absoluteIdx >= b.startSlide && absoluteIdx <= b.endSlide,
+      );
+      const targetSceneIdx = bounds?.sceneIdx ?? -1;
+      const relativeSlideIdx = bounds ? absoluteIdx - bounds.startSlide : -1;
+
+      // Access the exposed engine handle (dev/test) for within-scene seeks.
+      const engine =
+        typeof window !== 'undefined'
+          ? (window as any).__maicEngine?.playbackEngine
+          : undefined;
+
+      if (
+        engine &&
+        typeof engine.seekToSlide === 'function' &&
+        targetSceneIdx === useMAICStageStore.getState().currentSceneIndex &&
+        relativeSlideIdx >= 0
+      ) {
+        engine.seekToSlide(relativeSlideIdx);
+        return;
+      }
+
+      // Fallback: pure goToSlide. Stage's scene-change useEffect handles
+      // loadScene (which internally calls stop() → abortCurrentAction).
+      goToSlide(absoluteIdx);
+    },
+    [onSlideClick, goToSlide, sceneSlideBounds],
+  );
 
   const totalSlides = slides.length;
   const totalCount = Math.max(totalSlides, scenes.length);
@@ -280,9 +347,10 @@ export const SlideNavigator = React.memo(function SlideNavigator() {
                       }}
                       type="button"
                       role="tab"
+                      data-testid="slide-thumbnail"
                       aria-selected={isActive}
                       aria-label={`Slide ${slideIdx + 1}: ${slide?.title || ''}`}
-                      onClick={() => goToSlide(slideIdx)}
+                      onClick={() => handleSlideClick(slideIdx)}
                       className={cn(
                         'shrink-0 w-14 h-10 rounded border-2 transition-all overflow-hidden',
                         'focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-1',

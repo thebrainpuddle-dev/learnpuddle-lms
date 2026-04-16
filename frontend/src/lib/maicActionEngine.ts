@@ -1,9 +1,32 @@
 // lib/maicActionEngine.ts — Executes individual MAIC actions (TTS, whiteboard, effects)
-
+//
+// Speech pipeline (Chunk 5 rewrite):
+//
+//   1. `generationToken`: a monotonic counter incremented on every call to
+//      `abortCurrentAction()` *and* on every new speech action. Every async
+//      step (awaited fetch, `onplaying`/`onended`/`onerror` callback, `.then()`
+//      promise handler, setTimeout continuation) checks
+//      `token !== this.generationToken` and becomes a no-op when stale.
+//      This is the single mechanism that makes scene/slide switches safe —
+//      old audio elements cannot "wake up" and mutate state belonging to the
+//      newly-loaded scene.
+//
+//   2. Subtitles + speaking indicator fire on the audio element's `playing`
+//      event — NOT before `play()` — so the UI does not show subtitles for
+//      speech that has not started yet (and does not leave them on-screen
+//      when a scene change aborts before audio ever begins).
+//
+//   3. Pre-generated `action.audioUrl` is the preferred path (see Chunk 4
+//      publish pipeline). When absent, fall back to the live TTS endpoint
+//      (chat, discussion, or any pre-gen gap). When that fails too, fall
+//      back to a reading-time timer (~60ms/char, min 2s) so slides don't
+//      snap-advance instantly on TTS outage.
+//
+// See design doc §10 (WS-E).
+//
 import { useMAICStageStore } from '../stores/maicStageStore';
 import { useMAICCanvasStore } from '../stores/maicCanvasStore';
 import { useMAICSettingsStore } from '../stores/maicSettingsStore';
-import { getCurrentTTSConfig } from './audio/tts-providers';
 import type { MAICAction } from '../types/maic-actions';
 import type {
   SpeechAction,
@@ -30,7 +53,9 @@ const EFFECT_AUTO_CLEAR_MS = 5000;
 const WB_ELEMENT_FADE_IN_MS = 800;
 const WB_CASCADE_DELETE_MS = 55;
 const WB_CLOSE_DELAY_MS = 700;
-const SPEECH_FALLBACK_WPM = 160;
+/** Reading-fallback timing: ~60ms per character, minimum 2s. */
+const READING_FALLBACK_MS_PER_CHAR = 60;
+const READING_FALLBACK_MIN_MS = 2000;
 
 /** Default voice mapping by agent role */
 const ROLE_VOICE_MAP: Record<string, string> = {
@@ -46,13 +71,6 @@ const ROLE_VOICE_MAP: Record<string, string> = {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/** Estimate speech duration in ms from text length and playback speed. */
-function estimateSpeechDuration(text: string, playbackSpeed: number): number {
-  const words = text.split(/\s+/).length;
-  const minutes = words / SPEECH_FALLBACK_WPM;
-  return (minutes * 60 * 1000) / playbackSpeed;
 }
 
 /** Convert whiteboard action coordinates to a single-point annotation. */
@@ -96,13 +114,15 @@ export class MAICActionEngine {
   private audioResolve: (() => void) | null = null;
   private currentFetchController: AbortController | null = null;
   private effectTimers: ReturnType<typeof setTimeout>[] = [];
+  private readingTimer: ReturnType<typeof setTimeout> | null = null;
 
-  // Browser-native TTS state (Web Speech API fallback)
-  private browserTTSActive = false;
-  private browserTTSChunks: string[] = [];
-  private browserTTSChunkIndex = 0;
-  private browserTTSPausedChunks: string[] = [];
-  private browserTTSResolve: (() => void) | null = null;
+  /**
+   * Monotonic counter. Every `abortCurrentAction()` call and every new speech
+   * action increments this. Async callbacks capture `myToken = ++this.generationToken`
+   * at entry and check `myToken !== this.generationToken` to detect staleness.
+   * A no-op on stale means old audio/fetches cannot leak into a new scene.
+   */
+  private generationToken = 0;
 
   private onSpeechStart?: (agentId: string, text: string) => void;
   private onSpeechEnd?: () => void;
@@ -123,41 +143,65 @@ export class MAICActionEngine {
   // ─── Lifecycle ──────────────────────────────────────────────────────
 
   /**
-   * Abort the currently executing action: kill audio, cancel TTS fetch,
-   * clear timers and transient UI state. Called by PlaybackEngine.stop()
-   * when the user navigates to a different scene mid-playback.
+   * Abort the currently executing action.
+   *
+   * This is the heart of the scene/slide-switch fix:
+   *   - Increments `generationToken` — any in-flight callback that captured
+   *     the old token will see it's stale and bail out.
+   *   - Cancels pending TTS fetch via AbortController.
+   *   - Detaches all audio event handlers (onplaying/onended/onerror) so
+   *     even if the audio decodes and fires an event, nothing runs.
+   *   - Pauses and drops the audio element reference.
+   *   - Clears the reading-time fallback timer.
+   *   - Clears scheduled effect timers (spotlight auto-clear, etc).
+   *   - Resets transient UI state (subtitles, speaking-agent indicator).
+   *
+   * Called by PlaybackEngine.stop() whenever the user navigates to a
+   * different scene or the playback engine changes mode mid-action.
    */
   abortCurrentAction(): void {
+    // Token bump FIRST — any live callback is now stale.
+    this.generationToken++;
+
     // Cancel pending TTS fetch
     if (this.currentFetchController) {
       this.currentFetchController.abort();
       this.currentFetchController = null;
     }
 
-    // Stop playing audio and resolve its pending promise so the action
-    // loop in PlaybackEngine can break cleanly.
+    // Stop playing audio; detach all handlers so buffered events are no-ops.
     if (this.audioElement) {
-      this.audioElement.pause();
+      this.audioElement.onplaying = null;
       this.audioElement.onended = null;
       this.audioElement.onerror = null;
-      if (this.audioElement.src.startsWith('blob:')) {
+      try {
+        this.audioElement.pause();
+      } catch {
+        /* ignore pause failures (e.g. audio not yet loaded) */
+      }
+      if (this.audioElement.src && this.audioElement.src.startsWith('blob:')) {
         URL.revokeObjectURL(this.audioElement.src);
       }
+      this.audioElement.src = '';
       this.audioElement = null;
     }
+
     if (this.audioResolve) {
       this.audioResolve();
       this.audioResolve = null;
     }
 
-    // Clear all scheduled timers (whiteboard fade-ins, spotlight auto-clear, etc.)
+    // Clear reading-time fallback timer if running.
+    if (this.readingTimer) {
+      clearTimeout(this.readingTimer);
+      this.readingTimer = null;
+    }
+
+    // Clear scheduled effect timers (whiteboard fade-ins, spotlight auto-clear, etc.)
     for (const timer of this.effectTimers) {
       clearTimeout(timer);
     }
     this.effectTimers = [];
-
-    // Cancel browser-native TTS
-    this.cancelBrowserTTS();
 
     // Reset transient state
     this.stageStore.getState().setSpeakingAgent(null);
@@ -170,12 +214,6 @@ export class MAICActionEngine {
    * Used by PlaybackEngine.pause() — audio stays loaded so it can resume.
    */
   pauseCurrentAudio(): void {
-    // Browser TTS: cancel+save pattern (Firefox compat — speechSynthesis.pause() is broken)
-    if (this.browserTTSActive) {
-      this.browserTTSPausedChunks = this.browserTTSChunks.slice(this.browserTTSChunkIndex);
-      window.speechSynthesis?.cancel();
-      return;
-    }
     if (this.audioElement && !this.audioElement.paused) {
       this.audioElement.pause();
     }
@@ -184,18 +222,9 @@ export class MAICActionEngine {
   /**
    * Resume a previously paused audio element.
    * Used by PlaybackEngine.resume() — when audio ends, the 'ended' event
-   * resolves the playAudio promise, which fires the .then() callback chain.
+   * resolves the play promise, which fires the .then() callback chain.
    */
   resumeCurrentAudio(): void {
-    // Browser TTS: re-speak remaining chunks from where we paused
-    if (this.browserTTSPausedChunks.length > 0) {
-      this.browserTTSActive = true;
-      this.browserTTSChunks = this.browserTTSPausedChunks;
-      this.browserTTSChunkIndex = 0;
-      this.browserTTSPausedChunks = [];
-      this.playBrowserTTSChunk();
-      return;
-    }
     if (this.audioElement && this.audioElement.paused) {
       this.audioElement.play().catch((err) => {
         console.warn('Failed to resume audio:', err);
@@ -209,7 +238,7 @@ export class MAICActionEngine {
    * call processNext() directly.
    */
   hasActiveAudio(): boolean {
-    return this.audioElement !== null || this.browserTTSActive || this.browserTTSPausedChunks.length > 0;
+    return this.audioElement !== null;
   }
 
   dispose(): void {
@@ -294,115 +323,95 @@ export class MAICActionEngine {
 
   // ─── Speech ─────────────────────────────────────────────────────────
 
+  /**
+   * Execute a speech action.
+   *
+   * Token lifecycle:
+   *   - Bumps `generationToken` on entry (`myToken = ++this.generationToken`).
+   *   - Any concurrent abortCurrentAction() (e.g. user clicks a different
+   *     slide, playback engine calls stop()) will increment the token again,
+   *     making `myToken` stale — every subsequent check bails out.
+   *
+   * Path selection:
+   *   1. `action.audioUrl` present → play it directly (pre-gen from Chunk 4).
+   *   2. Otherwise → fetch TTS blob from backend, then play it.
+   *   3. If fetch returns 204 / fails → reading-time fallback.
+   */
   private async executeSpeech(action: SpeechAction): Promise<void> {
+    const myToken = ++this.generationToken;
     const { agentId, text, ssml } = action;
-    const settings = this.settingsStore.getState();
-    const playbackSpeed = settings.playbackSpeed;
-    const volume = settings.audioVolume;
 
-    // Resolve per-agent voice ID
+    // Resolve per-agent voice ID (explicit on action > agent.voiceId > legacy
+    // `agent.voice` > role-based default > fallback en-IN voice).
     const agents = this.stageStore.getState().agents;
     const agent = agents.find((a) => a.id === agentId);
-    const voiceId = agent?.voice || (agent?.role ? ROLE_VOICE_MAP[agent.role] : undefined) || ROLE_VOICE_MAP.professor;
+    const voiceId =
+      action.voiceId ||
+      agent?.voiceId ||
+      agent?.voice ||
+      (agent?.role ? ROLE_VOICE_MAP[agent.role as keyof typeof ROLE_VOICE_MAP] : undefined) ||
+      'en-IN-NeerjaNeural';
 
-    // Helper: notify listeners and set subtitle state right before audio plays.
-    // This ensures subtitles appear in sync with audio, not seconds early.
-    const notifySpeechStart = () => {
-      this.onSpeechStart?.(agentId, text);
-      this.stageStore.getState().setSpeakingAgent(agentId);
-      this.stageStore.getState().setSpeechText(text);
+    const volume = this.settingsStore.getState().audioVolume;
+    const playbackSpeed = this.settingsStore.getState().playbackSpeed;
+
+    // 1. Preferred: pre-generated audio URL (zero network lag).
+    if (action.audioUrl) {
+      return this.playAudioSynced(
+        action.audioUrl,
+        text,
+        agentId,
+        volume,
+        playbackSpeed,
+        myToken,
+      );
+    }
+
+    // 2. Fallback: live TTS fetch.
+    const blobUrl = await this.fetchTtsBlob(ssml || text, voiceId, myToken);
+    if (myToken !== this.generationToken) return; // stale
+    if (!blobUrl) {
+      // 3. Final fallback: timed reading window so slides don't snap-advance.
+      return this.readingTimeFallback(text, agentId, myToken);
+    }
+    try {
+      await this.playAudioSynced(blobUrl, text, agentId, volume, playbackSpeed, myToken);
+    } finally {
+      // Revoke only the blob we created; pre-gen URLs are owned by Chunk 4.
+      URL.revokeObjectURL(blobUrl);
+    }
+  }
+
+  /**
+   * Fetch a TTS blob from the backend `ttsEndpoint`. Returns a blob URL on
+   * success, or null when the server says "no audio" (204) or the request
+   * errors out / is aborted. Caller is responsible for revoking the URL.
+   *
+   * Token check points:
+   *   - After the await on `fetch()`
+   *   - After the await on `res.blob()`
+   * A stale token makes each return a no-op (null).
+   */
+  private async fetchTtsBlob(
+    text: string,
+    voiceId: string,
+    token: number,
+  ): Promise<string | null> {
+    const baseUrl = import.meta.env.VITE_API_BASE_URL || '';
+    const url = `${baseUrl}${this.ttsEndpoint}`;
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${this.token}`,
     };
 
-    try {
-      // ── 1. Pre-generated audio URL (instant playback, no network lag) ──
-      if (action.audioUrl) {
-        notifySpeechStart();
-        await this.playAudio(action.audioUrl, volume, playbackSpeed);
-        return; // finally block handles cleanup
-      }
-
-      // ── 2. Try configured TTS provider via backend ──
-      // Check if a non-browser TTS provider is configured
-      const ttsConfig = getCurrentTTSConfig();
-      const useConfiguredProvider =
-        ttsConfig.providerId !== 'browser-native-tts';
-
-      if (useConfiguredProvider) {
-        try {
-          const baseUrl = import.meta.env.VITE_API_BASE_URL || '';
-          const ttsProviderUrl = `${baseUrl}${this.ttsEndpoint}`;
-
-          const headers: Record<string, string> = {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${this.token}`,
-          };
-
-          // Include tenant subdomain for localhost dev
-          const hostname = window.location.hostname;
-          if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname.endsWith('.localhost')) {
-            const urlSubdomain = hostname.endsWith('.localhost')
-              ? hostname.replace('.localhost', '')
-              : null;
-            const subdomain =
-              urlSubdomain ||
-              sessionStorage.getItem('tenant_subdomain') ||
-              localStorage.getItem('tenant_subdomain');
-            if (subdomain) {
-              headers['X-Tenant-Subdomain'] = subdomain;
-            }
-          }
-
-          this.currentFetchController = new AbortController();
-
-          const providerResponse = await fetch(ttsProviderUrl, {
-            method: 'POST',
-            headers,
-            body: JSON.stringify({
-              text: ssml || text,
-              providerId: ttsConfig.providerId,
-              voice: voiceId || ttsConfig.voice,
-              speed: ttsConfig.speed ?? playbackSpeed,
-              modelId: ttsConfig.modelId,
-            }),
-            signal: this.currentFetchController.signal,
-          });
-
-          this.currentFetchController = null;
-
-          if (providerResponse.ok && providerResponse.status !== 204) {
-            const blob = await providerResponse.blob();
-            if (blob.size > 0) {
-              const blobUrl = URL.createObjectURL(blob);
-              notifySpeechStart();
-              await this.playAudio(blobUrl, volume, playbackSpeed);
-              URL.revokeObjectURL(blobUrl);
-              return; // Success — finally block handles cleanup
-            }
-          }
-          // If provider returned empty/error, fall through to legacy endpoint
-        } catch (providerErr) {
-          // Aborted by navigation — exit silently
-          if (providerErr instanceof DOMException && providerErr.name === 'AbortError') {
-            return;
-          }
-          // Provider failed — fall through to legacy TTS endpoint
-          console.warn('Configured TTS provider failed, falling back:', providerErr);
-          this.currentFetchController = null;
-        }
-      }
-
-      // ── 3. Legacy real-time TTS from backend (original endpoint) ──
-      const baseUrl = import.meta.env.VITE_API_BASE_URL || '';
-      const fullUrl = `${baseUrl}${this.ttsEndpoint}`;
-
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.token}`,
-      };
-
-      // Include tenant subdomain for localhost dev
+    // Tenant subdomain injection for local dev (preserved from original).
+    if (typeof window !== 'undefined') {
       const hostname = window.location.hostname;
-      if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname.endsWith('.localhost')) {
+      if (
+        hostname === 'localhost' ||
+        hostname === '127.0.0.1' ||
+        hostname.endsWith('.localhost')
+      ) {
         const urlSubdomain = hostname.endsWith('.localhost')
           ? hostname.replace('.localhost', '')
           : null;
@@ -414,111 +423,149 @@ export class MAICActionEngine {
           headers['X-Tenant-Subdomain'] = subdomain;
         }
       }
+    }
 
-      // AbortController lets abortCurrentAction() cancel a pending TTS fetch
-      this.currentFetchController = new AbortController();
-
-      const response = await fetch(fullUrl, {
+    this.currentFetchController = new AbortController();
+    try {
+      const res = await fetch(url, {
         method: 'POST',
         headers,
-        body: JSON.stringify({ text: ssml || text, agentId, voice_id: voiceId }),
+        body: JSON.stringify({ text, voiceId, voice_id: voiceId }),
         signal: this.currentFetchController.signal,
       });
-
-      this.currentFetchController = null;
-
-      if (response.ok && response.status !== 204) {
-        const blob = await response.blob();
-        if (blob.size > 0) {
-          const blobUrl = URL.createObjectURL(blob);
-          notifySpeechStart();
-          await this.playAudio(blobUrl, volume, playbackSpeed);
-          URL.revokeObjectURL(blobUrl);
-        } else {
-          // Empty audio response — fall back to browser TTS or timed silence
-          if (!this.disposed) {
-            notifySpeechStart();
-            await this.speechFallback(text, playbackSpeed, voiceId);
-          }
-        }
-      } else {
-        // TTS unavailable (204 or error) — fall back
-        if (!this.disposed) {
-          notifySpeechStart();
-          await this.speechFallback(text, playbackSpeed, voiceId);
-        }
-      }
+      if (token !== this.generationToken) return null;
+      if (res.status === 204 || !res.ok) return null;
+      const blob = await res.blob();
+      if (token !== this.generationToken) return null;
+      if (blob.size === 0) return null;
+      return URL.createObjectURL(blob);
     } catch (err) {
-      // Aborted by navigation — exit silently
-      if (err instanceof DOMException && err.name === 'AbortError') {
-        return;
-      }
-      // Network error — fall back
-      console.warn('TTS error, using fallback:', err);
-      if (!this.disposed) {
-        notifySpeechStart();
-        await this.speechFallback(text, playbackSpeed, voiceId);
-      }
+      if (err instanceof DOMException && err.name === 'AbortError') return null;
+      console.warn('TTS fetch failed:', err);
+      return null;
     } finally {
-      this.currentFetchController = null;
-      if (!this.disposed) {
-        this.stageStore.getState().setSpeakingAgent(null);
-        this.stageStore.getState().setSpeechText(null);
-        this.onSpeechEnd?.();
+      // Only clear if we still own it — a concurrent abort may have already
+      // nulled it and bumped the token.
+      if (token === this.generationToken) {
+        this.currentFetchController = null;
       }
     }
   }
 
   /**
-   * Fallback when server TTS fails: try browser-native TTS (Web Speech API),
-   * then fall back to timed silence based on word count.
+   * Play `src` via a fresh HTMLAudioElement, firing subtitles + speaking
+   * indicator on the `playing` event (not before `play()`).
+   *
+   * Every callback checks `token !== this.generationToken` and:
+   *   - For `onplaying`: pauses immediately so buffered audio stops.
+   *   - For `onended`/`onerror`/`play().catch`: exits without resolving
+   *     the promise (abortCurrentAction() already resolved it via audioResolve).
    */
-  private async speechFallback(text: string, playbackSpeed: number, voiceId?: string): Promise<void> {
-    const settings = this.settingsStore.getState();
-    if (
-      settings.browserTTSEnabled &&
-      typeof window !== 'undefined' &&
-      window.speechSynthesis
-    ) {
-      await this.playBrowserTTS(text, playbackSpeed, voiceId);
-    } else {
-      await delay(estimateSpeechDuration(text, playbackSpeed));
-    }
-  }
-
-  private playAudio(src: string, volume: number, playbackRate: number): Promise<void> {
+  private playAudioSynced(
+    src: string,
+    text: string,
+    agentId: string,
+    volume: number,
+    playbackRate: number,
+    token: number,
+  ): Promise<void> {
     return new Promise((resolve) => {
-      if (this.disposed) {
+      if (token !== this.generationToken) {
         resolve();
         return;
       }
 
-      // Clean up any existing audio element
-      if (this.audioElement) {
-        this.audioElement.pause();
-        if (this.audioElement.src.startsWith('blob:')) {
-          URL.revokeObjectURL(this.audioElement.src);
-        }
-      }
-
       const audio = new Audio();
-      audio.preload = 'auto';
+      this.audioElement = audio;
+      this.audioResolve = resolve;
+
       audio.volume = volume;
       audio.playbackRate = playbackRate;
-      this.audioElement = audio;
-      this.audioResolve = resolve; // stored so abortCurrentAction() can release
 
-      const cleanup = () => {
-        this.audioElement = null;
-        this.audioResolve = null;
-        resolve(); // safe to call multiple times — only first counts
+      audio.onplaying = () => {
+        if (token !== this.generationToken) {
+          try {
+            audio.pause();
+          } catch {
+            /* ignore */
+          }
+          return;
+        }
+        this.onSpeechStart?.(agentId, text);
+        this.stageStore.getState().setSpeakingAgent(agentId);
+        this.stageStore.getState().setSpeechText(text);
       };
 
-      audio.addEventListener('ended', cleanup);
-      audio.addEventListener('error', cleanup);
+      audio.onended = () => {
+        if (token !== this.generationToken) return;
+        this.onSpeechEnd?.();
+        this.stageStore.getState().setSpeakingAgent(null);
+        this.stageStore.getState().setSpeechText(null);
+        // Clear the audioElement reference so hasActiveAudio() returns false.
+        this.audioElement = null;
+        this.audioResolve = null;
+        resolve();
+      };
+
+      audio.onerror = () => {
+        if (token !== this.generationToken) return;
+        // Fail-open: advance playback so one broken audio doesn't hang the
+        // whole classroom. Do not flash subtitles for audio that never started.
+        this.onSpeechEnd?.();
+        this.audioElement = null;
+        this.audioResolve = null;
+        resolve();
+      };
 
       audio.src = src;
-      audio.play().catch(cleanup);
+      audio.play().catch(() => {
+        if (token !== this.generationToken) return;
+        // play() rejected (autoplay blocked, decode error) — resolve so the
+        // playback engine can advance.
+        this.onSpeechEnd?.();
+        this.audioElement = null;
+        this.audioResolve = null;
+        resolve();
+      });
+    });
+  }
+
+  /**
+   * Reading-time fallback: when TTS is unavailable, advance on a timer
+   * sized to the text (~60ms/char, minimum 2s). Still fires
+   * onSpeechStart/onSpeechEnd so subtitles appear as if speech were playing.
+   *
+   * The resolve fn is stored in `audioResolve` so `abortCurrentAction()` can
+   * release the pending await when a scene change interrupts reading mode.
+   */
+  private readingTimeFallback(
+    text: string,
+    agentId: string,
+    token: number,
+  ): Promise<void> {
+    return new Promise((resolve) => {
+      if (token !== this.generationToken) {
+        resolve();
+        return;
+      }
+      this.onSpeechStart?.(agentId, text);
+      this.stageStore.getState().setSpeakingAgent(agentId);
+      this.stageStore.getState().setSpeechText(text);
+
+      // Register resolve with abort so interrupting the fallback releases the
+      // awaiting playback engine immediately (rather than waiting up to 2 s).
+      this.audioResolve = resolve;
+
+      const ms = Math.max(READING_FALLBACK_MIN_MS, text.length * READING_FALLBACK_MS_PER_CHAR);
+      this.readingTimer = setTimeout(() => {
+        if (token !== this.generationToken) return;
+        this.onSpeechEnd?.();
+        this.stageStore.getState().setSpeakingAgent(null);
+        this.stageStore.getState().setSpeechText(null);
+        this.readingTimer = null;
+        this.audioResolve = null;
+        resolve();
+      }, ms);
     });
   }
 
@@ -824,110 +871,5 @@ export class MAICActionEngine {
   private executeDiscussion(action: DiscussionAction): void {
     this.stageStore.getState().setDiscussionMode(action.sessionType);
     this.onDiscussionTrigger?.(action.sessionType, action.topic, action.agentIds);
-  }
-
-  // ─── Browser-Native TTS (Web Speech API Fallback) ──────────────────
-
-  /**
-   * Split text into sentence-level chunks for sequential playback.
-   * Chrome has a bug where utterances >~15s are silently cut off and onend
-   * never fires, causing the engine to hang. Chunking avoids this.
-   * Ported from upstream OpenMAIC PlaybackEngine.
-   */
-  private splitIntoChunks(text: string): string[] {
-    const chunks = text
-      .split(/(?<=[.!?。！？\n])\s*/)
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0);
-    return chunks.length > 0 ? chunks : [text];
-  }
-
-  /**
-   * Play text using the Web Speech API (browser-native TTS).
-   * Returns a promise that resolves when all chunks finish speaking.
-   */
-  /** Currently active voice ID for browser TTS — set per speech action. */
-  private browserTTSVoiceId: string | null = null;
-
-  private playBrowserTTS(text: string, speed: number, voiceId?: string): Promise<void> {
-    return new Promise<void>((resolve) => {
-      this.browserTTSChunks = this.splitIntoChunks(text);
-      this.browserTTSChunkIndex = 0;
-      this.browserTTSPausedChunks = [];
-      this.browserTTSActive = true;
-      this.browserTTSResolve = resolve;
-      this.browserTTSVoiceId = voiceId ?? null;
-      this.playBrowserTTSChunk();
-    });
-  }
-
-  /** Speak the current chunk; on completion, advance to next or finish. */
-  private playBrowserTTSChunk(): void {
-    if (this.browserTTSChunkIndex >= this.browserTTSChunks.length) {
-      // All chunks done
-      this.browserTTSActive = false;
-      this.browserTTSChunks = [];
-      if (this.browserTTSResolve) {
-        this.browserTTSResolve();
-        this.browserTTSResolve = null;
-      }
-      return;
-    }
-
-    const chunkText = this.browserTTSChunks[this.browserTTSChunkIndex];
-    const utterance = new SpeechSynthesisUtterance(chunkText);
-
-    const settings = this.settingsStore.getState();
-    utterance.rate = settings.playbackSpeed;
-    utterance.volume = settings.audioVolume;
-
-    // Select a voice matching the agent's voice ID if available
-    if (this.browserTTSVoiceId) {
-      const voices = window.speechSynthesis.getVoices();
-      const match = voices.find((v) => v.name === this.browserTTSVoiceId || v.voiceURI === this.browserTTSVoiceId);
-      if (match) {
-        utterance.voice = match;
-      }
-    }
-
-    // Auto-detect language: if >30% CJK characters, use Chinese
-    const cjkCount = (
-      chunkText.match(/[\u4e00-\u9fff\u3400-\u4dbf\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]/g) || []
-    ).length;
-    utterance.lang = chunkText.length > 0 && cjkCount / chunkText.length > 0.3 ? 'zh-CN' : 'en-US';
-
-    utterance.onend = () => {
-      this.browserTTSChunkIndex++;
-      this.playBrowserTTSChunk(); // next chunk (or finish)
-    };
-
-    utterance.onerror = (event) => {
-      // 'canceled' is expected when stop/pause is called — not a real error
-      if (event.error !== 'canceled') {
-        console.warn('Browser TTS chunk error:', event.error);
-        this.browserTTSChunkIndex++;
-        this.playBrowserTTSChunk(); // skip failed chunk
-      }
-      // On 'canceled': do nothing — pause/abort handler already saved state
-    };
-
-    // Chrome bug workaround: cancel() before speak() to clear stale synthesis
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(utterance);
-  }
-
-  /** Cancel any active browser-native TTS and resolve the pending promise. */
-  private cancelBrowserTTS(): void {
-    if (this.browserTTSActive || this.browserTTSPausedChunks.length > 0) {
-      this.browserTTSActive = false;
-      this.browserTTSChunks = [];
-      this.browserTTSChunkIndex = 0;
-      this.browserTTSPausedChunks = [];
-      window.speechSynthesis?.cancel();
-    }
-    if (this.browserTTSResolve) {
-      this.browserTTSResolve();
-      this.browserTTSResolve = null;
-    }
   }
 }

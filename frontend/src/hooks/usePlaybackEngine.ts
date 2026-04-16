@@ -103,11 +103,30 @@ export function usePlaybackEngine(role: MAICRole = 'teacher') {
     actionEngineRef.current = actionEngine;
     engineRef.current = playbackEngine;
 
+    // Expose the engines on `window.__maicEngine` under test/dev so e2e
+    // Playwright probes can inspect `audioElement`, `generationToken`, etc.
+    // In production builds (MODE === 'production' && !DEV) this is a no-op.
+    if (
+      typeof window !== 'undefined' &&
+      (import.meta.env.MODE === 'test' || import.meta.env.DEV)
+    ) {
+      (window as any).__maicEngine = {
+        actionEngine,
+        playbackEngine,
+      };
+    }
+
     return () => {
       playbackEngine.dispose();
       actionEngine.dispose();
       engineRef.current = null;
       actionEngineRef.current = null;
+      if (
+        typeof window !== 'undefined' &&
+        (import.meta.env.MODE === 'test' || import.meta.env.DEV)
+      ) {
+        delete (window as any).__maicEngine;
+      }
     };
   }, [accessToken, setEngineMode, role]);
 
@@ -134,25 +153,32 @@ export function usePlaybackEngine(role: MAICRole = 'teacher') {
     setCurrentActionIndex(index);
   }, []);
 
+  /**
+   * Seek to the transition action for a given slide index (within the current
+   * scene) and start playing from there. Triggered by slide-thumbnail clicks
+   * mid-playback. Uses `generationToken` internally to guarantee the previous
+   * slide's audio cannot wake up and corrupt the new slide's state.
+   */
+  const seekToSlide = useCallback((slideIndex: number) => {
+    engineRef.current?.seekToSlide(slideIndex);
+  }, []);
+
   const resumeAfterDiscussion = useCallback(() => {
     engineRef.current?.resumeAfterDiscussion();
   }, []);
 
   const loadScene = useCallback((scene: MAICScene) => {
+    // loadScene() calls stop() internally, which bumps the action engine's
+    // generationToken and tears down any in-flight audio synchronously.
+    // That makes the previous 150 ms setTimeout unnecessary — the token
+    // guarantees a clean start with no stale callbacks leaking through.
     engineRef.current?.loadScene(scene);
     setActionCount(scene.actions?.length ?? 0);
     setCurrentActionIndex(0);
     setPlaybackState('idle');
 
-    // If class playback is active (auto-advance mode), auto-play the new
-    // scene after a short delay. This handles both auto-advance between
-    // scenes AND manual navigation (clicking slide 6 mid-playback).
     if (autoAdvanceRef.current && !classStoppedRef.current) {
-      setTimeout(() => {
-        if (!classStoppedRef.current) {
-          engineRef.current?.play();
-        }
-      }, 150);
+      engineRef.current?.play();
     }
   }, []);
 
@@ -203,6 +229,7 @@ export function usePlaybackEngine(role: MAICRole = 'teacher') {
     resume,
     stop,
     seekTo,
+    seekToSlide,
     loadScene,
     resumeAfterDiscussion,
     startClass,
