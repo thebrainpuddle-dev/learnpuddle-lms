@@ -369,7 +369,12 @@ export class MAICActionEngine {
 
     // 2. Fallback: live TTS fetch.
     const blobUrl = await this.fetchTtsBlob(ssml || text, voiceId, myToken);
-    if (myToken !== this.generationToken) return; // stale
+    if (myToken !== this.generationToken) {
+      // Stale — abort happened after the fetch completed. Revoke the blob
+      // we decoded so the URL doesn't linger for the page's lifetime.
+      if (blobUrl) URL.revokeObjectURL(blobUrl);
+      return;
+    }
     if (!blobUrl) {
       // 3. Final fallback: timed reading window so slides don't snap-advance.
       return this.readingTimeFallback(text, agentId, myToken);

@@ -118,6 +118,7 @@ export const Stage: React.FC<StageProps> = ({ role }) => {
     playFromCurrent,
     stopClass,
     seekToSlide,
+    consumeEngineDrivenSlideChange,
   } = usePlaybackEngine(role);
 
   // Current scene & slide
@@ -132,17 +133,24 @@ export const Stage: React.FC<StageProps> = ({ role }) => {
     }
   }, [currentScene, loadScene]);
 
-  // Stop current audio when user manually navigates to a different slide
+  // Stop current audio when user MANUALLY navigates to a different slide.
+  // Skip the auto-pause when the slide change was engine-driven —
+  //   a) during autoplay the engine's executeTransition changes the slide
+  //      between actions (covered by isClassPlaying),
+  //   b) when seekToSlide is called from a thumbnail click the hook sets
+  //      a consume-once flag (covered by consumeEngineDrivenSlideChange).
+  // Only user-driven changes (prev/next buttons, keyboard shortcuts) should
+  // pause the engine.
   const prevSlideIndexRef = useRef(currentSlideIndex);
   useEffect(() => {
     if (prevSlideIndexRef.current !== currentSlideIndex) {
-      // Slide changed — stop any playing audio so old speech doesn't persist
-      if (playbackState === 'playing') {
+      const engineDriven = consumeEngineDrivenSlideChange();
+      if (!engineDriven && !isClassPlaying && playbackState === 'playing') {
         pause();
       }
       prevSlideIndexRef.current = currentSlideIndex;
     }
-  }, [currentSlideIndex, playbackState, pause]);
+  }, [currentSlideIndex, playbackState, isClassPlaying, pause, consumeEngineDrivenSlideChange]);
 
   const speakingAgent = useMemo(
     () => (speakingAgentId ? agents.find((a) => a.id === speakingAgentId) || null : null),

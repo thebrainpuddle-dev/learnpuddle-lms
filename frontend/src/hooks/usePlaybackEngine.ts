@@ -153,14 +153,22 @@ export function usePlaybackEngine(role: MAICRole = 'teacher') {
     setCurrentActionIndex(index);
   }, []);
 
+  // Ref set true immediately before an engine-driven slide change so
+  // Stage's auto-pause-on-slide-change useEffect can differentiate
+  // "engine seeking to a new slide" from "user manually navigating".
+  // The useEffect consumes the flag and clears it.
+  const engineDrivenSlideChangeRef = useRef(false);
+
   /**
    * Seek to the transition action for a given slide index (within the current
    * scene) and start playing from there. Triggered by slide-thumbnail clicks
-   * mid-playback. Uses `generationToken` internally to guarantee the previous
-   * slide's audio cannot wake up and corrupt the new slide's state.
+   * mid-playback. Uses `generationToken` + `sessionId` internally so the
+   * previous slide's audio cannot wake up and corrupt the new slide's state.
    */
   const seekToSlide = useCallback((slideIndex: number) => {
-    engineRef.current?.seekToSlide(slideIndex);
+    if (!engineRef.current) return;
+    engineDrivenSlideChangeRef.current = true;
+    engineRef.current.seekToSlide(slideIndex);
   }, []);
 
   const resumeAfterDiscussion = useCallback(() => {
@@ -219,6 +227,19 @@ export function usePlaybackEngine(role: MAICRole = 'teacher') {
     engineRef.current?.stop();
   }, []);
 
+  /**
+   * Consume-once flag indicating the most recent `currentSlideIndex` change
+   * came from an engine-initiated path (seekToSlide or executeTransition).
+   * Stage's auto-pause useEffect calls this to skip the pause when the
+   * engine is driving the slide change. The read is destructive — the
+   * flag is reset to false whenever inspected.
+   */
+  const consumeEngineDrivenSlideChange = useCallback(() => {
+    const wasEngineDriven = engineDrivenSlideChangeRef.current;
+    engineDrivenSlideChangeRef.current = false;
+    return wasEngineDriven;
+  }, []);
+
   return {
     playbackState,
     currentActionIndex,
@@ -235,5 +256,6 @@ export function usePlaybackEngine(role: MAICRole = 'teacher') {
     startClass,
     playFromCurrent,
     stopClass,
+    consumeEngineDrivenSlideChange,
   };
 }

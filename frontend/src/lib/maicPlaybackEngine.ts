@@ -36,6 +36,13 @@ export class MAICPlaybackEngine {
   private actions: MAICAction[] = [];
   private disposed = false;
 
+  // Monotonic session token — bumped by every stop() (directly or via
+  // loadScene/seekToSlide). Every deferred callback captures the token
+  // at dispatch time and no-ops when it changes. This prevents a stale
+  // speech promise whose audio was aborted by seekToSlide from racing the
+  // freshly-started chain and double-incrementing currentActionIndex.
+  private sessionId = 0;
+
   // Discussion state
   private consumedDiscussions = new Set<number>();
   private checkpoint: PlaybackCheckpoint | null = null;
@@ -129,7 +136,12 @@ export class MAICPlaybackEngine {
    * from firing processNext() after the stop.
    */
   stop(): void {
-    // Set mode FIRST — blocks all in-flight callbacks via mode guard
+    // Bump the playback session so any in-flight `.then()` / setTimeout
+    // callback captured under the previous session becomes a no-op before
+    // the next chain starts. Must happen BEFORE setMode / abortCurrentAction
+    // so the racing callbacks see the new value immediately.
+    this.sessionId++;
+    // Set mode — blocks any callback still checking only the mode guard.
     this.setMode('idle');
     // Now safely clean up audio/timers/effects
     this.actionEngine.abortCurrentAction();
@@ -255,6 +267,11 @@ export class MAICPlaybackEngine {
 
     const idx = this.currentActionIndex;
     const action = this.actions[idx];
+    // Capture the session under which we're dispatching this action. Any
+    // deferred callback (speech promise, setTimeout, etc.) compares against
+    // this value — if stop() / loadScene() / seekToSlide() bumped the session
+    // in between, the callback is stale and must not advance the cursor.
+    const mySession = this.sessionId;
 
     // Notify listeners of action start
     this.onActionStart?.(idx, action);
@@ -265,16 +282,19 @@ export class MAICPlaybackEngine {
     switch (action.type) {
       // ── Speech: callback-driven, non-blocking ──
       // Don't await — the .then() callback drives progression when audio ends.
-      // If stopped mid-speech, mode guard in .then() blocks processNext.
+      // Gated on BOTH mode==='playing' AND session token matches. Prevents
+      // a stale audio-end from racing a fresh seekToSlide → play() chain.
       case 'speech': {
         this.actionEngine
           .execute(action)
           .then(() => {
+            if (mySession !== this.sessionId) return;
             if (this.mode === 'playing') {
               void this.processNext();
             }
           })
           .catch((err) => {
+            if (mySession !== this.sessionId) return;
             console.error(`Speech action ${idx} failed:`, err);
             if (this.mode === 'playing') {
               void this.processNext();
@@ -295,6 +315,7 @@ export class MAICPlaybackEngine {
           console.error(`Action ${idx} (${action.type}) failed:`, err);
         }
         queueMicrotask(() => {
+          if (mySession !== this.sessionId) return;
           if (this.mode === 'playing') {
             void this.processNext();
           }
@@ -336,15 +357,14 @@ export class MAICPlaybackEngine {
       }
 
       // ── Awaited actions (whiteboard, video, pause, transition, etc.) ──
-      // Await completion, then mode-guard before continuing.
+      // Await completion, then mode+session guard before continuing.
       default: {
         try {
           await this.actionEngine.execute(action);
         } catch (err) {
           console.error(`Action ${idx} (${action.type}) failed:`, err);
         }
-        // Mode guard AFTER await — prevents stale continuation if
-        // stop() was called while the action was executing.
+        if (mySession !== this.sessionId) break;
         if (this.mode === 'playing') {
           void this.processNext();
         }

@@ -77,14 +77,17 @@ function buildSceneGroups(
 /**
  * Props for SlideNavigator.
  *
- * - `onSlideClick`: optional override for thumbnail clicks. When set, the
- *   parent can invoke `playbackEngine.seekToSlide(idx)` so the action engine
- *   bumps its generationToken and starts the new slide's audio cleanly.
- *   When absent, the component falls back to the stage store's `goToSlide`
- *   (pure state change, no playback reset) — same behaviour as before.
+ * - `onSlideClick`: optional callback invoked when the user clicks a slide
+ *   thumbnail that resolves to the CURRENT scene. Called with the
+ *   **scene-relative** slide index (matching `TransitionAction.slideIndex`)
+ *   so the parent can invoke `playbackEngine.seekToSlide(rel)` directly.
+ *   For cross-scene clicks the component always falls back to the stage
+ *   store's `goToSlide(absoluteIdx)` — a scene change, not a within-scene
+ *   seek. When the prop is absent, the component resolves the seek via the
+ *   dev-only `window.__maicEngine` handle if available.
  */
 export interface SlideNavigatorProps {
-  onSlideClick?: (slideIndex: number) => void;
+  onSlideClick?: (relativeSlideIndex: number) => void;
 }
 
 export const SlideNavigator = React.memo(function SlideNavigator({
@@ -101,53 +104,49 @@ export const SlideNavigator = React.memo(function SlideNavigator({
   const isPlaying = useMAICStageStore((s) => s.isPlaying);
   const setPlaying = useMAICStageStore((s) => s.setPlaying);
 
-  // Delegate thumbnail clicks. The clicked `idx` is an absolute slide index
-  // (0-based across all scenes). We route as follows:
+  // Delegate thumbnail clicks. The clicked `absoluteIdx` is an absolute
+  // slide index (0-based across all scenes). We route as follows:
   //
-  //   1. `onSlideClick` prop override → caller is responsible for the policy.
-  //   2. Click within the current scene → call `playbackEngine.seekToSlide(rel)`
-  //      with a scene-relative index so the engine finds the matching
-  //      `transition` action and restarts audio cleanly (generationToken
-  //      invalidates the old slide's audio mid-playback).
-  //   3. Click in a different scene → fall back to the stage store's
-  //      `goToSlide(idx)`. This updates `currentSceneIndex`, which Stage's
-  //      useEffect observes and calls `loadScene()` on the new scene — which
-  //      itself goes through `stop()` → abortCurrentAction → token bump.
-  //      So the no-audio-overlap guarantee still holds.
-  //   4. No engine available (production build, pre-mount) → pure goToSlide
-  //      (legacy behaviour).
+  //   A. Click is WITHIN the current scene:
+  //      a1. `onSlideClick` prop present → call it with the SCENE-RELATIVE
+  //          index (so Stage can call playbackEngine.seekToSlide(rel)).
+  //      a2. Otherwise try dev-only `window.__maicEngine` for the seek.
+  //      a3. Otherwise fall back to pure goToSlide(absoluteIdx).
+  //
+  //   B. Click is in a DIFFERENT scene:
+  //      → always goToSlide(absoluteIdx). This updates `currentSceneIndex`,
+  //        Stage's scene-change useEffect observes and calls `loadScene()`,
+  //        which internally calls stop() → abortCurrentAction → token bump.
+  //        No-audio-overlap guarantee still holds.
   const handleSlideClick = useCallback(
     (absoluteIdx: number) => {
-      if (onSlideClick) {
-        onSlideClick(absoluteIdx);
-        return;
-      }
-
       // Locate the scene this slide belongs to, and its relative offset.
       const bounds = sceneSlideBounds.find(
         (b) => absoluteIdx >= b.startSlide && absoluteIdx <= b.endSlide,
       );
       const targetSceneIdx = bounds?.sceneIdx ?? -1;
       const relativeSlideIdx = bounds ? absoluteIdx - bounds.startSlide : -1;
-
-      // Access the exposed engine handle (dev/test) for within-scene seeks.
-      const engine =
-        typeof window !== 'undefined'
-          ? (window as any).__maicEngine?.playbackEngine
-          : undefined;
-
-      if (
-        engine &&
-        typeof engine.seekToSlide === 'function' &&
+      const sameScene =
         targetSceneIdx === useMAICStageStore.getState().currentSceneIndex &&
-        relativeSlideIdx >= 0
-      ) {
-        engine.seekToSlide(relativeSlideIdx);
-        return;
+        relativeSlideIdx >= 0;
+
+      if (sameScene) {
+        if (onSlideClick) {
+          onSlideClick(relativeSlideIdx);
+          return;
+        }
+        // Dev/test fallback via exposed engine handle.
+        const engine =
+          typeof window !== 'undefined'
+            ? (window as any).__maicEngine?.playbackEngine
+            : undefined;
+        if (engine && typeof engine.seekToSlide === 'function') {
+          engine.seekToSlide(relativeSlideIdx);
+          return;
+        }
       }
 
-      // Fallback: pure goToSlide. Stage's scene-change useEffect handles
-      // loadScene (which internally calls stop() → abortCurrentAction).
+      // Cross-scene click, or no engine available — defer to the store.
       goToSlide(absoluteIdx);
     },
     [onSlideClick, goToSlide, sceneSlideBounds],
