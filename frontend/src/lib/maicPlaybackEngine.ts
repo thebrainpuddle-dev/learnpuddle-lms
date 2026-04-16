@@ -1,4 +1,11 @@
 // lib/maicPlaybackEngine.ts — Sequences through a scene's action array
+//
+// Architecture aligned with upstream OpenMAIC PlaybackEngine:
+//   - Recursive processNext() instead of while-loop
+//   - Mode guard at every callback entry: if (mode !== 'playing') return
+//   - stop() sets mode to 'idle' BEFORE stopping audio (prevents stale callbacks)
+//   - Speech actions are callback-driven (non-blocking)
+//   - Fire-and-forget actions use queueMicrotask for non-blocking progression
 
 import { MAICActionEngine } from './maicActionEngine';
 import type { MAICAction } from '../types/maic-actions';
@@ -18,11 +25,9 @@ export interface PlaybackCallbacks {
 
 export class MAICPlaybackEngine {
   private actionEngine: MAICActionEngine;
-  private state: PlaybackState = 'idle';
+  private mode: PlaybackState = 'idle';
   private currentActionIndex = 0;
   private actions: MAICAction[] = [];
-  private aborted = false;
-  private pauseResolve: (() => void) | null = null;
   private disposed = false;
 
   private onStateChange?: (state: PlaybackState) => void;
@@ -45,113 +50,79 @@ export class MAICPlaybackEngine {
     this.stop();
     this.actions = scene.actions ? [...scene.actions] : [];
     this.currentActionIndex = 0;
-    this.setState('idle');
   }
 
   // ─── Playback Controls ─────────────────────────────────────────────
 
   /**
    * Start or resume playing from the current action index.
-   * This method resolves when all actions have been executed or playback is stopped.
+   * Non-blocking: kicks off recursive processNext chain.
    */
-  async play(): Promise<void> {
+  play(): void {
     if (this.disposed) return;
     if (this.actions.length === 0) return;
 
-    // If resuming from pause, just resume
-    if (this.state === 'paused') {
+    // If resuming from pause, delegate to resume()
+    if (this.mode === 'paused') {
       this.resume();
       return;
     }
 
-    // Guard: prevent concurrent play loops (e.g. auto-advance + manual navigate)
-    if (this.state === 'playing') return;
+    // Guard: prevent concurrent play (e.g. auto-advance + manual navigate)
+    if (this.mode === 'playing') return;
 
-    this.aborted = false;
-    this.setState('playing');
-
-    while (this.currentActionIndex < this.actions.length && !this.aborted) {
-      // Handle pause — wait until resume() is called
-      // Note: state can be mutated by pause() from outside, so cast to bypass TS narrowing
-      if ((this.state as PlaybackState) === 'paused') {
-        await new Promise<void>((resolve) => {
-          this.pauseResolve = resolve;
-        });
-        // After resume, re-check abort and continue
-        if (this.aborted) break;
-      }
-
-      const idx = this.currentActionIndex;
-      const action = this.actions[idx];
-
-      // Notify listeners of action start
-      this.onActionStart?.(idx, action);
-
-      try {
-        await this.actionEngine.execute(action);
-      } catch (err) {
-        console.error(`Action ${idx} (${action.type}) failed:`, err);
-        // Continue to next action on failure
-      }
-
-      if (this.aborted) break;
-      this.currentActionIndex++;
-    }
-
-    if (!this.aborted && !this.disposed) {
-      this.setState('idle');
-      this.onSceneComplete?.();
-    }
+    this.setMode('playing');
+    void this.processNext();
   }
 
   /**
-   * Pause playback at the current action. The currently executing action
-   * will complete before the pause takes effect.
+   * Pause playback. Audio is paused immediately. The next processNext()
+   * will see mode !== 'playing' and return without advancing.
    */
   pause(): void {
-    if (this.state !== 'playing') return;
-    this.setState('paused');
+    if (this.mode !== 'playing') return;
+    this.setMode('paused');
+    this.actionEngine.pauseCurrentAudio();
   }
 
   /**
-   * Resume playback after a pause.
+   * Resume playback after a pause. If audio was paused, it resumes and
+   * the onEnded chain continues. If no audio (completed during pause),
+   * processNext is called directly.
    */
   resume(): void {
-    if (this.state !== 'paused') return;
-    this.setState('playing');
+    if (this.mode !== 'paused') return;
+    this.setMode('playing');
 
-    // Release the pause promise so the play loop continues
-    if (this.pauseResolve) {
-      this.pauseResolve();
-      this.pauseResolve = null;
+    if (this.actionEngine.hasActiveAudio()) {
+      // Audio is paused — resume it. When audio ends, the speech promise
+      // resolves and the .then() callback fires processNext (with mode guard).
+      this.actionEngine.resumeCurrentAudio();
+    } else {
+      // No active audio — speech finished during pause or non-speech action.
+      // Continue processing from current position.
+      void this.processNext();
     }
   }
 
   /**
    * Stop playback entirely. Resets to the beginning of the action list.
-   * Immediately kills any in-progress audio/TTS so the user doesn't hear
-   * stale speech from the previous scene after navigating.
+   *
+   * CRITICAL: Sets mode to 'idle' BEFORE stopping audio — this is the
+   * upstream OpenMAIC pattern that prevents stale onEnded/promise callbacks
+   * from firing processNext() after the stop.
    */
   stop(): void {
-    this.aborted = true;
-
-    // Kill current audio/TTS fetch immediately — this resolves the pending
-    // playAudio promise so the play() loop can break on the next aborted check.
+    // Set mode FIRST — blocks all in-flight callbacks via mode guard
+    this.setMode('idle');
+    // Now safely clean up audio/timers/effects
     this.actionEngine.abortCurrentAction();
-
-    // Release any pending pause promise
-    if (this.pauseResolve) {
-      this.pauseResolve();
-      this.pauseResolve = null;
-    }
-
     this.currentActionIndex = 0;
-    this.setState('idle');
   }
 
   /**
-   * Jump to a specific action index. If currently playing, playback continues
-   * from the new position. If idle or paused, it just sets the position.
+   * Jump to a specific action index. If currently playing, the next
+   * processNext() call will pick up from the new position.
    */
   seekTo(index: number): void {
     const clamped = Math.max(0, Math.min(index, this.actions.length - 1));
@@ -161,7 +132,7 @@ export class MAICPlaybackEngine {
   // ─── State ──────────────────────────────────────────────────────────
 
   getState(): PlaybackState {
-    return this.state;
+    return this.mode;
   }
 
   getCurrentActionIndex(): number {
@@ -183,11 +154,105 @@ export class MAICPlaybackEngine {
     this.onSceneComplete = undefined;
   }
 
+  // ─── Core Processing (Recursive, Mode-Guarded) ─────────────────────
+
+  /**
+   * Process the next action in the sequence.
+   *
+   * This method is called recursively — each action type determines how
+   * and when to call processNext() again:
+   *
+   *   - Speech:        callback-driven — .then() fires processNext after audio ends
+   *   - Fire-and-forget: queueMicrotask(() => processNext()) for non-blocking effects
+   *   - Awaited:       await action, then processNext after mode guard
+   *
+   * Every entry point checks `if (this.mode !== 'playing') return` to prevent
+   * stale callbacks from advancing the action index after stop/pause.
+   */
+  private async processNext(): Promise<void> {
+    // ── MODE GUARD ── the core fix for stale audio/slide sync issues
+    if (this.mode !== 'playing') return;
+
+    // Check if scene is complete
+    if (this.currentActionIndex >= this.actions.length) {
+      this.setMode('idle');
+      this.onSceneComplete?.();
+      return;
+    }
+
+    const idx = this.currentActionIndex;
+    const action = this.actions[idx];
+
+    // Notify listeners of action start
+    this.onActionStart?.(idx, action);
+
+    // Advance index BEFORE executing (upstream pattern — snapshot points at current)
+    this.currentActionIndex++;
+
+    switch (action.type) {
+      // ── Speech: callback-driven, non-blocking ──
+      // Don't await — the .then() callback drives progression when audio ends.
+      // If stopped mid-speech, mode guard in .then() blocks processNext.
+      case 'speech': {
+        this.actionEngine
+          .execute(action)
+          .then(() => {
+            if (this.mode === 'playing') {
+              void this.processNext();
+            }
+          })
+          .catch((err) => {
+            console.error(`Speech action ${idx} failed:`, err);
+            if (this.mode === 'playing') {
+              void this.processNext();
+            }
+          });
+        break;
+      }
+
+      // ── Fire-and-forget visual effects ──
+      // Non-blocking — use queueMicrotask to avoid stack overflow from deep
+      // synchronous recursion when many consecutive effects appear in sequence.
+      case 'spotlight':
+      case 'laser':
+      case 'highlight':
+      case 'discussion': {
+        try {
+          this.actionEngine.execute(action);
+        } catch (err) {
+          console.error(`Action ${idx} (${action.type}) failed:`, err);
+        }
+        queueMicrotask(() => {
+          if (this.mode === 'playing') {
+            void this.processNext();
+          }
+        });
+        break;
+      }
+
+      // ── Awaited actions (whiteboard, video, pause, transition, etc.) ──
+      // Await completion, then mode-guard before continuing.
+      default: {
+        try {
+          await this.actionEngine.execute(action);
+        } catch (err) {
+          console.error(`Action ${idx} (${action.type}) failed:`, err);
+        }
+        // Mode guard AFTER await — prevents stale continuation if
+        // stop() was called while the action was executing.
+        if (this.mode === 'playing') {
+          void this.processNext();
+        }
+        break;
+      }
+    }
+  }
+
   // ─── Internal ─────────────────────────────────────────────────────
 
-  private setState(newState: PlaybackState): void {
-    if (this.state === newState) return;
-    this.state = newState;
-    this.onStateChange?.(newState);
+  private setMode(newMode: PlaybackState): void {
+    if (this.mode === newMode) return;
+    this.mode = newMode;
+    this.onStateChange?.(newMode);
   }
 }

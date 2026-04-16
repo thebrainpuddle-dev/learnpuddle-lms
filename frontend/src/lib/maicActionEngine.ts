@@ -154,6 +154,38 @@ export class MAICActionEngine {
     this.stageStore.getState().setSpotlightElementId(null);
   }
 
+  /**
+   * Pause the currently playing audio element (if any).
+   * Used by PlaybackEngine.pause() — audio stays loaded so it can resume.
+   */
+  pauseCurrentAudio(): void {
+    if (this.audioElement && !this.audioElement.paused) {
+      this.audioElement.pause();
+    }
+  }
+
+  /**
+   * Resume a previously paused audio element.
+   * Used by PlaybackEngine.resume() — when audio ends, the 'ended' event
+   * resolves the playAudio promise, which fires the .then() callback chain.
+   */
+  resumeCurrentAudio(): void {
+    if (this.audioElement && this.audioElement.paused) {
+      this.audioElement.play().catch((err) => {
+        console.warn('Failed to resume audio:', err);
+      });
+    }
+  }
+
+  /**
+   * Whether there is an active audio element (playing or paused, not ended).
+   * Used by PlaybackEngine.resume() to decide whether to resume audio or
+   * call processNext() directly.
+   */
+  hasActiveAudio(): boolean {
+    return this.audioElement !== null;
+  }
+
   dispose(): void {
     this.disposed = true;
     this.abortCurrentAction();
