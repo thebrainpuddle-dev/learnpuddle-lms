@@ -696,7 +696,11 @@ def teacher_maic_classroom_publish(request, classroom_id):
         scenes = content.get("scenes", [])
         agents_by_id = {a["id"]: a for a in content.get("agents", [])}
 
-        # Walk speech actions, stamp audioId + voiceId
+        # Walk speech actions, stamp audioId + voiceId.
+        # If text or voice changed since the last publish, the new audioId
+        # will differ from the previous one — clear the stale audioUrl so
+        # the pre-gen task regenerates audio instead of reusing the old file.
+        # (Fixes edit-and-republish playing stale audio — Chunk 4 review A/B.)
         total = 0
         for scene_idx, scene in enumerate(scenes):
             actions = scene.get("actions", [])
@@ -706,12 +710,17 @@ def teacher_maic_classroom_publish(request, classroom_id):
                 agent_id = action.get("agentId")
                 agent = agents_by_id.get(agent_id, {})
                 voice_id = agent.get("voiceId") or "en-IN-NeerjaNeural"
-                action["voiceId"] = voice_id
                 payload = (
                     f"{scene.get('id', scene_idx)}|{action_idx}|"
                     f"{action.get('text', '')}|{voice_id}"
                 )
-                action["audioId"] = hashlib.sha256(payload.encode()).hexdigest()[:12]
+                new_audio_id = hashlib.sha256(payload.encode()).hexdigest()[:12]
+                old_audio_id = action.get("audioId")
+                if old_audio_id and old_audio_id != new_audio_id:
+                    # Content drifted — old audioUrl points to stale audio.
+                    action.pop("audioUrl", None)
+                action["voiceId"] = voice_id
+                action["audioId"] = new_audio_id
                 total += 1
 
         content["audioManifest"] = {

@@ -106,7 +106,9 @@ export const maicApi = {
     api.post('/v1/teacher/maic/tts/preview/', data, { responseType: 'blob' }),
 
   listVoices: () =>
-    api.get<{ voices: MAICVoice[] }>('/v1/maic/voices/'),
+    // Backend mounts this under the courses router: apps/courses/urls.py →
+    // /api/v1/courses/maic/voices/  (not /api/v1/maic/voices/).
+    api.get<{ voices: MAICVoice[] }>('/v1/courses/maic/voices/'),
 
   publishClassroom: (id: string) =>
     api.post<{ audioManifest: AudioManifest }>(`/v1/teacher/maic/classrooms/${id}/publish/`, {}),

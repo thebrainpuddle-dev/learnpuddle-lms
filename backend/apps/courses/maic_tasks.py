@@ -10,16 +10,27 @@ import time
 from datetime import datetime, timezone
 
 from celery import shared_task
+from django.db import OperationalError, DatabaseError
 
 from apps.courses.maic_models import MAICClassroom, TenantAIConfig
 from apps.courses.maic_generation_service import generate_tts_audio
-from apps.courses.maic_storage import storage_upload
+from apps.courses.maic_storage import storage_upload, storage_exists
 from utils.tenant_middleware import set_current_tenant, clear_current_tenant
 
 logger = logging.getLogger(__name__)
 
 
-@shared_task(name="apps.courses.maic_tasks.pre_generate_classroom_tts")
+@shared_task(
+    name="apps.courses.maic_tasks.pre_generate_classroom_tts",
+    # Retry only on transient infrastructure failures (DB disconnects, Redis
+    # hiccups). Per-TTS-action failures are caught locally and recorded as
+    # failedAudioIds without bouncing the whole task.
+    autoretry_for=(OperationalError, DatabaseError, ConnectionError),
+    max_retries=3,
+    retry_backoff=True,
+    retry_backoff_max=300,
+    retry_jitter=True,
+)
 def pre_generate_classroom_tts(classroom_id: str) -> None:
     """Pre-generate TTS audio for every speech action. Idempotent on re-run.
 
@@ -102,8 +113,10 @@ def pre_generate_classroom_tts(classroom_id: str) -> None:
                 f"{classroom_id}/{audio_id}.mp3"
             )
 
-            # Idempotent re-publish: skip if we already have a URL
-            if action.get("audioUrl"):
+            # Idempotent re-publish: skip if we already have a URL AND the
+            # underlying storage file still exists. If the row has a URL but
+            # the file is gone (GC'd, bucket re-provisioned), regenerate.
+            if action.get("audioUrl") and storage_exists(storage_key):
                 completed += 1
                 continue
 

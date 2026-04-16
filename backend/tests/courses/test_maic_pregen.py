@@ -302,3 +302,43 @@ def test_student_cannot_see_classroom_mid_generation(
     r = client.get("/api/v1/student/maic/classrooms/")
     ids = [c["id"] for c in r.json()]
     assert str(classroom.id) in ids
+
+
+def test_republish_skips_unchanged_audio(classroom_with_content):
+    """Re-publish with identical text+voice must not re-run TTS — the audioId
+    hash is deterministic, the audioUrl is preserved, and the storage file
+    still exists, so the task's idempotency guard short-circuits."""
+    classroom, _ = classroom_with_content
+
+    # Seed state as if a previous publish already completed successfully.
+    scene = classroom.content["scenes"][0]
+    for idx, action in enumerate(scene["actions"]):
+        action["voiceId"] = "en-IN-PrabhatNeural"
+        # Matching deterministic hash from the publish endpoint's formula.
+        import hashlib
+        payload = f"{scene['id']}|{idx}|{action['text']}|{action['voiceId']}"
+        action["audioId"] = hashlib.sha256(payload.encode()).hexdigest()[:12]
+        action["audioUrl"] = f"/media/tts/{action['audioId']}.mp3"
+    classroom.status = "GENERATING"
+    classroom.content["audioManifest"] = {
+        "status": "generating", "progress": 0,
+        "totalActions": 2, "completedActions": 0,
+        "failedAudioIds": [], "generatedAt": None,
+    }
+    classroom.save()
+
+    with patch("apps.courses.maic_tasks.generate_tts_audio") as tts, \
+         patch("apps.courses.maic_tasks.storage_upload") as upload, \
+         patch("apps.courses.maic_tasks.storage_exists", return_value=True):
+        from apps.courses.maic_tasks import pre_generate_classroom_tts
+        pre_generate_classroom_tts(str(classroom.id))
+
+    # All cached audio reused — zero TTS calls, zero storage uploads.
+    assert tts.call_count == 0, (
+        f"Expected 0 TTS calls on unchanged re-publish, got {tts.call_count}"
+    )
+    assert upload.call_count == 0
+
+    classroom.refresh_from_db()
+    assert classroom.content["audioManifest"]["status"] == "ready"
+    assert classroom.status == "READY"
