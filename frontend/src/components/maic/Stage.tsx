@@ -113,10 +113,15 @@ export const Stage: React.FC<StageProps> = ({ role }) => {
   // Determine scene id for whiteboard
   const sceneId = currentScene?.id || currentSlide?.id || 'default';
 
-  // Audio URL (from scene content or slide)
-  const audioUrl = currentScene?.content.type === 'slide'
-    ? (currentScene.content as MAICSlideContent).audioUrl
-    : currentSlide?.audioUrl;
+  // Audio URL — only used when the engine is NOT managing audio via speech
+  // actions. When the engine has actions, it handles TTS audio internally
+  // and the AudioPlayer must stay silent to avoid dual-audio overlap.
+  const engineManagesAudio = hasScenes && (currentScene?.actions?.length ?? 0) > 0;
+  const audioUrl = engineManagesAudio
+    ? undefined
+    : currentScene?.content.type === 'slide'
+      ? (currentScene.content as MAICSlideContent).audioUrl
+      : currentSlide?.audioUrl;
 
   // ─── Discussion ──────────────────────────────────────────────────────
   const [discussionTopic, setDiscussionTopic] = useState('');

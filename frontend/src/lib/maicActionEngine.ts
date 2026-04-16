@@ -92,6 +92,8 @@ export class MAICActionEngine {
   private settingsStore = useMAICSettingsStore;
 
   private audioElement: HTMLAudioElement | null = null;
+  private audioResolve: (() => void) | null = null;
+  private currentFetchController: AbortController | null = null;
   private effectTimers: ReturnType<typeof setTimeout>[] = [];
 
   private onSpeechStart?: (agentId: string, text: string) => void;
@@ -112,19 +114,35 @@ export class MAICActionEngine {
 
   // ─── Lifecycle ──────────────────────────────────────────────────────
 
-  dispose(): void {
-    this.disposed = true;
+  /**
+   * Abort the currently executing action: kill audio, cancel TTS fetch,
+   * clear timers and transient UI state. Called by PlaybackEngine.stop()
+   * when the user navigates to a different scene mid-playback.
+   */
+  abortCurrentAction(): void {
+    // Cancel pending TTS fetch
+    if (this.currentFetchController) {
+      this.currentFetchController.abort();
+      this.currentFetchController = null;
+    }
 
-    // Stop audio
+    // Stop playing audio and resolve its pending promise so the action
+    // loop in PlaybackEngine can break cleanly.
     if (this.audioElement) {
       this.audioElement.pause();
+      this.audioElement.onended = null;
+      this.audioElement.onerror = null;
       if (this.audioElement.src.startsWith('blob:')) {
         URL.revokeObjectURL(this.audioElement.src);
       }
       this.audioElement = null;
     }
+    if (this.audioResolve) {
+      this.audioResolve();
+      this.audioResolve = null;
+    }
 
-    // Clear all scheduled timers
+    // Clear all scheduled timers (whiteboard fade-ins, spotlight auto-clear, etc.)
     for (const timer of this.effectTimers) {
       clearTimeout(timer);
     }
@@ -134,6 +152,11 @@ export class MAICActionEngine {
     this.stageStore.getState().setSpeakingAgent(null);
     this.stageStore.getState().setSpeechText(null);
     this.stageStore.getState().setSpotlightElementId(null);
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    this.abortCurrentAction();
   }
 
   // ─── Main Dispatch ──────────────────────────────────────────────────
@@ -254,11 +277,17 @@ export class MAICActionEngine {
         }
       }
 
+      // AbortController lets abortCurrentAction() cancel a pending TTS fetch
+      this.currentFetchController = new AbortController();
+
       const response = await fetch(fullUrl, {
         method: 'POST',
         headers,
         body: JSON.stringify({ text: ssml || text, agentId, voice_id: voiceId }),
+        signal: this.currentFetchController.signal,
       });
+
+      this.currentFetchController = null;
 
       if (response.ok && response.status !== 204) {
         const blob = await response.blob();
@@ -268,17 +297,22 @@ export class MAICActionEngine {
           URL.revokeObjectURL(blobUrl);
         } else {
           // Empty audio response — fall back to timed silence
-          await delay(estimateSpeechDuration(text, playbackSpeed));
+          if (!this.disposed) await delay(estimateSpeechDuration(text, playbackSpeed));
         }
       } else {
         // TTS unavailable (204 or error) — fall back to timed silence
-        await delay(estimateSpeechDuration(text, playbackSpeed));
+        if (!this.disposed) await delay(estimateSpeechDuration(text, playbackSpeed));
       }
     } catch (err) {
+      // Aborted by navigation — exit silently
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        return;
+      }
       // Network error — fall back to timing estimate
       console.warn('TTS error, using timing estimate:', err);
-      await delay(estimateSpeechDuration(text, playbackSpeed));
+      if (!this.disposed) await delay(estimateSpeechDuration(text, playbackSpeed));
     } finally {
+      this.currentFetchController = null;
       if (!this.disposed) {
         this.stageStore.getState().setSpeakingAgent(null);
         this.stageStore.getState().setSpeechText(null);
@@ -288,7 +322,7 @@ export class MAICActionEngine {
   }
 
   private playAudio(src: string, volume: number, playbackRate: number): Promise<void> {
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
       if (this.disposed) {
         resolve();
         return;
@@ -307,23 +341,19 @@ export class MAICActionEngine {
       audio.volume = volume;
       audio.playbackRate = playbackRate;
       this.audioElement = audio;
+      this.audioResolve = resolve; // stored so abortCurrentAction() can release
 
-      audio.addEventListener('ended', () => {
+      const cleanup = () => {
         this.audioElement = null;
-        resolve();
-      });
+        this.audioResolve = null;
+        resolve(); // safe to call multiple times — only first counts
+      };
 
-      audio.addEventListener('error', () => {
-        // Resolve instead of reject — playback errors shouldn't break the action sequence
-        this.audioElement = null;
-        resolve();
-      });
+      audio.addEventListener('ended', cleanup);
+      audio.addEventListener('error', cleanup);
 
       audio.src = src;
-      audio.play().catch(() => {
-        this.audioElement = null;
-        resolve();
-      });
+      audio.play().catch(cleanup);
     });
   }
 

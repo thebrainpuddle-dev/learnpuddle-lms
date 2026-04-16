@@ -7,6 +7,7 @@
 import React, { useRef, useEffect, useCallback } from 'react';
 import { useMAICStageStore } from '../../stores/maicStageStore';
 import { useMAICSettingsStore } from '../../stores/maicSettingsStore';
+import type { MAICEngineMode } from '../../types/maic-scenes';
 
 interface AudioPlayerProps {
   audioUrl?: string;
@@ -21,6 +22,7 @@ export const AudioPlayer = React.memo<AudioPlayerProps>(function AudioPlayer({ a
   const currentSlideIndex = useMAICStageStore((s) => s.currentSlideIndex);
   const slides = useMAICStageStore((s) => s.slides);
 
+  const engineMode = useMAICStageStore((s) => s.engineMode);
   const audioVolume = useMAICSettingsStore((s) => s.audioVolume);
   const playbackSpeed = useMAICSettingsStore((s) => s.playbackSpeed);
   const autoPlay = useMAICSettingsStore((s) => s.autoPlay);
@@ -72,8 +74,15 @@ export const AudioPlayer = React.memo<AudioPlayerProps>(function AudioPlayer({ a
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [audioUrl]);
 
-  // Handle audio ended
+  // Handle audio ended — only auto-advance when the playback engine is NOT
+  // managing audio (engine drives its own scene progression via onSceneComplete).
   const handleEnded = useCallback(() => {
+    // When the engine is actively playing scenes, it handles progression.
+    if (engineMode === 'playing' || engineMode === 'paused') {
+      setPlaying(false);
+      return;
+    }
+
     const isLastSlide = currentSlideIndex >= slides.length - 1;
 
     if (autoPlay && !isLastSlide) {
@@ -82,7 +91,7 @@ export const AudioPlayer = React.memo<AudioPlayerProps>(function AudioPlayer({ a
     } else {
       setPlaying(false);
     }
-  }, [autoPlay, currentSlideIndex, slides.length, nextSlide, setPlaying]);
+  }, [autoPlay, currentSlideIndex, slides.length, nextSlide, setPlaying, engineMode]);
 
   // This is a headless audio element; no visible UI. Playback controls are
   // in StageToolbar and SlideNavigator. Use preload="none" to avoid Range

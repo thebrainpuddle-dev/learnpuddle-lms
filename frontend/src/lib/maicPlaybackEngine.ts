@@ -64,6 +64,9 @@ export class MAICPlaybackEngine {
       return;
     }
 
+    // Guard: prevent concurrent play loops (e.g. auto-advance + manual navigate)
+    if (this.state === 'playing') return;
+
     this.aborted = false;
     this.setState('playing');
 
@@ -126,9 +129,15 @@ export class MAICPlaybackEngine {
 
   /**
    * Stop playback entirely. Resets to the beginning of the action list.
+   * Immediately kills any in-progress audio/TTS so the user doesn't hear
+   * stale speech from the previous scene after navigating.
    */
   stop(): void {
     this.aborted = true;
+
+    // Kill current audio/TTS fetch immediately — this resolves the pending
+    // playAudio promise so the play() loop can break on the next aborted check.
+    this.actionEngine.abortCurrentAction();
 
     // Release any pending pause promise
     if (this.pauseResolve) {

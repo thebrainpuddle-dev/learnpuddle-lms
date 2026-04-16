@@ -77,16 +77,12 @@ export function usePlaybackEngine(role: 'teacher' | 'student' = 'teacher') {
           const store = useMAICStageStore.getState();
           const { currentSceneIndex, scenes } = store;
           if (currentSceneIndex < scenes.length - 1) {
-            // Brief pause between scenes, then advance
+            // Brief pause between scenes, then advance.
+            // The scene change triggers loadScene via Stage useEffect,
+            // which auto-plays because autoAdvanceRef is true.
             setTimeout(() => {
               if (classStoppedRef.current) return;
               store.goToScene(currentSceneIndex + 1);
-              // The scene change will trigger loadScene via the Stage useEffect,
-              // and then we auto-play it
-              setTimeout(() => {
-                if (classStoppedRef.current) return;
-                engineRef.current?.play();
-              }, 300);
             }, SCENE_TRANSITION_DELAY_MS);
           } else {
             // All scenes complete
@@ -116,8 +112,6 @@ export function usePlaybackEngine(role: 'teacher' | 'student' = 'teacher') {
   }, []);
 
   const pause = useCallback(() => {
-    classStoppedRef.current = true;
-    autoAdvanceRef.current = false;
     engineRef.current?.pause();
   }, []);
 
@@ -139,6 +133,17 @@ export function usePlaybackEngine(role: 'teacher' | 'student' = 'teacher') {
     setActionCount(scene.actions?.length ?? 0);
     setCurrentActionIndex(0);
     setPlaybackState('idle');
+
+    // If class playback is active (auto-advance mode), auto-play the new
+    // scene after a short delay. This handles both auto-advance between
+    // scenes AND manual navigation (clicking slide 6 mid-playback).
+    if (autoAdvanceRef.current && !classStoppedRef.current) {
+      setTimeout(() => {
+        if (!classStoppedRef.current) {
+          engineRef.current?.play();
+        }
+      }, 150);
+    }
   }, []);
 
   // ─── Full-Classroom Playback ──────────────────────────────────────
