@@ -54,11 +54,13 @@ const LANGUAGES = [
 ];
 
 function stepFromGeneration(genStep: StudentGenerationStep, currentWizardStep: WizardStep): WizardStep {
-  // Once the user has advanced past "Topic & Settings", respect the wizard's
-  // own step cursor so the new agent-picker step (2) isn't skipped.
+  // Steps 1 (Topic) and 2 (Agents) are pre-generation — the hook is still
+  // 'idle' at those points. Steps 3-5 are driven by the generation hook
+  // phase. The 'idle' branch must respect wizardStep up to 2, otherwise
+  // clicking "Meet your classroom" silently resets back to Topic.
   switch (genStep) {
     case 'idle':
-      return 1;
+      return currentWizardStep <= 2 ? currentWizardStep : 1;
     case 'validating':
     case 'outlining':
       return currentWizardStep >= 2 ? currentWizardStep : 1;

@@ -54,12 +54,17 @@ const LANGUAGES = [
 ];
 
 function stepFromGeneration(genStep: GenerationStep, currentWizardStep: WizardStep): WizardStep {
-  // Once the user has advanced past "Topic & Settings", respect the wizard's
-  // own step cursor. This keeps us on the new agent-picker step (2) while the
-  // outline hook is still in 'outlining' or 'editing'.
+  // The wizard's 5 steps are: 1 Topic & Settings, 2 Meet your classroom,
+  // 3 Review Outline, 4 Generating, 5 Complete. The generation hook only
+  // owns steps 3-5 (outline + content phases); steps 1-2 are pre-generation
+  // UI owned by the wizard itself. The switch below maps hook state →
+  // displayed step, respecting the wizard's own cursor for everything the
+  // hook doesn't know about.
   switch (genStep) {
     case 'idle':
-      return 1;
+      // Hook hasn't started — user may be on Topic (1) or Agents (2).
+      // Step 3+ without a hook phase is nonsense; snap back to Topic.
+      return currentWizardStep <= 2 ? currentWizardStep : 1;
     case 'outlining':
       return currentWizardStep >= 2 ? currentWizardStep : 1;
     case 'editing':
