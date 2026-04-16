@@ -25,10 +25,12 @@ Student endpoints:
     POST /api/v1/student/maic/generate/tts/            -- TTS playback
 """
 
+import hashlib
 import json
 import logging
 
 import requests as http_requests
+from django.db import transaction
 from django.http import StreamingHttpResponse, HttpResponse
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
@@ -43,8 +45,12 @@ from apps.courses.maic_generation_service import (
     generate_chat_sse,
     generate_tts_audio,
     fallback_quiz_grade,
+    generate_agent_profiles_json,
+    regenerate_one_agent,
+    AgentValidationError,
     AGENT_VOICE_MAP,
 )
+from apps.courses.maic_voices import AZURE_IN_VOICES
 from apps.courses.image_service import fetch_scene_image
 from apps.courses.content_guardrails import validate_topic, validate_pdf_content, validate_chat_message
 from utils.decorators import teacher_or_admin, student_or_admin, tenant_required, check_feature
@@ -320,11 +326,19 @@ def teacher_maic_generate_outlines(request):
     except (json.JSONDecodeError, UnicodeDecodeError):
         body = {}
 
+    agents_input = body.get("agents") or []
+    if not agents_input:
+        return HttpResponse(
+            json.dumps({"error": "No agents provided. Generate agents first."}),
+            status=400,
+            content_type="application/json",
+        )
+
     response = StreamingHttpResponse(
         generate_outline_sse(
             topic=body.get("topic", ""),
             language=body.get("language", "en"),
-            agent_count=body.get("agentCount", 3),
+            agents=agents_input,
             scene_count=body.get("sceneCount", 6),
             pdf_text=body.get("pdfText"),
             config=config,
@@ -580,6 +594,7 @@ def teacher_maic_classroom_detail(request, classroom_id):
             for s in sections
         ],
         "config": classroom.config,
+        "audioManifest": (classroom.content or {}).get("audioManifest"),
         "created_at": classroom.created_at.isoformat(),
         "updated_at": classroom.updated_at.isoformat(),
     })
@@ -612,11 +627,6 @@ def teacher_maic_classroom_update(request, classroom_id):
         updated_fields.append("updated_at")
         classroom.save(update_fields=updated_fields)
 
-        # Dispatch TTS pre-generation when content is updated
-        if "content" in updated_fields:
-            from apps.courses.maic_tasks import pre_generate_classroom_tts
-            pre_generate_classroom_tts.delay(str(classroom.id), classroom.tenant_id)
-
     # Handle M2M assigned_sections separately
     if "assigned_section_ids" in request.data:
         section_ids = request.data["assigned_section_ids"]
@@ -648,6 +658,82 @@ def teacher_maic_classroom_delete(request, classroom_id):
     classroom.save(update_fields=["status", "updated_at"])
 
     return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@teacher_or_admin
+@tenant_required
+@check_feature("feature_maic")
+def teacher_maic_classroom_publish(request, classroom_id):
+    """Trigger pre-gen audio pipeline; transitions DRAFT/READY → GENERATING → READY.
+
+    Uses ``select_for_update`` to reject concurrent publish attempts with HTTP 409.
+    Walks every speech action, stamps a deterministic ``audioId`` + resolved
+    ``voiceId`` from the agent roster, writes an ``audioManifest`` onto
+    ``classroom.content`` and enqueues the Celery pre-gen task (idempotent:
+    if it runs again on a re-publish, actions that already carry ``audioUrl``
+    are skipped).
+    """
+    with transaction.atomic():
+        try:
+            classroom = MAICClassroom.objects.select_for_update().get(
+                pk=classroom_id, tenant=request.tenant, creator=request.user,
+            )
+        except MAICClassroom.DoesNotExist:
+            return Response(
+                {"error": "Classroom not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if classroom.status == "GENERATING":
+            return Response(
+                {"error": "Publish already in progress."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        content = classroom.content or {}
+        scenes = content.get("scenes", [])
+        agents_by_id = {a["id"]: a for a in content.get("agents", [])}
+
+        # Walk speech actions, stamp audioId + voiceId
+        total = 0
+        for scene_idx, scene in enumerate(scenes):
+            actions = scene.get("actions", [])
+            for action_idx, action in enumerate(actions):
+                if action.get("type") != "speech":
+                    continue
+                agent_id = action.get("agentId")
+                agent = agents_by_id.get(agent_id, {})
+                voice_id = agent.get("voiceId") or "en-IN-NeerjaNeural"
+                action["voiceId"] = voice_id
+                payload = (
+                    f"{scene.get('id', scene_idx)}|{action_idx}|"
+                    f"{action.get('text', '')}|{voice_id}"
+                )
+                action["audioId"] = hashlib.sha256(payload.encode()).hexdigest()[:12]
+                total += 1
+
+        content["audioManifest"] = {
+            "status": "generating",
+            "progress": 0,
+            "totalActions": total,
+            "completedActions": 0,
+            "failedAudioIds": [],
+            "generatedAt": None,
+        }
+        classroom.content = content
+        classroom.status = "GENERATING"
+        classroom.save(update_fields=["content", "status", "updated_at"])
+
+    # Enqueue after the transaction commits so the worker sees the new state
+    from apps.courses.maic_tasks import pre_generate_classroom_tts
+    pre_generate_classroom_tts.delay(str(classroom.id))
+
+    return Response(
+        {"audioManifest": content["audioManifest"]},
+        status=status.HTTP_202_ACCEPTED,
+    )
 
 
 # Quiz grading
@@ -774,18 +860,18 @@ def teacher_maic_generate_scene_actions(request):
     )
 
 
-# Agent profiles generation
+# Agent profiles generation — uses the direct LLM validator path.
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 @teacher_or_admin
 @tenant_required
 @check_feature("feature_maic")
 def teacher_maic_generate_agent_profiles(request):
-    """JSON proxy to OpenMAIC /api/generate/agent-profiles."""
+    """Generate an agent roster using the validated LLM path."""
     config, err = _get_ai_config(request.tenant)
     if err:
         return err
-    return _proxy_json(request, "/api/generate/agent-profiles", config)
+    return _generate_agent_profiles_impl(request, config)
 
 
 # ======================================================================
@@ -809,6 +895,10 @@ def student_maic_classroom_list(request):
 
     qs = MAICClassroom.objects.filter(
         tenant=request.tenant, status="READY",
+    ).filter(
+        # Gate on audioManifest — classrooms mid-generation are hidden from students.
+        Q(content__audioManifest__status="ready") |
+        Q(content__audioManifest__status="partial")
     ).order_by("-updated_at")
 
     student_section = getattr(request.user, "section_fk", None)
@@ -857,6 +947,11 @@ def student_maic_classroom_detail(request, classroom_id):
             pk=classroom_id, tenant=request.tenant, status="READY",
         )
     except MAICClassroom.DoesNotExist:
+        return Response({"error": "Classroom not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    # Hide classrooms still mid-generation — audio manifest must be usable.
+    manifest_status = (classroom.content or {}).get("audioManifest", {}).get("status")
+    if manifest_status not in ("ready", "partial"):
         return Response({"error": "Classroom not found."}, status=status.HTTP_404_NOT_FOUND)
 
     # Check visibility: assigned sections grant access, otherwise must be public with no restrictions
@@ -1124,11 +1219,6 @@ def student_maic_classroom_update(request, classroom_id):
         updated_fields.append("updated_at")
         classroom.save(update_fields=updated_fields)
 
-        # Dispatch TTS pre-generation when content is updated
-        if "content" in updated_fields:
-            from apps.courses.maic_tasks import pre_generate_classroom_tts
-            pre_generate_classroom_tts.delay(str(classroom.id), classroom.tenant_id)
-
     return Response({"id": str(classroom.id), "status": classroom.status})
 
 
@@ -1213,6 +1303,14 @@ def student_maic_generate_outlines(request):
     if result.status_code != 502:
         return result
 
+    agents_input = body.get("agents") or []
+    if not agents_input:
+        return HttpResponse(
+            json.dumps({"error": "No agents provided. Generate agents first."}),
+            status=400,
+            content_type="application/json",
+        )
+
     # Direct fallback
     logger.info("Sidecar unavailable, using direct outline generation (student)")
     response = StreamingHttpResponse(
@@ -1220,7 +1318,7 @@ def student_maic_generate_outlines(request):
             topic=topic,
             pdf_text=pdf_text,
             language=body.get("language", "en"),
-            agent_count=min(int(body.get("agentCount", 3)), 4),  # Cap at 4 for students
+            agents=agents_input,
             scene_count=min(int(body.get("sceneCount", 5)), 8),  # Cap at 8 for students
             config=config,
         ),
@@ -1290,6 +1388,125 @@ def student_maic_generate_scene_actions(request):
 
     data = generate_scene_actions(scene, agents, language, config)
     return Response(data)
+
+
+# ======================================================================
+# Public MAIC endpoints (authenticated, role-agnostic)
+# ======================================================================
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def maic_list_voices(request):
+    """Return the Azure en-IN voice roster so the wizard can show labels /
+    swatches / previews without round-tripping through an LLM. Available to
+    teachers *and* students (both roles use the agent picker)."""
+    return Response({"voices": AZURE_IN_VOICES})
+
+
+# ======================================================================
+# Agent profile + regenerate-one + TTS preview (shared impls)
+# ======================================================================
+
+def _generate_agent_profiles_impl(request, config):
+    """Shared logic for agent-profile generation. NO decorators — called by
+    both the teacher and student view functions so decorators never fire twice."""
+    body = request.data
+    try:
+        result = generate_agent_profiles_json(
+            topic=body.get("topic", ""),
+            language=body.get("language", "en"),
+            role_slots=body.get("roleSlots", []),
+            config=config,
+        )
+        return Response(result, status=status.HTTP_200_OK)
+    except AgentValidationError as e:
+        return Response(
+            {"error": str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+def _regenerate_one_agent_impl(request, config):
+    """Shared logic for regenerating a single agent distinct from the rest."""
+    body = request.data
+    try:
+        result = regenerate_one_agent(
+            topic=body.get("topic", ""),
+            language=body.get("language", "en"),
+            existing_agents=body.get("existingAgents", []),
+            target_agent_id=body.get("targetAgentId", ""),
+            locked_fields=body.get("lockedFields", []),
+            config=config,
+        )
+        return Response(result, status=status.HTTP_200_OK)
+    except AgentValidationError as e:
+        return Response(
+            {"error": str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@teacher_or_admin
+@tenant_required
+@check_feature("feature_maic")
+def teacher_maic_regenerate_one_agent(request):
+    """Regenerate one agent (teacher variant)."""
+    config, err = _get_ai_config(request.tenant)
+    if err:
+        return err
+    return _regenerate_one_agent_impl(request, config)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@student_or_admin
+@tenant_required
+@check_feature("feature_maic")
+def student_maic_generate_agent_profiles(request):
+    """Generate agent profiles (student variant — same logic as teacher)."""
+    config, err = _get_ai_config(request.tenant)
+    if err:
+        return err
+    return _generate_agent_profiles_impl(request, config)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@student_or_admin
+@tenant_required
+@check_feature("feature_maic")
+def student_maic_regenerate_one_agent(request):
+    """Regenerate one agent (student variant)."""
+    config, err = _get_ai_config(request.tenant)
+    if err:
+        return err
+    return _regenerate_one_agent_impl(request, config)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@teacher_or_admin
+@tenant_required
+@check_feature("feature_maic")
+def teacher_maic_tts_preview(request):
+    """Synthesize a short TTS preview for the wizard's voice-picker.
+
+    Input JSON: {"voiceId": "en-IN-...", "text": "..."}
+    Returns audio/mpeg bytes, or HTTP 204 when TTS is unavailable so the UI
+    can fall back cleanly.
+    """
+    config, err = _get_ai_config(request.tenant)
+    if err:
+        return err
+    body = request.data
+    voice_id = body.get("voiceId")
+    text = (body.get("text") or "")[:200]  # cap length — this is a preview
+    audio_bytes = generate_tts_audio(text, config, voice_id=voice_id)
+    if not audio_bytes:
+        return HttpResponse(status=204)
+    return HttpResponse(audio_bytes, content_type="audio/mpeg")
 
 
 # ======================================================================

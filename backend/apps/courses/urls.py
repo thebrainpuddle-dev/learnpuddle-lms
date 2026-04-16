@@ -7,10 +7,14 @@ from . import learning_path_views
 from . import assignment_views
 from . import ai_views
 from . import material_views
+from . import maic_views
 
 app_name = 'courses'
 
 urlpatterns = [
+    # MAIC public endpoints (logged-in users, any role — used by wizard voice picker)
+    path('maic/voices/', maic_views.maic_list_voices, name='maic_list_voices'),
+
     # AI Course Generation (admin only)
     path('ai/generate-outline/', ai_views.ai_generate_outline, name='ai_generate_outline'),
     path('ai/generate-content/', ai_views.ai_generate_content, name='ai_generate_content'),

@@ -26,6 +26,11 @@ teacher_urlpatterns = [
     path("classrooms/<uuid:classroom_id>/", maic_views.teacher_maic_classroom_detail, name="teacher_maic_classroom_detail"),
     path("classrooms/<uuid:classroom_id>/update/", maic_views.teacher_maic_classroom_update, name="teacher_maic_classroom_update"),
     path("classrooms/<uuid:classroom_id>/delete/", maic_views.teacher_maic_classroom_delete, name="teacher_maic_classroom_delete"),
+    path("classrooms/<uuid:classroom_id>/publish/", maic_views.teacher_maic_classroom_publish, name="teacher_maic_classroom_publish"),
+
+    # Agent roster + per-agent regeneration + TTS preview
+    path("agents/regenerate-one/", maic_views.teacher_maic_regenerate_one_agent, name="teacher_maic_regenerate_one_agent"),
+    path("tts/preview/", maic_views.teacher_maic_tts_preview, name="teacher_maic_tts_preview"),
 ]
 
 # Student MAIC URL patterns
@@ -45,6 +50,10 @@ student_urlpatterns = [
     path("generate/outlines/", maic_views.student_maic_generate_outlines, name="student_maic_generate_outlines"),
     path("generate/scene-content/", maic_views.student_maic_generate_scene_content, name="student_maic_generate_scene_content"),
     path("generate/scene-actions/", maic_views.student_maic_generate_scene_actions, name="student_maic_generate_scene_actions"),
+
+    # Agent roster (student) — mirrors teacher variants with @student_or_admin
+    path("generate/agent-profiles/", maic_views.student_maic_generate_agent_profiles, name="student_maic_generate_agent_profiles"),
+    path("agents/regenerate-one/", maic_views.student_maic_regenerate_one_agent, name="student_maic_regenerate_one_agent"),
 
     # Chat, TTS, quiz (existing)
     path("chat/", maic_views.student_maic_chat, name="student_maic_chat"),
