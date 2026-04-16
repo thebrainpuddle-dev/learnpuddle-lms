@@ -36,6 +36,9 @@ export const NotesPanel: React.FC = () => {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const notedSlidesRef = useRef<Set<number>>(new Set());
+  // Entry DOM refs by slide index so we can scroll the active note into view
+  // whenever the learner (or engine) moves to a new slide — OpenMAIC parity.
+  const entryRefs = useRef<Map<number, HTMLDivElement>>(new Map());
 
   // ─── Auto-note on slide change ──────────────────────────────────────
 
@@ -128,11 +131,23 @@ export const NotesPanel: React.FC = () => {
 
   // ─── Auto-scroll ────────────────────────────────────────────────────
 
+  // When new entries arrive and the user hasn't scrolled away, keep the list
+  // pinned to the bottom (catches newly-generated notes during autoplay).
   useEffect(() => {
     if (!userScrolled) {
       bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
   }, [allEntries.length, userScrolled]);
+
+  // Scroll the active slide's entry into view on slide change. Overrides
+  // user-scrolled sticky so clicking a thumbnail always reveals its note.
+  useEffect(() => {
+    const el = entryRefs.current.get(currentSlideIndex);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      setUserScrolled(false);
+    }
+  }, [currentSlideIndex]);
 
   const handleScroll = useCallback(() => {
     const el = scrollContainerRef.current;
@@ -321,38 +336,56 @@ export const NotesPanel: React.FC = () => {
 
               {/* Scene notes */}
               <div className="space-y-1.5 ml-3 border-l-2 border-gray-100 pl-3">
-                {entries.map((entry, idx) => (
-                  <div
-                    key={`${entry.timestamp}-${idx}`}
-                    className={cn(
-                      'text-xs leading-relaxed rounded-lg px-2.5 py-2',
-                      entry.type === 'user'
-                        ? 'bg-amber-50 border border-amber-200 text-amber-900'
-                        : entry.type === 'quiz'
-                          ? 'bg-violet-50 border border-violet-200 text-violet-900'
-                          : 'bg-gray-50 text-gray-700',
-                    )}
-                  >
-                    {/* Meta line */}
-                    <div className="flex items-center gap-1.5 mb-0.5">
-                      <span className="text-[10px] text-gray-400 tabular-nums">
-                        Slide {entry.slideIdx + 1}
-                      </span>
-                      {entry.type === 'user' && (
-                        <span className="text-[10px] font-medium text-amber-500">My Note</span>
+                {entries.map((entry, idx) => {
+                  const isCurrent = entry.slideIdx === currentSlideIndex;
+                  return (
+                    <div
+                      key={`${entry.timestamp}-${idx}`}
+                      ref={(el) => {
+                        if (el && isCurrent) entryRefs.current.set(entry.slideIdx, el);
+                      }}
+                      className={cn(
+                        'text-xs leading-relaxed rounded-lg px-2.5 py-2 transition-all',
+                        isCurrent
+                          ? 'bg-primary-50 border-2 border-primary-400 text-gray-900 shadow-sm'
+                          : entry.type === 'user'
+                            ? 'bg-amber-50 border border-amber-200 text-amber-900'
+                            : entry.type === 'quiz'
+                              ? 'bg-violet-50 border border-violet-200 text-violet-900'
+                              : 'bg-gray-50 border border-transparent text-gray-700',
                       )}
-                      {entry.type === 'quiz' && (
-                        <span className="text-[10px] font-medium text-violet-500">Quiz</span>
-                      )}
-                      {entry.agentName && entry.type === 'auto' && (
-                        <span className="text-[10px] font-medium text-gray-500">
-                          {entry.agentName}
+                    >
+                      {/* Meta line */}
+                      <div className="flex items-center gap-1.5 mb-0.5">
+                        <span
+                          className={cn(
+                            'text-[10px] tabular-nums',
+                            isCurrent ? 'font-semibold text-primary-700' : 'text-gray-400',
+                          )}
+                        >
+                          Slide {entry.slideIdx + 1}
                         </span>
-                      )}
+                        {isCurrent && (
+                          <span className="text-[10px] font-semibold uppercase tracking-wide text-primary-600 bg-primary-100 px-1.5 py-0.5 rounded">
+                            Current
+                          </span>
+                        )}
+                        {entry.type === 'user' && !isCurrent && (
+                          <span className="text-[10px] font-medium text-amber-500">My Note</span>
+                        )}
+                        {entry.type === 'quiz' && (
+                          <span className="text-[10px] font-medium text-violet-500">Quiz</span>
+                        )}
+                        {entry.agentName && entry.type === 'auto' && (
+                          <span className="text-[10px] font-medium text-gray-500">
+                            {entry.agentName}
+                          </span>
+                        )}
+                      </div>
+                      <p className="line-clamp-none">{entry.text}</p>
                     </div>
-                    <p className="line-clamp-none">{entry.text}</p>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           );

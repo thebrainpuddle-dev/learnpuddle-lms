@@ -307,24 +307,8 @@ export const StageToolbar = React.memo<StageToolbarProps>(function StageToolbar(
       )}
 
       {/* Center-Right: Playback controls + action buttons */}
+      {/* Play/Pause lives in SlideNavigator (bottom) — single canonical control. */}
       <div className="flex items-center gap-1">
-        {/* Play / Pause */}
-        <button
-          type="button"
-          onClick={handlePlayPause}
-          className={cn(
-            'p-1.5 rounded-md transition-colors',
-            'focus:outline-none focus:ring-2 focus:ring-primary-500',
-            isPlaying
-              ? 'bg-primary-100 text-primary-700 dark:bg-primary-900 dark:text-primary-300'
-              : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:text-gray-200 dark:hover:bg-gray-800',
-          )}
-          title={isPlaying ? 'Pause (Space)' : 'Play (Space)'}
-          aria-label={isPlaying ? 'Pause playback' : 'Play playback'}
-        >
-          {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-        </button>
-
         {/* Stop */}
         <button
           type="button"

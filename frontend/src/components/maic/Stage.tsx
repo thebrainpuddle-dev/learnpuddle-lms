@@ -2,7 +2,7 @@
 //
 // Main container component for the MAIC AI Classroom player. Composes
 // SceneRenderer, Whiteboard, ChatPanel, SlideNavigator, StageToolbar,
-// AgentAvatar, AudioPlayer, SpotlightOverlay, SpeechSubtitles,
+// AgentAvatar, AudioPlayer, SpotlightOverlay,
 // RoundtablePanel, ExportMenu, SceneSidebar, and keyboard shortcuts
 // into a unified interactive stage.
 
@@ -25,7 +25,6 @@ import { StageToolbar } from './StageToolbar';
 import { PresentationSpeechOverlay } from './PresentationSpeechOverlay';
 import { AudioPlayer } from './AudioPlayer';
 import { SpotlightOverlay } from './SpotlightOverlay';
-import { SpeechSubtitles } from './SpeechSubtitles';
 import { RoundtablePanel } from './RoundtablePanel';
 import { ExportMenu } from './ExportMenu';
 import { SceneSidebar } from './SceneSidebar';
@@ -412,13 +411,6 @@ export const Stage: React.FC<StageProps> = ({ role }) => {
           )}
         </div>
 
-          {/* Speech subtitles (below the video viewport) */}
-          <SpeechSubtitles
-            text={speechText}
-            agentName={speakingAgent?.name}
-            agentColor={speakingAgent?.color}
-          />
-
           {/* Proactive discussion suggestion cards */}
           <ProactiveCardManager
             enabled={isClassPlaying && !discussionMode}
@@ -442,8 +434,8 @@ export const Stage: React.FC<StageProps> = ({ role }) => {
         )}
       </div>
 
-      {/* Bottom navigation bar */}
-      <SlideNavigator onSlideClick={seekToSlide} />
+      {/* Bottom navigation bar — owns the canonical Play/Pause control */}
+      <SlideNavigator onSlideClick={seekToSlide} onPlayPause={handlePlayPause} />
 
       {/* Headless audio player */}
       <AudioPlayer audioUrl={audioUrl} />

@@ -162,6 +162,7 @@ export function useStudentMAICGeneration(): UseStudentMAICGenerationReturn {
           language: config.language,
           agentCount: Math.min(config.agentCount, 4),   // Student cap
           sceneCount: Math.min(config.sceneCount, 8),    // Student cap
+          enableWebSearch: config.enableWebSearch ?? false,
           // When the wizard already picked a roster (WS-C), send it along so
           // the backend can reuse personality/voice mapping for outline prompts.
           ...(preSelectedAgents && preSelectedAgents.length > 0

@@ -113,6 +113,9 @@ export function useMAICGeneration(): UseMAICGenerationReturn {
           language: config.language,
           agentCount: config.agentCount,
           sceneCount: config.sceneCount,
+          // Toggle from the wizard (default ON) — tells the sidecar / backend
+          // to enrich the outline with web-search context before calling the LLM.
+          enableWebSearch: config.enableWebSearch ?? false,
           // When the wizard already picked a roster (WS-C), send it along so
           // the backend can reuse personality/voice mapping for outline prompts.
           ...(preSelectedAgents && preSelectedAgents.length > 0

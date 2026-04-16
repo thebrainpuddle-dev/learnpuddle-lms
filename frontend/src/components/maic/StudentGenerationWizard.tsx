@@ -134,6 +134,8 @@ export const StudentGenerationWizard: React.FC<StudentGenerationWizardProps> = (
         sceneCount: Math.min(sceneCount, 8),
         enableTTS: true,
         enableImages: true,
+        // Student flow: web-search enrichment ON by default (OpenMAIC parity).
+        enableWebSearch: true,
       };
 
       setWizardStep(3);

@@ -226,6 +226,9 @@ export interface MAICGenerationConfig {
   sceneCount: number;
   enableTTS: boolean;
   enableImages: boolean;
+  /** When true, the backend enriches the outline generation with web-search
+   *  context (OpenMAIC-style grounding). Default ON in the wizard. */
+  enableWebSearch?: boolean;
   courseId?: string;
 }
 

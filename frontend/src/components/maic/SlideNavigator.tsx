@@ -88,10 +88,16 @@ function buildSceneGroups(
  */
 export interface SlideNavigatorProps {
   onSlideClick?: (relativeSlideIndex: number) => void;
+  /** Parent-provided play/pause handler. When set, this is the single
+   *  canonical play/pause in the UI (StageToolbar no longer shows one).
+   *  Must drive the real playback engine — the legacy fallback just
+   *  toggled a Zustand flag without starting audio. */
+  onPlayPause?: () => void;
 }
 
 export const SlideNavigator = React.memo(function SlideNavigator({
   onSlideClick,
+  onPlayPause,
 }: SlideNavigatorProps = {}) {
   const slides = useMAICStageStore((s) => s.slides);
   const scenes = useMAICStageStore((s) => s.scenes);
@@ -232,18 +238,25 @@ export const SlideNavigator = React.memo(function SlideNavigator({
         <ChevronLeft className="h-4 w-4" />
       </button>
 
-      {/* Play/Pause */}
+      {/* Play/Pause — single canonical control (StageToolbar no longer has one).
+          Prefers the engine-aware onPlayPause callback from Stage; falls back
+          to toggling the Zustand flag only when no parent handler is wired. */}
       <button
         type="button"
-        onClick={() => setPlaying(!isPlaying)}
+        onClick={onPlayPause ?? (() => setPlaying(!isPlaying))}
+        data-testid="play-button"
         className={cn(
-          'shrink-0 p-1.5 rounded-lg transition-colors',
-          'text-gray-600 hover:bg-gray-100 hover:text-gray-800',
-          'focus:outline-none focus:ring-2 focus:ring-primary-500',
+          'shrink-0 flex items-center justify-center rounded-full transition-all',
+          'h-9 w-9 shadow-sm',
+          isPlaying
+            ? 'bg-primary-600 text-white hover:bg-primary-700'
+            : 'bg-gray-900 text-white hover:bg-gray-700',
+          'focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
         )}
         aria-label={isPlaying ? 'Pause playback' : 'Start playback'}
+        title={isPlaying ? 'Pause (Space)' : 'Play (Space)'}
       >
-        {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+        {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4 ml-0.5" />}
       </button>
 
       {/* Slide indicator */}
@@ -351,10 +364,10 @@ export const SlideNavigator = React.memo(function SlideNavigator({
                       aria-label={`Slide ${slideIdx + 1}: ${slide?.title || ''}`}
                       onClick={() => handleSlideClick(slideIdx)}
                       className={cn(
-                        'shrink-0 w-14 h-10 rounded border-2 transition-all overflow-hidden',
+                        'shrink-0 w-14 h-10 rounded-md border-2 transition-all overflow-hidden relative',
                         'focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-1',
                         isActive
-                          ? 'border-primary-500 shadow-sm scale-110'
+                          ? 'border-primary-500 ring-2 ring-primary-500/40 shadow-md scale-110 z-10'
                           : 'border-gray-200 hover:border-gray-300 opacity-60 hover:opacity-100',
                       )}
                       style={{ background: bg }}
@@ -362,13 +375,16 @@ export const SlideNavigator = React.memo(function SlideNavigator({
                       <div className="h-full w-full flex items-center justify-center">
                         <span
                           className={cn(
-                            'text-[9px] font-medium',
-                            isActive ? 'text-primary-600' : 'text-gray-400',
+                            'font-semibold',
+                            isActive ? 'text-primary-600 text-[11px]' : 'text-gray-400 text-[9px]',
                           )}
                         >
                           {slideIdx + 1}
                         </span>
                       </div>
+                      {isActive && (
+                        <span className="absolute inset-x-0 bottom-0 h-0.5 bg-primary-500" aria-hidden />
+                      )}
                     </button>
                   );
                 })}

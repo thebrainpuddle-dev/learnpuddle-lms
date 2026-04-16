@@ -96,7 +96,13 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
   // authoritative roster for outline + scene-content + scene-actions.
   const [agents, setAgents] = useState<MAICAgent[]>([]);
 
-  // Web search state
+  // Web search state.
+  // `webSearchEnabled` is the ON/OFF toggle (default ON, OpenMAIC parity) —
+  // instructs the backend to auto-enrich the outline with search context.
+  // `showWebSearch` opens the manual-search panel for power users who want
+  // to curate context themselves; the manual context then rides along in
+  // `webSearchContext`.
+  const [webSearchEnabled, setWebSearchEnabled] = useState(true);
   const [showWebSearch, setShowWebSearch] = useState(false);
   const [webSearchContext, setWebSearchContext] = useState<string | undefined>();
 
@@ -147,6 +153,7 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
       const config: MAICGenerationConfig = {
         topic: topic.trim(),
         pdfText: combinedContext,
+        enableWebSearch: webSearchEnabled,
         language,
         agentCount: approvedAgents.length,
         sceneCount,
@@ -322,31 +329,43 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
             <PDFUploader onExtract={setPdfText} />
           </div>
 
-          {/* Web search toggle + panel */}
+          {/* Web search enrichment */}
           <div>
             <div className="flex items-center justify-between mb-1">
-              <label className="block text-sm font-medium text-gray-700">
-                Enrich with web search <span className="text-xs text-gray-400">(optional)</span>
+              <label className="block text-sm font-medium text-gray-700 flex items-center gap-1.5">
+                <Globe className={cn('h-4 w-4', webSearchEnabled ? 'text-indigo-600' : 'text-gray-400')} />
+                Enrich with web search
+                <span className="text-xs text-gray-400 font-normal">
+                  ({webSearchEnabled ? 'ON — grounds the outline with live context' : 'OFF'})
+                </span>
               </label>
               <button
                 type="button"
-                onClick={() => setShowWebSearch(!showWebSearch)}
+                onClick={() => setWebSearchEnabled((v) => !v)}
                 className={cn(
                   'relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-1',
-                  showWebSearch ? 'bg-indigo-600' : 'bg-gray-200',
+                  webSearchEnabled ? 'bg-indigo-600' : 'bg-gray-200',
                 )}
                 role="switch"
-                aria-checked={showWebSearch}
-                aria-label="Toggle web search"
+                aria-checked={webSearchEnabled}
+                aria-label="Toggle web search enrichment"
               >
                 <span
                   className={cn(
                     'inline-block h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-transform',
-                    showWebSearch ? 'translate-x-4.5' : 'translate-x-0.5',
+                    webSearchEnabled ? 'translate-x-4.5' : 'translate-x-0.5',
                   )}
                 />
               </button>
             </div>
+
+            <button
+              type="button"
+              onClick={() => setShowWebSearch((v) => !v)}
+              className="text-[11px] text-indigo-600 hover:text-indigo-700 underline-offset-2 hover:underline"
+            >
+              {showWebSearch ? 'Hide manual search panel' : 'Curate search context manually (advanced)'}
+            </button>
 
             {showWebSearch && (
               <div className="mt-2">

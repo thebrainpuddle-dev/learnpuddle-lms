@@ -18,10 +18,19 @@ export const WhiteboardElementRenderer = React.memo<Props>(function WhiteboardEl
   const [p0, p1] = annotation.points;
   if (!p0 || !p1) return null;
 
-  const x = Math.min(p0.x, p1.x);
-  const y = Math.min(p0.y, p1.y);
-  const w = Math.abs(p1.x - p0.x);
-  const h = Math.abs(p1.y - p0.y);
+  // Guard against NaN/undefined coords — LLM-generated whiteboard actions
+  // sometimes omit dimensions. React will throw on <rect x="NaN"> etc., so
+  // coerce to finite numbers with 0 / reasonable defaults.
+  const safe = (n: number | undefined, fallback = 0): number =>
+    Number.isFinite(n) ? (n as number) : fallback;
+  const x0 = safe(p0.x);
+  const y0 = safe(p0.y);
+  const x1 = safe(p1.x);
+  const y1 = safe(p1.y);
+  const x = Math.min(x0, x1);
+  const y = Math.min(y0, y1);
+  const w = Math.max(1, Math.abs(x1 - x0));
+  const h = Math.max(1, Math.abs(y1 - y0));
 
   // ── Shape (rectangle, circle, triangle) ──
   if (meta.shape) {
@@ -30,7 +39,7 @@ export const WhiteboardElementRenderer = React.memo<Props>(function WhiteboardEl
 
   // ── Line with markers ──
   if (meta.startMarker !== undefined || meta.endMarker !== undefined) {
-    return renderLine(p0.x, p0.y, p1.x, p1.y, annotation.color, annotation.strokeWidth, meta.startMarker, meta.endMarker, annotation.id);
+    return renderLine(x0, y0, x1, y1, annotation.color, annotation.strokeWidth, meta.startMarker, meta.endMarker, annotation.id);
   }
 
   // ── LaTeX ──
