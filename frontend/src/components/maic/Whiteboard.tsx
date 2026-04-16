@@ -7,6 +7,7 @@
 import React, { useCallback, useRef, useState } from 'react';
 import { useMAICCanvasStore } from '../../stores/maicCanvasStore';
 import type { WhiteboardAnnotation, WhiteboardPoint } from '../../types/maic';
+import { WhiteboardElementRenderer } from './WhiteboardElementRenderer';
 
 interface WhiteboardProps {
   sceneId: string;
@@ -177,20 +178,24 @@ export const Whiteboard = React.memo<WhiteboardProps>(function Whiteboard({
       role="img"
     >
       {/* Existing annotations */}
-      {sceneAnnotations.map((ann) => (
-        <path
-          key={ann.id}
-          d={pointsToPathD(ann.points)}
-          fill="none"
-          stroke={ann.color}
-          strokeWidth={ann.tool === 'highlighter' ? ann.strokeWidth * 4 : ann.strokeWidth}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          style={getAnnotationStyle(ann)}
-          data-annotation-id={ann.id}
-          className={activeTool === 'eraser' && !readonly ? 'cursor-pointer hover:opacity-50' : ''}
-        />
-      ))}
+      {sceneAnnotations.map((ann) =>
+        ann.meta ? (
+          <WhiteboardElementRenderer key={ann.id} annotation={ann} />
+        ) : (
+          <path
+            key={ann.id}
+            d={pointsToPathD(ann.points)}
+            fill="none"
+            stroke={ann.color}
+            strokeWidth={ann.tool === 'highlighter' ? ann.strokeWidth * 4 : ann.strokeWidth}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            style={getAnnotationStyle(ann)}
+            data-annotation-id={ann.id}
+            className={activeTool === 'eraser' && !readonly ? 'cursor-pointer hover:opacity-50' : ''}
+          />
+        )
+      )}
 
       {/* Current stroke being drawn */}
       {isDrawing && currentPoints.length > 0 && (

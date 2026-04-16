@@ -29,6 +29,7 @@ export interface SpeechAction {
   agentId: string;
   text: string;
   ssml?: string;
+  audioUrl?: string;   // Pre-generated TTS URL from backend
 }
 
 // ─── Video ──────────────────────────────────────────────────────────────────

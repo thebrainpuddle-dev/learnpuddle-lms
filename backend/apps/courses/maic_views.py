@@ -612,6 +612,11 @@ def teacher_maic_classroom_update(request, classroom_id):
         updated_fields.append("updated_at")
         classroom.save(update_fields=updated_fields)
 
+        # Dispatch TTS pre-generation when content is updated
+        if "content" in updated_fields:
+            from apps.courses.maic_tasks import pre_generate_classroom_tts
+            pre_generate_classroom_tts.delay(str(classroom.id), classroom.tenant_id)
+
     # Handle M2M assigned_sections separately
     if "assigned_section_ids" in request.data:
         section_ids = request.data["assigned_section_ids"]
@@ -1118,6 +1123,11 @@ def student_maic_classroom_update(request, classroom_id):
     if updated_fields:
         updated_fields.append("updated_at")
         classroom.save(update_fields=updated_fields)
+
+        # Dispatch TTS pre-generation when content is updated
+        if "content" in updated_fields:
+            from apps.courses.maic_tasks import pre_generate_classroom_tts
+            pre_generate_classroom_tts.delay(str(classroom.id), classroom.tenant_id)
 
     return Response({"id": str(classroom.id), "status": classroom.status})
 

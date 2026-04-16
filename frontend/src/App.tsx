@@ -26,6 +26,7 @@ import { useTenantStore } from './stores/tenantStore';
 import { TourProvider } from './components/tour';
 import { isPlatformRequest } from './utils/hostRouting';
 import './assets/styles/index.css';
+import 'katex/dist/katex.min.css';
 
 // ─── Static imports (keep for fast initial load) ────────────────────────────
 import { LoginPage } from './pages/auth/LoginPage';

@@ -35,6 +35,7 @@ from utils.tenant_middleware import set_current_tenant, clear_current_tenant
 
 # Register chatbot tasks with Celery (autodiscover only finds tasks.py)
 from apps.courses.chatbot_tasks import ingest_chatbot_knowledge  # noqa: F401
+from apps.courses.maic_tasks import pre_generate_classroom_tts  # noqa: F401
 
 
 MAX_VIDEO_DURATION_SECONDS = 60 * 60  # 1 hour

@@ -96,6 +96,13 @@ export class MAICActionEngine {
   private currentFetchController: AbortController | null = null;
   private effectTimers: ReturnType<typeof setTimeout>[] = [];
 
+  // Browser-native TTS state (Web Speech API fallback)
+  private browserTTSActive = false;
+  private browserTTSChunks: string[] = [];
+  private browserTTSChunkIndex = 0;
+  private browserTTSPausedChunks: string[] = [];
+  private browserTTSResolve: (() => void) | null = null;
+
   private onSpeechStart?: (agentId: string, text: string) => void;
   private onSpeechEnd?: () => void;
   private onDiscussionTrigger?: (sessionType: string, topic: string, agentIds: string[]) => void;
@@ -148,6 +155,9 @@ export class MAICActionEngine {
     }
     this.effectTimers = [];
 
+    // Cancel browser-native TTS
+    this.cancelBrowserTTS();
+
     // Reset transient state
     this.stageStore.getState().setSpeakingAgent(null);
     this.stageStore.getState().setSpeechText(null);
@@ -159,6 +169,12 @@ export class MAICActionEngine {
    * Used by PlaybackEngine.pause() — audio stays loaded so it can resume.
    */
   pauseCurrentAudio(): void {
+    // Browser TTS: cancel+save pattern (Firefox compat — speechSynthesis.pause() is broken)
+    if (this.browserTTSActive) {
+      this.browserTTSPausedChunks = this.browserTTSChunks.slice(this.browserTTSChunkIndex);
+      window.speechSynthesis?.cancel();
+      return;
+    }
     if (this.audioElement && !this.audioElement.paused) {
       this.audioElement.pause();
     }
@@ -170,6 +186,15 @@ export class MAICActionEngine {
    * resolves the playAudio promise, which fires the .then() callback chain.
    */
   resumeCurrentAudio(): void {
+    // Browser TTS: re-speak remaining chunks from where we paused
+    if (this.browserTTSPausedChunks.length > 0) {
+      this.browserTTSActive = true;
+      this.browserTTSChunks = this.browserTTSPausedChunks;
+      this.browserTTSChunkIndex = 0;
+      this.browserTTSPausedChunks = [];
+      this.playBrowserTTSChunk();
+      return;
+    }
     if (this.audioElement && this.audioElement.paused) {
       this.audioElement.play().catch((err) => {
         console.warn('Failed to resume audio:', err);
@@ -183,7 +208,7 @@ export class MAICActionEngine {
    * call processNext() directly.
    */
   hasActiveAudio(): boolean {
-    return this.audioElement !== null;
+    return this.audioElement !== null || this.browserTTSActive || this.browserTTSPausedChunks.length > 0;
   }
 
   dispose(): void {
@@ -285,7 +310,13 @@ export class MAICActionEngine {
     this.stageStore.getState().setSpeechText(text);
 
     try {
-      // Build request to TTS proxy
+      // ── 1. Pre-generated audio URL (instant playback, no network lag) ──
+      if (action.audioUrl) {
+        await this.playAudio(action.audioUrl, volume, playbackSpeed);
+        return; // finally block handles cleanup
+      }
+
+      // ── 2. Real-time TTS from backend ──
       const baseUrl = import.meta.env.VITE_API_BASE_URL || '';
       const fullUrl = `${baseUrl}${this.ttsEndpoint}`;
 
@@ -328,21 +359,21 @@ export class MAICActionEngine {
           await this.playAudio(blobUrl, volume, playbackSpeed);
           URL.revokeObjectURL(blobUrl);
         } else {
-          // Empty audio response — fall back to timed silence
-          if (!this.disposed) await delay(estimateSpeechDuration(text, playbackSpeed));
+          // Empty audio response — fall back to browser TTS or timed silence
+          if (!this.disposed) await this.speechFallback(text, playbackSpeed);
         }
       } else {
-        // TTS unavailable (204 or error) — fall back to timed silence
-        if (!this.disposed) await delay(estimateSpeechDuration(text, playbackSpeed));
+        // TTS unavailable (204 or error) — fall back
+        if (!this.disposed) await this.speechFallback(text, playbackSpeed);
       }
     } catch (err) {
       // Aborted by navigation — exit silently
       if (err instanceof DOMException && err.name === 'AbortError') {
         return;
       }
-      // Network error — fall back to timing estimate
-      console.warn('TTS error, using timing estimate:', err);
-      if (!this.disposed) await delay(estimateSpeechDuration(text, playbackSpeed));
+      // Network error — fall back
+      console.warn('TTS error, using fallback:', err);
+      if (!this.disposed) await this.speechFallback(text, playbackSpeed);
     } finally {
       this.currentFetchController = null;
       if (!this.disposed) {
@@ -350,6 +381,23 @@ export class MAICActionEngine {
         this.stageStore.getState().setSpeechText(null);
         this.onSpeechEnd?.();
       }
+    }
+  }
+
+  /**
+   * Fallback when server TTS fails: try browser-native TTS (Web Speech API),
+   * then fall back to timed silence based on word count.
+   */
+  private async speechFallback(text: string, playbackSpeed: number): Promise<void> {
+    const settings = this.settingsStore.getState();
+    if (
+      settings.browserTTSEnabled &&
+      typeof window !== 'undefined' &&
+      window.speechSynthesis
+    ) {
+      await this.playBrowserTTS(text, playbackSpeed);
+    } else {
+      await delay(estimateSpeechDuration(text, playbackSpeed));
     }
   }
 
@@ -492,7 +540,7 @@ export class MAICActionEngine {
     );
 
     // Attach extra data via extended properties
-    (annotation as WhiteboardAnnotation & { meta?: Record<string, unknown> }).meta = {
+    annotation.meta = {
       text: action.text,
       html: action.html,
       width: action.width,
@@ -522,7 +570,7 @@ export class MAICActionEngine {
       sceneId,
     );
 
-    (annotation as WhiteboardAnnotation & { meta?: Record<string, unknown> }).meta = {
+    annotation.meta = {
       shape: action.shape,
       fill: action.fill,
       stroke: action.stroke,
@@ -550,7 +598,7 @@ export class MAICActionEngine {
       sceneId,
     );
 
-    (annotation as WhiteboardAnnotation & { meta?: Record<string, unknown> }).meta = {
+    annotation.meta = {
       chartType: action.chartType,
       data: action.data,
       width: action.width,
@@ -577,7 +625,7 @@ export class MAICActionEngine {
       sceneId,
     );
 
-    (annotation as WhiteboardAnnotation & { meta?: Record<string, unknown> }).meta = {
+    annotation.meta = {
       latex: action.latex,
       width: action.width,
       height: action.height,
@@ -605,7 +653,7 @@ export class MAICActionEngine {
       sceneId,
     );
 
-    (annotation as WhiteboardAnnotation & { meta?: Record<string, unknown> }).meta = {
+    annotation.meta = {
       headers: action.headers,
       rows: action.rows,
       width: action.width,
@@ -632,7 +680,7 @@ export class MAICActionEngine {
       sceneId,
     );
 
-    (annotation as WhiteboardAnnotation & { meta?: Record<string, unknown> }).meta = {
+    annotation.meta = {
       startMarker: action.startMarker ?? 'none',
       endMarker: action.endMarker ?? 'none',
     };
@@ -688,5 +736,97 @@ export class MAICActionEngine {
   private executeDiscussion(action: DiscussionAction): void {
     this.stageStore.getState().setDiscussionMode(action.sessionType);
     this.onDiscussionTrigger?.(action.sessionType, action.topic, action.agentIds);
+  }
+
+  // ─── Browser-Native TTS (Web Speech API Fallback) ──────────────────
+
+  /**
+   * Split text into sentence-level chunks for sequential playback.
+   * Chrome has a bug where utterances >~15s are silently cut off and onend
+   * never fires, causing the engine to hang. Chunking avoids this.
+   * Ported from upstream OpenMAIC PlaybackEngine.
+   */
+  private splitIntoChunks(text: string): string[] {
+    const chunks = text
+      .split(/(?<=[.!?。！？\n])\s*/)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    return chunks.length > 0 ? chunks : [text];
+  }
+
+  /**
+   * Play text using the Web Speech API (browser-native TTS).
+   * Returns a promise that resolves when all chunks finish speaking.
+   */
+  private playBrowserTTS(text: string, speed: number): Promise<void> {
+    return new Promise<void>((resolve) => {
+      this.browserTTSChunks = this.splitIntoChunks(text);
+      this.browserTTSChunkIndex = 0;
+      this.browserTTSPausedChunks = [];
+      this.browserTTSActive = true;
+      this.browserTTSResolve = resolve;
+      this.playBrowserTTSChunk();
+    });
+  }
+
+  /** Speak the current chunk; on completion, advance to next or finish. */
+  private playBrowserTTSChunk(): void {
+    if (this.browserTTSChunkIndex >= this.browserTTSChunks.length) {
+      // All chunks done
+      this.browserTTSActive = false;
+      this.browserTTSChunks = [];
+      if (this.browserTTSResolve) {
+        this.browserTTSResolve();
+        this.browserTTSResolve = null;
+      }
+      return;
+    }
+
+    const chunkText = this.browserTTSChunks[this.browserTTSChunkIndex];
+    const utterance = new SpeechSynthesisUtterance(chunkText);
+
+    const settings = this.settingsStore.getState();
+    utterance.rate = settings.playbackSpeed;
+    utterance.volume = settings.audioVolume;
+
+    // Auto-detect language: if >30% CJK characters, use Chinese
+    const cjkCount = (
+      chunkText.match(/[\u4e00-\u9fff\u3400-\u4dbf\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]/g) || []
+    ).length;
+    utterance.lang = chunkText.length > 0 && cjkCount / chunkText.length > 0.3 ? 'zh-CN' : 'en-US';
+
+    utterance.onend = () => {
+      this.browserTTSChunkIndex++;
+      this.playBrowserTTSChunk(); // next chunk (or finish)
+    };
+
+    utterance.onerror = (event) => {
+      // 'canceled' is expected when stop/pause is called — not a real error
+      if (event.error !== 'canceled') {
+        console.warn('Browser TTS chunk error:', event.error);
+        this.browserTTSChunkIndex++;
+        this.playBrowserTTSChunk(); // skip failed chunk
+      }
+      // On 'canceled': do nothing — pause/abort handler already saved state
+    };
+
+    // Chrome bug workaround: cancel() before speak() to clear stale synthesis
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(utterance);
+  }
+
+  /** Cancel any active browser-native TTS and resolve the pending promise. */
+  private cancelBrowserTTS(): void {
+    if (this.browserTTSActive || this.browserTTSPausedChunks.length > 0) {
+      this.browserTTSActive = false;
+      this.browserTTSChunks = [];
+      this.browserTTSChunkIndex = 0;
+      this.browserTTSPausedChunks = [];
+      window.speechSynthesis?.cancel();
+    }
+    if (this.browserTTSResolve) {
+      this.browserTTSResolve();
+      this.browserTTSResolve = null;
+    }
   }
 }

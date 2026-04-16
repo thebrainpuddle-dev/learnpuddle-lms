@@ -128,6 +128,31 @@ export interface WhiteboardPoint {
   pressure?: number;
 }
 
+export interface WhiteboardMeta {
+  // Text
+  text?: string;
+  html?: string;
+  // Shape
+  shape?: 'rectangle' | 'circle' | 'triangle';
+  fill?: string;
+  stroke?: string;
+  // Chart
+  chartType?: 'bar' | 'line' | 'pie' | 'scatter' | 'area' | 'radar';
+  data?: Record<string, unknown>;
+  // LaTeX
+  latex?: string;
+  // Table
+  headers?: string[];
+  rows?: string[][];
+  // Dimensions (shared)
+  width?: number;
+  height?: number;
+  fontSize?: number;
+  // Line markers
+  startMarker?: 'arrow' | 'dot' | 'none';
+  endMarker?: 'arrow' | 'dot' | 'none';
+}
+
 export interface WhiteboardAnnotation {
   id: string;
   tool: WhiteboardToolType;
@@ -137,6 +162,7 @@ export interface WhiteboardAnnotation {
   agentId?: string;
   sceneId: string;
   timestamp: number;
+  meta?: WhiteboardMeta;
 }
 
 // ─── Quiz Types ───────────────────────────────────────────────────────────
