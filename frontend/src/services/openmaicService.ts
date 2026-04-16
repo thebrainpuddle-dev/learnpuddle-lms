@@ -5,8 +5,44 @@
 import api from '../config/api';
 import type { MAICClassroomMeta, MAICOutlineScene, MAICAgent, MAICSlide } from '../types/maic';
 import type { MAICAction } from '../types/maic-actions';
-import type { MAICScene, SceneSlideBounds } from '../types/maic-scenes';
+import type { MAICScene, SceneSlideBounds, AudioManifest } from '../types/maic-scenes';
 import type { AIChatbot, AIChatbotKnowledge, AIChatbotCreatePayload, ChatbotAnalytics, Conversation, TeacherSection } from '../types/chatbot';
+
+// ─── Shared MAIC types ──────────────────────────────────────────────────────
+
+export interface MAICRoleSlot {
+  role: string;
+  count: number;
+}
+
+export interface GenerateAgentProfilesRequest {
+  topic: string;
+  language: string;
+  /** Preferred: role slot map. The server may also accept an `agentCount` body from older callers. */
+  roleSlots?: MAICRoleSlot[];
+  /** Legacy single-count request. Kept for callers that don't yet pass `roleSlots`. */
+  agentCount?: number;
+  existingAgents?: MAICAgent[];
+}
+
+export interface GenerateAgentProfilesResponse {
+  agents: MAICAgent[];
+}
+
+export interface RegenerateAgentRequest {
+  topic: string;
+  existingAgents: MAICAgent[];
+  targetAgentId: string;
+  lockedFields: string[];
+}
+
+export interface MAICVoice {
+  id: string;
+  gender: string;
+  tone: string;
+  age: string;
+  suits: string[];
+}
 
 // ─── MAIC AI Classroom API (Teacher) ─────────────────────────────────────────
 
@@ -60,13 +96,20 @@ export const maicApi = {
   }) =>
     api.post<{ actions: MAICAction[] }>('/v1/teacher/maic/generate/scene-actions/', data),
 
-  generateAgentProfiles: (data: {
-    topic: string;
-    agentCount: number;
-    language: string;
-    existingAgents?: MAICAgent[];
-  }) =>
-    api.post<{ agents: MAICAgent[] }>('/v1/teacher/maic/generate/agent-profiles/', data),
+  generateAgentProfiles: (data: GenerateAgentProfilesRequest) =>
+    api.post<GenerateAgentProfilesResponse>('/v1/teacher/maic/generate/agent-profiles/', data),
+
+  regenerateAgent: (data: RegenerateAgentRequest) =>
+    api.post<{ agent: MAICAgent }>('/v1/teacher/maic/agents/regenerate-one/', data),
+
+  ttsPreview: (data: { voiceId: string; text: string }) =>
+    api.post('/v1/teacher/maic/tts/preview/', data, { responseType: 'blob' }),
+
+  listVoices: () =>
+    api.get<{ voices: MAICVoice[] }>('/v1/maic/voices/'),
+
+  publishClassroom: (id: string) =>
+    api.post<{ audioManifest: AudioManifest }>(`/v1/teacher/maic/classrooms/${id}/publish/`, {}),
 
   /** Push full classroom content to backend for student access */
   syncContent: (classroomId: string, content: {
@@ -143,6 +186,12 @@ export const maicStudentApi = {
     language: string;
   }) =>
     api.post<{ actions: MAICAction[] }>('/v1/student/maic/generate/scene-actions/', data),
+
+  generateAgentProfiles: (data: GenerateAgentProfilesRequest) =>
+    api.post<GenerateAgentProfilesResponse>('/v1/student/maic/generate/agent-profiles/', data),
+
+  regenerateAgent: (data: RegenerateAgentRequest) =>
+    api.post<{ agent: MAICAgent }>('/v1/student/maic/agents/regenerate-one/', data),
 
   // Quiz grading (student)
   quizGrade: (data: { question: string; answer: string; commentPrompt?: string }) =>

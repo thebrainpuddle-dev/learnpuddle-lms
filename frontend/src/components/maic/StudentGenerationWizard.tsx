@@ -19,7 +19,8 @@ import {
 import { useStudentMAICGeneration, type StudentGenerationStep } from '../../hooks/useStudentMAICGeneration';
 import type { GenerationPhase } from '../../hooks/useMAICGeneration';
 import { maicStudentApi } from '../../services/openmaicService';
-import type { MAICGenerationConfig, MAICOutlineScene } from '../../types/maic';
+import type { MAICAgent, MAICGenerationConfig, MAICOutlineScene } from '../../types/maic';
+import { AgentGenerationStep } from './AgentGenerationStep';
 import { OutlineEditor } from './OutlineEditor';
 import { PDFUploader } from './PDFUploader';
 import { GenerationVisualizer } from './GenerationVisualizer';
@@ -29,7 +30,15 @@ interface StudentGenerationWizardProps {
   onComplete?: (classroomId: string) => void;
 }
 
-type WizardStep = 1 | 2 | 3 | 4;
+/**
+ * Wizard steps:
+ *   1 = Topic & Settings
+ *   2 = Meet your classroom (agent picker, added by WS-C)
+ *   3 = Review outline
+ *   4 = Generating content
+ *   5 = Complete
+ */
+type WizardStep = 1 | 2 | 3 | 4 | 5;
 
 const LANGUAGES = [
   { value: 'en', label: 'English' },
@@ -45,6 +54,8 @@ const LANGUAGES = [
 ];
 
 function stepFromGeneration(genStep: StudentGenerationStep, currentWizardStep: WizardStep): WizardStep {
+  // Once the user has advanced past "Topic & Settings", respect the wizard's
+  // own step cursor so the new agent-picker step (2) isn't skipped.
   switch (genStep) {
     case 'idle':
       return 1;
@@ -52,11 +63,11 @@ function stepFromGeneration(genStep: StudentGenerationStep, currentWizardStep: W
     case 'outlining':
       return currentWizardStep >= 2 ? currentWizardStep : 1;
     case 'editing':
-      return 2;
+      return currentWizardStep >= 3 ? currentWizardStep : 3;
     case 'generating':
-      return 3;
-    case 'complete':
       return 4;
+    case 'complete':
+      return 5;
     case 'error':
       return currentWizardStep;
     default:
@@ -64,7 +75,13 @@ function stepFromGeneration(genStep: StudentGenerationStep, currentWizardStep: W
   }
 }
 
-const STEP_LABELS = ['Topic & Settings', 'Review Outline', 'Generating', 'Complete'];
+const STEP_LABELS = [
+  'Topic & Settings',
+  'Meet your classroom',
+  'Review Outline',
+  'Generating',
+  'Complete',
+];
 
 export const StudentGenerationWizard: React.FC<StudentGenerationWizardProps> = ({ onComplete }) => {
   const [topic, setTopic] = useState('');
@@ -74,6 +91,8 @@ export const StudentGenerationWizard: React.FC<StudentGenerationWizardProps> = (
   const [sceneCount, setSceneCount] = useState(5);
   const [classroomId, setClassroomId] = useState<string | null>(null);
   const [wizardStep, setWizardStep] = useState<WizardStep>(1);
+  // Agents chosen in the "Meet your classroom" wizard step (WS-C).
+  const [agents, setAgents] = useState<MAICAgent[]>([]);
 
   const {
     step: genStep,
@@ -93,24 +112,40 @@ export const StudentGenerationWizard: React.FC<StudentGenerationWizardProps> = (
 
   const effectiveStep = stepFromGeneration(genStep, wizardStep);
 
-  const handleGenerateOutline = useCallback(async () => {
+  // Step 1 → Step 2 (agents). Outline generation runs once the roster is
+  // approved so the backend can condition scenes on the chosen personas.
+  const handleGoToAgents = useCallback(() => {
     if (!topic.trim()) return;
+    setWizardStep(2);
+  }, [topic]);
 
-    const config: MAICGenerationConfig = {
-      topic: topic.trim(),
-      pdfText,
-      language,
-      agentCount: Math.min(agentCount, 4),
-      sceneCount: Math.min(sceneCount, 8),
-      enableTTS: true,
-      enableImages: true,
-    };
+  // Step 2 → Step 3 (outline). Validates the topic (student guardrail) and
+  // starts outline generation using the wizard-approved roster.
+  const handleAgentsComplete = useCallback(
+    async (approvedAgents: MAICAgent[]) => {
+      setAgents(approvedAgents);
+      setAgentCount(approvedAgents.length);
 
-    await validateAndStartOutline(config);
-    if (genStep !== 'error') {
-      setWizardStep(2);
-    }
-  }, [topic, pdfText, language, agentCount, sceneCount, validateAndStartOutline, genStep]);
+      const config: MAICGenerationConfig = {
+        topic: topic.trim(),
+        pdfText,
+        language,
+        agentCount: Math.min(approvedAgents.length, 4),
+        sceneCount: Math.min(sceneCount, 8),
+        enableTTS: true,
+        enableImages: true,
+      };
+
+      setWizardStep(3);
+      await validateAndStartOutline(config, approvedAgents);
+      // If validation rejected the topic, surface the error banner by
+      // snapping the wizard back to Step 1.
+      if (genStep === 'error') {
+        setWizardStep(1);
+      }
+    },
+    [topic, pdfText, language, sceneCount, validateAndStartOutline, genStep],
+  );
 
   const handleStartGeneration = useCallback(async () => {
     if (!outline) return;
@@ -128,7 +163,7 @@ export const StudentGenerationWizard: React.FC<StudentGenerationWizardProps> = (
 
       const newId = res.data.id;
       setClassroomId(newId);
-      setWizardStep(3);
+      setWizardStep(4);
 
       await startContentGeneration(newId);
     } catch {
@@ -157,6 +192,7 @@ export const StudentGenerationWizard: React.FC<StudentGenerationWizardProps> = (
     setAgentCount(3);
     setSceneCount(5);
     setClassroomId(null);
+    setAgents([]);
     setWizardStep(1);
   }, [resetGeneration]);
 
@@ -340,8 +376,8 @@ export const StudentGenerationWizard: React.FC<StudentGenerationWizardProps> = (
           <div className="flex justify-end pt-2">
             <button
               type="button"
-              onClick={handleGenerateOutline}
-              disabled={!topic.trim() || genStep === 'validating' || genStep === 'outlining'}
+              onClick={handleGoToAgents}
+              disabled={!topic.trim()}
               className={cn(
                 'inline-flex items-center gap-2 rounded-lg px-5 py-2.5 text-sm font-medium',
                 'bg-primary-600 text-white hover:bg-primary-700',
@@ -350,74 +386,57 @@ export const StudentGenerationWizard: React.FC<StudentGenerationWizardProps> = (
                 'transition-colors',
               )}
             >
-              {genStep === 'validating' ? (
-                <>
-                  <ShieldCheck className="h-4 w-4 animate-pulse" />
-                  Checking Topic...
-                </>
-              ) : genStep === 'outlining' ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Generating Outline...
-                </>
-              ) : (
-                <>
-                  <Sparkles className="h-4 w-4" />
-                  Generate Outline
-                  <ChevronRight className="h-4 w-4" />
-                </>
-              )}
+              <Sparkles className="h-4 w-4" />
+              Meet your classroom
+              <ChevronRight className="h-4 w-4" />
             </button>
           </div>
+        </div>
+      )}
 
-          {/* Validation / outline progress */}
-          {(genStep === 'validating' || genStep === 'outlining') && (
-            <div className="rounded-xl border border-indigo-100 bg-gradient-to-r from-indigo-50/50 to-white p-4 animate-fade-in">
-              <div className="flex items-center gap-3">
-                <div className="relative shrink-0">
-                  <div className="h-10 w-10 rounded-lg bg-indigo-100 flex items-center justify-center">
-                    {genStep === 'validating' ? (
-                      <ShieldCheck className="h-5 w-5 text-indigo-500 animate-pulse" />
-                    ) : (
-                      <svg className="h-5 w-5 text-indigo-500 animate-[float_2s_ease-in-out_infinite]" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25H12" />
-                      </svg>
-                    )}
-                  </div>
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-gray-900">
-                    {genStep === 'validating' ? 'Validating your topic' : 'Building your outline'}
-                  </p>
-                  <p className="text-xs text-gray-500 mt-0.5">
-                    {genStep === 'validating'
-                      ? 'Checking that the topic is appropriate for learning...'
-                      : 'AI is analyzing your topic and structuring scenes...'}
-                  </p>
-                </div>
-                <div className="shrink-0 flex gap-0.5">
-                  <span className="h-1.5 w-1.5 rounded-full bg-indigo-400 animate-[bounce-dot_1.4s_ease-in-out_infinite]" />
-                  <span className="h-1.5 w-1.5 rounded-full bg-indigo-400 animate-[bounce-dot_1.4s_ease-in-out_0.2s_infinite]" />
-                  <span className="h-1.5 w-1.5 rounded-full bg-indigo-400 animate-[bounce-dot_1.4s_ease-in-out_0.4s_infinite]" />
-                </div>
+      {/* ─── Step 2: Meet your classroom (agent picker) ──────────────────── */}
+      {effectiveStep === 2 && (
+        <AgentGenerationStep
+          topic={topic}
+          language={language}
+          role="student"
+          onBack={() => setWizardStep(1)}
+          onComplete={(approvedAgents) => void handleAgentsComplete(approvedAgents)}
+        />
+      )}
+
+      {/* ─── Step 3: Outline Review ──────────────────────────────────────── */}
+      {effectiveStep === 3 && !outline && (genStep === 'validating' || genStep === 'outlining') && (
+        <div className="py-10 text-center">
+          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-indigo-100">
+            {genStep === 'validating' ? (
+              <ShieldCheck className="h-6 w-6 animate-pulse text-indigo-500" />
+            ) : (
+              <Loader2 className="h-6 w-6 animate-spin text-indigo-500" />
+            )}
+          </div>
+          <h2 className="text-lg font-semibold text-gray-900">
+            {genStep === 'validating' ? 'Validating your topic…' : 'Building your outline…'}
+          </h2>
+          <p className="mt-1 text-sm text-gray-500">
+            {genStep === 'validating'
+              ? 'Checking that the topic is appropriate for learning.'
+              : `Arranging scenes for ${agents.length} agent${agents.length === 1 ? '' : 's'}.`}
+          </p>
+          {progress > 0 && (
+            <div className="mx-auto mt-5 w-56">
+              <div className="w-full bg-indigo-100 rounded-full h-1 overflow-hidden">
+                <div
+                  className="h-1 rounded-full bg-gradient-to-r from-indigo-500 to-indigo-400 transition-all duration-700"
+                  style={{ width: `${progress}%` }}
+                />
               </div>
-              {progress > 0 && (
-                <div className="mt-3">
-                  <div className="w-full bg-indigo-100 rounded-full h-1 overflow-hidden">
-                    <div
-                      className="h-1 rounded-full bg-gradient-to-r from-indigo-500 to-indigo-400 transition-all duration-700"
-                      style={{ width: `${progress}%` }}
-                    />
-                  </div>
-                </div>
-              )}
             </div>
           )}
         </div>
       )}
 
-      {/* ─── Step 2: Outline Review ──────────────────────────────────────── */}
-      {effectiveStep === 2 && outline && (
+      {effectiveStep === 3 && outline && (
         <div className="space-y-5">
           <div>
             <h2 className="text-lg font-semibold text-gray-900 mb-1">Review Outline</h2>
@@ -432,8 +451,9 @@ export const StudentGenerationWizard: React.FC<StudentGenerationWizardProps> = (
             <button
               type="button"
               onClick={() => {
+                // Back from outline-review → agent picker. Keep the roster.
                 resetGeneration();
-                setWizardStep(1);
+                setWizardStep(2);
               }}
               className={cn(
                 'inline-flex items-center gap-1 rounded-lg px-4 py-2 text-sm font-medium',
@@ -463,8 +483,8 @@ export const StudentGenerationWizard: React.FC<StudentGenerationWizardProps> = (
         </div>
       )}
 
-      {/* ─── Step 3: Generation Progress ─────────────────────────────────── */}
-      {effectiveStep === 3 && (
+      {/* ─── Step 4: Generation Progress ─────────────────────────────────── */}
+      {effectiveStep === 4 && (
         <div className="py-6 space-y-6">
           <GenerationVisualizer
             phase={phase as GenerationPhase}
@@ -486,8 +506,8 @@ export const StudentGenerationWizard: React.FC<StudentGenerationWizardProps> = (
         </div>
       )}
 
-      {/* ─── Step 4: Complete ────────────────────────────────────────────── */}
-      {effectiveStep === 4 && (
+      {/* ─── Step 5: Complete ────────────────────────────────────────────── */}
+      {effectiveStep === 5 && (
         <div className="space-y-6 text-center py-8 animate-scale-in">
           <div className="relative inline-flex items-center justify-center mx-auto">
             <div className="absolute h-20 w-20 rounded-full bg-green-100 animate-ping opacity-20" />

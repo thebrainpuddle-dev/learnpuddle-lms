@@ -2,6 +2,11 @@
 //
 // Full-page wrapper for the GenerationWizard.
 // On completion, navigates to the AI Classroom player.
+//
+// The wizard itself owns the step state; the "Meet your classroom" agent
+// picker (WS-C) is inserted between Topic/Config and Review-Outline inside
+// GenerationWizard. This page stays a thin wrapper so non-wizard pages can
+// reuse GenerationWizard as-is.
 
 import React, { useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';

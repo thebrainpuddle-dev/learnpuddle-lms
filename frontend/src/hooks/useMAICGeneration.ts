@@ -44,7 +44,13 @@ interface UseMAICGenerationReturn {
   progress: number;
   error: string | null;
 
-  startOutlineGeneration: (config: MAICGenerationConfig) => Promise<void>;
+  /**
+   * Generate the outline. Optionally pass `preSelectedAgents` — the roster
+   * approved by the agent-picker wizard step (WS-C). When provided, these
+   * agents are sent to the backend and will override any agents that the
+   * outline stream emits, keeping the approved roster authoritative.
+   */
+  startOutlineGeneration: (config: MAICGenerationConfig, preSelectedAgents?: MAICAgent[]) => Promise<void>;
   updateOutline: (scenes: MAICOutlineScene[]) => void;
   startContentGeneration: (classroomId: string) => Promise<void>;
   cancel: () => void;
@@ -81,7 +87,7 @@ export function useMAICGeneration(): UseMAICGenerationReturn {
   }, [cancel]);
 
   const startOutlineGeneration = useCallback(
-    async (config: MAICGenerationConfig) => {
+    async (config: MAICGenerationConfig, preSelectedAgents?: MAICAgent[]) => {
       if (!accessToken) return;
       setStep('outlining');
       setPhase('outline');
@@ -94,7 +100,7 @@ export function useMAICGeneration(): UseMAICGenerationReturn {
       const partialOutline: Partial<MAICOutline> = {
         topic: config.topic,
         scenes: [],
-        agents: [],
+        agents: preSelectedAgents ?? [],
         language: config.language,
         totalMinutes: 0,
       };
@@ -107,6 +113,11 @@ export function useMAICGeneration(): UseMAICGenerationReturn {
           language: config.language,
           agentCount: config.agentCount,
           sceneCount: config.sceneCount,
+          // When the wizard already picked a roster (WS-C), send it along so
+          // the backend can reuse personality/voice mapping for outline prompts.
+          ...(preSelectedAgents && preSelectedAgents.length > 0
+            ? { agents: preSelectedAgents }
+            : {}),
         },
         token: accessToken,
         signal: controller.signal,
@@ -114,7 +125,13 @@ export function useMAICGeneration(): UseMAICGenerationReturn {
           if (event.type === 'outline') {
             const data = event.data as MAICOutline;
             partialOutline.scenes = data.scenes || partialOutline.scenes;
-            partialOutline.agents = data.agents || partialOutline.agents;
+            // Prefer the roster the user just approved in the wizard. If
+            // there is no approved roster yet, fall back to whatever the
+            // outline event emitted.
+            partialOutline.agents =
+              preSelectedAgents && preSelectedAgents.length > 0
+                ? preSelectedAgents
+                : data.agents || partialOutline.agents;
             partialOutline.totalMinutes = data.totalMinutes || 0;
             setOutline({ ...partialOutline } as MAICOutline);
           } else if (event.type === 'generation_progress') {

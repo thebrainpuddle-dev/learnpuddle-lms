@@ -56,7 +56,12 @@ interface UseStudentMAICGenerationReturn {
   error: string | null;
   guardrailResult: GuardrailResult | null;
 
-  validateAndStartOutline: (config: MAICGenerationConfig) => Promise<void>;
+  /**
+   * Validate the topic through guardrails, then generate the outline.
+   * Pass `preSelectedAgents` to send the wizard-approved roster to the
+   * backend and override any agents the outline stream emits.
+   */
+  validateAndStartOutline: (config: MAICGenerationConfig, preSelectedAgents?: MAICAgent[]) => Promise<void>;
   updateOutline: (scenes: MAICOutlineScene[]) => void;
   startContentGeneration: (classroomId: string) => Promise<void>;
   cancel: () => void;
@@ -96,7 +101,7 @@ export function useStudentMAICGeneration(): UseStudentMAICGenerationReturn {
 
   // ── Step 1: Validate topic, then generate outline ──
   const validateAndStartOutline = useCallback(
-    async (config: MAICGenerationConfig) => {
+    async (config: MAICGenerationConfig, preSelectedAgents?: MAICAgent[]) => {
       if (!accessToken) return;
       setStep('validating');
       setPhase('validation');
@@ -144,7 +149,7 @@ export function useStudentMAICGeneration(): UseStudentMAICGenerationReturn {
       const partialOutline: Partial<MAICOutline> = {
         topic: config.topic,
         scenes: [],
-        agents: [],
+        agents: preSelectedAgents ?? [],
         language: config.language,
         totalMinutes: 0,
       };
@@ -157,6 +162,11 @@ export function useStudentMAICGeneration(): UseStudentMAICGenerationReturn {
           language: config.language,
           agentCount: Math.min(config.agentCount, 4),   // Student cap
           sceneCount: Math.min(config.sceneCount, 8),    // Student cap
+          // When the wizard already picked a roster (WS-C), send it along so
+          // the backend can reuse personality/voice mapping for outline prompts.
+          ...(preSelectedAgents && preSelectedAgents.length > 0
+            ? { agents: preSelectedAgents }
+            : {}),
         },
         token: accessToken,
         signal: controller.signal,
@@ -164,7 +174,11 @@ export function useStudentMAICGeneration(): UseStudentMAICGenerationReturn {
           if (event.type === 'outline') {
             const data = event.data as MAICOutline;
             partialOutline.scenes = data.scenes || partialOutline.scenes;
-            partialOutline.agents = data.agents || partialOutline.agents;
+            // Prefer the wizard-approved roster when present.
+            partialOutline.agents =
+              preSelectedAgents && preSelectedAgents.length > 0
+                ? preSelectedAgents
+                : data.agents || partialOutline.agents;
             partialOutline.totalMinutes = data.totalMinutes || 0;
             setOutline({ ...partialOutline } as MAICOutline);
           } else if (event.type === 'generation_progress') {

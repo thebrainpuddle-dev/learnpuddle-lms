@@ -2,6 +2,11 @@
 //
 // Student AI Classroom creation page — same wizard flow as teacher
 // but with guardrail validation on topic/PDF before generation.
+//
+// The wizard itself owns the step state; the "Meet your classroom" agent
+// picker (WS-C) is inserted between Topic/Config and Review-Outline inside
+// StudentGenerationWizard with role="student". This page stays a thin
+// wrapper so non-wizard pages can reuse StudentGenerationWizard as-is.
 
 import React, { useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';

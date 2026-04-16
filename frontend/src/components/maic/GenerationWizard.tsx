@@ -17,7 +17,8 @@ import {
 } from 'lucide-react';
 import { useMAICGeneration, type GenerationStep } from '../../hooks/useMAICGeneration';
 import { maicApi } from '../../services/openmaicService';
-import type { MAICGenerationConfig, MAICOutlineScene } from '../../types/maic';
+import type { MAICAgent, MAICGenerationConfig, MAICOutlineScene } from '../../types/maic';
+import { AgentGenerationStep } from './AgentGenerationStep';
 import { OutlineEditor } from './OutlineEditor';
 import { PDFUploader } from './PDFUploader';
 import { GenerationVisualizer } from './GenerationVisualizer';
@@ -29,7 +30,15 @@ interface GenerationWizardProps {
   onComplete?: (classroomId: string) => void;
 }
 
-type WizardStep = 1 | 2 | 3 | 4;
+/**
+ * Wizard steps:
+ *   1 = Topic & Settings
+ *   2 = Meet your classroom (agent picker, added by WS-C)
+ *   3 = Review outline
+ *   4 = Generating content
+ *   5 = Complete
+ */
+type WizardStep = 1 | 2 | 3 | 4 | 5;
 
 const LANGUAGES = [
   { value: 'en', label: 'English' },
@@ -45,17 +54,20 @@ const LANGUAGES = [
 ];
 
 function stepFromGeneration(genStep: GenerationStep, currentWizardStep: WizardStep): WizardStep {
+  // Once the user has advanced past "Topic & Settings", respect the wizard's
+  // own step cursor. This keeps us on the new agent-picker step (2) while the
+  // outline hook is still in 'outlining' or 'editing'.
   switch (genStep) {
     case 'idle':
       return 1;
     case 'outlining':
       return currentWizardStep >= 2 ? currentWizardStep : 1;
     case 'editing':
-      return 2;
+      return currentWizardStep >= 3 ? currentWizardStep : 3;
     case 'generating':
-      return 3;
-    case 'complete':
       return 4;
+    case 'complete':
+      return 5;
     case 'error':
       return currentWizardStep;
     default:
@@ -63,7 +75,13 @@ function stepFromGeneration(genStep: GenerationStep, currentWizardStep: WizardSt
   }
 }
 
-const STEP_LABELS = ['Topic & Settings', 'Review Outline', 'Generating', 'Complete'];
+const STEP_LABELS = [
+  'Topic & Settings',
+  'Meet your classroom',
+  'Review Outline',
+  'Generating',
+  'Complete',
+];
 
 export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, onComplete }) => {
   // Form state
@@ -74,6 +92,9 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
   const [sceneCount, setSceneCount] = useState(6);
   const [classroomId, setClassroomId] = useState<string | null>(null);
   const [wizardStep, setWizardStep] = useState<WizardStep>(1);
+  // Agents chosen on the "Meet your classroom" step (WS-C) — become the
+  // authoritative roster for outline + scene-content + scene-actions.
+  const [agents, setAgents] = useState<MAICAgent[]>([]);
 
   // Web search state
   const [showWebSearch, setShowWebSearch] = useState(false);
@@ -105,26 +126,40 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
     setWebSearchContext((prev) => (prev ? `${prev}\n\n${context}` : context));
   }, []);
 
-  const handleGenerateOutline = useCallback(async () => {
+  // Step 1 → Step 2 (agents). We defer outline generation until the user
+  // approves the agent roster so the outline can use it.
+  const handleGoToAgents = useCallback(() => {
     if (!topic.trim()) return;
-
-    // Combine PDF text and web search context for richer generation
-    const combinedContext = [pdfText, webSearchContext].filter(Boolean).join('\n\n---\n\n') || undefined;
-
-    const config: MAICGenerationConfig = {
-      topic: topic.trim(),
-      pdfText: combinedContext,
-      language,
-      agentCount,
-      sceneCount,
-      enableTTS: true,
-      enableImages: true,
-      courseId,
-    };
-
-    await startOutlineGeneration(config);
     setWizardStep(2);
-  }, [topic, pdfText, webSearchContext, language, agentCount, sceneCount, courseId, startOutlineGeneration]);
+  }, [topic]);
+
+  // Step 2 → Step 3 (outline). Starts outline generation using the approved
+  // agents[] as input, then moves the wizard to the outline-review step.
+  const handleAgentsComplete = useCallback(
+    async (approvedAgents: MAICAgent[]) => {
+      setAgents(approvedAgents);
+      setAgentCount(approvedAgents.length);
+
+      // Combine PDF text and web search context for richer generation.
+      const combinedContext =
+        [pdfText, webSearchContext].filter(Boolean).join('\n\n---\n\n') || undefined;
+
+      const config: MAICGenerationConfig = {
+        topic: topic.trim(),
+        pdfText: combinedContext,
+        language,
+        agentCount: approvedAgents.length,
+        sceneCount,
+        enableTTS: true,
+        enableImages: true,
+        courseId,
+      };
+
+      setWizardStep(3);
+      await startOutlineGeneration(config, approvedAgents);
+    },
+    [topic, pdfText, webSearchContext, language, sceneCount, courseId, startOutlineGeneration],
+  );
 
   // ─── Step 2: Start full generation ────────────────────────────────────────
 
@@ -146,7 +181,7 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
 
       const newId = res.data.id;
       setClassroomId(newId);
-      setWizardStep(3);
+      setWizardStep(4);
 
       await startContentGeneration(newId);
     } catch (err) {
@@ -181,6 +216,7 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
     setAgentCount(3);
     setSceneCount(6);
     setClassroomId(null);
+    setAgents([]);
     setWizardStep(1);
     setShowWebSearch(false);
     setWebSearchContext(undefined);
@@ -405,8 +441,8 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
           <div className="flex justify-end pt-2">
             <button
               type="button"
-              onClick={handleGenerateOutline}
-              disabled={!topic.trim() || genStep === 'outlining'}
+              onClick={handleGoToAgents}
+              disabled={!topic.trim()}
               className={cn(
                 'inline-flex items-center gap-2 rounded-lg px-5 py-2.5 text-sm font-medium',
                 'bg-primary-600 text-white hover:bg-primary-700',
@@ -415,61 +451,49 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
                 'transition-colors',
               )}
             >
-              {genStep === 'outlining' ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Generating Outline...
-                </>
-              ) : (
-                <>
-                  <Sparkles className="h-4 w-4" />
-                  Generate Outline
-                  <ChevronRight className="h-4 w-4" />
-                </>
-              )}
+              <Sparkles className="h-4 w-4" />
+              Meet your classroom
+              <ChevronRight className="h-4 w-4" />
             </button>
           </div>
+        </div>
+      )}
 
-          {/* Outline generation progress indicator */}
-          {genStep === 'outlining' && (
-            <div className="rounded-xl border border-indigo-100 bg-gradient-to-r from-indigo-50/50 to-white p-4 animate-fade-in">
-              <div className="flex items-center gap-3">
-                <div className="relative shrink-0">
-                  <div className="h-10 w-10 rounded-lg bg-indigo-100 flex items-center justify-center">
-                    <svg className="h-5 w-5 text-indigo-500 animate-[float_2s_ease-in-out_infinite]" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25H12" />
-                    </svg>
-                  </div>
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-gray-900">Building your outline</p>
-                  <p className="text-xs text-gray-500 mt-0.5">
-                    AI is analyzing your topic and structuring scenes...
-                  </p>
-                </div>
-                <div className="shrink-0 flex gap-0.5">
-                  <span className="h-1.5 w-1.5 rounded-full bg-indigo-400 animate-[bounce-dot_1.4s_ease-in-out_infinite]" />
-                  <span className="h-1.5 w-1.5 rounded-full bg-indigo-400 animate-[bounce-dot_1.4s_ease-in-out_0.2s_infinite]" />
-                  <span className="h-1.5 w-1.5 rounded-full bg-indigo-400 animate-[bounce-dot_1.4s_ease-in-out_0.4s_infinite]" />
-                </div>
+      {/* ─── Step 2: Meet your classroom (agent picker) ───────────────────── */}
+      {effectiveStep === 2 && (
+        <AgentGenerationStep
+          topic={topic}
+          language={language}
+          role="teacher"
+          onBack={() => setWizardStep(1)}
+          onComplete={(approvedAgents) => void handleAgentsComplete(approvedAgents)}
+        />
+      )}
+
+      {/* ─── Step 3: Outline Review ────────────────────────────────────────── */}
+      {effectiveStep === 3 && (!outline || genStep === 'outlining') && (
+        <div className="py-10 text-center">
+          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-indigo-100">
+            <Loader2 className="h-6 w-6 animate-spin text-indigo-500" />
+          </div>
+          <h2 className="text-lg font-semibold text-gray-900">Building your outline…</h2>
+          <p className="mt-1 text-sm text-gray-500">
+            Arranging scenes for {agents.length} agent{agents.length === 1 ? '' : 's'}.
+          </p>
+          {progress > 0 && (
+            <div className="mx-auto mt-5 w-56">
+              <div className="w-full bg-indigo-100 rounded-full h-1 overflow-hidden">
+                <div
+                  className="h-1 rounded-full bg-gradient-to-r from-indigo-500 to-indigo-400 transition-all duration-700"
+                  style={{ width: `${progress}%` }}
+                />
               </div>
-              {progress > 0 && (
-                <div className="mt-3">
-                  <div className="w-full bg-indigo-100 rounded-full h-1 overflow-hidden">
-                    <div
-                      className="h-1 rounded-full bg-gradient-to-r from-indigo-500 to-indigo-400 transition-all duration-700"
-                      style={{ width: `${progress}%` }}
-                    />
-                  </div>
-                </div>
-              )}
             </div>
           )}
         </div>
       )}
 
-      {/* ─── Step 2: Outline Review ────────────────────────────────────────── */}
-      {effectiveStep === 2 && outline && (
+      {effectiveStep === 3 && outline && genStep !== 'outlining' && (
         <div className="space-y-5">
           <div>
             <h2 className="text-lg font-semibold text-gray-900 mb-1">Review Outline</h2>
@@ -485,8 +509,10 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
             <button
               type="button"
               onClick={() => {
+                // Back from outline-review → agent picker. Keep the approved
+                // roster so the user can tweak it without losing their edits.
                 resetGeneration();
-                setWizardStep(1);
+                setWizardStep(2);
               }}
               className={cn(
                 'inline-flex items-center gap-1 rounded-lg px-4 py-2 text-sm font-medium',
@@ -516,8 +542,8 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
         </div>
       )}
 
-      {/* ─── Step 3: Generation Progress ───────────────────────────────────── */}
-      {effectiveStep === 3 && (
+      {/* ─── Step 4: Generation Progress ───────────────────────────────────── */}
+      {effectiveStep === 4 && (
         <div className="py-6 space-y-6">
           <GenerationVisualizer
             phase={phase}
@@ -539,8 +565,8 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
         </div>
       )}
 
-      {/* ─── Step 4: Complete ──────────────────────────────────────────────── */}
-      {effectiveStep === 4 && (
+      {/* ─── Step 5: Complete ──────────────────────────────────────────────── */}
+      {effectiveStep === 5 && (
         <div className="space-y-6 text-center py-8 animate-scale-in">
           <div className="relative inline-flex items-center justify-center mx-auto">
             <div className="absolute h-20 w-20 rounded-full bg-green-100 animate-ping opacity-20" />
