@@ -112,6 +112,10 @@ describe('AgentGenerationStep', () => {
   });
 
   test('"Regenerate all" shows a confirmation dialog', async () => {
+    // jsdom does not stub window.confirm by default — install a stub before spying
+    if (typeof window.confirm !== 'function') {
+      Object.defineProperty(window, 'confirm', { value: () => true, writable: true, configurable: true });
+    }
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
     render(
       <AgentGenerationStep
