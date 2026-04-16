@@ -131,6 +131,18 @@ export const Stage: React.FC<StageProps> = ({ role }) => {
     }
   }, [currentScene, loadScene]);
 
+  // Stop current audio when user manually navigates to a different slide
+  const prevSlideIndexRef = useRef(currentSlideIndex);
+  useEffect(() => {
+    if (prevSlideIndexRef.current !== currentSlideIndex) {
+      // Slide changed — stop any playing audio so old speech doesn't persist
+      if (playbackState === 'playing') {
+        pause();
+      }
+      prevSlideIndexRef.current = currentSlideIndex;
+    }
+  }, [currentSlideIndex, playbackState, pause]);
+
   const speakingAgent = useMemo(
     () => (speakingAgentId ? agents.find((a) => a.id === speakingAgentId) || null : null),
     [agents, speakingAgentId],
@@ -245,6 +257,8 @@ export const Stage: React.FC<StageProps> = ({ role }) => {
         role={role}
         onDiscussionToggle={handleToggleDiscussion}
         discussionActive={!!discussionMode}
+        onPlayPause={handlePlayPause}
+        onStop={stopClass}
       />
 
       {/* Main content area */}

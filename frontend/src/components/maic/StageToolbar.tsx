@@ -35,6 +35,8 @@ interface StageToolbarProps {
   role: MAICPlayerRole;
   onDiscussionToggle?: () => void;
   discussionActive?: boolean;
+  onPlayPause?: () => void;
+  onStop?: () => void;
 }
 
 const VIEW_MODES: { mode: MAICViewMode; icon: typeof Presentation; label: string }[] = [
@@ -108,6 +110,8 @@ export const StageToolbar = React.memo<StageToolbarProps>(function StageToolbar(
   role,
   onDiscussionToggle,
   discussionActive = false,
+  onPlayPause,
+  onStop,
 }) {
   const viewMode = useMAICStageStore((s) => s.viewMode);
   const setViewMode = useMAICStageStore((s) => s.setViewMode);
@@ -149,12 +153,20 @@ export const StageToolbar = React.memo<StageToolbarProps>(function StageToolbar(
   }, [setFullscreen]);
 
   const handlePlayPause = useCallback(() => {
-    setPlaying(!isPlaying);
-  }, [isPlaying, setPlaying]);
+    if (onPlayPause) {
+      onPlayPause();
+    } else {
+      setPlaying(!isPlaying);
+    }
+  }, [isPlaying, setPlaying, onPlayPause]);
 
   const handleStop = useCallback(() => {
-    setPlaying(false);
-  }, [setPlaying]);
+    if (onStop) {
+      onStop();
+    } else {
+      setPlaying(false);
+    }
+  }, [setPlaying, onStop]);
 
   const handleCycleSpeed = useCallback(() => {
     const currentIdx = INLINE_SPEED_CYCLE.indexOf(playbackSpeed as typeof INLINE_SPEED_CYCLE[number]);

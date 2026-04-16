@@ -305,14 +305,18 @@ export class MAICActionEngine {
     const agent = agents.find((a) => a.id === agentId);
     const voiceId = agent?.voice || (agent?.role ? ROLE_VOICE_MAP[agent.role] : undefined) || ROLE_VOICE_MAP.professor;
 
-    // Notify listeners
-    this.onSpeechStart?.(agentId, text);
-    this.stageStore.getState().setSpeakingAgent(agentId);
-    this.stageStore.getState().setSpeechText(text);
+    // Helper: notify listeners and set subtitle state right before audio plays.
+    // This ensures subtitles appear in sync with audio, not seconds early.
+    const notifySpeechStart = () => {
+      this.onSpeechStart?.(agentId, text);
+      this.stageStore.getState().setSpeakingAgent(agentId);
+      this.stageStore.getState().setSpeechText(text);
+    };
 
     try {
       // ── 1. Pre-generated audio URL (instant playback, no network lag) ──
       if (action.audioUrl) {
+        notifySpeechStart();
         await this.playAudio(action.audioUrl, volume, playbackSpeed);
         return; // finally block handles cleanup
       }
@@ -356,7 +360,7 @@ export class MAICActionEngine {
             body: JSON.stringify({
               text: ssml || text,
               providerId: ttsConfig.providerId,
-              voice: ttsConfig.voice || voiceId,
+              voice: voiceId || ttsConfig.voice,
               speed: ttsConfig.speed ?? playbackSpeed,
               modelId: ttsConfig.modelId,
             }),
@@ -369,6 +373,7 @@ export class MAICActionEngine {
             const blob = await providerResponse.blob();
             if (blob.size > 0) {
               const blobUrl = URL.createObjectURL(blob);
+              notifySpeechStart();
               await this.playAudio(blobUrl, volume, playbackSpeed);
               URL.revokeObjectURL(blobUrl);
               return; // Success — finally block handles cleanup
@@ -426,15 +431,22 @@ export class MAICActionEngine {
         const blob = await response.blob();
         if (blob.size > 0) {
           const blobUrl = URL.createObjectURL(blob);
+          notifySpeechStart();
           await this.playAudio(blobUrl, volume, playbackSpeed);
           URL.revokeObjectURL(blobUrl);
         } else {
           // Empty audio response — fall back to browser TTS or timed silence
-          if (!this.disposed) await this.speechFallback(text, playbackSpeed);
+          if (!this.disposed) {
+            notifySpeechStart();
+            await this.speechFallback(text, playbackSpeed, voiceId);
+          }
         }
       } else {
         // TTS unavailable (204 or error) — fall back
-        if (!this.disposed) await this.speechFallback(text, playbackSpeed);
+        if (!this.disposed) {
+          notifySpeechStart();
+          await this.speechFallback(text, playbackSpeed, voiceId);
+        }
       }
     } catch (err) {
       // Aborted by navigation — exit silently
@@ -443,7 +455,10 @@ export class MAICActionEngine {
       }
       // Network error — fall back
       console.warn('TTS error, using fallback:', err);
-      if (!this.disposed) await this.speechFallback(text, playbackSpeed);
+      if (!this.disposed) {
+        notifySpeechStart();
+        await this.speechFallback(text, playbackSpeed, voiceId);
+      }
     } finally {
       this.currentFetchController = null;
       if (!this.disposed) {
@@ -458,14 +473,14 @@ export class MAICActionEngine {
    * Fallback when server TTS fails: try browser-native TTS (Web Speech API),
    * then fall back to timed silence based on word count.
    */
-  private async speechFallback(text: string, playbackSpeed: number): Promise<void> {
+  private async speechFallback(text: string, playbackSpeed: number, voiceId?: string): Promise<void> {
     const settings = this.settingsStore.getState();
     if (
       settings.browserTTSEnabled &&
       typeof window !== 'undefined' &&
       window.speechSynthesis
     ) {
-      await this.playBrowserTTS(text, playbackSpeed);
+      await this.playBrowserTTS(text, playbackSpeed, voiceId);
     } else {
       await delay(estimateSpeechDuration(text, playbackSpeed));
     }
@@ -831,13 +846,17 @@ export class MAICActionEngine {
    * Play text using the Web Speech API (browser-native TTS).
    * Returns a promise that resolves when all chunks finish speaking.
    */
-  private playBrowserTTS(text: string, speed: number): Promise<void> {
+  /** Currently active voice ID for browser TTS — set per speech action. */
+  private browserTTSVoiceId: string | null = null;
+
+  private playBrowserTTS(text: string, speed: number, voiceId?: string): Promise<void> {
     return new Promise<void>((resolve) => {
       this.browserTTSChunks = this.splitIntoChunks(text);
       this.browserTTSChunkIndex = 0;
       this.browserTTSPausedChunks = [];
       this.browserTTSActive = true;
       this.browserTTSResolve = resolve;
+      this.browserTTSVoiceId = voiceId ?? null;
       this.playBrowserTTSChunk();
     });
   }
@@ -861,6 +880,15 @@ export class MAICActionEngine {
     const settings = this.settingsStore.getState();
     utterance.rate = settings.playbackSpeed;
     utterance.volume = settings.audioVolume;
+
+    // Select a voice matching the agent's voice ID if available
+    if (this.browserTTSVoiceId) {
+      const voices = window.speechSynthesis.getVoices();
+      const match = voices.find((v) => v.name === this.browserTTSVoiceId || v.voiceURI === this.browserTTSVoiceId);
+      if (match) {
+        utterance.voice = match;
+      }
+    }
 
     // Auto-detect language: if >30% CJK characters, use Chinese
     const cjkCount = (
