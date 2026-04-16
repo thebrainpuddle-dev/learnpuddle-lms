@@ -137,14 +137,15 @@ export const StudentGenerationWizard: React.FC<StudentGenerationWizardProps> = (
       };
 
       setWizardStep(3);
-      await validateAndStartOutline(config, approvedAgents);
-      // If validation rejected the topic, surface the error banner by
-      // snapping the wizard back to Step 1.
-      if (genStep === 'error') {
+      const result = await validateAndStartOutline(config, approvedAgents);
+      // If validation rejected the topic, snap the wizard back to Step 1 so
+      // the error banner surfaces. We use the direct return value rather than
+      // reading `genStep` from the closure (which is stale here).
+      if (result && result.rejected) {
         setWizardStep(1);
       }
     },
-    [topic, pdfText, language, sceneCount, validateAndStartOutline, genStep],
+    [topic, pdfText, language, sceneCount, validateAndStartOutline],
   );
 
   const handleStartGeneration = useCallback(async () => {
@@ -400,6 +401,7 @@ export const StudentGenerationWizard: React.FC<StudentGenerationWizardProps> = (
           topic={topic}
           language={language}
           role="student"
+          initialAgents={agents.length > 0 ? agents : undefined}
           onBack={() => setWizardStep(1)}
           onComplete={(approvedAgents) => void handleAgentsComplete(approvedAgents)}
         />

@@ -229,3 +229,63 @@ def test_outline_uses_provided_agents_not_generated(mock_llm, ai_config):
             assert aid in allowed_ids
     # The outline must pass through the supplied roster unchanged
     assert payload["agents"] == agents
+
+
+# ---------------------------------------------------------------------------
+# Follow-up fixes from Chunk 2 review (2026-04-16)
+# ---------------------------------------------------------------------------
+
+def test_color_outside_palette_rejected():
+    agents = sample_agents()
+    agents[0]["color"] = "#FF0000"   # not in canonical palette
+    with pytest.raises(AgentValidationError, match="not in palette"):
+        validate_agents(agents, role_slots=[
+            {"role": "professor", "count": 1},
+            {"role": "teaching_assistant", "count": 1},
+            {"role": "student", "count": 1},
+        ])
+
+
+def test_avatar_outside_allowed_set_rejected():
+    agents = sample_agents()
+    agents[0]["avatar"] = "🦄"   # not in curated emoji set
+    with pytest.raises(AgentValidationError, match="not in allowed emoji set"):
+        validate_agents(agents, role_slots=[
+            {"role": "professor", "count": 1},
+            {"role": "teaching_assistant", "count": 1},
+            {"role": "student", "count": 1},
+        ])
+
+
+def test_persona_flavored_appends_style_fragment():
+    from apps.courses.maic_generation_service import _persona_flavored
+    agent = {"speakingStyle": "Warm, unhurried. Occasionally asks 'theek hai?' to check understanding."}
+    out = _persona_flavored("Let me walk you through this.", agent)
+    assert out.startswith("Let me walk you through this.")
+    assert "warm" in out.lower()
+
+
+def test_persona_flavored_handles_missing_style():
+    from apps.courses.maic_generation_service import _persona_flavored
+    assert _persona_flavored("Hi there.", {}) == "Hi there."
+    assert _persona_flavored("Hi there.", {"speakingStyle": ""}) == "Hi there."
+
+
+def test_fallback_actions_carries_persona_hints():
+    """_fallback_actions must not strip the speaking-style flavoring — losing it here
+    would undo WS-B the moment the LLM action path fails."""
+    from apps.courses.maic_generation_service import _fallback_actions
+    agents = [
+        {"id": "agent-1", "name": "Dr. Aarav Sharma", "role": "professor",
+         "speakingStyle": "Warm, unhurried, says 'theek hai?' to check in"},
+        {"id": "agent-2", "name": "Ms. Priya Iyer", "role": "teaching_assistant",
+         "speakingStyle": "Crisp and encouraging, uses 'bilkul' when she agrees"},
+    ]
+    scene = {"title": "Photosynthesis", "content": {"slides": [{"elements": [], "speakerScript": ""}]}}
+    result = _fallback_actions(scene, agents)
+    speeches = [a["text"] for a in result["actions"] if a["type"] == "speech"]
+    # At least one line per agent should carry the style fragment
+    agent1_lines = [t for a in result["actions"] if a["type"] == "speech" and a.get("agentId") == "agent-1" for t in [a["text"]]]
+    agent2_lines = [t for a in result["actions"] if a["type"] == "speech" and a.get("agentId") == "agent-2" for t in [a["text"]]]
+    assert any("warm" in t.lower() for t in agent1_lines), f"agent-1 lines lack persona hint: {agent1_lines}"
+    assert any("crisp" in t.lower() or "bilkul" in t.lower() for t in agent2_lines), f"agent-2 lines lack persona hint: {agent2_lines}"

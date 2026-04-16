@@ -61,7 +61,7 @@ interface UseStudentMAICGenerationReturn {
    * Pass `preSelectedAgents` to send the wizard-approved roster to the
    * backend and override any agents the outline stream emits.
    */
-  validateAndStartOutline: (config: MAICGenerationConfig, preSelectedAgents?: MAICAgent[]) => Promise<void>;
+  validateAndStartOutline: (config: MAICGenerationConfig, preSelectedAgents?: MAICAgent[]) => Promise<{ rejected: boolean }>;
   updateOutline: (scenes: MAICOutlineScene[]) => void;
   startContentGeneration: (classroomId: string) => Promise<void>;
   cancel: () => void;
@@ -101,8 +101,8 @@ export function useStudentMAICGeneration(): UseStudentMAICGenerationReturn {
 
   // ── Step 1: Validate topic, then generate outline ──
   const validateAndStartOutline = useCallback(
-    async (config: MAICGenerationConfig, preSelectedAgents?: MAICAgent[]) => {
-      if (!accessToken) return;
+    async (config: MAICGenerationConfig, preSelectedAgents?: MAICAgent[]): Promise<{ rejected: boolean }> => {
+      if (!accessToken) return { rejected: false };
       setStep('validating');
       setPhase('validation');
       setError(null);
@@ -121,7 +121,7 @@ export function useStudentMAICGeneration(): UseStudentMAICGenerationReturn {
         if (!validation.allowed) {
           setError(validation.reason || 'This topic was not approved. Please enter an educational topic.');
           setStep('error');
-          return;
+          return { rejected: true };
         }
       } catch (err) {
         // If validation endpoint fails, check for 422 guardrail rejection
@@ -131,11 +131,11 @@ export function useStudentMAICGeneration(): UseStudentMAICGenerationReturn {
           if (guardrail) setGuardrailResult(guardrail);
           setError(axiosErr.response.data?.error || 'Topic not approved.');
           setStep('error');
-          return;
+          return { rejected: true };
         }
         setError('Failed to validate topic. Please try again.');
         setStep('error');
-        return;
+        return { rejected: true };
       }
 
       // Validation passed — proceed with outline generation
@@ -199,6 +199,7 @@ export function useStudentMAICGeneration(): UseStudentMAICGenerationReturn {
           }
         },
       });
+      return { rejected: false };
     },
     [accessToken, step],
   );

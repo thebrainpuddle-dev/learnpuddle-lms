@@ -12,12 +12,11 @@ import { useMAICSettingsStore } from '../stores/maicSettingsStore';
 import { useAuthStore } from '../stores/authStore';
 import type { MAICAction } from '../types/maic-actions';
 import type { MAICScene } from '../types/maic-scenes';
+import { maicTtsUrl, type MAICRole } from '../lib/maic/endpoints';
 
-const TEACHER_TTS_ENDPOINT = '/api/v1/teacher/maic/generate/tts/';
-const STUDENT_TTS_ENDPOINT = '/api/v1/student/maic/generate/tts/';
 const SCENE_TRANSITION_DELAY_MS = 1200;
 
-export function usePlaybackEngine(role: 'teacher' | 'student' = 'teacher') {
+export function usePlaybackEngine(role: MAICRole = 'teacher') {
   const [playbackState, setPlaybackState] = useState<PlaybackState>('idle');
   const [currentActionIndex, setCurrentActionIndex] = useState(0);
   const [actionCount, setActionCount] = useState(0);
@@ -36,7 +35,7 @@ export function usePlaybackEngine(role: 'teacher' | 'student' = 'teacher') {
   useEffect(() => {
     if (!accessToken) return;
 
-    const ttsEndpoint = role === 'student' ? STUDENT_TTS_ENDPOINT : TEACHER_TTS_ENDPOINT;
+    const ttsEndpoint = maicTtsUrl(role);
     const actionEngine = new MAICActionEngine({
       ttsEndpoint,
       token: accessToken,

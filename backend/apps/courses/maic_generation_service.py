@@ -43,6 +43,21 @@ AGENT_VOICE_MAP = {
 
 # ─── Agent Profile Validation ────────────────────────────────────────────────
 
+# Canonical palettes referenced from prompts/agent_profiles.md — validator enforces
+# membership so LLM drift on color/avatar doesn't leak into stored classrooms.
+AGENT_COLOR_PALETTE: frozenset[str] = frozenset({
+    "#4338CA",  # indigo
+    "#0F766E",  # teal
+    "#D97706",  # saffron
+    "#166534",  # forest
+    "#9F1239",  # cranberry
+    "#334155",  # slate
+})
+AGENT_AVATAR_SET: frozenset[str] = frozenset({
+    "👨‍🏫", "👩‍🏫", "🧑‍🎓", "👨‍🎓", "👩‍🎓", "🧕", "🙋‍♀️", "🙋‍♂️",
+})
+
+
 class AgentValidationError(ValueError):
     """Raised when a generated agent roster fails validation."""
 
@@ -85,11 +100,23 @@ def validate_agents(agents: list[dict], role_slots: list[dict]) -> None:
                 "gender balance required: need at least one male and one female"
             )
 
-    # Duplicate colors / avatars
+    # Color: palette membership + no duplicates
     colors = [a["color"] for a in agents]
+    for c in colors:
+        if c not in AGENT_COLOR_PALETTE:
+            raise AgentValidationError(
+                f"color {c!r} not in palette (allowed: {sorted(AGENT_COLOR_PALETTE)})"
+            )
     if len(set(colors)) != len(colors):
         raise AgentValidationError("duplicate color")
+
+    # Avatar: emoji set membership + no duplicates
     avatars = [a["avatar"] for a in agents]
+    for av in avatars:
+        if av not in AGENT_AVATAR_SET:
+            raise AgentValidationError(
+                f"avatar {av!r} not in allowed emoji set"
+            )
     if len(set(avatars)) != len(avatars):
         raise AgentValidationError("duplicate avatar")
 
@@ -784,6 +811,13 @@ ACTION TYPES (12 types — use all of these for maximum engagement):
 
 CRITICAL RULES:
 - VOICE DISCIPLINE: You MUST write speech text that reflects each agent's `speakingStyle`, including any cultural phrases the style notes. Each agent's lines should be identifiable as that agent's voice, not generic LLM prose. Use the cultural phrases SPARINGLY — one phrase per agent across the whole scene, not every line.
+  BAD (both agents sound identical, generic):
+    - agent-1 (professor, style: "warm, unhurried, says 'theek hai?'"): "Photosynthesis is the process by which plants convert sunlight into energy."
+    - agent-2 (student, style: "curious, asks why, plays with analogies"):  "Yes, that's correct. The plant uses sunlight to make food."
+  GOOD (each agent's style lands in the sentence, cultural phrase used ONCE):
+    - agent-1 (professor): "Think of the leaf like a tiny kitchen — sunlight is the stove, and the sugar made inside is the meal. Theek hai?"
+    - agent-2 (student):   "Wait — but what happens at night when the stove is off? Does the plant just go hungry?"
+  Every agent's 3+ speech lines should read like THAT agent typed them, not a generic narrator.
 - Generate 15-25 actions per scene (more is better for engagement)
 - EVERY assigned agent MUST speak at least 3 times
 - For multi-slide scenes, you MUST include "transition" actions between slides
@@ -898,10 +932,32 @@ IMPORTANT:
     return parsed
 
 
+def _persona_flavored(base: str, agent: dict) -> str:
+    """Append a persona hint to a fallback speech line so agents still sound distinct
+    when the LLM path fails. Pulls first few words of speakingStyle into a parenthetical
+    delivery cue; falls back cleanly if no speakingStyle is set.
+    """
+    style = (agent.get("speakingStyle") or "").strip()
+    if not style:
+        return base
+    # Surface ONE short fragment, not the full sentence.
+    fragment = style.split(".")[0].strip()
+    if not fragment or len(fragment) > 80:
+        return base
+    return f"{base} ({fragment.lower()})"
+
+
 def _fallback_actions(scene: dict, agents: list) -> dict:
-    """Deterministic multi-agent fallback actions with transitions and rich action types."""
-    primary_id = agents[0]["id"] if agents else "agent-1"
-    primary_name = agents[0].get("name", "Instructor") if agents else "Instructor"
+    """Deterministic multi-agent fallback actions with transitions and rich action types.
+
+    Honors each agent's speakingStyle so fallback text still reads as that agent's voice
+    when the LLM action-generation path fails — otherwise the entire persona investment
+    is lost the moment the provider misbehaves.
+    """
+    primary = agents[0] if agents else {"id": "agent-1", "name": "Instructor"}
+    primary_id = primary["id"]
+    primary_name = primary.get("name", "Instructor")
+    secondary = agents[1] if len(agents) > 1 else None
     content = scene.get("content", {})
     title = scene.get("title", "this topic")
 
@@ -922,19 +978,27 @@ def _fallback_actions(scene: dict, agents: list) -> dict:
         slide0_script = slides[0].get("speakerScript", "")
         slide0_elements = slides[0].get("elements", [])
 
-    actions.append({"type": "speech", "agentId": primary_id,
-                    "text": slide0_script or f"Let me walk you through {title}."})
+    actions.append({
+        "type": "speech", "agentId": primary_id,
+        "text": _persona_flavored(
+            slide0_script or f"Let me walk you through {title}.",
+            primary,
+        ),
+    })
 
     if slide0_elements:
         actions.append({"type": "spotlight", "elementId": slide0_elements[0].get("id", "el-1"), "duration": 2500})
 
     # Second agent responds
-    if len(agents) > 1:
-        second_id = agents[1]["id"]
-        second_name = agents[1].get("name", "Assistant")
+    if secondary:
         actions.append({"type": "pause", "duration": 800})
-        actions.append({"type": "speech", "agentId": second_id,
-                        "text": f"Great introduction, {primary_name}! I think this is a really important topic for our students."})
+        actions.append({
+            "type": "speech", "agentId": secondary["id"],
+            "text": _persona_flavored(
+                f"That's a great way to frame it, {primary_name}. Let me add a bit more context.",
+                secondary,
+            ),
+        })
 
     # --- Transitions for slides 1+ ---
     for si in range(1, len(slides)):
@@ -942,32 +1006,42 @@ def _fallback_actions(scene: dict, agents: list) -> dict:
         slide_elements = slide.get("elements", [])
         slide_script = slide.get("speakerScript", "")
 
-        # Transition action
         actions.append({"type": "transition", "slideIndex": si})
 
-        # Primary agent explains this slide
-        actions.append({"type": "speech", "agentId": primary_id,
-                        "text": slide_script or f"Moving on to {slide.get('title', 'the next topic')}."})
+        actions.append({
+            "type": "speech", "agentId": primary_id,
+            "text": _persona_flavored(
+                slide_script or f"Moving on to {slide.get('title', 'the next topic')}.",
+                primary,
+            ),
+        })
 
-        # Spotlight first element on this slide
         if slide_elements:
             actions.append({"type": "spotlight", "elementId": slide_elements[0].get("id", f"el-s{si+1}-1"), "duration": 2000})
 
-        # Highlight content element if available
         if len(slide_elements) > 1:
             actions.append({"type": "highlight", "elementId": slide_elements[1].get("id", f"el-s{si+1}-2"), "color": "#DBEAFE"})
 
-        # Second agent chimes in
-        if len(agents) > 1:
+        if secondary:
             actions.append({"type": "pause", "duration": 600})
-            actions.append({"type": "speech", "agentId": agents[1]["id"],
-                            "text": f"That is a great point. I would add that this connects to what we discussed earlier about {title}."})
+            actions.append({
+                "type": "speech", "agentId": secondary["id"],
+                "text": _persona_flavored(
+                    f"That connects nicely to what we covered about {title}.",
+                    secondary,
+                ),
+            })
 
     # --- Whiteboard segment ---
     actions.append({"type": "wb_open"})
     actions.append({"type": "wb_draw_text", "text": f"Key Concept: {title}", "x": 150, "y": 80, "fontSize": 24, "color": "#1E293B"})
-    actions.append({"type": "speech", "agentId": primary_id,
-                    "text": f"Let me write this on the board to make it clearer. This is the core idea behind {title}."})
+    actions.append({
+        "type": "speech", "agentId": primary_id,
+        "text": _persona_flavored(
+            f"Let me write this on the board so it's clearer. This is the core idea behind {title}.",
+            primary,
+        ),
+    })
     actions.append({"type": "wb_draw_shape", "shape": "rect", "x": 120, "y": 60, "width": 560, "height": 60, "color": "#3B82F6"})
     actions.append({"type": "wb_close"})
 
@@ -976,11 +1050,21 @@ def _fallback_actions(scene: dict, agents: list) -> dict:
     actions.append({"type": "discussion", "sessionType": "qa", "topic": f"What questions do you have about {title}?", "agentIds": all_agent_ids})
 
     # --- Closing ---
-    if len(agents) > 1:
-        actions.append({"type": "speech", "agentId": agents[1]["id"],
-                        "text": f"Excellent discussion! I think the key takeaway from {title} is really going to help in the next section."})
-    actions.append({"type": "speech", "agentId": primary_id,
-                    "text": f"Well said. Let us move on to see how these concepts apply in practice."})
+    if secondary:
+        actions.append({
+            "type": "speech", "agentId": secondary["id"],
+            "text": _persona_flavored(
+                f"Excellent discussion! The key takeaway from {title} will really help in the next section.",
+                secondary,
+            ),
+        })
+    actions.append({
+        "type": "speech", "agentId": primary_id,
+        "text": _persona_flavored(
+            "Well said. Let's move on to see how these concepts apply in practice.",
+            primary,
+        ),
+    })
 
     return {"actions": actions}
 

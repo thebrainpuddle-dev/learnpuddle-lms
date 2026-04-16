@@ -262,7 +262,7 @@ export const Stage: React.FC<StageProps> = ({ role }) => {
       />
 
       {/* Main content area */}
-      <div className="flex flex-1 min-h-0 overflow-hidden relative">
+      <div className="flex flex-1 min-h-0 overflow-hidden relative" data-testid="maic-stage">
         {/* Scene sidebar (left) */}
         {hasScenes && (
           <SceneSidebar
@@ -293,7 +293,7 @@ export const Stage: React.FC<StageProps> = ({ role }) => {
                 {/* Scene-based rendering (preferred) */}
                 {hasScenes && currentScene ? (
                   <div className="absolute inset-0">
-                    <SceneRenderer scene={currentScene} mode="playback" />
+                    <SceneRenderer scene={currentScene} mode="playback" role={role} />
                   </div>
                 ) : (viewMode === 'slides' || viewMode === 'split') && currentSlide ? (
                   <div className={cn('absolute inset-0', viewMode === 'split' && 'w-1/2')}>

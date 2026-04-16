@@ -43,6 +43,7 @@ export const ClassroomCard = React.memo<ClassroomCardProps>(function ClassroomCa
     <button
       type="button"
       onClick={onClick}
+      data-testid="classroom-card"
       className={cn(
         'group w-full text-left rounded-xl border border-gray-200 bg-white p-5',
         'shadow-sm hover:shadow-md hover:border-gray-300',

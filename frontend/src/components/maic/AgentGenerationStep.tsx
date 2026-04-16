@@ -34,6 +34,10 @@ export interface AgentGenerationStepProps {
   role: 'teacher' | 'student';
   onComplete: (agents: MAICAgent[]) => void;
   onBack: () => void;
+  /** Previously-approved agents. When provided (and non-empty), the step
+   *  re-hydrates from them instead of regenerating. Lets users click "Back"
+   *  from the outline step without losing the roster they already approved. */
+  initialAgents?: MAICAgent[];
 }
 
 export function AgentGenerationStep({
@@ -42,15 +46,16 @@ export function AgentGenerationStep({
   role,
   onComplete,
   onBack,
+  initialAgents,
 }: AgentGenerationStepProps) {
   // Pick the right service surface based on caller role. The TTS-preview +
   // voice-roster endpoints only live on the teacher service today (per the
   // plan — both wizards can use them because they're tenant-scoped only).
   const api = role === 'student' ? maicStudentApi : maicApi;
 
-  const [agents, setAgents] = useState<MAICAgent[]>([]);
+  const [agents, setAgents] = useState<MAICAgent[]>(initialAgents ?? []);
   const [voices, setVoices] = useState<MAICVoice[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!(initialAgents && initialAgents.length));
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<MAICAgent | null>(null);
   const [regenIds, setRegenIds] = useState<Set<string>>(() => new Set());
@@ -60,9 +65,14 @@ export function AgentGenerationStep({
   // Shared audio element — only one preview plays at a time.
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const blobUrlRef = useRef<string | null>(null);
+  // Monotonic generation token — bumped on every preview start or stop.
+  // Any async handler captured by an older token is a no-op. Kills the
+  // double-click race (audio overlap + blob-URL leak + stuck pause icon).
+  const previewGenRef = useRef(0);
 
   /** Tear down any active preview audio. */
   const stopPreview = useCallback(() => {
+    previewGenRef.current++;
     if (audioRef.current) {
       audioRef.current.onended = null;
       audioRef.current.onerror = null;
@@ -116,8 +126,10 @@ export function AgentGenerationStep({
     };
   }, []);
 
-  // Generate agents when the step mounts.
+  // Generate agents when the step mounts — unless the parent already supplied
+  // an approved roster (e.g. user navigated Back from the outline step).
   useEffect(() => {
+    if (initialAgents && initialAgents.length > 0) return;
     void generateAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -169,7 +181,8 @@ export function AgentGenerationStep({
         return;
       }
 
-      stopPreview();
+      stopPreview();                              // stopPreview bumps the token
+      const myGen = previewGenRef.current;        // capture THIS preview's token
       setPreviewWarn(null);
 
       try {
@@ -177,21 +190,37 @@ export function AgentGenerationStep({
           voiceId,
           text: PREVIEW_SENTENCE,
         });
-        const blobUrl = URL.createObjectURL(response.data as Blob);
-        blobUrlRef.current = blobUrl;
+        // Stale? Another click superseded us — drop the response on the floor.
+        if (myGen !== previewGenRef.current) return;
 
+        const blobUrl = URL.createObjectURL(response.data as Blob);
+        // Race check a second time — in case stopPreview() fired while decoding.
+        if (myGen !== previewGenRef.current) {
+          URL.revokeObjectURL(blobUrl);
+          return;
+        }
+
+        blobUrlRef.current = blobUrl;
         const audio = new Audio(blobUrl);
         audioRef.current = audio;
-        audio.onended = () => stopPreview();
+        audio.onended = () => {
+          // Only tear down if WE own the current preview.
+          if (myGen === previewGenRef.current) stopPreview();
+        };
         audio.onerror = () => {
-          setPreviewWarn('Voice preview unavailable — the voice will still be used in playback.');
-          stopPreview();
+          if (myGen === previewGenRef.current) {
+            setPreviewWarn('Voice preview unavailable — the voice will still be used in playback.');
+            stopPreview();
+          }
         };
         await audio.play();
+        if (myGen !== previewGenRef.current) return;  // stopPreview() fired during play()
         setPreviewingVoice(voiceId);
       } catch {
-        setPreviewWarn('Voice preview unavailable — the voice will still be used in playback.');
-        stopPreview();
+        if (myGen === previewGenRef.current) {
+          setPreviewWarn('Voice preview unavailable — the voice will still be used in playback.');
+          stopPreview();
+        }
       }
     },
     [previewingVoice, stopPreview],

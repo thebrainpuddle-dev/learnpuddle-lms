@@ -373,6 +373,7 @@ export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({ role, c
             <div
               key={msg.id}
               className={cn('flex gap-2', isUser ? 'flex-row-reverse' : 'flex-row')}
+              data-testid={isUser ? 'chat-user-message' : 'chat-agent-message'}
             >
               {/* Avatar */}
               {!isUser && agent ? (
@@ -521,7 +522,10 @@ export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({ role, c
       </ConversationContainer>
 
       {/* Enhanced PromptInput (chat tab only) */}
-      <div className={cn('shrink-0 px-4 py-3 border-t border-gray-100', activeTab !== 'chat' && 'hidden')}>
+      <div
+        className={cn('shrink-0 px-4 py-3 border-t border-gray-100', activeTab !== 'chat' && 'hidden')}
+        data-testid="chat-input"
+      >
         <PromptInput
           value={input}
           onChange={setInput}

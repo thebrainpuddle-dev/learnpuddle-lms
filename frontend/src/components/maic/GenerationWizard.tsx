@@ -465,6 +465,7 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
           topic={topic}
           language={language}
           role="teacher"
+          initialAgents={agents.length > 0 ? agents : undefined}
           onBack={() => setWizardStep(1)}
           onComplete={(approvedAgents) => void handleAgentsComplete(approvedAgents)}
         />

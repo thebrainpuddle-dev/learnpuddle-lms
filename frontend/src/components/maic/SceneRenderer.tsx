@@ -21,16 +21,21 @@ import type {
   MAICInteractiveContent,
   MAICPBLContent,
 } from '../../types/maic-scenes';
+import type { MAICRole } from '../../lib/maic/endpoints';
 import { AlertTriangle } from 'lucide-react';
 
 interface SceneRendererProps {
   scene: MAICScene;
   mode?: 'autonomous' | 'playback';
+  /** Which portal rendered this scene. Forwarded to PBLRenderer so student
+   *  PBL chat hits the student endpoint. Defaults to 'teacher' for legacy callers. */
+  role?: MAICRole;
 }
 
 export const SceneRenderer = React.memo<SceneRendererProps>(function SceneRenderer({
   scene,
   mode = 'autonomous',
+  role,
 }) {
   const content = scene.content;
   const slides = useMAICStageStore((s) => s.slides);
@@ -96,6 +101,7 @@ export const SceneRenderer = React.memo<SceneRendererProps>(function SceneRender
             content={pblContent}
             sceneId={scene.id}
             mode={mode}
+            role={role}
           />
         );
       }
