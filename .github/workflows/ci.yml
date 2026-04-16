@@ -392,8 +392,12 @@ jobs:
           echo "Current deployed SHA: \${PREV_SHA:-none}"
           echo "Deploying new SHA: ${NEW_SHA}"
 
-          # ── Pull new images ────────────────────────────────────────────
-          docker compose -f docker-compose.prod.yml pull
+          # ── Pull new images (skip locally-built services like nginx) ──
+          docker compose -f docker-compose.prod.yml pull --ignore-buildable
+
+          # ── Build nginx (frontend baked into the image) ─────────────
+          git pull origin main
+          docker compose -f docker-compose.prod.yml build nginx
 
           # ── Run migrations BEFORE restarting (prevents schema mismatch) ─
           docker compose -f docker-compose.prod.yml up -d db redis
