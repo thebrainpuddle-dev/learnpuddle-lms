@@ -15,10 +15,16 @@ import type { MAICScene } from '../types/maic-scenes';
 
 export type PlaybackState = 'idle' | 'playing' | 'paused';
 
+export interface PlaybackCheckpoint {
+  actionIndex: number;
+  sceneId?: string;
+}
+
 export interface PlaybackCallbacks {
   onStateChange?: (state: PlaybackState) => void;
   onActionStart?: (index: number, action: MAICAction) => void;
   onSceneComplete?: () => void;
+  onDiscussionPending?: (topic: string, agentIds: string[], sessionType: string) => void;
 }
 
 // ─── Engine ─────────────────────────────────────────────────────────────────
@@ -30,15 +36,22 @@ export class MAICPlaybackEngine {
   private actions: MAICAction[] = [];
   private disposed = false;
 
+  // Discussion state
+  private consumedDiscussions = new Set<number>();
+  private checkpoint: PlaybackCheckpoint | null = null;
+  private discussionPending = false;
+
   private onStateChange?: (state: PlaybackState) => void;
   private onActionStart?: (index: number, action: MAICAction) => void;
   private onSceneComplete?: () => void;
+  private onDiscussionPending?: (topic: string, agentIds: string[], sessionType: string) => void;
 
   constructor(actionEngine: MAICActionEngine, callbacks?: PlaybackCallbacks) {
     this.actionEngine = actionEngine;
     this.onStateChange = callbacks?.onStateChange;
     this.onActionStart = callbacks?.onActionStart;
     this.onSceneComplete = callbacks?.onSceneComplete;
+    this.onDiscussionPending = callbacks?.onDiscussionPending;
   }
 
   // ─── Scene Loading ──────────────────────────────────────────────────
@@ -50,6 +63,9 @@ export class MAICPlaybackEngine {
     this.stop();
     this.actions = scene.actions ? [...scene.actions] : [];
     this.currentActionIndex = 0;
+    this.consumedDiscussions.clear();
+    this.checkpoint = null;
+    this.discussionPending = false;
   }
 
   // ─── Playback Controls ─────────────────────────────────────────────
@@ -129,6 +145,31 @@ export class MAICPlaybackEngine {
     this.currentActionIndex = clamped;
   }
 
+  /**
+   * Resume playback after a discussion ends. Restores the checkpoint
+   * (saved action index) so playback continues from where it was
+   * interrupted by the discussion trigger.
+   */
+  resumeAfterDiscussion(): void {
+    if (!this.discussionPending) return;
+    this.discussionPending = false;
+
+    if (this.checkpoint) {
+      this.currentActionIndex = this.checkpoint.actionIndex;
+      this.checkpoint = null;
+    }
+
+    this.setMode('playing');
+    void this.processNext();
+  }
+
+  /**
+   * Whether the engine is waiting for a discussion to complete.
+   */
+  isDiscussionPending(): boolean {
+    return this.discussionPending;
+  }
+
   // ─── State ──────────────────────────────────────────────────────────
 
   getState(): PlaybackState {
@@ -149,9 +190,13 @@ export class MAICPlaybackEngine {
     this.disposed = true;
     this.stop();
     this.actions = [];
+    this.consumedDiscussions.clear();
+    this.checkpoint = null;
+    this.discussionPending = false;
     this.onStateChange = undefined;
     this.onActionStart = undefined;
     this.onSceneComplete = undefined;
+    this.onDiscussionPending = undefined;
   }
 
   // ─── Core Processing (Recursive, Mode-Guarded) ─────────────────────
@@ -215,8 +260,7 @@ export class MAICPlaybackEngine {
       // synchronous recursion when many consecutive effects appear in sequence.
       case 'spotlight':
       case 'laser':
-      case 'highlight':
-      case 'discussion': {
+      case 'highlight': {
         try {
           this.actionEngine.execute(action);
         } catch (err) {
@@ -227,6 +271,35 @@ export class MAICPlaybackEngine {
             void this.processNext();
           }
         });
+        break;
+      }
+
+      // ── Discussion: save checkpoint, soft-pause, notify ──
+      // Playback pauses while discussion is active. After discussion ends,
+      // call resumeAfterDiscussion() to continue from the checkpoint.
+      case 'discussion': {
+        if (this.consumedDiscussions.has(idx)) {
+          // Already triggered this discussion — skip
+          queueMicrotask(() => {
+            if (this.mode === 'playing') void this.processNext();
+          });
+          break;
+        }
+
+        this.consumedDiscussions.add(idx);
+        this.checkpoint = { actionIndex: this.currentActionIndex };
+        this.discussionPending = true;
+
+        try {
+          this.actionEngine.execute(action);
+        } catch (err) {
+          console.error(`Discussion action ${idx} failed:`, err);
+        }
+
+        // Soft-pause: set mode to paused but notify via discussion callback
+        this.setMode('paused');
+        const disc = action as import('../types/maic-actions').DiscussionAction;
+        this.onDiscussionPending?.(disc.topic, disc.agentIds, disc.sessionType);
         break;
       }
 

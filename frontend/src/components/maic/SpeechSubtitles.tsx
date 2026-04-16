@@ -10,13 +10,24 @@ interface SpeechSubtitlesProps {
   text: string | null;
   agentName?: string;
   agentColor?: string;
+  /** Secondary live text (e.g., from discussion/roundtable) */
+  liveText?: string | null;
+  liveAgentName?: string;
+  liveAgentColor?: string;
 }
 
 export const SpeechSubtitles: React.FC<SpeechSubtitlesProps> = ({
   text,
   agentName,
   agentColor = '#FFFFFF',
+  liveText,
+  liveAgentName,
+  liveAgentColor = '#10B981',
 }) => {
+  // Prefer live text (discussion) over lecture text when both present
+  const activeText = liveText || text;
+  const activeName = liveText ? liveAgentName : agentName;
+  const activeColor = liveText ? liveAgentColor : agentColor;
   const [visible, setVisible] = useState(false);
   const [displayText, setDisplayText] = useState<string | null>(null);
   const [displayAgent, setDisplayAgent] = useState<string | undefined>(undefined);
@@ -29,11 +40,11 @@ export const SpeechSubtitles: React.FC<SpeechSubtitlesProps> = ({
       timeoutRef.current = null;
     }
 
-    if (text) {
+    if (activeText) {
       // Update content and show
-      setDisplayText(text);
-      setDisplayAgent(agentName);
-      setDisplayColor(agentColor);
+      setDisplayText(activeText);
+      setDisplayAgent(activeName);
+      setDisplayColor(activeColor);
       setVisible(true);
     } else {
       // Fade out, then clear content
@@ -49,7 +60,7 @@ export const SpeechSubtitles: React.FC<SpeechSubtitlesProps> = ({
         clearTimeout(timeoutRef.current);
       }
     };
-  }, [text, agentName, agentColor]);
+  }, [activeText, activeName, activeColor]);
 
   if (!displayText && !visible) return null;
 

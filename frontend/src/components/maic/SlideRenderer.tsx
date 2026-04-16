@@ -6,6 +6,13 @@
 
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import DOMPurify from 'dompurify';
+import katex from 'katex';
+import {
+  BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
+  AreaChart, Area, RadarChart, Radar, PolarGrid, PolarAngleAxis,
+  ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip,
+  Legend, ResponsiveContainer,
+} from 'recharts';
 import type { MAICSlide, MAICSlideElement } from '../../types/maic';
 import { cn } from '../../lib/utils';
 
@@ -116,6 +123,13 @@ function renderShapeElement(el: MAICSlideElement): React.ReactNode {
           stroke={stroke}
           strokeWidth={strokeWidth}
         />
+      ) : shape === 'triangle' ? (
+        <polygon
+          points={`${el.width / 2},${strokeWidth} ${strokeWidth},${el.height - strokeWidth} ${el.width - strokeWidth},${el.height - strokeWidth}`}
+          fill={fill}
+          stroke={stroke}
+          strokeWidth={strokeWidth}
+        />
       ) : (
         <rect
           x={strokeWidth / 2}
@@ -132,30 +146,171 @@ function renderShapeElement(el: MAICSlideElement): React.ReactNode {
   );
 }
 
-function renderChartElement(el: MAICSlideElement): React.ReactNode {
+const CHART_COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#06B6D4', '#F97316'];
+
+function ChartElement({ el }: { el: MAICSlideElement }): React.ReactElement {
+  let chartData: Record<string, unknown>[] = [];
+  let chartType = 'bar';
+  let title = '';
+
+  try {
+    const parsed = JSON.parse(el.content) as {
+      type?: string;
+      chartType?: string;
+      data?: Record<string, unknown>[];
+      title?: string;
+      labels?: string[];
+      values?: number[];
+      datasets?: { label?: string; data?: number[] }[];
+    };
+    chartType = parsed.type || parsed.chartType || 'bar';
+    title = parsed.title || '';
+
+    if (parsed.data && Array.isArray(parsed.data)) {
+      chartData = parsed.data;
+    } else if (parsed.labels && parsed.values) {
+      chartData = parsed.labels.map((label, i) => ({
+        name: label,
+        value: parsed.values![i] ?? 0,
+      }));
+    } else if (parsed.datasets && parsed.labels) {
+      chartData = parsed.labels.map((label, i) => {
+        const point: Record<string, unknown> = { name: label };
+        parsed.datasets!.forEach((ds, di) => {
+          point[ds.label || `series${di}`] = ds.data?.[i] ?? 0;
+        });
+        return point;
+      });
+    }
+  } catch {
+    return (
+      <div className="h-full w-full flex items-center justify-center bg-gray-50 rounded text-gray-400 text-sm">
+        Invalid chart data
+      </div>
+    );
+  }
+
+  if (chartData.length === 0) {
+    return (
+      <div className="h-full w-full flex items-center justify-center bg-gray-50 rounded text-gray-400 text-sm">
+        No chart data
+      </div>
+    );
+  }
+
+  const dataKeys = Object.keys(chartData[0]).filter((k) => k !== 'name');
+
   return (
-    <div className="h-full w-full flex items-center justify-center bg-gray-50 rounded border border-gray-200 text-gray-400 text-sm">
-      <div className="text-center">
-        <svg className="mx-auto h-8 w-8 mb-1 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z" />
-        </svg>
-        Chart
+    <div className="h-full w-full flex flex-col">
+      {title && <div className="text-xs font-semibold text-gray-700 text-center mb-1 truncate">{title}</div>}
+      <div className="flex-1 min-h-0">
+        <ResponsiveContainer width="100%" height="100%">
+          {renderChart(chartType, chartData, dataKeys)}
+        </ResponsiveContainer>
       </div>
     </div>
   );
 }
 
+function renderChart(type: string, data: Record<string, unknown>[], dataKeys: string[]): React.ReactElement {
+  switch (type) {
+    case 'line':
+      return (
+        <LineChart data={data}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
+          <XAxis dataKey="name" tick={{ fontSize: 10 }} />
+          <YAxis tick={{ fontSize: 10 }} />
+          <Tooltip />
+          <Legend wrapperStyle={{ fontSize: 10 }} />
+          {dataKeys.map((key, i) => (
+            <Line key={key} type="monotone" dataKey={key} stroke={CHART_COLORS[i % CHART_COLORS.length]} strokeWidth={2} dot={{ r: 3 }} />
+          ))}
+        </LineChart>
+      );
+    case 'pie':
+      return (
+        <PieChart>
+          <Pie data={data} dataKey={dataKeys[0] || 'value'} nameKey="name" cx="50%" cy="50%" outerRadius="70%" label={{ fontSize: 10 }}>
+            {data.map((_, i) => (
+              <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
+            ))}
+          </Pie>
+          <Tooltip />
+          <Legend wrapperStyle={{ fontSize: 10 }} />
+        </PieChart>
+      );
+    case 'area':
+      return (
+        <AreaChart data={data}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
+          <XAxis dataKey="name" tick={{ fontSize: 10 }} />
+          <YAxis tick={{ fontSize: 10 }} />
+          <Tooltip />
+          <Legend wrapperStyle={{ fontSize: 10 }} />
+          {dataKeys.map((key, i) => (
+            <Area key={key} type="monotone" dataKey={key} fill={CHART_COLORS[i % CHART_COLORS.length]} stroke={CHART_COLORS[i % CHART_COLORS.length]} fillOpacity={0.3} />
+          ))}
+        </AreaChart>
+      );
+    case 'scatter':
+      return (
+        <ScatterChart>
+          <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
+          <XAxis dataKey={dataKeys[0] || 'x'} tick={{ fontSize: 10 }} />
+          <YAxis dataKey={dataKeys[1] || 'y'} tick={{ fontSize: 10 }} />
+          <Tooltip />
+          <Scatter data={data} fill={CHART_COLORS[0]} />
+        </ScatterChart>
+      );
+    case 'radar':
+      return (
+        <RadarChart data={data} cx="50%" cy="50%" outerRadius="70%">
+          <PolarGrid />
+          <PolarAngleAxis dataKey="name" tick={{ fontSize: 10 }} />
+          {dataKeys.map((key, i) => (
+            <Radar key={key} dataKey={key} stroke={CHART_COLORS[i % CHART_COLORS.length]} fill={CHART_COLORS[i % CHART_COLORS.length]} fillOpacity={0.3} />
+          ))}
+          <Legend wrapperStyle={{ fontSize: 10 }} />
+          <Tooltip />
+        </RadarChart>
+      );
+    case 'bar':
+    default:
+      return (
+        <BarChart data={data}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
+          <XAxis dataKey="name" tick={{ fontSize: 10 }} />
+          <YAxis tick={{ fontSize: 10 }} />
+          <Tooltip />
+          <Legend wrapperStyle={{ fontSize: 10 }} />
+          {dataKeys.map((key, i) => (
+            <Bar key={key} dataKey={key} fill={CHART_COLORS[i % CHART_COLORS.length]} radius={[2, 2, 0, 0]} />
+          ))}
+        </BarChart>
+      );
+  }
+}
+
 function renderLatexElement(el: MAICSlideElement): React.ReactNode {
+  let html: string;
+  try {
+    html = katex.renderToString(el.content, {
+      throwOnError: false,
+      displayMode: true,
+    });
+  } catch {
+    html = `<code>${el.content}</code>`;
+  }
+
   return (
-    <span
-      className="katex-display block overflow-auto"
+    <div
+      className="overflow-auto"
       style={{
         fontSize: (el.style?.fontSize as string) || '18px',
         color: (el.style?.color as string) || undefined,
       }}
-    >
-      {el.content}
-    </span>
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
   );
 }
 
@@ -243,7 +398,7 @@ const elementRenderers: Record<MAICSlideElement['type'], (el: MAICSlideElement) 
   text: renderTextElement,
   image: (el) => <ImageElement el={el} />,
   shape: renderShapeElement,
-  chart: renderChartElement,
+  chart: (el) => <ChartElement el={el} />,
   latex: renderLatexElement,
   code: renderCodeElement,
   table: renderTableElement,

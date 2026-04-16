@@ -79,6 +79,7 @@ export type MAICSSEEventType =
   | 'scene_content'
   | 'chat_message'
   | 'agent_speaking'
+  | 'agent_thinking'
   | 'slide_update'
   | 'generation_progress'
   | 'generation_complete'

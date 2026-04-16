@@ -69,6 +69,13 @@ export function usePlaybackEngine(role: 'teacher' | 'student' = 'teacher') {
       onActionStart: (index: number, _action: MAICAction) => {
         setCurrentActionIndex(index);
       },
+      onDiscussionPending: (topic: string, agentIds: string[], sessionType: string) => {
+        // Discussion triggered — the engine has soft-paused itself.
+        // The RoundtablePanel will show and call resumeAfterDiscussion() when done.
+        useMAICStageStore
+          .getState()
+          .setDiscussionMode(sessionType as 'qa' | 'roundtable' | 'classroom');
+      },
       onSceneComplete: () => {
         setCurrentActionIndex(0);
 
@@ -126,6 +133,10 @@ export function usePlaybackEngine(role: 'teacher' | 'student' = 'teacher') {
   const seekTo = useCallback((index: number) => {
     engineRef.current?.seekTo(index);
     setCurrentActionIndex(index);
+  }, []);
+
+  const resumeAfterDiscussion = useCallback(() => {
+    engineRef.current?.resumeAfterDiscussion();
   }, []);
 
   const loadScene = useCallback((scene: MAICScene) => {
@@ -194,6 +205,7 @@ export function usePlaybackEngine(role: 'teacher' | 'student' = 'teacher') {
     stop,
     seekTo,
     loadScene,
+    resumeAfterDiscussion,
     startClass,
     playFromCurrent,
     stopClass,

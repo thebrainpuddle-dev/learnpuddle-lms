@@ -88,6 +88,7 @@ export const Stage: React.FC<StageProps> = ({ role }) => {
     pause,
     resume,
     loadScene,
+    resumeAfterDiscussion,
     startClass,
     playFromCurrent,
     stopClass,
@@ -131,7 +132,9 @@ export const Stage: React.FC<StageProps> = ({ role }) => {
     setDiscussionMode(null);
     setDiscussionTopic('');
     setDiscussionAgentIds([]);
-  }, [setDiscussionMode]);
+    // Resume playback from the checkpoint saved when discussion was triggered
+    resumeAfterDiscussion();
+  }, [setDiscussionMode, resumeAfterDiscussion]);
 
   const handleToggleDiscussion = useCallback(() => {
     if (discussionMode) {

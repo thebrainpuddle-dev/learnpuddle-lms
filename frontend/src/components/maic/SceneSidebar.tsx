@@ -5,10 +5,11 @@
 // estimated duration, progress indicator, and active scene highlight with
 // left border accent.
 
-import React, { useCallback, useMemo } from 'react';
-import { X } from 'lucide-react';
+import React, { useCallback, useMemo, useState } from 'react';
+import { X, GripVertical } from 'lucide-react';
 import { useMAICStageStore } from '../../stores/maicStageStore';
 import type { MAICScene, MAICSceneType, SceneSlideBounds } from '../../types/maic-scenes';
+import type { MAICSlide } from '../../types/maic';
 import { cn } from '../../lib/utils';
 
 interface SceneSidebarProps {
@@ -49,6 +50,37 @@ function estimateMinutes(scene: MAICScene, slideCount: number): number {
   return Math.max(1, slideCount);
 }
 
+/** Mini thumbnail preview showing the first slide's content as a preview card */
+function SceneThumbnail({ slide, isActive }: { slide?: MAICSlide; isActive: boolean }) {
+  if (!slide) return null;
+
+  // Extract first text element as preview
+  const textEl = slide.elements.find((e) => e.type === 'text');
+  const imageEl = slide.elements.find((e) => e.type === 'image');
+  const previewText = textEl?.content?.replace(/\\n/g, ' ').replace(/<[^>]*>/g, '').slice(0, 60) || '';
+
+  return (
+    <div
+      className={cn(
+        'w-full aspect-video rounded border overflow-hidden text-[6px] leading-tight',
+        'flex items-center justify-center p-1',
+        isActive
+          ? 'border-primary-300 bg-primary-50'
+          : 'border-gray-200 bg-gray-50',
+      )}
+      style={{ background: slide.background || '#ffffff' }}
+    >
+      {imageEl?.src ? (
+        <img src={imageEl.src} alt="" className="w-full h-full object-cover rounded-sm" loading="lazy" />
+      ) : previewText ? (
+        <span className="text-gray-500 line-clamp-3 text-center px-0.5">{previewText}</span>
+      ) : (
+        <span className="text-gray-300">{slide.title || 'Slide'}</span>
+      )}
+    </div>
+  );
+}
+
 export const SceneSidebar = React.memo<SceneSidebarProps>(function SceneSidebar({
   visible,
   onClose,
@@ -59,6 +91,29 @@ export const SceneSidebar = React.memo<SceneSidebarProps>(function SceneSidebar(
   const currentSceneIndex = useMAICStageStore((s) => s.currentSceneIndex);
   const currentSlideIndex = useMAICStageStore((s) => s.currentSlideIndex);
   const goToScene = useMAICStageStore((s) => s.goToScene);
+
+  // Sidebar resizing
+  const [sidebarWidth, setSidebarWidth] = useState(288); // 18rem default
+  const [isResizing, setIsResizing] = useState(false);
+
+  const handleResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+    const startX = e.clientX;
+    const startWidth = sidebarWidth;
+
+    const onMove = (moveEvent: MouseEvent) => {
+      const delta = moveEvent.clientX - startX;
+      setSidebarWidth(Math.max(220, Math.min(450, startWidth + delta)));
+    };
+    const onUp = () => {
+      setIsResizing(false);
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }, [sidebarWidth]);
 
   // Build slide distribution across scenes, preferring sceneSlideBounds when available
   const sceneSlideInfo = useMemo(() => {
@@ -100,10 +155,11 @@ export const SceneSidebar = React.memo<SceneSidebarProps>(function SceneSidebar(
   return (
     <div
       className={cn(
-        'absolute inset-y-0 left-0 z-30 w-72 bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-700 shadow-lg',
+        'absolute inset-y-0 left-0 z-30 bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-700 shadow-lg',
         'flex flex-col transition-transform duration-200 ease-in-out',
         visible ? 'translate-x-0' : '-translate-x-full',
       )}
+      style={{ width: sidebarWidth }}
       role="navigation"
       aria-label="Scene list"
     >
@@ -163,13 +219,13 @@ export const SceneSidebar = React.memo<SceneSidebarProps>(function SceneSidebar(
                 )}
                 aria-current={isActive ? 'true' : undefined}
               >
-                {/* Emoji icon */}
-                <span
-                  className="shrink-0 flex items-center justify-center h-8 w-8 rounded-lg bg-gray-100 dark:bg-gray-800 text-base"
-                  aria-hidden="true"
-                >
-                  {emoji}
-                </span>
+                {/* Thumbnail preview */}
+                <div className="shrink-0 w-16">
+                  <SceneThumbnail
+                    slide={slides[info.startIdx]}
+                    isActive={isActive}
+                  />
+                </div>
 
                 {/* Content */}
                 <div className="flex-1 min-w-0">
@@ -188,7 +244,7 @@ export const SceneSidebar = React.memo<SceneSidebarProps>(function SceneSidebar(
 
                   {/* Metadata row: type badge, slide count, duration */}
                   <div className="flex items-center gap-1.5 mt-1">
-                    {/* Type badge */}
+                    {/* Type badge with emoji */}
                     <span
                       className={cn(
                         'text-[9px] px-1.5 py-0.5 rounded-full font-medium',
@@ -197,7 +253,7 @@ export const SceneSidebar = React.memo<SceneSidebarProps>(function SceneSidebar(
                           : 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400',
                       )}
                     >
-                      {label}
+                      {emoji} {label}
                     </span>
 
                     {/* Slide count badge */}
@@ -243,6 +299,16 @@ export const SceneSidebar = React.memo<SceneSidebarProps>(function SceneSidebar(
           );
         })}
       </ul>
+
+      {/* Resize handle */}
+      <div
+        className={cn(
+          'absolute inset-y-0 right-0 w-1.5 cursor-col-resize hover:bg-primary-200 transition-colors z-10',
+          isResizing && 'bg-primary-300',
+        )}
+        onMouseDown={handleResizeStart}
+        title="Drag to resize"
+      />
     </div>
   );
 });
