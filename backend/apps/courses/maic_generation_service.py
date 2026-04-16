@@ -22,6 +22,12 @@ import requests as http_requests
 from json_repair import repair_json
 
 from apps.courses.maic_models import TenantAIConfig
+from apps.courses.maic_voices import (
+    AZURE_IN_VOICES,
+    VOICE_BY_ID,
+    voice_matches_role,
+)
+from apps.courses.prompts.loader import load_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +39,59 @@ AGENT_VOICE_MAP = {
     "student_rep": "en-US-AriaNeural",
     "moderator": "en-US-DavisNeural",
 }
+
+
+# ─── Agent Profile Validation ────────────────────────────────────────────────
+
+class AgentValidationError(ValueError):
+    """Raised when a generated agent roster fails validation."""
+
+
+def validate_agents(agents: list[dict], role_slots: list[dict]) -> None:
+    """Raise AgentValidationError if the agent list doesn't satisfy constraints.
+
+    role_slots: [{"role": "professor", "count": 1}, ...]
+    """
+    # Count by role must match role_slots
+    role_counts: dict[str, int] = {}
+    for a in agents:
+        role_counts[a["role"]] = role_counts.get(a["role"], 0) + 1
+    for slot in role_slots:
+        actual = role_counts.get(slot["role"], 0)
+        if actual != slot["count"]:
+            raise AgentValidationError(
+                f"role {slot['role']}: expected {slot['count']}, got {actual}"
+            )
+
+    # Voice constraints
+    seen_voices: set[str] = set()
+    for a in agents:
+        voice_id = a.get("voiceId")
+        if voice_id not in VOICE_BY_ID:
+            raise AgentValidationError(f"voice {voice_id!r} not in roster")
+        if voice_id in seen_voices:
+            raise AgentValidationError(f"duplicate voice: {voice_id}")
+        seen_voices.add(voice_id)
+        if not voice_matches_role(voice_id, a["role"]):
+            raise AgentValidationError(
+                f"voice {voice_id} does not suit role {a['role']}"
+            )
+
+    # Gender balance when count ≥ 3
+    if len(agents) >= 3:
+        genders = {VOICE_BY_ID[a["voiceId"]]["gender"] for a in agents}
+        if len(genders) < 2:
+            raise AgentValidationError(
+                "gender balance required: need at least one male and one female"
+            )
+
+    # Duplicate colors / avatars
+    colors = [a["color"] for a in agents]
+    if len(set(colors)) != len(colors):
+        raise AgentValidationError("duplicate color")
+    avatars = [a["avatar"] for a in agents]
+    if len(set(avatars)) != len(avatars):
+        raise AgentValidationError("duplicate avatar")
 
 # ─── LLM Call Helpers ─────────────────────────────────────────────────────────
 
@@ -115,6 +174,113 @@ def _parse_json_from_llm(text: str) -> dict | list | None:
         return None
 
 
+# ─── Agent Profile Generation ────────────────────────────────────────────────
+
+def generate_agent_profiles_json(
+    topic: str,
+    language: str,
+    role_slots: list[dict],
+    config: TenantAIConfig,
+) -> dict:
+    """Generate an agent roster via LLM, validated against our constraints.
+
+    Retries once on validation failure. Raises AgentValidationError on persistent failure.
+    """
+    system_prompt = load_prompt("agent_profiles")
+
+    # Build the rendered system prompt by filling in template variables baked
+    # into the markdown: {{topic}}, {{language}}, {{role_slots_json}}, {{voices_json}}.
+    rendered = system_prompt.replace("{{topic}}", topic)
+    rendered = rendered.replace("{{language}}", language)
+    rendered = rendered.replace("{{role_slots_json}}", json.dumps(role_slots, indent=2))
+    rendered = rendered.replace("{{voices_json}}", json.dumps(AZURE_IN_VOICES, indent=2))
+
+    user_prompt = f'Generate the agents for the topic "{topic}" in {language}.'
+
+    last_error = None
+    for attempt in range(2):
+        raw = _call_llm(config, rendered, user_prompt, temperature=0.9, max_tokens=2048)
+        if not raw:
+            last_error = "LLM returned empty"
+            continue
+        parsed = _parse_json_from_llm(raw)
+        if not parsed or not isinstance(parsed, dict) or "agents" not in parsed:
+            last_error = "invalid JSON"
+            continue
+        try:
+            validate_agents(parsed["agents"], role_slots)
+            return parsed
+        except AgentValidationError as e:
+            last_error = str(e)
+            logger.warning("Agent profile validation failed (attempt %d): %s", attempt + 1, e)
+            continue
+
+    raise AgentValidationError(
+        f"generation failed after 2 attempts: {last_error}"
+    )
+
+
+def regenerate_one_agent(
+    topic: str,
+    language: str,
+    existing_agents: list[dict],
+    target_agent_id: str,
+    locked_fields: list[str],
+    config: TenantAIConfig,
+) -> dict:
+    """Regenerate a single agent distinct from the existing set.
+
+    locked_fields: list of field names to preserve from the existing agent (e.g., ['voiceId']).
+    Returns the new agent dict wrapped in {"agent": ...}.
+    """
+    existing = next((a for a in existing_agents if a["id"] == target_agent_id), None)
+    if not existing:
+        raise ValueError(f"target_agent_id {target_agent_id} not in existing_agents")
+    others = [a for a in existing_agents if a["id"] != target_agent_id]
+    target_role = existing["role"]
+
+    system_prompt = (
+        "You are an expert instructional designer. Generate ONE replacement AI agent "
+        f'for an Indian classroom teaching "{topic}" in {language}.\n'
+        f"The new agent must fill this role slot: {target_role}.\n"
+        f"The new agent must be distinct from these existing agents:\n"
+        f"{json.dumps(others, indent=2)}\n"
+        f"The new agent MUST preserve these locked fields from the existing agent: {locked_fields}.\n"
+        f"Existing agent (for locked fields only): "
+        f"{json.dumps({k: existing.get(k) for k in locked_fields})}\n"
+        "Follow the same naming/styling rules as full roster generation: Indian names, "
+        "no stereotypes, 1 cultural phrase in speakingStyle (used sparingly).\n"
+        'Return ONLY JSON: {"agent": {...}}'
+    )
+    user_prompt = f"Generate replacement agent for id={target_agent_id}."
+
+    raw = _call_llm(config, system_prompt, user_prompt, temperature=0.9, max_tokens=1024)
+    parsed = _parse_json_from_llm(raw or "")
+    if not parsed or not isinstance(parsed, dict) or "agent" not in parsed:
+        raise AgentValidationError("regenerate returned invalid JSON")
+
+    new_agent = parsed["agent"]
+    # Force-preserve locked fields
+    for field in locked_fields:
+        new_agent[field] = existing[field]
+    new_agent["id"] = target_agent_id  # always preserve id
+
+    # Validate against full roster: replace target in list, re-validate
+    full = [new_agent if a["id"] == target_agent_id else a for a in existing_agents]
+    role_slots_from_existing = _infer_role_slots(existing_agents)
+    validate_agents(full, role_slots_from_existing)
+
+    return {"agent": new_agent}
+
+
+def _infer_role_slots(agents: list[dict]) -> list[dict]:
+    """Build a role-slot list by counting roles in the provided agent roster."""
+    counts: dict[str, int] = {}
+    for a in agents:
+        counts[a["role"]] = counts.get(a["role"], 0) + 1
+    return [{"role": r, "count": c} for r, c in counts.items()]
+
+
 # ─── SSE Formatting ──────────────────────────────────────────────────────────
 
 def _sse_event(event_type: str, data: dict) -> str:
@@ -130,7 +296,9 @@ def _sse_done() -> str:
 
 OUTLINE_SYSTEM_PROMPT = """You are an expert educational content designer creating a multi-agent interactive classroom.
 
-Return a valid JSON object with this exact structure:
+You will receive a pre-configured agent roster. Do NOT invent new agents. Use the exact `id`s from the roster when assigning agents to scenes.
+
+Return a valid JSON object:
 {
   "scenes": [
     {
@@ -144,17 +312,6 @@ Return a valid JSON object with this exact structure:
       "questionCount": 0
     }
   ],
-  "agents": [
-    {
-      "id": "agent-1",
-      "name": "Professor Chen",
-      "role": "professor",
-      "avatar": "\\ud83d\\udc68\\u200d\\ud83c\\udfeb",
-      "color": "#4F46E5",
-      "personality": "Warm, authoritative, uses analogies to explain complex ideas",
-      "expertise": "Subject matter expert who leads lectures"
-    }
-  ],
   "totalMinutes": 20
 }
 
@@ -162,10 +319,8 @@ Rules:
 - The FIRST scene MUST be type "introduction" — all agents introduce themselves and preview the class
 - The LAST scene MUST be type "summary" — wrap up key takeaways and next steps
 - Automatically insert a "quiz" scene after every 2-3 lecture/discussion scenes to reinforce learning
-- Create exactly the requested number of scenes and agents after the introduction
 - Each scene should have 2-5 minutes estimated time
-- Every scene MUST have at least 2 agents assigned (for dialogue)
-- Agents should have DISTINCT personalities — one might be enthusiastic, another analytical, another asks probing questions
+- Every scene MUST have at least 2 agents assigned (for dialogue) drawn from the provided roster
 - Scene type distribution: introduction -> lectures -> quiz -> lectures/discussion -> quiz -> summary
 - For "lecture" scenes: set "slideCount" to 5-8 (number of slides to generate)
 - For "discussion" scenes: set "slideCount" to 3-5
@@ -173,32 +328,38 @@ Rules:
 - For "summary" scenes: set "slideCount" to 3-4
 - For "quiz" scenes: set "questionCount" to 3-5, "slideCount" to 1
 - For "activity" scenes: set "slideCount" to 3-5
-- For "pbl" scenes: set "slideCount" to 4-6, include project overview, milestones, deliverables
-- For "case_study" scenes: set "slideCount" to 4-6, include scenario, analysis, discussion points
-- Agent roles: professor (leads), teaching_assistant (supports, asks questions), student_rep (raises common confusions), moderator (guides discussion)
-- Agent names should be realistic full names (e.g. "Dr. Sarah Kim", "Professor James Rivera")
-- Agent colors should be visually distinct hex colors
-- Agent avatars should be relevant emoji
-- Include a "personality" field that describes how this agent talks and thinks
-- Include an "expertise" field that describes what this agent contributes"""
+- For "pbl" scenes: set "slideCount" to 4-6
+- For "case_study" scenes: set "slideCount" to 4-6
+- Use agentIds ONLY from the provided roster — never invent new ids."""
 
 
-def generate_outline_sse(topic: str, language: str, agent_count: int,
+def generate_outline_sse(topic: str, language: str, agents: list[dict],
                          scene_count: int, pdf_text: str | None,
                          config: TenantAIConfig):
     """
     Generator that yields SSE-formatted strings for outline streaming.
     Used as the body of a StreamingHttpResponse.
-    """
-    user_prompt = f"""Create a classroom outline for the following:
 
-Topic: {topic}
-Language: {language}
-Number of AI agents: {agent_count}
-Number of scenes: {scene_count}
-"""
+    ``agents`` is the authoritative roster produced by ``generate_agent_profiles_json``
+    (or a teacher-edited variant). The outline prompt no longer invents agents;
+    it assigns the supplied agent ids to scenes only.
+    """
+    agent_roster_for_prompt = [{
+        "id": a["id"],
+        "name": a["name"],
+        "role": a["role"],
+        "personality": a.get("personality", ""),
+    } for a in agents]
+
+    user_prompt = (
+        "Create a classroom outline for the following:\n"
+        f"\nTopic: {topic}"
+        f"\nLanguage: {language}"
+        f"\nNumber of scenes: {scene_count}"
+        "\n\nAgent roster (use these ids when assigning agents to scenes):\n"
+        f"{json.dumps(agent_roster_for_prompt, indent=2)}\n"
+    )
     if pdf_text:
-        # Truncate to avoid token limits
         excerpt = pdf_text[:15000]
         user_prompt += f"\nReference material (excerpt):\n{excerpt}\n"
 
@@ -221,31 +382,26 @@ Number of scenes: {scene_count}
         yield _sse_done()
         return
 
-    # Ensure required fields exist
+    # Ensure required fields exist on scenes and that agent ids come from the supplied roster
     scenes = parsed.get("scenes", [])
-    agents = parsed.get("agents", [])
-    total_minutes = parsed.get("totalMinutes", sum(s.get("estimatedMinutes", 3) for s in scenes))
+    total_minutes = parsed.get("totalMinutes",
+                                sum(s.get("estimatedMinutes", 3) for s in scenes))
 
-    # Validate/fix scene IDs and agent IDs — ensure every scene has ≥2 agents
-    all_agent_ids = [a.get("id", f"agent-{j+1}") for j, a in enumerate(agents)]
+    agent_ids_allowed = {a["id"] for a in agents}
     for i, scene in enumerate(scenes):
         if not scene.get("id"):
             scene["id"] = f"scene-{i + 1}"
-        if not scene.get("agentIds") or len(scene.get("agentIds", [])) < 2:
-            # Assign at least 2 agents — primary + one supporting
-            scene["agentIds"] = all_agent_ids[:min(len(all_agent_ids), 3)]
-
-    for i, agent in enumerate(agents):
-        if not agent.get("id"):
-            agent["id"] = f"agent-{i + 1}"
-        if not agent.get("color"):
-            agent["color"] = ["#4F46E5", "#059669", "#D97706", "#DC2626", "#7C3AED"][i % 5]
-        if not agent.get("avatar"):
-            agent["avatar"] = ["👨‍🏫", "👩‍🎓", "🤖", "👨‍💼", "👩‍🔬"][i % 5]
+        scene_agent_ids = [
+            aid for aid in scene.get("agentIds", []) if aid in agent_ids_allowed
+        ]
+        if len(scene_agent_ids) < 2:
+            # Fall back: pick first two ids from the supplied roster
+            scene_agent_ids = [a["id"] for a in agents[:2]]
+        scene["agentIds"] = scene_agent_ids
 
     outline_data = {
         "scenes": scenes,
-        "agents": agents,
+        "agents": agents,               # pass-through from input
         "totalMinutes": total_minutes,
     }
 
@@ -627,6 +783,7 @@ ACTION TYPES (12 types — use all of these for maximum engagement):
 12. discussion  — Start discussion segment (requires: sessionType ["qa"|"roundtable"], topic, agentIds)
 
 CRITICAL RULES:
+- VOICE DISCIPLINE: You MUST write speech text that reflects each agent's `speakingStyle`, including any cultural phrases the style notes. Each agent's lines should be identifiable as that agent's voice, not generic LLM prose. Use the cultural phrases SPARINGLY — one phrase per agent across the whole scene, not every line.
 - Generate 15-25 actions per scene (more is better for engagement)
 - EVERY assigned agent MUST speak at least 3 times
 - For multi-slide scenes, you MUST include "transition" actions between slides
@@ -701,6 +858,7 @@ def generate_scene_actions(scene: dict, agents: list, language: str,
         "name": a["name"],
         "role": a.get("role", "professor"),
         "personality": a.get("personality", ""),
+        "speakingStyle": a.get("speakingStyle", ""),
     } for a in assigned_agents])
 
     slides_json = json.dumps(slides_desc, indent=2) if slides_desc else "[]"
@@ -829,51 +987,52 @@ def _fallback_actions(scene: dict, agents: list) -> dict:
 
 # ─── Chat Generation ────────────────────────────────────────────────────────
 
-CHAT_SYSTEM_PROMPT = """You are a panel of AI teaching agents in an interactive classroom. Multiple agents should respond to the student's question, each bringing their unique perspective.
+CHAT_SYSTEM_PROMPT = """You are a panel of AI teaching agents in an interactive classroom. Multiple agents should respond to the student's question, each bringing their unique perspective and their own voice.
 
 You MUST return a valid JSON array of agent responses:
 [
-  {{"agentId": "agent-1", "agentName": "Dr. Smith", "content": "Your response here..."}},
-  {{"agentId": "agent-2", "agentName": "Alex", "content": "Building on that, I'd add..."}}
+  {"agentId": "agent-1", "agentName": "Dr. Aarav Sharma", "content": "Your response..."},
+  {"agentId": "agent-2", "agentName": "Ms. Priya Iyer", "content": "Building on that..."}
 ]
 
 Rules:
 - Return 2-3 agent responses (not just one)
 - The lead agent (professor) answers first with the main explanation
 - Supporting agents add perspective, ask follow-ups, give analogies, or provide examples
-- Each response should be 2-4 sentences
+- Each response is 2-4 sentences
+- EACH AGENT MUST SPEAK IN THEIR OWN VOICE per their `personality` and `speakingStyle`. Do not write generic answers — make them identifiable.
+- Use each agent's cultural phrases (from speakingStyle) SPARINGLY — at most once per response
 - Be conversational, warm, and encouraging
 - Reference the classroom topic naturally
-- If the question is off-topic, gently redirect
-- Use the agent's personality and role to shape their response style"""
+- If the question is off-topic, gently redirect"""
 
 
 def generate_chat_sse(message: str, classroom_title: str, agents: list,
                       config: TenantAIConfig):
     """
     Generator that yields SSE-formatted strings for multi-agent chat responses.
-    Multiple agents respond, each with their unique perspective.
+    Multiple agents respond, each with their unique perspective and voice.
     """
     if not agents:
         agents = [{"id": "agent-1", "name": "Teaching Assistant", "role": "professor"}]
 
-    agent_roster = json.dumps([{
-        "agentId": a.get("id"),
-        "agentName": a.get("name"),
+    agents_for_prompt = json.dumps([{
+        "id": a.get("id"),
+        "name": a.get("name"),
         "role": a.get("role", "professor"),
         "personality": a.get("personality", ""),
-    } for a in agents[:4]])  # Max 4 agents in chat
+        "speakingStyle": a.get("speakingStyle", ""),
+    } for a in agents[:4]], indent=2)  # Max 4 agents in chat
 
-    system = f"""{CHAT_SYSTEM_PROMPT}
+    user_prompt = f"""Classroom topic: {classroom_title}
+Agents (each must speak in their own voice):
+{agents_for_prompt}
 
-Classroom topic: {classroom_title}
+Student question: {message}
 
-Available agents (use these exact IDs and names):
-{agent_roster}
+Generate 2-3 agent responses."""
 
-Respond with a JSON array. The first response should be from the lead professor, followed by 1-2 supporting agents."""
-
-    raw = _call_llm(config, system, message, temperature=0.7, max_tokens=2048)
+    raw = _call_llm(config, CHAT_SYSTEM_PROMPT, user_prompt, temperature=0.7, max_tokens=2048)
 
     if not raw:
         yield _sse_event("chat_message", {
