@@ -27,8 +27,9 @@ import {
 import { useMAICStageStore } from '../../stores/maicStageStore';
 import { useMAICCanvasStore } from '../../stores/maicCanvasStore';
 import { useMAICSettingsStore } from '../../stores/maicSettingsStore';
-import type { MAICPlayerRole, MAICViewMode, WhiteboardToolType } from '../../types/maic';
+import type { MAICPlayerRole, MAICSlideTransition, MAICViewMode, WhiteboardToolType } from '../../types/maic';
 import { cn } from '../../lib/utils';
+import { SettingsDialog } from './settings';
 
 interface StageToolbarProps {
   role: MAICPlayerRole;
@@ -56,6 +57,20 @@ const PRESET_COLORS = [
 const STROKE_WIDTHS = [1, 2, 4, 6, 8];
 
 const PLAYBACK_SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
+
+/** Ordered cycle for the inline speed button: 1 -> 1.25 -> 1.5 -> 2 -> 0.5 -> 0.75 -> 1 */
+const INLINE_SPEED_CYCLE = [1, 1.25, 1.5, 2, 0.5, 0.75] as const;
+
+const SLIDE_TRANSITIONS: { value: MAICSlideTransition; label: string }[] = [
+  { value: 'none', label: 'None' },
+  { value: 'fade', label: 'Fade' },
+  { value: 'slideLeft', label: 'Left' },
+  { value: 'slideRight', label: 'Right' },
+  { value: 'slideUp', label: 'Up' },
+  { value: 'slideDown', label: 'Down' },
+  { value: 'zoom', label: 'Zoom' },
+  { value: 'flip', label: 'Flip' },
+];
 
 /** Notes panel toggle — reads showNotesPanel from the stage store */
 function NotesToggleButton() {
@@ -116,8 +131,11 @@ export const StageToolbar = React.memo<StageToolbarProps>(function StageToolbar(
   const setPlaybackSpeed = useMAICSettingsStore((s) => s.setPlaybackSpeed);
   const autoPlay = useMAICSettingsStore((s) => s.autoPlay);
   const setAutoPlay = useMAICSettingsStore((s) => s.setAutoPlay);
+  const slideTransition = useMAICSettingsStore((s) => s.slideTransition);
+  const setSlideTransition = useMAICSettingsStore((s) => s.setSlideTransition);
 
   const [showSettings, setShowSettings] = useState(false);
+  const [showSettingsDialog, setShowSettingsDialog] = useState(false);
   const [showColorPicker, setShowColorPicker] = useState(false);
 
   const showWhiteboardTools = role === 'teacher' && (viewMode === 'whiteboard' || viewMode === 'split');
@@ -137,6 +155,12 @@ export const StageToolbar = React.memo<StageToolbarProps>(function StageToolbar(
   const handleStop = useCallback(() => {
     setPlaying(false);
   }, [setPlaying]);
+
+  const handleCycleSpeed = useCallback(() => {
+    const currentIdx = INLINE_SPEED_CYCLE.indexOf(playbackSpeed as typeof INLINE_SPEED_CYCLE[number]);
+    const nextIdx = currentIdx === -1 ? 0 : (currentIdx + 1) % INLINE_SPEED_CYCLE.length;
+    setPlaybackSpeed(INLINE_SPEED_CYCLE[nextIdx]);
+  }, [playbackSpeed, setPlaybackSpeed]);
 
   return (
     <div className="flex items-center justify-between gap-2 px-3 py-2 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700">
@@ -304,6 +328,17 @@ export const StageToolbar = React.memo<StageToolbarProps>(function StageToolbar(
           <Square className="h-4 w-4" />
         </button>
 
+        {/* Inline speed selector */}
+        <button
+          type="button"
+          onClick={handleCycleSpeed}
+          className="text-[10px] px-1.5 py-1 rounded-md bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 tabular-nums font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500"
+          title={`Playback speed: ${playbackSpeed}x (click to cycle)`}
+          aria-label={`Playback speed ${playbackSpeed}x`}
+        >
+          {playbackSpeed}x
+        </button>
+
         {/* Divider */}
         <div className="w-px h-5 bg-gray-200 dark:bg-gray-700 mx-1" aria-hidden="true" />
 
@@ -403,6 +438,31 @@ export const StageToolbar = React.memo<StageToolbarProps>(function StageToolbar(
                 </div>
               </div>
 
+              {/* Slide Transition */}
+              <div>
+                <label className="flex items-center justify-between text-xs text-gray-600 dark:text-gray-400 mb-1">
+                  <span>Slide Transition</span>
+                  <span className="tabular-nums capitalize">{slideTransition}</span>
+                </label>
+                <div className="flex flex-wrap items-center gap-1">
+                  {SLIDE_TRANSITIONS.map(({ value, label }) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => setSlideTransition(value)}
+                      className={cn(
+                        'text-[10px] px-1.5 py-1 rounded transition-colors',
+                        slideTransition === value
+                          ? 'bg-primary-100 text-primary-700 font-medium dark:bg-primary-900 dark:text-primary-300'
+                          : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700',
+                      )}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               {/* Toggles */}
               <div className="space-y-2 border-t border-gray-100 dark:border-gray-700 pt-2">
                 <label className="flex items-center justify-between text-xs text-gray-600 dark:text-gray-400 cursor-pointer">
@@ -438,6 +498,20 @@ export const StageToolbar = React.memo<StageToolbarProps>(function StageToolbar(
                   <span>N</span><span>Notes panel</span>
                 </div>
               </div>
+
+              {/* Open full settings dialog */}
+              <div className="border-t border-gray-100 dark:border-gray-700 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowSettings(false);
+                    setShowSettingsDialog(true);
+                  }}
+                  className="w-full text-left text-xs text-primary-600 hover:text-primary-700 font-medium transition-colors"
+                >
+                  All Settings...
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -461,6 +535,9 @@ export const StageToolbar = React.memo<StageToolbarProps>(function StageToolbar(
           )}
         </button>
       </div>
+
+      {/* Full settings dialog */}
+      <SettingsDialog open={showSettingsDialog} onClose={() => setShowSettingsDialog(false)} />
     </div>
   );
 });

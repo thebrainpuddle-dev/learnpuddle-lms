@@ -49,8 +49,8 @@ export const maicApi = {
     api.post('/v1/teacher/maic/export/html/', { classroomId }, { responseType: 'blob' }),
 
   // Web search
-  webSearch: (query: string) =>
-    api.post('/v1/teacher/maic/web-search/', { query }),
+  webSearch: (query: string, maxResults?: number) =>
+    api.post('/v1/teacher/maic/web-search/', { query, max_results: maxResults }),
 
   // Generation proxies (additional)
   generateSceneActions: (data: {
@@ -75,6 +75,35 @@ export const maicApi = {
     sceneSlideBounds: SceneSlideBounds[];
   }) =>
     api.patch(`/v1/teacher/maic/classrooms/${classroomId}/update/`, { content }),
+
+  /** Chat/orchestration — send message to agent for streaming response */
+  chat: (data: {
+    classroomId?: string;
+    agentId: string;
+    messages: Array<{ role: string; content: string }>;
+    systemPrompt: string;
+    discussionContext?: { topic: string; prompt?: string };
+  }) =>
+    api.post('/v1/teacher/maic/chat/', data),
+
+  /** Generate TTS audio via the backend proxy */
+  generateTTS: (data: {
+    text: string;
+    providerId: string;
+    voice: string;
+    speed?: number;
+    modelId?: string;
+    format?: string;
+  }) =>
+    api.post('/v1/teacher/maic/generate/tts/', data, { responseType: 'arraybuffer' }),
+
+  /** Transcribe audio via the backend proxy */
+  transcribe: (formData: FormData) =>
+    api.post('/v1/teacher/maic/transcribe/', formData),
+
+  /** Parse a PDF for text extraction */
+  parsePdf: (formData: FormData) =>
+    api.post('/v1/teacher/maic/parse-pdf/', formData),
 };
 
 // ─── MAIC AI Classroom API (Student) ─────────────────────────────────────────

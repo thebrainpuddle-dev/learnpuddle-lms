@@ -7,19 +7,22 @@
 // into a unified interactive stage.
 
 import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
+import { Pencil } from 'lucide-react';
 import { useMAICStageStore } from '../../stores/maicStageStore';
 import { useMAICSettingsStore } from '../../stores/maicSettingsStore';
+import { initKeyboardListeners } from '../../stores/maicKeyboardStore';
 import { usePlaybackEngine } from '../../hooks/usePlaybackEngine';
 import { useKeyboardShortcuts } from '../../hooks/useKeyboardShortcuts';
-import type { MAICPlayerRole } from '../../types/maic';
+import type { MAICPlayerRole, MAICSlide } from '../../types/maic';
 import type { MAICSlideContent } from '../../types/maic-scenes';
 import { SceneRenderer } from './SceneRenderer';
 import { SlideRenderer } from './SlideRenderer';
+import { SlideEditor } from './slide-editor';
 import { Whiteboard } from './Whiteboard';
 import { ChatPanel } from './ChatPanel';
 import { SlideNavigator } from './SlideNavigator';
 import { StageToolbar } from './StageToolbar';
-import { AgentAvatar } from './AgentAvatar';
+import { PresentationSpeechOverlay } from './PresentationSpeechOverlay';
 import { AudioPlayer } from './AudioPlayer';
 import { SpotlightOverlay } from './SpotlightOverlay';
 import { SpeechSubtitles } from './SpeechSubtitles';
@@ -27,6 +30,9 @@ import { RoundtablePanel } from './RoundtablePanel';
 import { ExportMenu } from './ExportMenu';
 import { SceneSidebar } from './SceneSidebar';
 import { NotesPanel } from './NotesPanel';
+import { ProactiveCardManager } from './ProactiveCardManager';
+import { HighlightOverlay } from './HighlightOverlay';
+import { LaserPointer } from './LaserPointer';
 import { cn } from '../../lib/utils';
 
 interface StageProps {
@@ -61,8 +67,27 @@ export const Stage: React.FC<StageProps> = ({ role }) => {
   const audioVolume = useMAICSettingsStore((s) => s.audioVolume);
   const setAudioVolume = useMAICSettingsStore((s) => s.setAudioVolume);
 
+  const spotlightElementId = useMAICStageStore((s) => s.spotlightElementId);
+  const setSpotlightElementId = useMAICStageStore((s) => s.setSpotlightElementId);
+  const laserElementId = useMAICStageStore((s) => s.laserElementId);
+  const laserColor = useMAICStageStore((s) => s.laserColor);
+
   const [spotlightActive, setSpotlightActive] = useState(false);
   const [showSceneSidebar, setShowSceneSidebar] = useState(false);
+  const [editMode, setEditMode] = useState(false);
+
+  const setSlides = useMAICStageStore((s) => s.setSlides);
+
+  // ─── Slide Editor ─────────────────────────────────────────────────
+  const handleSlideUpdate = useCallback(
+    (updatedSlide: MAICSlide) => {
+      const newSlides = slides.map((s) =>
+        s.id === updatedSlide.id ? updatedSlide : s,
+      );
+      setSlides(newSlides);
+    },
+    [slides, setSlides],
+  );
 
   // ─── Mobile Swipe Navigation ──────────────────────────────────────
   const touchStartRef = useRef<number>(0);
@@ -191,6 +216,12 @@ export const Stage: React.FC<StageProps> = ({ role }) => {
     enabled: true,
   });
 
+  // ─── Keyboard modifier tracking (Ctrl/Shift/Space) ─────────────────
+  useEffect(() => {
+    const cleanup = initKeyboardListeners();
+    return cleanup;
+  }, []);
+
   // ─── Empty State ─────────────────────────────────────────────────────
   if (slides.length === 0 && scenes.length === 0) {
     return (
@@ -235,19 +266,31 @@ export const Stage: React.FC<StageProps> = ({ role }) => {
         >
           {/* 16:9 aspect ratio container — fill viewport as much as possible */}
           <div className="relative w-full max-w-[95vw] max-h-[calc(100%-0.5rem)] aspect-video bg-white rounded-lg shadow-lg overflow-hidden">
-            {/* Scene-based rendering (preferred) */}
-            {hasScenes && currentScene ? (
+            {/* Edit mode: render SlideEditor (teacher only) */}
+            {editMode && role === 'teacher' && currentSlide ? (
               <div className="absolute inset-0">
-                <SceneRenderer scene={currentScene} mode="playback" />
+                <SlideEditor
+                  slide={currentSlide}
+                  onSlideUpdate={handleSlideUpdate}
+                />
               </div>
-            ) : (viewMode === 'slides' || viewMode === 'split') && currentSlide ? (
-              <div className={cn('absolute inset-0', viewMode === 'split' && 'w-1/2')}>
-                <SlideRenderer slide={currentSlide} />
-              </div>
-            ) : null}
+            ) : (
+              <>
+                {/* Scene-based rendering (preferred) */}
+                {hasScenes && currentScene ? (
+                  <div className="absolute inset-0">
+                    <SceneRenderer scene={currentScene} mode="playback" />
+                  </div>
+                ) : (viewMode === 'slides' || viewMode === 'split') && currentSlide ? (
+                  <div className={cn('absolute inset-0', viewMode === 'split' && 'w-1/2')}>
+                    <SlideRenderer slide={currentSlide} />
+                  </div>
+                ) : null}
+              </>
+            )}
 
-            {/* Whiteboard layer */}
-            {(viewMode === 'whiteboard' || viewMode === 'split' || showWhiteboard) && (
+            {/* Whiteboard layer (hidden in edit mode) */}
+            {!editMode && (viewMode === 'whiteboard' || viewMode === 'split' || showWhiteboard) && (
               <div className={cn(
                 'absolute inset-0',
                 viewMode === 'split' && !hasScenes && 'left-1/2 w-1/2 border-l border-gray-300',
@@ -260,7 +303,7 @@ export const Stage: React.FC<StageProps> = ({ role }) => {
             )}
 
             {/* Whiteboard overlay for teacher annotations on slides */}
-            {!showWhiteboard && viewMode === 'slides' && role === 'teacher' && !hasScenes && (
+            {!editMode && !showWhiteboard && viewMode === 'slides' && role === 'teacher' && !hasScenes && (
               <Whiteboard sceneId={sceneId} readonly={false} />
             )}
 
@@ -268,6 +311,19 @@ export const Stage: React.FC<StageProps> = ({ role }) => {
             <SpotlightOverlay
               active={spotlightActive}
               onToggle={() => setSpotlightActive(false)}
+            />
+
+            {/* Highlight overlay for element highlighting (driven by store) */}
+            <HighlightOverlay
+              elementId={spotlightElementId}
+              active={!!spotlightElementId}
+              onDismiss={() => setSpotlightElementId(null)}
+            />
+
+            {/* Laser pointer effect (driven by store) */}
+            <LaserPointer
+              active={!!laserElementId}
+              color={laserColor || '#ef4444'}
             />
 
             {/* Start Class overlay — shows when class hasn't started */}
@@ -301,14 +357,27 @@ export const Stage: React.FC<StageProps> = ({ role }) => {
             )}
           </div>
 
-          {/* Speaking agent avatar (bottom-left) */}
-          {speakingAgent && (
-            <div className="absolute bottom-6 left-6 flex items-center gap-2 bg-black/60 backdrop-blur-sm rounded-full pl-1 pr-3 py-1">
-              <AgentAvatar agent={speakingAgent} isSpeaking size="sm" />
-              <span className="text-xs text-white font-medium">
-                {speakingAgent.name}
-              </span>
-            </div>
+          {/* Speaking agent overlay (bottom-left) */}
+          <PresentationSpeechOverlay
+            agent={speakingAgent}
+            speechText={speechText}
+            active={!!speakingAgent}
+          />
+
+          {/* Edit mode toggle (teacher only) */}
+          {role === 'teacher' && currentSlide && (
+            <button
+              onClick={() => setEditMode((v) => !v)}
+              title={editMode ? 'Exit edit mode' : 'Edit slide'}
+              className={cn(
+                'absolute top-2 right-14 z-20 p-2 rounded-lg transition-colors shadow-sm',
+                editMode
+                  ? 'bg-blue-600 text-white hover:bg-blue-700'
+                  : 'bg-white/90 text-gray-600 hover:bg-white hover:text-gray-900',
+              )}
+            >
+              <Pencil className="w-4 h-4" />
+            </button>
           )}
 
           {/* Export menu (teacher only) */}
@@ -324,6 +393,11 @@ export const Stage: React.FC<StageProps> = ({ role }) => {
             text={speechText}
             agentName={speakingAgent?.name}
             agentColor={speakingAgent?.color}
+          />
+
+          {/* Proactive discussion suggestion cards */}
+          <ProactiveCardManager
+            enabled={isClassPlaying && !discussionMode}
           />
         </div>
 

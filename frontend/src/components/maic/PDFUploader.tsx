@@ -1,13 +1,16 @@
 // src/components/maic/PDFUploader.tsx
 //
-// Drag-and-drop zone for PDF files. Reads the file client-side, performs
-// basic text extraction, and passes the extracted text to the parent via
-// onExtract callback.
+// Drag-and-drop zone for PDF files. Uploads the file to the Django backend
+// for parsing, then displays a rich preview of the results. Falls back to
+// client-side pdfjs-dist text extraction if the backend is unreachable.
 
 import React, { useState, useRef, useCallback } from 'react';
 import { Upload, FileText, X, AlertCircle } from 'lucide-react';
 import * as pdfjsLib from 'pdfjs-dist';
 import { cn } from '../../lib/utils';
+import { parsePDF } from '../../lib/pdf/pdf-service';
+import type { ParsedPdfContent } from '../../lib/pdf/types';
+import { PDFContentPreview } from './PDFContentPreview';
 
 // Configure worker — use the bundled worker from pdfjs-dist
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
@@ -17,6 +20,8 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
 
 interface PDFUploaderProps {
   onExtract: (text: string) => void;
+  /** When provided, receives the full parsed PDF content from the backend */
+  onParsedContent?: (content: ParsedPdfContent) => void;
 }
 
 interface UploadState {
@@ -53,7 +58,7 @@ async function extractTextFromPDF(buffer: ArrayBuffer): Promise<{ text: string; 
   return { text: text || '(No extractable text found in PDF)', pageCount };
 }
 
-export const PDFUploader = React.memo<PDFUploaderProps>(function PDFUploader({ onExtract }) {
+export const PDFUploader = React.memo<PDFUploaderProps>(function PDFUploader({ onExtract, onParsedContent }) {
   const [state, setState] = useState<UploadState>({
     status: 'idle',
     fileName: null,
@@ -62,6 +67,8 @@ export const PDFUploader = React.memo<PDFUploaderProps>(function PDFUploader({ o
     error: null,
   });
   const [isDragOver, setIsDragOver] = useState(false);
+  const [parsedContent, setParsedContent] = useState<ParsedPdfContent | null>(null);
+  const [showPreview, setShowPreview] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const processFile = useCallback(
@@ -85,12 +92,13 @@ export const PDFUploader = React.memo<PDFUploaderProps>(function PDFUploader({ o
         error: null,
       });
 
+      // Try backend-powered parsing first, fall back to client-side pdfjs
       try {
-        const buffer = await file.arrayBuffer();
-        setState((prev) => ({ ...prev, progress: 60 }));
-
-        const { text, pageCount } = await extractTextFromPDF(buffer);
+        setState((prev) => ({ ...prev, progress: 30 }));
+        const parsed = await parsePDF(file);
         setState((prev) => ({ ...prev, progress: 90 }));
+
+        const pageCount = parsed.metadata?.pageCount ?? 0;
 
         setState({
           status: 'done',
@@ -100,18 +108,41 @@ export const PDFUploader = React.memo<PDFUploaderProps>(function PDFUploader({ o
           error: null,
         });
 
-        onExtract(text);
-      } catch (err) {
-        setState({
-          status: 'error',
-          fileName: file.name,
-          pageCount: 0,
-          progress: 0,
-          error: err instanceof Error ? err.message : 'Failed to process PDF.',
-        });
+        setParsedContent(parsed);
+        setShowPreview(true);
+        onParsedContent?.(parsed);
+        onExtract(parsed.text);
+      } catch {
+        // Backend unreachable — fall back to client-side extraction
+        try {
+          setState((prev) => ({ ...prev, progress: 50 }));
+          const buffer = await file.arrayBuffer();
+          setState((prev) => ({ ...prev, progress: 70 }));
+
+          const { text, pageCount } = await extractTextFromPDF(buffer);
+          setState((prev) => ({ ...prev, progress: 90 }));
+
+          setState({
+            status: 'done',
+            fileName: file.name,
+            pageCount,
+            progress: 100,
+            error: null,
+          });
+
+          onExtract(text);
+        } catch (err) {
+          setState({
+            status: 'error',
+            fileName: file.name,
+            pageCount: 0,
+            progress: 0,
+            error: err instanceof Error ? err.message : 'Failed to process PDF.',
+          });
+        }
       }
     },
-    [onExtract],
+    [onExtract, onParsedContent],
   );
 
   const handleDrop = useCallback(
@@ -149,9 +180,26 @@ export const PDFUploader = React.memo<PDFUploaderProps>(function PDFUploader({ o
       progress: 0,
       error: null,
     });
+    setParsedContent(null);
+    setShowPreview(false);
     if (inputRef.current) {
       inputRef.current.value = '';
     }
+  }, []);
+
+  const handleUseContent = useCallback(
+    (text: string, images: string[]) => {
+      onExtract(text);
+      if (onParsedContent && parsedContent) {
+        onParsedContent({ ...parsedContent, text, images });
+      }
+      setShowPreview(false);
+    },
+    [onExtract, onParsedContent, parsedContent],
+  );
+
+  const handleClosePreview = useCallback(() => {
+    setShowPreview(false);
   }, []);
 
   return (
@@ -250,6 +298,17 @@ export const PDFUploader = React.memo<PDFUploaderProps>(function PDFUploader({ o
               <X className="h-4 w-4" />
             </button>
           </div>
+        </div>
+      )}
+
+      {/* PDF Content Preview (shown after backend parsing) */}
+      {showPreview && parsedContent && (
+        <div className="mt-3">
+          <PDFContentPreview
+            content={parsedContent}
+            onUseContent={handleUseContent}
+            onClose={handleClosePreview}
+          />
         </div>
       )}
 

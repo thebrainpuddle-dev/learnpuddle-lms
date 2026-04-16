@@ -5,6 +5,7 @@
 // container that preserves 16:9 aspect ratio.
 
 import React, { useRef, useState, useEffect, useCallback } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
 import DOMPurify from 'dompurify';
 import katex from 'katex';
 import {
@@ -13,7 +14,8 @@ import {
   ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip,
   Legend, ResponsiveContainer,
 } from 'recharts';
-import type { MAICSlide, MAICSlideElement } from '../../types/maic';
+import type { MAICSlide, MAICSlideElement, MAICSlideTransition } from '../../types/maic';
+import { useMAICSettingsStore } from '../../stores/maicSettingsStore';
 import { cn } from '../../lib/utils';
 
 // Design space the LLM generates coordinates for
@@ -405,6 +407,59 @@ const elementRenderers: Record<MAICSlideElement['type'], (el: MAICSlideElement) 
   video: renderVideoElement,
 };
 
+// ─── Transition variants ────────────────────────────────────────────────────
+
+function getTransitionVariants(transition: MAICSlideTransition, direction: 'next' | 'prev') {
+  const sign = direction === 'next' ? 1 : -1;
+
+  switch (transition) {
+    case 'none':
+      return { initial: {}, animate: {}, exit: {} };
+    case 'fade':
+      return {
+        initial: { opacity: 0 },
+        animate: { opacity: 1 },
+        exit: { opacity: 0 },
+      };
+    case 'slideLeft':
+      return {
+        initial: { x: `${100 * sign}%`, opacity: 0 },
+        animate: { x: 0, opacity: 1 },
+        exit: { x: `${-100 * sign}%`, opacity: 0 },
+      };
+    case 'slideRight':
+      return {
+        initial: { x: `${-100 * sign}%`, opacity: 0 },
+        animate: { x: 0, opacity: 1 },
+        exit: { x: `${100 * sign}%`, opacity: 0 },
+      };
+    case 'slideUp':
+      return {
+        initial: { y: `${100 * sign}%`, opacity: 0 },
+        animate: { y: 0, opacity: 1 },
+        exit: { y: `${-100 * sign}%`, opacity: 0 },
+      };
+    case 'slideDown':
+      return {
+        initial: { y: `${-100 * sign}%`, opacity: 0 },
+        animate: { y: 0, opacity: 1 },
+        exit: { y: `${100 * sign}%`, opacity: 0 },
+      };
+    case 'zoom':
+      return {
+        initial: { scale: 0.8, opacity: 0 },
+        animate: { scale: 1, opacity: 1 },
+        exit: { scale: 1.2, opacity: 0 },
+      };
+    case 'flip':
+      return {
+        initial: { rotateY: 90, opacity: 0 },
+        animate: { rotateY: 0, opacity: 1 },
+        exit: { rotateY: -90, opacity: 0 },
+      };
+  }
+}
+
 // ─── SlideRenderer ──────────────────────────────────────────────────────────
 
 export const SlideRenderer = React.memo<SlideRendererProps>(function SlideRenderer({
@@ -415,23 +470,22 @@ export const SlideRenderer = React.memo<SlideRendererProps>(function SlideRender
   const containerRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
 
-  // ─── Slide transition state ────────────────────────────────────────────
-  const [isTransitioning, setIsTransitioning] = useState(false);
-  const [displaySlide, setDisplaySlide] = useState(slide);
+  // ─── Transition direction tracking ─────────────────────────────────────
+  const slideTransition = useMAICSettingsStore((s) => s.slideTransition);
+  const prevSlideIdRef = useRef(slide.id);
+  const slideIndexRef = useRef(slideNumber ?? 0);
+  const [direction, setDirection] = useState<'next' | 'prev'>('next');
 
   useEffect(() => {
-    if (displaySlide.id === slide.id) {
-      // Same slide — just update content in-place without transition
-      setDisplaySlide(slide);
-      return;
+    if (slide.id !== prevSlideIdRef.current) {
+      const currentIndex = slideNumber ?? 0;
+      setDirection(currentIndex >= slideIndexRef.current ? 'next' : 'prev');
+      prevSlideIdRef.current = slide.id;
+      slideIndexRef.current = currentIndex;
     }
-    setIsTransitioning(true);
-    const timer = setTimeout(() => {
-      setDisplaySlide(slide);
-      setIsTransitioning(false);
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [slide]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [slide.id, slideNumber]);
+
+  const variants = getTransitionVariants(slideTransition, direction);
 
   const updateScale = useCallback(() => {
     const el = containerRef.current;
@@ -452,52 +506,60 @@ export const SlideRenderer = React.memo<SlideRendererProps>(function SlideRender
     <div
       ref={containerRef}
       className="relative w-full h-full overflow-hidden flex items-center justify-center"
-      style={{ background: displaySlide.background || '#ffffff' }}
+      style={{
+        background: slide.background || '#ffffff',
+        perspective: slideTransition === 'flip' ? 1000 : undefined,
+      }}
       role="region"
-      aria-label={`Slide: ${displaySlide.title}`}
+      aria-label={`Slide: ${slide.title}`}
     >
-      {/* Transition wrapper */}
-      <div
-        className={cn(
-          'transition-opacity duration-300 ease-in-out w-full h-full',
-          isTransitioning ? 'opacity-0' : 'opacity-100',
-        )}
-      >
-        {/* Scaled design-space canvas */}
-        <div
-          className="relative"
-          style={{
-            width: DESIGN_WIDTH,
-            height: DESIGN_HEIGHT,
-            transform: `scale(${scale})`,
-            transformOrigin: 'top left',
-            position: 'absolute',
-            top: Math.max(0, (containerRef.current?.clientHeight ?? 0) - DESIGN_HEIGHT * scale) / 2,
-            left: Math.max(0, (containerRef.current?.clientWidth ?? 0) - DESIGN_WIDTH * scale) / 2,
-          }}
+      {/* Animated transition wrapper */}
+      <AnimatePresence mode="wait">
+        <motion.div
+          key={slide.id}
+          variants={variants}
+          initial="initial"
+          animate="animate"
+          exit="exit"
+          transition={{ duration: 0.3, ease: 'easeInOut' }}
+          className="w-full h-full"
         >
-          {displaySlide.elements.map((el) => {
-            const renderer = elementRenderers[el.type];
-            if (!renderer) return null;
+          {/* Scaled design-space canvas */}
+          <div
+            className="relative"
+            style={{
+              width: DESIGN_WIDTH,
+              height: DESIGN_HEIGHT,
+              transform: `scale(${scale})`,
+              transformOrigin: 'top left',
+              position: 'absolute',
+              top: Math.max(0, (containerRef.current?.clientHeight ?? 0) - DESIGN_HEIGHT * scale) / 2,
+              left: Math.max(0, (containerRef.current?.clientWidth ?? 0) - DESIGN_WIDTH * scale) / 2,
+            }}
+          >
+            {slide.elements.map((el) => {
+              const renderer = elementRenderers[el.type];
+              if (!renderer) return null;
 
-            return (
-              <div
-                key={el.id}
-                id={el.id}
-                className="absolute"
-                style={{
-                  left: el.x,
-                  top: el.y,
-                  width: el.width,
-                  height: el.height,
-                }}
-              >
-                {renderer(el)}
-              </div>
-            );
-          })}
-        </div>
-      </div>
+              return (
+                <div
+                  key={el.id}
+                  id={el.id}
+                  className="absolute"
+                  style={{
+                    left: el.x,
+                    top: el.y,
+                    width: el.width,
+                    height: el.height,
+                  }}
+                >
+                  {renderer(el)}
+                </div>
+              );
+            })}
+          </div>
+        </motion.div>
+      </AnimatePresence>
 
       {/* Slide counter indicator */}
       {slideNumber != null && totalSlides != null && totalSlides > 1 && (

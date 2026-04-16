@@ -13,6 +13,7 @@ import {
   AlertCircle,
   Sparkles,
   Play,
+  Globe,
 } from 'lucide-react';
 import { useMAICGeneration, type GenerationStep } from '../../hooks/useMAICGeneration';
 import { maicApi } from '../../services/openmaicService';
@@ -20,6 +21,7 @@ import type { MAICGenerationConfig, MAICOutlineScene } from '../../types/maic';
 import { OutlineEditor } from './OutlineEditor';
 import { PDFUploader } from './PDFUploader';
 import { GenerationVisualizer } from './GenerationVisualizer';
+import { WebSearchPanel } from './WebSearchPanel';
 import { cn } from '../../lib/utils';
 
 interface GenerationWizardProps {
@@ -73,6 +75,10 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
   const [classroomId, setClassroomId] = useState<string | null>(null);
   const [wizardStep, setWizardStep] = useState<WizardStep>(1);
 
+  // Web search state
+  const [showWebSearch, setShowWebSearch] = useState(false);
+  const [webSearchContext, setWebSearchContext] = useState<string | undefined>();
+
   const {
     step: genStep,
     phase,
@@ -93,12 +99,21 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
 
   // ─── Step 1: Generate outline ─────────────────────────────────────────────
 
+  // ─── Web search context insertion ──────────────────────────────────────────
+
+  const handleInsertWebContext = useCallback((context: string) => {
+    setWebSearchContext((prev) => (prev ? `${prev}\n\n${context}` : context));
+  }, []);
+
   const handleGenerateOutline = useCallback(async () => {
     if (!topic.trim()) return;
 
+    // Combine PDF text and web search context for richer generation
+    const combinedContext = [pdfText, webSearchContext].filter(Boolean).join('\n\n---\n\n') || undefined;
+
     const config: MAICGenerationConfig = {
       topic: topic.trim(),
-      pdfText,
+      pdfText: combinedContext,
       language,
       agentCount,
       sceneCount,
@@ -109,7 +124,7 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
 
     await startOutlineGeneration(config);
     setWizardStep(2);
-  }, [topic, pdfText, language, agentCount, sceneCount, courseId, startOutlineGeneration]);
+  }, [topic, pdfText, webSearchContext, language, agentCount, sceneCount, courseId, startOutlineGeneration]);
 
   // ─── Step 2: Start full generation ────────────────────────────────────────
 
@@ -167,6 +182,8 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
     setSceneCount(6);
     setClassroomId(null);
     setWizardStep(1);
+    setShowWebSearch(false);
+    setWebSearchContext(undefined);
   }, [resetGeneration]);
 
   return (
@@ -267,6 +284,60 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
               Reference PDF <span className="text-xs text-gray-400">(optional)</span>
             </label>
             <PDFUploader onExtract={setPdfText} />
+          </div>
+
+          {/* Web search toggle + panel */}
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-sm font-medium text-gray-700">
+                Enrich with web search <span className="text-xs text-gray-400">(optional)</span>
+              </label>
+              <button
+                type="button"
+                onClick={() => setShowWebSearch(!showWebSearch)}
+                className={cn(
+                  'relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-1',
+                  showWebSearch ? 'bg-indigo-600' : 'bg-gray-200',
+                )}
+                role="switch"
+                aria-checked={showWebSearch}
+                aria-label="Toggle web search"
+              >
+                <span
+                  className={cn(
+                    'inline-block h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-transform',
+                    showWebSearch ? 'translate-x-4.5' : 'translate-x-0.5',
+                  )}
+                />
+              </button>
+            </div>
+
+            {showWebSearch && (
+              <div className="mt-2">
+                <WebSearchPanel onInsertContext={handleInsertWebContext} role="teacher" />
+                {webSearchContext && (
+                  <div className="mt-2 rounded-lg bg-indigo-50 border border-indigo-100 px-3 py-2">
+                    <div className="flex items-center justify-between">
+                      <span className="inline-flex items-center gap-1.5 text-xs font-medium text-indigo-700">
+                        <Globe className="h-3 w-3" />
+                        Web context added
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setWebSearchContext(undefined)}
+                        className="text-[10px] text-indigo-400 hover:text-indigo-600 transition-colors"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                    <p className="text-[11px] text-indigo-600 mt-1 line-clamp-2">
+                      {webSearchContext.slice(0, 150)}
+                      {webSearchContext.length > 150 && '...'}
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Language */}

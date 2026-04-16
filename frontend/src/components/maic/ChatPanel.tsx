@@ -3,16 +3,28 @@
 // Right sidebar panel for multi-agent classroom chat. Displays conversation
 // history with agent-colored bubbles, role badges, relative timestamps,
 // typing indicator, and allows user participation via SSE streaming.
+// Uses ConversationContainer for auto-scrolling and PromptInput for enhanced
+// input with slash commands and suggestions.
 
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { Send, BookOpen, MessageCircle } from 'lucide-react';
+import { BookOpen, MessageCircle } from 'lucide-react';
 import { useMAICStageStore } from '../../stores/maicStageStore';
 import { useAuthStore } from '../../stores/authStore';
 import { streamMAIC } from '../../lib/maicSSE';
 import { updateClassroomChat } from '../../lib/maicDb';
 import type { MAICChatMessage, MAICPlayerRole, MAICSSEEvent, MAICAgent } from '../../types/maic';
 import { AgentAvatar } from './AgentAvatar';
+import { StreamMarkdown } from './StreamMarkdown';
+import { PromptInput } from './PromptInput';
+import { ConversationContainer } from './ConversationContainer';
 import { cn } from '../../lib/utils';
+import {
+  ChainOfThought,
+  ChainOfThoughtTrigger,
+  ChainOfThoughtContent,
+  ChainOfThoughtStep,
+} from './ai-elements/ChainOfThought';
+import { CodeBlock } from './ai-elements/CodeBlock';
 
 type ChatTab = 'chat' | 'notes';
 
@@ -44,6 +56,33 @@ function formatRelativeTime(ts: number): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
+/** Check if content contains a fenced code block. */
+function hasCodeBlock(content: string): boolean {
+  return /```(\w+)?\n[\s\S]*?```/.test(content);
+}
+
+/** Split content into segments: text and code blocks. */
+function splitCodeBlocks(content: string): Array<{ type: 'text' | 'code'; value: string; language?: string }> {
+  const segments: Array<{ type: 'text' | 'code'; value: string; language?: string }> = [];
+  const regex = /```(\w+)?\n([\s\S]*?)```/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(content)) !== null) {
+    if (match.index > lastIndex) {
+      segments.push({ type: 'text', value: content.slice(lastIndex, match.index) });
+    }
+    segments.push({ type: 'code', value: match[2], language: match[1] });
+    lastIndex = match.index + match[0].length;
+  }
+
+  if (lastIndex < content.length) {
+    segments.push({ type: 'text', value: content.slice(lastIndex) });
+  }
+
+  return segments;
+}
+
 /** Derive a subtle background tint from an agent color for message bubbles. */
 function agentBubbleBg(color: string): string {
   // Append low opacity — works for hex colors
@@ -56,16 +95,15 @@ export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({ role, c
   const agents = useMAICStageStore((s) => s.agents);
   const scenes = useMAICStageStore((s) => s.scenes);
   const currentSceneIndex = useMAICStageStore((s) => s.currentSceneIndex);
-  const speechText = useMAICStageStore((s) => s.speechText);
-  const speakingAgentId = useMAICStageStore((s) => s.speakingAgentId);
   const accessToken = useAuthStore((s) => s.accessToken);
 
   const [activeTab, setActiveTab] = useState<ChatTab>('chat');
   const [input, setInput] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [thinkingAgentId, setThinkingAgentId] = useState<string | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
+  const [reasoningSteps, setReasoningSteps] = useState<string[]>([]);
+  const [showReasoning, setShowReasoning] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
   // Build lecture notes from scene speech actions
@@ -83,11 +121,6 @@ export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({ role, c
     }).filter((s) => s.notes.length > 0);
   }, [scenes, currentSceneIndex]);
 
-  // Auto-scroll to newest message
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [chatMessages.length]);
-
   // Persist chat history to IndexedDB when messages change
   useEffect(() => {
     if (chatMessages.length > 0 && classroomId) {
@@ -104,12 +137,40 @@ export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({ role, c
     [agents],
   );
 
-  const handleSend = useCallback(async () => {
-    const trimmed = input.trim();
+  // Context-aware suggestion pills based on current scene
+  const suggestions = useMemo(() => {
+    const currentScene = scenes[currentSceneIndex];
+    const base = ['Explain this concept', 'Quiz me'];
+    if (currentScene?.title) {
+      base.unshift(`Summarize "${currentScene.title}"`);
+    }
+    if (chatMessages.length === 0) {
+      base.push('Give me an example');
+    }
+    return base.slice(0, 4);
+  }, [scenes, currentSceneIndex, chatMessages.length]);
+
+  const handleSuggestionClick = useCallback((suggestion: string) => {
+    setInput(suggestion);
+  }, []);
+
+  // Stop ongoing generation
+  const handleStop = useCallback(() => {
+    abortRef.current?.abort();
+    setIsSending(false);
+    setThinkingAgentId(null);
+    setStreamingMessageId(null);
+  }, []);
+
+  // Send a message (accepts text directly from PromptInput)
+  const handleSubmit = useCallback(async (text: string) => {
+    const trimmed = text.trim();
     if (!trimmed || isSending || !accessToken) return;
 
     setInput('');
     setIsSending(true);
+    setReasoningSteps([]);
+    setShowReasoning(false);
 
     // Add user message locally
     const userMsg: MAICChatMessage = {
@@ -141,18 +202,24 @@ export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({ role, c
         if (event.type === 'chat_message') {
           setThinkingAgentId(null);
           const data = event.data as { content: string; agentId?: string; agentName?: string };
+          const msgId = `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
           const assistantMsg: MAICChatMessage = {
-            id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            id: msgId,
             role: 'assistant',
             agentId: data.agentId || event.agentId,
             agentName: data.agentName,
             content: data.content,
             timestamp: Date.now(),
           };
+          setStreamingMessageId(msgId);
           addChatMessage(assistantMsg);
         } else if (event.type === 'agent_thinking' || event.type === 'agent_speaking') {
-          const data = event.data as { agentId?: string };
+          const data = event.data as { agentId?: string; step?: string };
           setThinkingAgentId(data.agentId || event.agentId || null);
+          if (data.step) {
+            setShowReasoning(true);
+            setReasoningSteps((prev) => [...prev, data.step as string]);
+          }
         }
       },
       onError: (err) => {
@@ -167,21 +234,12 @@ export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({ role, c
       onDone: () => {
         setIsSending(false);
         setThinkingAgentId(null);
+        setStreamingMessageId(null);
       },
     });
 
     setIsSending(false);
-  }, [input, isSending, accessToken, role, classroomId, addChatMessage]);
-
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        handleSend();
-      }
-    },
-    [handleSend],
-  );
+  }, [isSending, accessToken, role, classroomId, addChatMessage]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -269,9 +327,12 @@ export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({ role, c
                 </div>
                 <div className="space-y-1.5">
                   {section.notes.map((note, ni) => (
-                    <p key={ni} className="text-xs text-gray-600 leading-relaxed">
-                      {note}
-                    </p>
+                    <div key={ni} className="text-xs text-gray-600">
+                      <StreamMarkdown
+                        content={note}
+                        className="text-xs leading-relaxed"
+                      />
+                    </div>
                   ))}
                 </div>
               </div>
@@ -280,8 +341,12 @@ export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({ role, c
         </div>
       )}
 
-      {/* Chat Messages Tab */}
-      <div className={cn('flex-1 overflow-y-auto px-4 py-3 space-y-3', activeTab !== 'chat' && 'hidden')} aria-live="polite">
+      {/* Chat Messages Tab — wrapped in ConversationContainer for auto-scroll */}
+      <ConversationContainer
+        className={cn(activeTab !== 'chat' && 'hidden')}
+        autoScroll
+        showScrollToBottom
+      >
         {chatMessages.length === 0 && (
           <p className="text-sm text-gray-400 text-center mt-8">
             No messages yet. Ask a question to start the conversation.
@@ -361,7 +426,33 @@ export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({ role, c
                       : undefined
                   }
                 >
-                  {msg.content}
+                  {isUser ? (
+                    msg.content
+                  ) : hasCodeBlock(msg.content) && msg.id !== streamingMessageId ? (
+                    splitCodeBlocks(msg.content).map((seg, si) =>
+                      seg.type === 'code' ? (
+                        <CodeBlock
+                          key={si}
+                          code={seg.value}
+                          language={seg.language}
+                          showLineNumbers={seg.value.split('\n').length > 3}
+                          className="my-2 -mx-1"
+                        />
+                      ) : (
+                        <StreamMarkdown
+                          key={si}
+                          content={seg.value}
+                          className="text-sm leading-relaxed"
+                        />
+                      ),
+                    )
+                  ) : (
+                    <StreamMarkdown
+                      content={msg.content}
+                      isStreaming={msg.id === streamingMessageId}
+                      className="text-sm leading-relaxed"
+                    />
+                  )}
                 </div>
                 {/* Timestamp */}
                 <p
@@ -376,6 +467,30 @@ export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({ role, c
             </div>
           );
         })}
+
+        {/* Chain of Thought reasoning display */}
+        {showReasoning && reasoningSteps.length > 0 && (
+          <div className="px-1">
+            <ChainOfThought defaultOpen={true}>
+              <ChainOfThoughtTrigger>
+                {thinkingAgentId
+                  ? `${getAgent(thinkingAgentId)?.name ?? 'Agent'}'s reasoning`
+                  : 'AI reasoning'}
+              </ChainOfThoughtTrigger>
+              <ChainOfThoughtContent>
+                {reasoningSteps.map((step, i) => (
+                  <ChainOfThoughtStep
+                    key={i}
+                    number={i + 1}
+                    type={i === reasoningSteps.length - 1 && isSending ? 'analyzing' : 'completed'}
+                  >
+                    {step}
+                  </ChainOfThoughtStep>
+                ))}
+              </ChainOfThoughtContent>
+            </ChainOfThought>
+          </div>
+        )}
 
         {/* Thinking indicator with agent identity */}
         {isSending && (
@@ -404,45 +519,23 @@ export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({ role, c
             </div>
           </div>
         )}
+      </ConversationContainer>
 
-        <div ref={messagesEndRef} />
-      </div>
-
-      {/* Input area (chat tab only) */}
+      {/* Enhanced PromptInput (chat tab only) */}
       <div className={cn('shrink-0 px-4 py-3 border-t border-gray-100', activeTab !== 'chat' && 'hidden')}>
-        <div className="flex items-end gap-2">
-          <textarea
-            ref={inputRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Ask the classroom..."
-            rows={1}
-            disabled={isSending}
-            className={cn(
-              'flex-1 resize-none rounded-lg border border-gray-200 px-3 py-2 text-sm',
-              'placeholder:text-gray-400',
-              'focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent',
-              'max-h-20 overflow-y-auto',
-              'disabled:opacity-50',
-            )}
-            aria-label="Chat message input"
-          />
-          <button
-            type="button"
-            onClick={handleSend}
-            disabled={!input.trim() || isSending}
-            className={cn(
-              'shrink-0 h-9 w-9 rounded-lg flex items-center justify-center',
-              'bg-primary-600 text-white hover:bg-primary-700',
-              'disabled:opacity-50 disabled:cursor-not-allowed',
-              'transition-colors',
-            )}
-            aria-label="Send message"
-          >
-            <Send className="h-4 w-4" />
-          </button>
-        </div>
+        <PromptInput
+          value={input}
+          onChange={setInput}
+          onSubmit={handleSubmit}
+          onStop={handleStop}
+          placeholder="Ask the classroom..."
+          loading={isSending}
+          disabled={!accessToken}
+          suggestions={suggestions}
+          onSuggestionClick={handleSuggestionClick}
+          maxLength={2000}
+          showCharCount
+        />
       </div>
     </div>
   );

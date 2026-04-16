@@ -16,3 +16,6 @@ export { useOffline } from './useOffline';
 export type { OfflineMutation } from './useOffline';
 
 export { useKeyboardShortcuts } from './useKeyboardShortcuts';
+
+export { useTTSPreview } from './useTTSPreview';
+export type { TTSPreviewOptions } from './useTTSPreview';

@@ -2,12 +2,17 @@
 //
 // SVG overlay for freehand drawing annotations. Supports pen, highlighter,
 // eraser (click to remove), and pointer (cursor-only) tools. Reads/writes
-// drawing state from maicCanvasStore.
+// drawing state from maicCanvasStore. Wrapped in a motion.div for spring
+// entrance animation; includes a WhiteboardHistory floating panel.
 
 import React, { useCallback, useRef, useState } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
+import { Clock } from 'lucide-react';
 import { useMAICCanvasStore } from '../../stores/maicCanvasStore';
 import type { WhiteboardAnnotation, WhiteboardPoint } from '../../types/maic';
 import { WhiteboardElementRenderer } from './WhiteboardElementRenderer';
+import { WhiteboardHistory } from './WhiteboardHistory';
+import { cn } from '../../lib/utils';
 
 interface WhiteboardProps {
   sceneId: string;
@@ -69,6 +74,7 @@ export const Whiteboard = React.memo<WhiteboardProps>(function Whiteboard({
 
   const svgRef = useRef<SVGSVGElement>(null);
   const [currentPoints, setCurrentPoints] = useState<WhiteboardPoint[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
 
   const sceneAnnotations = annotations.filter((a) => a.sceneId === sceneId);
 
@@ -163,52 +169,83 @@ export const Whiteboard = React.memo<WhiteboardProps>(function Whiteboard({
   }, [isDrawing, readonly, currentPoints, activeTool, activeColor, strokeWidth, sceneId, addAnnotation, setDrawing]);
 
   return (
-    <svg
-      ref={svgRef}
-      className="absolute inset-0 w-full h-full z-10"
-      style={{ cursor: readonly ? 'default' : cursorMap[activeTool] || 'default' }}
-      onMouseDown={handlePointerDown}
-      onMouseMove={handlePointerMove}
-      onMouseUp={handlePointerUp}
-      onMouseLeave={handlePointerUp}
-      onTouchStart={handlePointerDown}
-      onTouchMove={handlePointerMove}
-      onTouchEnd={handlePointerUp}
-      aria-label="Whiteboard drawing area"
-      role="img"
+    <motion.div
+      className="absolute inset-0 w-full h-full"
+      initial={{ opacity: 0, scale: 0.95 }}
+      animate={{ opacity: 1, scale: 1 }}
+      transition={{ type: 'spring', stiffness: 120, damping: 18, mass: 1.2 }}
     >
-      {/* Existing annotations */}
-      {sceneAnnotations.map((ann) =>
-        ann.meta ? (
-          <WhiteboardElementRenderer key={ann.id} annotation={ann} />
-        ) : (
+      {/* SVG drawing surface */}
+      <svg
+        ref={svgRef}
+        className="absolute inset-0 w-full h-full z-10"
+        style={{ cursor: readonly ? 'default' : cursorMap[activeTool] || 'default' }}
+        onMouseDown={handlePointerDown}
+        onMouseMove={handlePointerMove}
+        onMouseUp={handlePointerUp}
+        onMouseLeave={handlePointerUp}
+        onTouchStart={handlePointerDown}
+        onTouchMove={handlePointerMove}
+        onTouchEnd={handlePointerUp}
+        aria-label="Whiteboard drawing area"
+        role="img"
+      >
+        {/* Existing annotations */}
+        {sceneAnnotations.map((ann) =>
+          ann.meta ? (
+            <WhiteboardElementRenderer key={ann.id} annotation={ann} />
+          ) : (
+            <path
+              key={ann.id}
+              d={pointsToPathD(ann.points)}
+              fill="none"
+              stroke={ann.color}
+              strokeWidth={ann.tool === 'highlighter' ? ann.strokeWidth * 4 : ann.strokeWidth}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              style={getAnnotationStyle(ann)}
+              data-annotation-id={ann.id}
+              className={activeTool === 'eraser' && !readonly ? 'cursor-pointer hover:opacity-50' : ''}
+            />
+          )
+        )}
+
+        {/* Current stroke being drawn */}
+        {isDrawing && currentPoints.length > 0 && (
           <path
-            key={ann.id}
-            d={pointsToPathD(ann.points)}
+            d={pointsToPathD(currentPoints)}
             fill="none"
-            stroke={ann.color}
-            strokeWidth={ann.tool === 'highlighter' ? ann.strokeWidth * 4 : ann.strokeWidth}
+            stroke={activeColor}
+            strokeWidth={activeTool === 'highlighter' ? strokeWidth * 4 : strokeWidth}
             strokeLinecap="round"
             strokeLinejoin="round"
-            style={getAnnotationStyle(ann)}
-            data-annotation-id={ann.id}
-            className={activeTool === 'eraser' && !readonly ? 'cursor-pointer hover:opacity-50' : ''}
+            style={activeTool === 'highlighter' ? { opacity: 0.35 } : undefined}
           />
-        )
+        )}
+      </svg>
+
+      {/* History toggle button (top-right, only when not readonly) */}
+      {!readonly && (
+        <button
+          type="button"
+          onClick={() => setShowHistory((v) => !v)}
+          className={cn(
+            'absolute top-2 right-2 z-20 p-1.5 rounded-md transition-colors',
+            'focus:outline-none focus:ring-2 focus:ring-primary-500',
+            showHistory
+              ? 'bg-gray-200 text-gray-900 dark:bg-gray-700 dark:text-gray-100'
+              : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100/80 dark:text-gray-500 dark:hover:text-gray-300 dark:hover:bg-gray-800/80',
+          )}
+          title="Toggle history panel"
+          aria-label="Toggle whiteboard history"
+          aria-pressed={showHistory}
+        >
+          <Clock className="h-3.5 w-3.5" />
+        </button>
       )}
 
-      {/* Current stroke being drawn */}
-      {isDrawing && currentPoints.length > 0 && (
-        <path
-          d={pointsToPathD(currentPoints)}
-          fill="none"
-          stroke={activeColor}
-          strokeWidth={activeTool === 'highlighter' ? strokeWidth * 4 : strokeWidth}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          style={activeTool === 'highlighter' ? { opacity: 0.35 } : undefined}
-        />
-      )}
-    </svg>
+      {/* WhiteboardHistory floating panel */}
+      <WhiteboardHistory visible={showHistory && !readonly} />
+    </motion.div>
   );
 });

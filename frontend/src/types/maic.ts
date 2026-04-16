@@ -2,6 +2,9 @@
 
 // ─── Slide Types ──────────────────────────────────────────────────────────
 
+/** Slide transition animation mode */
+export type MAICSlideTransition = 'none' | 'fade' | 'slideLeft' | 'slideRight' | 'slideUp' | 'slideDown' | 'zoom' | 'flip';
+
 export interface MAICSlideElement {
   type: 'text' | 'image' | 'shape' | 'chart' | 'latex' | 'code' | 'table' | 'video';
   id: string;
@@ -24,6 +27,7 @@ export interface MAICSlide {
   speakerScript?: string;
   audioUrl?: string;
   duration?: number;
+  transition?: MAICSlideTransition;
 }
 
 // ─── Agent Types ──────────────────────────────────────────────────────────

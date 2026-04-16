@@ -3,6 +3,7 @@
 import { useMAICStageStore } from '../stores/maicStageStore';
 import { useMAICCanvasStore } from '../stores/maicCanvasStore';
 import { useMAICSettingsStore } from '../stores/maicSettingsStore';
+import { getCurrentTTSConfig } from './audio/tts-providers';
 import type { MAICAction } from '../types/maic-actions';
 import type {
   SpeechAction,
@@ -316,7 +317,76 @@ export class MAICActionEngine {
         return; // finally block handles cleanup
       }
 
-      // ── 2. Real-time TTS from backend ──
+      // ── 2. Try configured TTS provider via backend ──
+      // Check if a non-browser TTS provider is configured
+      const ttsConfig = getCurrentTTSConfig();
+      const useConfiguredProvider =
+        ttsConfig.providerId !== 'browser-native-tts';
+
+      if (useConfiguredProvider) {
+        try {
+          const baseUrl = import.meta.env.VITE_API_BASE_URL || '';
+          const ttsProviderUrl = `${baseUrl}/api/v1/teacher/maic/generate/tts/`;
+
+          const headers: Record<string, string> = {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${this.token}`,
+          };
+
+          // Include tenant subdomain for localhost dev
+          const hostname = window.location.hostname;
+          if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname.endsWith('.localhost')) {
+            const urlSubdomain = hostname.endsWith('.localhost')
+              ? hostname.replace('.localhost', '')
+              : null;
+            const subdomain =
+              urlSubdomain ||
+              sessionStorage.getItem('tenant_subdomain') ||
+              localStorage.getItem('tenant_subdomain');
+            if (subdomain) {
+              headers['X-Tenant-Subdomain'] = subdomain;
+            }
+          }
+
+          this.currentFetchController = new AbortController();
+
+          const providerResponse = await fetch(ttsProviderUrl, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+              text: ssml || text,
+              providerId: ttsConfig.providerId,
+              voice: ttsConfig.voice || voiceId,
+              speed: ttsConfig.speed ?? playbackSpeed,
+              modelId: ttsConfig.modelId,
+            }),
+            signal: this.currentFetchController.signal,
+          });
+
+          this.currentFetchController = null;
+
+          if (providerResponse.ok && providerResponse.status !== 204) {
+            const blob = await providerResponse.blob();
+            if (blob.size > 0) {
+              const blobUrl = URL.createObjectURL(blob);
+              await this.playAudio(blobUrl, volume, playbackSpeed);
+              URL.revokeObjectURL(blobUrl);
+              return; // Success — finally block handles cleanup
+            }
+          }
+          // If provider returned empty/error, fall through to legacy endpoint
+        } catch (providerErr) {
+          // Aborted by navigation — exit silently
+          if (providerErr instanceof DOMException && providerErr.name === 'AbortError') {
+            return;
+          }
+          // Provider failed — fall through to legacy TTS endpoint
+          console.warn('Configured TTS provider failed, falling back:', providerErr);
+          this.currentFetchController = null;
+        }
+      }
+
+      // ── 3. Legacy real-time TTS from backend (original endpoint) ──
       const baseUrl = import.meta.env.VITE_API_BASE_URL || '';
       const fullUrl = `${baseUrl}${this.ttsEndpoint}`;
 
@@ -710,10 +780,13 @@ export class MAICActionEngine {
   }
 
   private async executePause(action: PauseAction): Promise<void> {
-    await delay(action.duration);
+    const playbackSpeed = this.settingsStore.getState().playbackSpeed;
+    await delay(action.duration / playbackSpeed);
   }
 
   private async executeTransition(action: TransitionAction): Promise<void> {
+    const playbackSpeed = this.settingsStore.getState().playbackSpeed;
+
     // Multi-slide navigation: if slideIndex is specified, advance to that slide
     // within the current scene's bounds
     if (action.slideIndex != null) {
@@ -723,12 +796,12 @@ export class MAICActionEngine {
       const absoluteSlideIndex = sceneStart + action.slideIndex;
       this.stageStore.getState().goToSlide(absoluteSlideIndex);
       // Allow time for transition animation
-      await delay(action.duration ?? 600);
+      await delay((action.duration ?? 600) / playbackSpeed);
       return;
     }
 
     // Legacy transition: visual effect only, handled by Stage component
-    await delay(action.duration ?? 500);
+    await delay((action.duration ?? 500) / playbackSpeed);
   }
 
   // ─── Discussion ─────────────────────────────────────────────────────
