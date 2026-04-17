@@ -35,14 +35,22 @@ retry() {
 }
 
 check_web_container_live() {
+  # Send X-Forwarded-Proto=https so Django's SECURE_SSL_REDIRECT doesn't 301
+  # our probe into an unreachable loopback HTTPS endpoint. We also accept
+  # any 2xx-3xx (including 301) as "process alive" — we're checking that
+  # gunicorn responds, not that the Django pipeline is perfect.
   compose exec -T web python -c "import sys,urllib.request;
 urls=['http://localhost:8000/health/live/','http://localhost:8000/health/'];
 ok=False;
+req=lambda u: urllib.request.Request(u, headers={'X-Forwarded-Proto':'https','Host':'localhost'});
 for u in urls:
     try:
-        urllib.request.urlopen(u, timeout=5);
+        urllib.request.urlopen(req(u), timeout=5);
         ok=True;
         break
+    except urllib.error.HTTPError as e:
+        if 200 <= e.code < 400:
+            ok=True; break
     except Exception:
         pass
 sys.exit(0 if ok else 1)"
@@ -54,12 +62,14 @@ check_db_schema_uptodate() {
 
 check_nginx_path() {
   local path="$1"
-  curl -fsS --max-time 10 -H "Host: $DOMAIN" "http://127.0.0.1${path}" >/dev/null
+  # -L follow redirects (nginx HTTP→HTTPS rewrite), -k allow self-signed/local
+  # cert so the loopback HTTPS hop doesn't fail verification.
+  curl -fsSLk --max-time 10 -H "Host: $DOMAIN" "http://127.0.0.1${path}" >/dev/null
 }
 
 check_login_endpoint_code() {
   local code
-  code="$(curl -sS --max-time 12 -o /tmp/login-check.json -w '%{http_code}' \
+  code="$(curl -sSLk --max-time 12 -o /tmp/login-check.json -w '%{http_code}' \
     -H "Host: $DOMAIN" \
     -H "Content-Type: application/json" \
     -X POST "http://127.0.0.1/api/users/auth/login/" \
