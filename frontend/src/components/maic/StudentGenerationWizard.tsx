@@ -105,6 +105,8 @@ export const StudentGenerationWizard: React.FC<StudentGenerationWizardProps> = (
     progress,
     error,
     guardrailResult,
+    startedAt,
+    isTabHidden,
     validateAndStartOutline,
     updateOutline,
     startContentGeneration,
@@ -498,6 +500,8 @@ export const StudentGenerationWizard: React.FC<StudentGenerationWizardProps> = (
             totalScenes={totalScenes}
             progress={progress}
             topic={outline?.topic}
+            startedAt={startedAt ?? undefined}
+            isTabHidden={isTabHidden}
           />
 
           <div className="text-center">

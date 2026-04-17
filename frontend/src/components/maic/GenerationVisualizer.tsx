@@ -2,9 +2,9 @@
 //
 // Animated step visualizer for classroom generation progress.
 // Shows phase-specific animations (outline → content → actions → saving)
-// with scene-level progress tracking.
+// with scene-level progress tracking, elapsed time, and honest ETA.
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import type { GenerationPhase } from '../../hooks/useMAICGeneration';
 import { cn } from '../../lib/utils';
 
@@ -14,6 +14,17 @@ interface GenerationVisualizerProps {
   totalScenes: number;
   progress: number;
   topic?: string;
+  /** Timestamp (ms) when generation started — drives the elapsed timer. */
+  startedAt?: number;
+  /** Tab is currently hidden. Pause the ticking timer to avoid drift. */
+  isTabHidden?: boolean;
+}
+
+function formatElapsed(ms: number): string {
+  const totalSec = Math.max(0, Math.floor(ms / 1000));
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return `${m}m ${s.toString().padStart(2, '0')}s`;
 }
 
 // ─── Phase metadata ──────────────────────────────────────────────────────────
@@ -58,9 +69,22 @@ export const GenerationVisualizer: React.FC<GenerationVisualizerProps> = ({
   totalScenes,
   progress,
   topic,
+  startedAt,
+  isTabHidden = false,
 }) => {
   const currentPhaseIdx = PHASES.findIndex((p) => p.key === phase);
   const activePhase = PHASES[currentPhaseIdx] || PHASES[0];
+
+  // Tick every second for the elapsed timer. Pause when tab is hidden so
+  // the clock doesn't drift off-screen; re-sync from `startedAt` on return.
+  const [now, setNow] = useState<number>(() => Date.now());
+  useEffect(() => {
+    if (!startedAt || isTabHidden) return;
+    setNow(Date.now());
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [startedAt, isTabHidden]);
+  const elapsedMs = startedAt ? now - startedAt : 0;
 
   return (
     <div className="space-y-8">
@@ -191,17 +215,28 @@ export const GenerationVisualizer: React.FC<GenerationVisualizerProps> = ({
             style={{ width: `${progress}%` }}
           />
         </div>
+        {startedAt && (
+          <div className="flex items-center justify-between text-[11px] text-gray-400 mt-2 tabular-nums">
+            <span>Elapsed: {formatElapsed(elapsedMs)}</span>
+            <span>Typically 5–10 min</span>
+          </div>
+        )}
       </div>
 
-      {/* "AI is working" footer */}
-      <p className="text-center text-[11px] text-gray-400 flex items-center justify-center gap-1.5">
-        <span className="inline-flex gap-0.5">
-          <span className="h-1 w-1 rounded-full bg-indigo-400 animate-[bounce-dot_1.4s_ease-in-out_infinite]" />
-          <span className="h-1 w-1 rounded-full bg-indigo-400 animate-[bounce-dot_1.4s_ease-in-out_0.2s_infinite]" />
-          <span className="h-1 w-1 rounded-full bg-indigo-400 animate-[bounce-dot_1.4s_ease-in-out_0.4s_infinite]" />
-        </span>
-        AI agents are working
-      </p>
+      {/* Status footer — honest about wait time + safe to leave tab */}
+      <div className="text-center space-y-1">
+        <p className="text-[11px] text-gray-400 flex items-center justify-center gap-1.5">
+          <span className="inline-flex gap-0.5">
+            <span className="h-1 w-1 rounded-full bg-indigo-400 animate-[bounce-dot_1.4s_ease-in-out_infinite]" />
+            <span className="h-1 w-1 rounded-full bg-indigo-400 animate-[bounce-dot_1.4s_ease-in-out_0.2s_infinite]" />
+            <span className="h-1 w-1 rounded-full bg-indigo-400 animate-[bounce-dot_1.4s_ease-in-out_0.4s_infinite]" />
+          </span>
+          {isTabHidden ? 'Paused display — still working in background' : 'AI agents are working'}
+        </p>
+        <p className="text-[10px] text-gray-400">
+          Safe to leave this tab open. We'll update when ready.
+        </p>
+      </div>
     </div>
   );
 };

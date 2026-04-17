@@ -207,7 +207,21 @@ export const MAICPlayerPage: React.FC = () => {
       );
     }
 
-    // No content yet — show generation progress
+    // No content yet — show honest generation progress.
+    // `scene_count` is stamped by the worker as scenes finish, giving us a
+    // real ordinal to display without needing a separate status endpoint.
+    // The outer query already polls every 3s while GENERATING.
+    const meta = classroom as unknown as Record<string, unknown>;
+    const plannedScenes =
+      (meta.expected_scenes as number | undefined) ??
+      ((meta.config as { sceneCount?: number } | undefined)?.sceneCount) ??
+      undefined;
+    const doneScenes = (meta.scene_count as number | undefined) ?? 0;
+    const createdAt = meta.created_at as string | undefined;
+    const elapsedMs = createdAt ? Date.now() - new Date(createdAt).getTime() : 0;
+    const elapsedMin = Math.floor(elapsedMs / 60000);
+    const elapsedSec = Math.floor((elapsedMs % 60000) / 1000);
+
     return (
       <div className="space-y-4 p-6">
         <button
@@ -227,21 +241,36 @@ export const MAICPlayerPage: React.FC = () => {
           <div>
             <h2 className="text-xl font-semibold text-gray-900 mb-2">
               {classroom.status === 'GENERATING'
-                ? 'Generating Your Classroom'
-                : 'Preparing Classroom'}
+                ? 'Generating your classroom'
+                : 'Preparing classroom'}
             </h2>
             <p className="text-sm text-gray-500">
-              AI agents are creating slides, scripts, and interactive content.
-              This may take a minute or two.
+              AI agents are composing slides, scripts, and interactive content.
+              Full classrooms typically take <span className="font-medium">5–10 minutes</span>.
             </p>
           </div>
-          <div className="max-w-xs mx-auto">
-            <div className="w-full bg-gray-200 rounded-full h-1.5 overflow-hidden">
-              <div className="bg-indigo-500 h-1.5 rounded-full animate-pulse" style={{ width: '60%' }} />
+          {plannedScenes && (
+            <div className="max-w-xs mx-auto">
+              <div className="flex items-center justify-between text-[11px] text-gray-400 mb-1 tabular-nums">
+                <span>
+                  {doneScenes} of {plannedScenes} scenes ready
+                </span>
+                <span>
+                  {createdAt ? `Elapsed ${elapsedMin}m ${elapsedSec.toString().padStart(2, '0')}s` : ''}
+                </span>
+              </div>
+              <div className="w-full bg-gray-200 rounded-full h-1.5 overflow-hidden">
+                <div
+                  className="bg-indigo-500 h-1.5 rounded-full transition-all duration-700"
+                  style={{
+                    width: `${Math.min(100, Math.round((doneScenes / plannedScenes) * 100))}%`,
+                  }}
+                />
+              </div>
             </div>
-          </div>
+          )}
           <p className="text-xs text-gray-400">
-            This page will update automatically when ready.
+            Safe to leave this tab — we'll refresh this page the moment it's ready.
           </p>
         </div>
       </div>

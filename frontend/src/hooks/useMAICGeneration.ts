@@ -1,6 +1,6 @@
 // hooks/useMAICGeneration.ts — Orchestrates classroom generation flow
 
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useAuthStore } from '../stores/authStore';
 import { useMAICStageStore } from '../stores/maicStageStore';
 import { streamMAIC } from '../lib/maicSSE';
@@ -43,6 +43,13 @@ interface UseMAICGenerationReturn {
   outline: MAICOutline | null;
   progress: number;
   error: string | null;
+  /** ms timestamp when generation started; null until first start. Used by
+   *  GenerationVisualizer to render an honest elapsed timer. */
+  startedAt: number | null;
+  /** Whether the browser tab is currently hidden — UI freezes its local
+   *  ticker when true and re-syncs on return so the user doesn't return
+   *  to a stale/lying clock. */
+  isTabHidden: boolean;
 
   /**
    * Generate the outline. Optionally pass `preSelectedAgents` — the roster
@@ -65,6 +72,26 @@ export function useMAICGeneration(): UseMAICGenerationReturn {
   const [outline, setOutline] = useState<MAICOutline | null>(null);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [startedAt, setStartedAt] = useState<number | null>(null);
+  const [isTabHidden, setIsTabHidden] = useState<boolean>(
+    typeof document !== 'undefined' ? document.visibilityState === 'hidden' : false,
+  );
+
+  // Mirror browser visibility into state. When the user returns we also
+  // ping the activity timestamp so the session-idle logout doesn't fire on
+  // next render. The content-generation loop is fully client-side, so the
+  // generation keeps running while the tab is hidden — the only thing we
+  // pause is the visible elapsed ticker.
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const handler = () => {
+      const hidden = document.visibilityState === 'hidden';
+      setIsTabHidden(hidden);
+      if (!hidden) setLastActivityTimestamp(Date.now());
+    };
+    document.addEventListener('visibilitychange', handler);
+    return () => document.removeEventListener('visibilitychange', handler);
+  }, []);
 
   const abortRef = useRef<AbortController | null>(null);
   const { accessToken } = useAuthStore();
@@ -84,6 +111,7 @@ export function useMAICGeneration(): UseMAICGenerationReturn {
     setOutline(null);
     setProgress(0);
     setError(null);
+    setStartedAt(null);
   }, [cancel]);
 
   const startOutlineGeneration = useCallback(
@@ -93,6 +121,7 @@ export function useMAICGeneration(): UseMAICGenerationReturn {
       setPhase('outline');
       setError(null);
       setProgress(0);
+      setStartedAt(Date.now());
 
       const controller = new AbortController();
       abortRef.current = controller;
@@ -346,6 +375,8 @@ export function useMAICGeneration(): UseMAICGenerationReturn {
     outline,
     progress,
     error,
+    startedAt,
+    isTabHidden,
     startOutlineGeneration,
     updateOutline,
     startContentGeneration,

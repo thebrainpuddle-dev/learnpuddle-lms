@@ -3,7 +3,7 @@
 // Same flow as useMAICGeneration but uses student API endpoints
 // and adds a validation step before outline generation.
 
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useAuthStore } from '../stores/authStore';
 import { useMAICStageStore } from '../stores/maicStageStore';
 import { streamMAIC } from '../lib/maicSSE';
@@ -55,6 +55,11 @@ interface UseStudentMAICGenerationReturn {
   progress: number;
   error: string | null;
   guardrailResult: GuardrailResult | null;
+  /** ms timestamp when generation started; null until first start. */
+  startedAt: number | null;
+  /** Tab visibility mirror — paired with `startedAt` to drive the
+   *  honest elapsed-timer UI in GenerationVisualizer. */
+  isTabHidden: boolean;
 
   /**
    * Validate the topic through guardrails, then generate the outline.
@@ -77,6 +82,21 @@ export function useStudentMAICGeneration(): UseStudentMAICGenerationReturn {
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [guardrailResult, setGuardrailResult] = useState<GuardrailResult | null>(null);
+  const [startedAt, setStartedAt] = useState<number | null>(null);
+  const [isTabHidden, setIsTabHidden] = useState<boolean>(
+    typeof document !== 'undefined' ? document.visibilityState === 'hidden' : false,
+  );
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const handler = () => {
+      const hidden = document.visibilityState === 'hidden';
+      setIsTabHidden(hidden);
+      if (!hidden) setLastActivityTimestamp(Date.now());
+    };
+    document.addEventListener('visibilitychange', handler);
+    return () => document.removeEventListener('visibilitychange', handler);
+  }, []);
 
   const abortRef = useRef<AbortController | null>(null);
   const { accessToken } = useAuthStore();
@@ -97,6 +117,7 @@ export function useStudentMAICGeneration(): UseStudentMAICGenerationReturn {
     setProgress(0);
     setError(null);
     setGuardrailResult(null);
+    setStartedAt(null);
   }, [cancel]);
 
   // ── Step 1: Validate topic, then generate outline ──
@@ -108,6 +129,7 @@ export function useStudentMAICGeneration(): UseStudentMAICGenerationReturn {
       setError(null);
       setProgress(0);
       setGuardrailResult(null);
+      setStartedAt(Date.now());
 
       // Validate topic/PDF through guardrails
       try {
@@ -386,6 +408,8 @@ export function useStudentMAICGeneration(): UseStudentMAICGenerationReturn {
     progress,
     error,
     guardrailResult,
+    startedAt,
+    isTabHidden,
     validateAndStartOutline,
     updateOutline,
     startContentGeneration,
