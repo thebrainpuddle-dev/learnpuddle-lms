@@ -254,6 +254,13 @@ export function useStudentMAICGeneration(): UseStudentMAICGenerationReturn {
       const totalSteps = outline.scenes.length * 2;
       let currentSlideOffset = 0;
 
+      // Stamp GENERATING status immediately so MAICPlayerPage's polled
+      // "Preparing Classroom" screen shows the correct copy right away.
+      // `config.sceneCount` is the denominator for the progress bar.
+      maicStudentApi.updateClassroom(classroomId, {
+        status: 'GENERATING',
+      }).catch(() => {});
+
       // Lock: prevent idle timeout and keep session alive during generation
       setGenerationActive(true);
       const heartbeat = window.setInterval(() => {
@@ -313,6 +320,14 @@ export function useStudentMAICGeneration(): UseStudentMAICGenerationReturn {
           };
 
           generatedScenes.push(scene);
+
+          // Fire-and-forget scene_count increment so MAICPlayerPage's
+          // progress bar advances in real time instead of jumping from
+          // 0 to N at the end. A failed PATCH is harmless; the next
+          // iteration's PATCH will catch up.
+          maicStudentApi.updateClassroom(classroomId, {
+            scene_count: generatedScenes.length,
+          }).catch(() => {});
         }
 
         // Phase 2: Generate actions

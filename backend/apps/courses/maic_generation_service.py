@@ -1482,11 +1482,33 @@ def generate_tts_audio(text: str, config: TenantAIConfig,
         config: Tenant AI configuration with provider settings.
         voice_id: Optional per-agent voice override. If provided, this takes
                   priority over the tenant default (config.tts_voice_id).
-                  Can be an Edge TTS voice name (e.g. "en-US-JennyNeural")
+                  Can be an Edge TTS voice name (e.g. "en-IN-NeerjaNeural")
                   or a provider-specific voice ID.
+
+    Voice-ID-based routing: when the caller passes an Azure Neural voice
+    name (matches `xx-YY-*Neural`), we route to Edge TTS regardless of
+    the tenant's configured provider. This is how the per-agent Indian
+    voices added in Chunk 4 actually play on tenants that are otherwise
+    configured for ElevenLabs / OpenAI — those providers don't accept
+    Azure Neural voice IDs, and shipping per-agent voices requires a
+    consistent backend that understands them. Edge TTS is free and
+    supports the full Azure Neural catalog.
     """
     # Resolve effective voice: explicit override > tenant config default
     effective_voice = voice_id or config.tts_voice_id
+
+    # Azure Neural voice IDs (e.g. en-IN-NeerjaNeural) — always Edge TTS.
+    if effective_voice and _is_azure_neural_voice(effective_voice):
+        audio = _tts_edge(text, effective_voice)
+        if audio:
+            return audio
+        # Edge TTS failed (network, throttle) — fall through to the
+        # tenant's configured provider as a last-resort fallback. The
+        # voice will be "wrong" but audio is better than silence.
+        logger.warning(
+            "Edge TTS failed for %r, falling back to tenant provider %r",
+            effective_voice, config.tts_provider,
+        )
 
     tts_provider = config.tts_provider or "disabled"
     if tts_provider == "disabled":
@@ -1508,7 +1530,7 @@ def generate_tts_audio(text: str, config: TenantAIConfig,
         elif tts_provider == "elevenlabs":
             return _tts_elevenlabs(text, tts_key, effective_voice)
         elif tts_provider == "azure":
-            # Azure TTS not yet implemented — fall back to Edge TTS
+            # Azure TTS direct API not yet implemented — fall back to Edge TTS
             return _tts_edge(text, effective_voice)
         else:
             logger.warning("Unsupported TTS provider: %s, falling back to Edge TTS", tts_provider)
@@ -1516,6 +1538,20 @@ def generate_tts_audio(text: str, config: TenantAIConfig,
     except Exception as e:
         logger.error("TTS generation failed (%s): %s — falling back to Edge TTS", tts_provider, e)
         return _tts_edge(text, effective_voice)
+
+
+def _is_azure_neural_voice(voice_id: str) -> bool:
+    """Heuristic: does this voice ID look like an Azure Neural voice?
+
+    Azure Neural voices follow the pattern `xx-YY-NameNeural` or
+    `xx-YY-NameNeural` with multi-letter region codes. A short regex check
+    is enough — ElevenLabs + OpenAI IDs don't follow this pattern.
+    """
+    if not voice_id or not isinstance(voice_id, str):
+        return False
+    # Examples: en-IN-NeerjaNeural, en-US-JennyNeural, hi-IN-MadhurNeural
+    import re
+    return bool(re.match(r"^[a-z]{2}-[A-Z]{2}-[A-Za-z]+Neural$", voice_id))
 
 
 def _tts_openai(text: str, api_key: str, voice_id: str | None) -> bytes | None:

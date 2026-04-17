@@ -57,12 +57,18 @@ export const PresentationSpeechOverlay = React.memo<PresentationSpeechOverlayPro
               mass: 0.8,
             }}
             className={cn(
-              'absolute bottom-6 left-6 z-20',
+              // Moved to top-left (was bottom-left) so the speech
+              // overlay never collides with the ProactiveCard / activity
+              // popups that live at bottom-center within the same stage
+              // viewport. z-30 keeps it above the spotlight layer but
+              // below full-screen modals.
+              'absolute top-4 left-4 z-30',
               'flex items-center gap-3',
               'bg-black/70 backdrop-blur-md',
               'rounded-2xl border border-white/10',
               'px-4 py-3',
               'max-w-sm',
+              'shadow-lg',
             )}
           >
             {/* Agent avatar (medium size) */}
