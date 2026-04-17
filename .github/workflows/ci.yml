@@ -396,8 +396,12 @@ jobs:
           docker compose -f docker-compose.prod.yml pull --ignore-buildable
 
           # ── Build nginx (frontend baked into the image) ─────────────
+          # --no-cache is deliberate: Docker's layer cache has bitten us when
+          # frontend/ source changes didn't invalidate the build layer (e.g.
+          # BuildKit cache preservation across runs). Costs ~2-3 min per deploy
+          # for a guaranteed-fresh bundle — cheaper than a stealth-stale deploy.
           git pull origin main
-          docker compose -f docker-compose.prod.yml build nginx
+          docker compose -f docker-compose.prod.yml build --no-cache nginx
 
           # ── Run migrations BEFORE restarting (prevents schema mismatch) ─
           docker compose -f docker-compose.prod.yml up -d db redis
