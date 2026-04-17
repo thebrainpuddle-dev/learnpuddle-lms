@@ -1502,13 +1502,22 @@ def generate_tts_audio(text: str, config: TenantAIConfig,
         audio = _tts_edge(text, effective_voice)
         if audio:
             return audio
-        # Edge TTS failed (network, throttle) — fall through to the
-        # tenant's configured provider as a last-resort fallback. The
-        # voice will be "wrong" but audio is better than silence.
+        # Edge TTS failed (network, throttle, package missing). Fall
+        # through to the tenant's configured provider — but SWAP the
+        # voice to the tenant default, because ElevenLabs / OpenAI
+        # will reject the Azure voice ID with a 400 and we end up
+        # returning 204 (silence). A generic tenant voice is worse for
+        # persona but better than silence on the demo.
         logger.warning(
-            "Edge TTS failed for %r, falling back to tenant provider %r",
+            "Edge TTS failed for %r, falling back to tenant provider %r with default voice",
             effective_voice, config.tts_provider,
         )
+        if config.tts_voice_id and not _is_azure_neural_voice(config.tts_voice_id):
+            effective_voice = config.tts_voice_id
+        else:
+            # Tenant default is also an Azure voice (or empty) — let the
+            # provider pick its own default by passing None.
+            effective_voice = None
 
     tts_provider = config.tts_provider or "disabled"
     if tts_provider == "disabled":
