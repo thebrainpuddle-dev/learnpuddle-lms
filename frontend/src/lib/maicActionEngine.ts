@@ -357,15 +357,6 @@ export class MAICActionEngine {
     const myToken = ++this.generationToken;
     const { agentId, text, ssml } = action;
 
-    // Fire subtitles + speaking indicator EAGERLY at speech entry so
-    // the audience sees the line the same frame the engine commits to
-    // it. Previously these fired inside audio.onplaying which lags by
-    // 500ms-2s on slow networks. The token guard in onplaying + onend
-    // still cleans up if a scene change interrupts before audio starts.
-    this.onSpeechStart?.(agentId, text);
-    this.stageStore.getState().setSpeakingAgent(agentId);
-    this.stageStore.getState().setSpeechText(text);
-
     // Resolve per-agent voice ID (explicit on action > agent.voiceId > legacy
     // `agent.voice` > role-based default > fallback en-IN voice).
     const agents = this.stageStore.getState().agents;
@@ -381,7 +372,12 @@ export class MAICActionEngine {
     const playbackSpeed = this.settingsStore.getState().playbackSpeed;
 
     // 1. Preferred: pre-generated audio URL (zero network lag).
+    // Fire subtitles eagerly — audio is already cached, near-zero delay
+    // to the `playing` event, so the text matches the sound.
     if (action.audioUrl) {
+      this.onSpeechStart?.(agentId, text);
+      this.stageStore.getState().setSpeakingAgent(agentId);
+      this.stageStore.getState().setSpeechText(text);
       return this.playAudioSynced(
         action.audioUrl,
         text,
@@ -389,10 +385,18 @@ export class MAICActionEngine {
         volume,
         playbackSpeed,
         myToken,
+        /*subtitlesAlreadyShown*/ true,
       );
     }
 
-    // 2. Fallback: live TTS fetch.
+    // 2. Fallback: live TTS fetch. Show a "speaking indicator without
+    //    subtitles" state while the backend generates audio — the agent
+    //    avatar animates, but the transcript stays hidden so the student
+    //    doesn't see words before hearing them. Subtitles land when
+    //    audio.onplaying fires (inside playAudioSynced).
+    this.stageStore.getState().setSpeakingAgent(agentId);
+    this.stageStore.getState().setSpeechText(null);
+
     const blobUrl = await this.fetchTtsBlob(ssml || text, voiceId, myToken);
     if (myToken !== this.generationToken) {
       // Stale — abort happened after the fetch completed. Revoke the blob
@@ -401,13 +405,18 @@ export class MAICActionEngine {
       return;
     }
     if (!blobUrl) {
-      // 3. Final fallback: timed reading window so slides don't snap-advance.
-      //    Prefer the backend-stamped durationMs over a char estimate when
-      //    present (Chunk 5 stamps this on every speech action).
+      // 3. Final fallback: no audio at all. Fire subtitles now (nothing
+      //    else to wait for) and run a reading-time timer. Prefer the
+      //    backend-stamped durationMs over the char estimate.
+      this.onSpeechStart?.(agentId, text);
+      this.stageStore.getState().setSpeechText(text);
       return this.readingTimeFallback(text, agentId, myToken, action.durationMs);
     }
     try {
-      await this.playAudioSynced(blobUrl, text, agentId, volume, playbackSpeed, myToken);
+      await this.playAudioSynced(
+        blobUrl, text, agentId, volume, playbackSpeed, myToken,
+        /*subtitlesAlreadyShown*/ false,
+      );
     } finally {
       // Revoke only the blob we created; pre-gen URLs are owned by Chunk 4.
       URL.revokeObjectURL(blobUrl);
@@ -510,6 +519,7 @@ export class MAICActionEngine {
     volume: number,
     playbackRate: number,
     token: number,
+    subtitlesAlreadyShown = false,
   ): Promise<void> {
     return new Promise((resolve) => {
       if (token !== this.generationToken) {
@@ -533,9 +543,14 @@ export class MAICActionEngine {
           }
           return;
         }
-        // Idempotent — executeSpeech already fired these eagerly. We
-        // re-assert here in case setSpeakingAgent(null) was called by a
-        // competing action between the eager fire and actual audio start.
+        // Audio has actually started playing. If subtitles were NOT
+        // already shown by the caller (live-TTS path), reveal them
+        // now — the wait time is over. If they WERE already shown
+        // (pre-gen / reading-fallback path), re-assert state
+        // idempotently in case a competing action briefly cleared it.
+        if (!subtitlesAlreadyShown) {
+          this.onSpeechStart?.(agentId, text);
+        }
         this.stageStore.getState().setSpeakingAgent(agentId);
         this.stageStore.getState().setSpeechText(text);
       };
