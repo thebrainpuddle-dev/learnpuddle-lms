@@ -229,24 +229,40 @@ def _proxy_binary(request, path, config):
     )
 
 
-def _fill_image_urls(data):
+def _fill_image_urls(data, *, image_provider: str = "disabled"):
     """Fill empty image src fields with actual image URLs.
 
     After scene content generation, image elements may have ``src: ""``
     because the LLM cannot produce real URLs.  This post-processor walks
     every slide and resolves empty ``src`` fields via the image service
-    (Unsplash / Pexels / Pollinations / placeholder fallback).
+    (Imagen / Nano Banana / Unsplash / Pexels / Pollinations / placeholder).
+
+    When the tenant has `image_provider == "disabled"`, we skip the fetch
+    and instead stamp `meta.imageProviderDisabled = true` on each image
+    element so the frontend can render an honest "AI images disabled"
+    placeholder instead of a random Unsplash photo the school didn't ask
+    for.
     """
+    disabled = (image_provider or "disabled").lower() == "disabled"
     slides = data.get("slides", [])
     for slide in slides:
         for element in slide.get("elements", []):
-            if element.get("type") == "image" and not element.get("src"):
-                keyword = element.get("content", "educational illustration")
-                try:
-                    url = fetch_scene_image(keyword)
-                    element["src"] = url
-                except Exception:
-                    pass
+            if element.get("type") != "image":
+                continue
+            if element.get("src"):
+                continue
+            if disabled:
+                meta = element.setdefault("meta", {})
+                meta["imageProviderDisabled"] = True
+                continue
+            keyword = element.get("content", "educational illustration")
+            try:
+                url = fetch_scene_image(keyword)
+                element["src"] = url
+            except Exception as exc:  # noqa: BLE001 — log + fail open
+                logger.warning(
+                    "image fill failed keyword=%r err=%s", keyword, exc,
+                )
     return data
 
 
@@ -380,8 +396,9 @@ def teacher_maic_generate_scene_content(request):
         config=config,
     )
     if data:
-        # Post-process: fill empty image src fields with real URLs
-        _fill_image_urls(data)
+        # Post-process: fill empty image src fields with real URLs,
+        # respecting the tenant's image_provider setting.
+        _fill_image_urls(data, image_provider=config.image_provider)
         return Response(data)
     return Response(
         {"error": "Failed to generate scene content."},
@@ -1369,7 +1386,7 @@ def student_maic_generate_scene_content(request):
     language = body.get("language", "en")
 
     data = generate_scene_content(scene, agents, language, config)
-    _fill_image_urls(data)
+    _fill_image_urls(data, image_provider=config.image_provider)
     return Response(data)
 
 

@@ -18,6 +18,14 @@ export interface MAICSlideElement {
   /** Image source URL — used when type is 'image' */
   src?: string;
   style?: Record<string, string | number>;
+  /** Optional bag for element-level backend signals. Image elements
+   *  carry `imageProviderDisabled: true` when the tenant has opted
+   *  out of AI image generation — the renderer uses this to show an
+   *  honest placeholder instead of falling back to random stock photos. */
+  meta?: {
+    imageProviderDisabled?: boolean;
+    [k: string]: unknown;
+  };
 }
 
 export interface MAICSlide {

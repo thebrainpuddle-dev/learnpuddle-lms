@@ -79,8 +79,11 @@ class TenantAIConfig(models.Model):
     )
 
     # ─── Image ────────────────────────────────────────────────────────────
+    # New tenants default to Pollinations (free, no API key required, via
+    # the fallback chain in image_service). Existing tenants keep whatever
+    # was previously stamped on their row — we do NOT backfill.
     image_provider = models.CharField(
-        max_length=20, choices=IMAGE_PROVIDER_CHOICES, default="disabled",
+        max_length=20, choices=IMAGE_PROVIDER_CHOICES, default="pollinations",
     )
     image_api_key_encrypted = models.TextField(blank=True, default="")
 

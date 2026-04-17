@@ -590,21 +590,43 @@ For quiz scenes, return:
 }"""
 
 
-def _fill_image_urls(parsed: dict, scene_id: str) -> dict:
-    """Post-process slides to fill in image URLs using image_service."""
+def _fill_image_urls(parsed: dict, scene_id: str, *,
+                     image_provider: str = "disabled") -> dict:
+    """Post-process slides to fill in image URLs using image_service.
+
+    When `image_provider == 'disabled'`, skip the fetch entirely and stamp
+    `meta.imageProviderDisabled = true` on each image element so the
+    frontend renders an honest "AI images off" placeholder rather than a
+    random Unsplash photo. Any fetch error is logged (not silenced) so
+    ops can see what providers are failing.
+    """
     from apps.courses.image_service import fetch_scene_image
 
+    disabled = (image_provider or "disabled").lower() == "disabled"
     slides = parsed.get("slides", [])
     for slide_idx, slide in enumerate(slides):
         for element in slide.get("elements", []):
-            if element.get("type") == "image" and not element.get("src"):
-                keyword = element.get("content", "educational illustration")
-                try:
-                    url = fetch_scene_image(keyword)
-                    element["src"] = url
-                except Exception:
-                    # Keep src empty, frontend will show placeholder
-                    pass
+            if element.get("type") != "image":
+                continue
+            if element.get("src"):
+                continue
+            if disabled:
+                # Mark it explicitly so the renderer shows a labelled
+                # placeholder instead of guessing at stock photos.
+                meta = element.setdefault("meta", {})
+                meta["imageProviderDisabled"] = True
+                continue
+            keyword = element.get("content", "educational illustration")
+            try:
+                url = fetch_scene_image(keyword)
+                element["src"] = url
+            except Exception as exc:  # noqa: BLE001 — log + fail open
+                logger.warning(
+                    "image fill failed scene=%s slide=%d keyword=%r err=%s",
+                    scene_id, slide_idx, keyword, exc,
+                )
+                # src stays empty; frontend falls back to the generic
+                # broken-image placeholder (not the Unsplash random).
     return parsed
 
 
@@ -643,12 +665,13 @@ Generate exactly {slide_count} slides following the layout guidelines (title sli
 
     raw = _call_llm(config, SCENE_CONTENT_SYSTEM_PROMPT, user_prompt,
                     temperature=0.6, max_tokens=8192)
+    image_provider = getattr(config, "image_provider", "disabled") or "disabled"
     if not raw:
-        return _fallback_scene_content(scene)
+        return _fallback_scene_content(scene, image_provider=image_provider)
 
     parsed = _parse_json_from_llm(raw)
     if not parsed or not isinstance(parsed, dict):
-        return _fallback_scene_content(scene)
+        return _fallback_scene_content(scene, image_provider=image_provider)
 
     # Handle multi-slide response
     if "slides" in parsed and isinstance(parsed["slides"], list):
@@ -683,11 +706,11 @@ Generate exactly {slide_count} slides following the layout guidelines (title sli
                 el["id"] = f"el-{j + 1}"
         parsed["slides"] = [slide]
 
-    _fill_image_urls(parsed, scene_id)
+    _fill_image_urls(parsed, scene_id, image_provider=image_provider)
     return parsed
 
 
-def _fallback_scene_content(scene: dict) -> dict:
+def _fallback_scene_content(scene: dict, *, image_provider: str = "disabled") -> dict:
     """Deterministic fallback when LLM fails. Returns multi-slide format (3 slides min)."""
     scene_id = scene.get("id", "scene-1")
     title = scene.get("title", "Untitled")
@@ -785,7 +808,7 @@ def _fallback_scene_content(scene: dict) -> dict:
         "slides": slides,
         "slide": slides[0],  # Backward compatibility
     }
-    _fill_image_urls(result, scene_id)
+    _fill_image_urls(result, scene_id, image_provider=image_provider)
     return result
 
 

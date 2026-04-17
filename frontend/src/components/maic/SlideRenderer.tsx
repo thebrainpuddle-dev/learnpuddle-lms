@@ -58,16 +58,39 @@ function ImageElement({ el }: { el: MAICSlideElement }) {
   const [loaded, setLoaded] = React.useState(false);
   const [error, setError] = React.useState(false);
 
-  // Resolve image src — use el.src if valid, otherwise generate from content keyword
+  const providerDisabled = !!el.meta?.imageProviderDisabled;
+
+  // Resolve image src — use el.src if valid; otherwise fall back only when
+  // the tenant has image generation enabled. Random Unsplash photos behind
+  // the user's back is bad UX for schools that deliberately opt out.
   const resolvedSrc = React.useMemo(() => {
     const raw = el.src || '';
     if (raw && (raw.startsWith('http') || raw.startsWith('/') || raw.startsWith('data:'))) {
       return raw;
     }
-    // No valid src — use Unsplash Source for a relevant stock photo
+    if (providerDisabled) return '';  // render placeholder instead
     const keyword = encodeURIComponent((el.content || 'education').slice(0, 80));
     return `https://source.unsplash.com/800x450/?${keyword}`;
-  }, [el.src, el.content]);
+  }, [el.src, el.content, providerDisabled]);
+
+  // "Provider disabled" placeholder — honest about why there's no image.
+  if (providerDisabled && !resolvedSrc) {
+    return (
+      <div className="relative h-full w-full">
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-br from-slate-100 to-slate-200 rounded-lg p-3 text-center">
+          <svg className="h-8 w-8 text-slate-400 mb-2" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909M3.75 21h16.5a2.25 2.25 0 0 0 2.25-2.25V6.75a2.25 2.25 0 0 0-2.25-2.25H3.75A2.25 2.25 0 0 0 1.5 6.75v13.5A2.25 2.25 0 0 0 3.75 21Z" />
+          </svg>
+          <span className="text-[10px] font-medium text-slate-500 mb-0.5">
+            AI images disabled
+          </span>
+          <span className="text-[9px] text-slate-400 line-clamp-2">
+            Ask your admin to enable image generation in classroom settings.
+          </span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="relative h-full w-full">
