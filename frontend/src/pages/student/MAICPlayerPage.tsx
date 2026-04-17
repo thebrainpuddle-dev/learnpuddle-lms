@@ -108,8 +108,11 @@ export const StudentMAICPlayerPage: React.FC = () => {
       reset();
       setStoreReady(false);
     };
+    // Dep on classroom?.id only — see teacher MAICPlayerPage for the
+    // full reasoning. tl;dr: React Query refetches produce new
+    // classroom references that wipe the store mid-chat.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [classroom, id]);
+  }, [classroom?.id, id]);
 
   if (isLoading) {
     return (

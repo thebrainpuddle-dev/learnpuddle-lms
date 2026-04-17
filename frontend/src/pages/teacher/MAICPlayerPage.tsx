@@ -141,8 +141,14 @@ export const MAICPlayerPage: React.FC = () => {
       setStoreReady(false);
       setHasContent(false);
     };
+    // Depend on classroom?.id, NOT the whole classroom object — React
+    // Query emits a fresh object reference on every refetch (window
+    // focus, interval) even when nothing changed. Using the whole
+    // object as a dep fires the cleanup (reset() wipes the store)
+    // after every refetch, which was making the AI Tutor chat
+    // disappear mid-conversation as soon as any refetch happened.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [classroom, id]);
+  }, [classroom?.id, id]);
 
   // ─── Loading ─────────────────────────────────────────────────────────────────
 

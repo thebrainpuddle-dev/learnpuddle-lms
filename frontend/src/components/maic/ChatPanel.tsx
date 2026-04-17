@@ -7,7 +7,7 @@
 // input with slash commands and suggestions.
 
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { BookOpen, MessageCircle } from 'lucide-react';
+import { BookOpen, MessageCircle, Trash2 } from 'lucide-react';
 import { useMAICStageStore } from '../../stores/maicStageStore';
 import { useAuthStore } from '../../stores/authStore';
 import { streamMAIC } from '../../lib/maicSSE';
@@ -215,6 +215,28 @@ export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({ role, c
     setThinkingAgentId(null);
     setStreamingMessageId(null);
   }, []);
+
+  // Clear all chat messages for this classroom. Wipes in-memory store,
+  // sessionStorage cache, AND the IndexedDB classroom-scoped record so
+  // the next page load starts from zero. Confirmed with a window.confirm
+  // because there's no undo.
+  const handleClearChat = useCallback(() => {
+    if (chatMessages.length === 0) return;
+    const ok = typeof window === 'undefined'
+      ? true
+      : window.confirm(`Clear all ${chatMessages.length} chat messages? This can't be undone.`);
+    if (!ok) return;
+    // Abort any in-flight stream so we don't race our own wipe.
+    abortRef.current?.abort();
+    setIsSending(false);
+    setThinkingAgentId(null);
+    setStreamingMessageId(null);
+    setChatMessages([]);
+    if (classroomId) {
+      persistChatToSession(classroomId, []);
+      updateClassroomChat(classroomId, []).catch(() => {});
+    }
+  }, [chatMessages.length, classroomId, setChatMessages]);
 
   // Send a message (accepts text directly from PromptInput)
   const handleSubmit = useCallback(async (text: string) => {
@@ -466,6 +488,28 @@ export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({ role, c
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Chat action row — Clear button. Only rendered while on the Chat
+          tab AND there's something to clear. Keeps the tab header clean
+          when the conversation is empty. */}
+      {activeTab === 'chat' && chatMessages.length > 0 && (
+        <div className="shrink-0 flex justify-end px-3 py-1.5 border-b border-gray-100 bg-white">
+          <button
+            type="button"
+            onClick={handleClearChat}
+            className={cn(
+              'inline-flex items-center gap-1 text-[11px] font-medium text-gray-500',
+              'hover:text-red-600 transition-colors',
+              'focus:outline-none focus:ring-2 focus:ring-red-400 rounded px-1.5 py-0.5',
+            )}
+            title="Clear all chat messages for this classroom"
+            aria-label="Clear chat"
+          >
+            <Trash2 className="h-3 w-3" />
+            <span>Clear chat</span>
+          </button>
         </div>
       )}
 
