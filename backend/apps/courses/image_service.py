@@ -30,9 +30,29 @@ import tempfile
 from urllib.parse import quote
 
 import requests
+from decouple import config
 from django.core.files.storage import default_storage
 
 logger = logging.getLogger(__name__)
+
+
+def _get_api_key(name: str) -> str:
+    """Resolve an API key from .env (via python-decouple, which reads
+    backend/.env at call time) with a fallback to process env vars for
+    container deployments that inject env directly.
+
+    The codebase's Django settings use `config(...)` throughout — raw
+    `os.getenv()` misses keys that only exist in .env and never make it
+    into os.environ, which is how we ended up shipping with Imagen
+    silently skipped on local dev.
+    """
+    try:
+        value = config(name, default="").strip()
+    except Exception:
+        value = ""
+    if not value:
+        value = os.getenv(name, "").strip()
+    return value
 
 # Timeouts (seconds)
 _API_TIMEOUT = 12
@@ -65,7 +85,7 @@ def fetch_scene_image(
     can_save = tenant_id and lesson_id and scene_index is not None
 
     # 1. Imagen 4.0 (premium)
-    google_key = os.getenv("GOOGLE_AI_API_KEY", "").strip()
+    google_key = _get_api_key("GOOGLE_AI_API_KEY")
     if google_key:
         image_bytes = _fetch_imagen(keyword, google_key)
         if image_bytes:
@@ -85,14 +105,14 @@ def fetch_scene_image(
             return _bytes_to_data_url(image_bytes)
 
     # 3. Unsplash (stock photos)
-    unsplash_key = os.getenv("UNSPLASH_ACCESS_KEY", "").strip()
+    unsplash_key = _get_api_key("UNSPLASH_ACCESS_KEY")
     if unsplash_key:
         url = _fetch_unsplash(keyword, unsplash_key)
         if url:
             return url
 
     # 4. Pexels (stock photos)
-    pexels_key = os.getenv("PEXELS_API_KEY", "").strip()
+    pexels_key = _get_api_key("PEXELS_API_KEY")
     if pexels_key:
         url = _fetch_pexels(keyword, pexels_key)
         if url:
