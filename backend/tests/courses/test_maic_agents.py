@@ -229,6 +229,51 @@ def test_voices_for_gender_returns_matching_voices():
 
 
 # ---------------------------------------------------------------------------
+# Action post-processing (Chunk 5)
+# ---------------------------------------------------------------------------
+
+def test_stamp_action_durations_fills_speech():
+    from apps.courses.maic_generation_service import _stamp_action_durations
+
+    actions = [
+        {"type": "speech", "agentId": "agent-1", "text": "Hello everyone!"},
+        {"type": "speech", "agentId": "agent-2", "text": "Hi"},   # very short
+        {"type": "spotlight", "elementId": "el-1", "duration": 2000},
+        {"type": "pause", "duration": 200},
+    ]
+    _stamp_action_durations(actions)
+    assert actions[0]["durationMs"] == max(800, round(len("Hello everyone!") * 55))
+    assert actions[1]["durationMs"] == 800  # min floor
+    assert "durationMs" not in actions[2]   # spotlight untouched
+    assert "durationMs" not in actions[3]   # pause untouched
+
+
+def test_stamp_action_durations_preserves_existing():
+    from apps.courses.maic_generation_service import _stamp_action_durations
+
+    actions = [
+        {"type": "speech", "agentId": "agent-1", "text": "Hello",
+         "durationMs": 1234},
+    ]
+    _stamp_action_durations(actions)
+    assert actions[0]["durationMs"] == 1234  # preserved
+
+
+def test_stamp_discussion_defaults_to_manual_trigger():
+    from apps.courses.maic_generation_service import _stamp_action_durations
+
+    actions = [
+        {"type": "discussion", "sessionType": "qa", "topic": "Why?",
+         "agentIds": ["agent-1"]},
+        {"type": "discussion", "sessionType": "qa", "topic": "How?",
+         "agentIds": ["agent-1"], "triggerMode": "auto"},
+    ]
+    _stamp_action_durations(actions)
+    assert actions[0]["triggerMode"] == "manual"
+    assert actions[1]["triggerMode"] == "auto"  # preserved
+
+
+# ---------------------------------------------------------------------------
 # generate_agent_profiles_json tests
 # ---------------------------------------------------------------------------
 

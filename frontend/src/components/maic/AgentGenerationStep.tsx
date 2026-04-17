@@ -60,7 +60,15 @@ export function AgentGenerationStep({
   const [editing, setEditing] = useState<MAICAgent | null>(null);
   const [regenIds, setRegenIds] = useState<Set<string>>(() => new Set());
   const [previewingVoice, setPreviewingVoice] = useState<string | null>(null);
-  const [previewWarn, setPreviewWarn] = useState<string | null>(null);
+  // Preview banner split into two channels:
+  //   - `previewError`  (red)    — real failure worth a visible banner.
+  //   - `previewInfo`   (slate)  — soft info, e.g. TTS provider not
+  //                                configured in this env (backend 204 +
+  //                                `X-TTS-Status: unavailable`). We must
+  //                                not scare demo audiences with a red
+  //                                alert for a non-error.
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewInfo, setPreviewInfo] = useState<string | null>(null);
 
   // Shared audio element — only one preview plays at a time.
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -159,7 +167,7 @@ export function AgentGenerationStep({
         }
       } catch {
         // Soft-fail: surface a lightweight warning so the UI stays usable.
-        setPreviewWarn("Couldn't regenerate that agent. Try again in a moment.");
+        setPreviewError("Couldn't regenerate that agent. Try again in a moment.");
       } finally {
         setRegenIds((prev) => {
           const next = new Set(prev);
@@ -183,7 +191,8 @@ export function AgentGenerationStep({
 
       stopPreview();                              // stopPreview bumps the token
       const myGen = previewGenRef.current;        // capture THIS preview's token
-      setPreviewWarn(null);
+      setPreviewError(null);
+      setPreviewInfo(null);
 
       try {
         const response = await maicApi.ttsPreview({
@@ -192,6 +201,31 @@ export function AgentGenerationStep({
         });
         // Stale? Another click superseded us — drop the response on the floor.
         if (myGen !== previewGenRef.current) return;
+
+        // Backend returns HTTP 204 when the tenant's TTS provider is not
+        // configured (common in fresh demo environments). The API client
+        // still resolves — but .data is an empty Blob. Calling Audio.play
+        // on an empty blob triggers onerror and historically flashed a
+        // red "Voice preview unavailable" banner. Treat 204 as a soft
+        // INFO state instead, and only warn on real errors.
+        const ttsStatus =
+          (response.headers as Record<string, string | undefined>)?.[
+            'x-tts-status'
+          ]?.toLowerCase() ?? '';
+        if (response.status === 204 || ttsStatus === 'unavailable') {
+          setPreviewInfo(
+            'Preview unavailable in this environment — the voice will still be used during playback.',
+          );
+          stopPreview();
+          return;
+        }
+        if (ttsStatus === 'error') {
+          setPreviewError(
+            'Voice preview failed. The voice will still be used during playback.',
+          );
+          stopPreview();
+          return;
+        }
 
         const blobUrl = URL.createObjectURL(response.data as Blob);
         // Race check a second time — in case stopPreview() fired while decoding.
@@ -209,16 +243,31 @@ export function AgentGenerationStep({
         };
         audio.onerror = () => {
           if (myGen === previewGenRef.current) {
-            setPreviewWarn('Voice preview unavailable — the voice will still be used in playback.');
+            setPreviewError(
+              'Voice preview failed. The voice will still be used during playback.',
+            );
             stopPreview();
           }
         };
         await audio.play();
         if (myGen !== previewGenRef.current) return;  // stopPreview() fired during play()
         setPreviewingVoice(voiceId);
-      } catch {
+      } catch (err) {
         if (myGen === previewGenRef.current) {
-          setPreviewWarn('Voice preview unavailable — the voice will still be used in playback.');
+          // Axios throws for non-2xx when responseType: 'blob' — including
+          // 204 on some clients. Sniff the response for the info channel.
+          const axiosErr = err as { response?: { status?: number; headers?: Record<string, string | undefined> } };
+          const errStatus =
+            axiosErr.response?.headers?.['x-tts-status']?.toLowerCase?.() ?? '';
+          if (axiosErr.response?.status === 204 || errStatus === 'unavailable') {
+            setPreviewInfo(
+              'Preview unavailable in this environment — the voice will still be used during playback.',
+            );
+          } else {
+            setPreviewError(
+              'Voice preview failed. The voice will still be used during playback.',
+            );
+          }
           stopPreview();
         }
       }
@@ -298,14 +347,27 @@ export function AgentGenerationStep({
         </p>
       </div>
 
-      {/* Preview/warning banner */}
-      {previewWarn && (
+      {/* Error banner — shown only when preview actually failed. */}
+      {previewError && (
         <div
-          role="status"
+          role="alert"
           className="mb-4 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800"
         >
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-          <span>{previewWarn}</span>
+          <span>{previewError}</span>
+        </div>
+      )}
+
+      {/* Info banner — shown when TTS provider isn't configured in this
+          environment. Neutral styling so demo audiences don't think
+          something is broken. */}
+      {previewInfo && !previewError && (
+        <div
+          role="status"
+          className="mb-4 flex items-start gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600"
+        >
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" aria-hidden="true" />
+          <span>{previewInfo}</span>
         </div>
       )}
 

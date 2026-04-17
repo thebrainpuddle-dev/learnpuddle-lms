@@ -1509,6 +1509,14 @@ def teacher_maic_tts_preview(request):
     Input JSON: {"voiceId": "en-IN-...", "text": "..."}
     Returns audio/mpeg bytes, or HTTP 204 when TTS is unavailable so the UI
     can fall back cleanly.
+
+    The response always carries an `X-TTS-Status` header:
+    - `ok`          — audio payload present
+    - `unavailable` — provider not configured or returned empty; safe to
+                      silently skip the preview without warning the user
+    - `error`       — unexpected failure (should be rare; frontend may
+                      surface a banner)
+    Frontend treats only `error` as a reason to warn the user.
     """
     config, err = _get_ai_config(request.tenant)
     if err:
@@ -1516,10 +1524,20 @@ def teacher_maic_tts_preview(request):
     body = request.data
     voice_id = body.get("voiceId")
     text = (body.get("text") or "")[:200]  # cap length — this is a preview
-    audio_bytes = generate_tts_audio(text, config, voice_id=voice_id)
+    try:
+        audio_bytes = generate_tts_audio(text, config, voice_id=voice_id)
+    except Exception as exc:  # noqa: BLE001 — defensive boundary
+        logger.warning("tts_preview unexpected error: %s", exc)
+        resp = HttpResponse(status=204)
+        resp["X-TTS-Status"] = "error"
+        return resp
     if not audio_bytes:
-        return HttpResponse(status=204)
-    return HttpResponse(audio_bytes, content_type="audio/mpeg")
+        resp = HttpResponse(status=204)
+        resp["X-TTS-Status"] = "unavailable"
+        return resp
+    resp = HttpResponse(audio_bytes, content_type="audio/mpeg")
+    resp["X-TTS-Status"] = "ok"
+    return resp
 
 
 # ======================================================================

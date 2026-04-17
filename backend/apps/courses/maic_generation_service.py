@@ -954,13 +954,50 @@ IMPORTANT:
     raw = _call_llm(config, ACTIONS_SYSTEM_PROMPT, user_prompt,
                     temperature=0.5, max_tokens=4096)
     if not raw:
-        return _fallback_actions(scene, assigned_agents)
+        fallback = _fallback_actions(scene, assigned_agents)
+        _stamp_action_durations(fallback.get("actions", []))
+        return fallback
 
     parsed = _parse_json_from_llm(raw)
     if not parsed or not isinstance(parsed, dict) or "actions" not in parsed:
-        return _fallback_actions(scene, assigned_agents)
+        fallback = _fallback_actions(scene, assigned_agents)
+        _stamp_action_durations(fallback.get("actions", []))
+        return fallback
 
+    _stamp_action_durations(parsed["actions"])
     return parsed
+
+
+# ─── Action post-processing ──────────────────────────────────────────────────
+
+# Character-based speech duration estimator. 55 ms/char approximates a
+# natural en-IN TTS cadence (~18 chars/sec). The playback engine uses this
+# as a fallback timer when TTS metadata isn't available and as the minimum
+# "hold time" for subtitles on slow networks. Minimum 800 ms so very short
+# utterances ("Exactly.", "Right.") still register on screen.
+_SPEECH_MS_PER_CHAR = 55
+_SPEECH_MIN_MS = 800
+
+
+def _stamp_action_durations(actions: list) -> None:
+    """Mutate `actions` in place: add a `durationMs` field to every speech
+    action that doesn't already have one. Computed from text length so the
+    frontend can synchronize slide transitions and subtitle timing without
+    waiting for the audio element to report duration.
+
+    Also normalizes discussion actions: if `triggerMode` is missing, defaults
+    to "manual" so stored classrooms generated before Chunk 9 don't auto-pop
+    the Roundtable panel mid-scene.
+    """
+    for action in actions:
+        if not isinstance(action, dict):
+            continue
+        a_type = action.get("type")
+        if a_type == "speech" and "durationMs" not in action:
+            text = str(action.get("text", ""))
+            action["durationMs"] = max(_SPEECH_MIN_MS, round(len(text) * _SPEECH_MS_PER_CHAR))
+        elif a_type == "discussion" and "triggerMode" not in action:
+            action["triggerMode"] = "manual"
 
 
 def _persona_flavored(base: str, agent: dict) -> str:
