@@ -262,12 +262,18 @@ export function useStudentMAICGeneration(): UseStudentMAICGenerationReturn {
 
           generatedSlides.push(...sceneSlides);
 
-          sceneSlideBounds.push({
-            sceneIdx: i,
-            startSlide: currentSlideOffset,
-            endSlide: currentSlideOffset + Math.max(sceneSlides.length - 1, 0),
-          });
-          currentSlideOffset += sceneSlides.length;
+          // Only push bounds for scenes that actually generated slides.
+          // Zero-slide scenes (e.g., quiz scenes returning `questions`)
+          // would otherwise claim the next scene's first slide index,
+          // producing duplicate thumbnails. See useMAICGeneration.ts.
+          if (sceneSlides.length > 0) {
+            sceneSlideBounds.push({
+              sceneIdx: i,
+              startSlide: currentSlideOffset,
+              endSlide: currentSlideOffset + sceneSlides.length - 1,
+            });
+            currentSlideOffset += sceneSlides.length;
+          }
 
           const sceneType = mapOutlineTypeToSceneType(outlineScene.type);
           const primarySlide = sceneSlides[0];

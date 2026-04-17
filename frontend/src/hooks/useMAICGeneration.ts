@@ -216,13 +216,20 @@ export function useMAICGeneration(): UseMAICGenerationReturn {
 
           generatedSlides.push(...sceneSlides);
 
-          // Build scene-to-slide bounds mapping
-          sceneSlideBounds.push({
-            sceneIdx: i,
-            startSlide: currentSlideOffset,
-            endSlide: currentSlideOffset + Math.max(sceneSlides.length - 1, 0),
-          });
-          currentSlideOffset += sceneSlides.length;
+          // Build scene-to-slide bounds mapping.
+          // Skip scenes that generated zero slides (quiz scenes return
+          // `questions: [...]` instead of `slides`). If we pushed a bound
+          // with startSlide=endSlide=offset for an empty scene, the NEXT
+          // scene would also start at offset and both would render the
+          // same thumbnail — the duplicate "16, 16" bug.
+          if (sceneSlides.length > 0) {
+            sceneSlideBounds.push({
+              sceneIdx: i,
+              startSlide: currentSlideOffset,
+              endSlide: currentSlideOffset + sceneSlides.length - 1,
+            });
+            currentSlideOffset += sceneSlides.length;
+          }
 
           // Map outline type to scene type
           const sceneType = mapOutlineTypeToSceneType(outlineScene.type);
