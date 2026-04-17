@@ -95,6 +95,7 @@ export const Stage: React.FC<StageProps> = ({ role }) => {
     resumeAfterDiscussion,
     startClass,
     playFromCurrent,
+    seekToScene,
     consumeEngineDrivenSlideChange,
   } = usePlaybackEngine(role);
 
@@ -352,7 +353,7 @@ export const Stage: React.FC<StageProps> = ({ role }) => {
       </div>
 
       {/* Bottom navigation bar — scene chips + canonical Play/Pause */}
-      <SlideNavigator onPlayPause={handlePlayPause} />
+      <SlideNavigator onPlayPause={handlePlayPause} onSeekToScene={seekToScene} />
 
       {/* Headless audio player */}
       <AudioPlayer audioUrl={audioUrl} />

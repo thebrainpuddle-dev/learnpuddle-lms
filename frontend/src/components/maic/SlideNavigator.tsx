@@ -21,6 +21,12 @@ export interface SlideNavigatorProps {
    *  button is the single canonical control; StageToolbar no longer
    *  renders one. */
   onPlayPause?: () => void;
+  /** Engine-aware scene seek handler wired by Stage. Stops the engine
+   *  and updates the store atomically so pressing Play after clicking a
+   *  chip always starts from action 0 of the new scene — no stale
+   *  audio from the previous scene can leak across. Falls back to the
+   *  store's goToScene when not provided (legacy pre-Chunk-10 callers). */
+  onSeekToScene?: (sceneIndex: number) => void;
   /** Deprecated — we no longer expose a per-slide seek surface. Left in
    *  the prop shape for backward compat with existing Stage wiring;
    *  never invoked from this component. */
@@ -29,6 +35,7 @@ export interface SlideNavigatorProps {
 
 export const SlideNavigator = React.memo(function SlideNavigator({
   onPlayPause,
+  onSeekToScene,
 }: SlideNavigatorProps = {}) {
   const scenes = useMAICStageStore((s) => s.scenes);
   const sceneSlideBounds = useMAICStageStore((s) => s.sceneSlideBounds);
@@ -81,22 +88,31 @@ export const SlideNavigator = React.memo(function SlideNavigator({
     ? Math.max(0, currentSlideIndex - activeScene.startSlide) + 1
     : 0;
 
-  // Jump to scene by index.
+  // Jump to scene by index. Prefer the engine-aware seek provided by
+  // Stage (stops the engine atomically before the store update) so
+  // pressing Play right after a chip click always plays from action 0
+  // of the target scene, not stale state from the prior one.
   const handleSceneClick = useCallback(
     (sceneIdx: number) => {
-      goToScene(sceneIdx);
+      if (onSeekToScene) onSeekToScene(sceneIdx);
+      else goToScene(sceneIdx);
     },
-    [goToScene],
+    [goToScene, onSeekToScene],
   );
 
   const handlePrev = useCallback(() => {
-    if (activeSceneIdx > 0) goToScene(activeSceneIdx - 1);
-  }, [activeSceneIdx, goToScene]);
+    if (activeSceneIdx <= 0) return;
+    const target = activeSceneIdx - 1;
+    if (onSeekToScene) onSeekToScene(target);
+    else goToScene(target);
+  }, [activeSceneIdx, goToScene, onSeekToScene]);
 
   const handleNext = useCallback(() => {
     const last = navScenes[navScenes.length - 1]?.sceneIndex ?? -1;
-    if (activeSceneIdx < last) nextScene();
-  }, [activeSceneIdx, navScenes, nextScene]);
+    if (activeSceneIdx >= last) return;
+    if (onSeekToScene) onSeekToScene(activeSceneIdx + 1);
+    else nextScene();
+  }, [activeSceneIdx, navScenes, nextScene, onSeekToScene]);
 
   // Scroll active chip into view when scene changes.
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);

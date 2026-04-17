@@ -181,6 +181,28 @@ export function usePlaybackEngine(role: MAICRole = 'teacher') {
     engineRef.current.seekToSlide(slideIndex);
   }, []);
 
+  /**
+   * Scene-chip click handler. Synchronizes the engine atomically with the
+   * scene change so a subsequent Play button press cannot race a
+   * partially-loaded scene:
+   *
+   *   1. Flip engineDrivenSlideChangeRef so Stage's auto-pause effect
+   *      doesn't spuriously pause us on the imminent slide-index change.
+   *   2. Stop the engine synchronously — aborts any in-flight audio or
+   *      timers. This must happen BEFORE the store update so stale audio
+   *      from the prior scene cannot leak into the new scene.
+   *   3. Update the store, which fires Stage's useEffect to loadScene
+   *      the new scene (fresh action list, currentActionIndex = 0).
+   *
+   * The engine is left in 'idle' state — the user's Play press then
+   * plays from action 0 of the freshly loaded scene, deterministically.
+   */
+  const seekToScene = useCallback((sceneIndex: number) => {
+    engineDrivenSlideChangeRef.current = true;
+    engineRef.current?.stop();
+    useMAICStageStore.getState().goToScene(sceneIndex);
+  }, []);
+
   const resumeAfterDiscussion = useCallback(() => {
     engineRef.current?.resumeAfterDiscussion();
   }, []);
@@ -261,6 +283,7 @@ export function usePlaybackEngine(role: MAICRole = 'teacher') {
     stop,
     seekTo,
     seekToSlide,
+    seekToScene,
     loadScene,
     resumeAfterDiscussion,
     startClass,

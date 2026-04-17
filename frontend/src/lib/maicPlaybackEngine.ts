@@ -165,24 +165,67 @@ export class MAICPlaybackEngine {
    *   1. stop() — sets mode to 'idle' and calls abortCurrentAction() which
    *      bumps the action engine's generationToken. Any in-flight speech
    *      callback from the previous slide becomes stale immediately.
-   *   2. Move the cursor to the transition action.
+   *   2. Move the cursor to a sensible position for the target slide.
    *   3. Set mode to 'playing' and call processNext() with a fresh token.
    *
-   * If no transition action matches `slideIndex`, this is a no-op — callers
-   * that want a hard jump (e.g. scene-switch) should use `goToScene()` on
-   * the stage store instead.
+   * Chunk 10: never NO-OP. If no exact transition matches `slideIndex`,
+   * fall back to the greatest transition ≤ target (prior slide's start),
+   * else action 0 of the current scene. Previously the method silently
+   * returned and the caller was left with a mismatched slide/action
+   * cursor, which manifested as "pressing Play restarts from the wrong
+   * position" in the demo.
    */
   seekToSlide(slideIndex: number): void {
-    const target = this.actions.findIndex(
-      (a) =>
-        a.type === 'transition' &&
-        (a as import('../types/maic-actions').TransitionAction).slideIndex === slideIndex,
-    );
-    if (target === -1) return;
+    const target = this.resolveSlideSeekTarget(slideIndex);
     this.stop(); // token++, synchronous clean teardown
     this.currentActionIndex = target;
     this.setMode('playing');
     void this.processNext();
+  }
+
+  /**
+   * Seek without auto-playing — used by scene-chip clicks that should
+   * reposition the cursor but wait for the user's explicit Play. Keeps
+   * the engine cleanly idle until the Play button fires.
+   */
+  seekToSlidePaused(slideIndex: number): void {
+    const target = this.resolveSlideSeekTarget(slideIndex);
+    this.stop();
+    this.currentActionIndex = target;
+    // Leave mode = 'idle'. Caller (usually the React hook) will trigger
+    // play() on user's Play button click.
+  }
+
+  /**
+   * Resolve the action index that best corresponds to `slideIndex`. Used
+   * by seekToSlide + seekToSlidePaused to pick a landing spot that's
+   * never a no-op.
+   */
+  private resolveSlideSeekTarget(slideIndex: number): number {
+    if (this.actions.length === 0) return 0;
+
+    // 1. Exact transition match.
+    let exact = -1;
+    let nearestBelow = -1;
+    let nearestBelowSlide = -1;
+    for (let i = 0; i < this.actions.length; i++) {
+      const action = this.actions[i];
+      if (action.type !== 'transition') continue;
+      const transition = action as import('../types/maic-actions').TransitionAction;
+      if (transition.slideIndex == null) continue;
+      if (transition.slideIndex === slideIndex) {
+        exact = i;
+        break;
+      }
+      if (transition.slideIndex < slideIndex && transition.slideIndex > nearestBelowSlide) {
+        nearestBelow = i;
+        nearestBelowSlide = transition.slideIndex;
+      }
+    }
+    if (exact !== -1) return exact;
+    if (nearestBelow !== -1) return nearestBelow;
+    // 2. No transition matches — start at action 0 (slide 0 of the scene).
+    return 0;
   }
 
   /**

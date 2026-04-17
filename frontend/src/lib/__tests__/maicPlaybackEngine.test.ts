@@ -82,7 +82,48 @@ describe('MAICPlaybackEngine.seekToSlide', () => {
     expect(pe.getCurrentActionIndex()).toBeGreaterThanOrEqual(3);
   });
 
-  test('is a no-op when no transition matches slideIndex', () => {
+  test('falls back to nearest transition below when no exact match (Chunk 10)', () => {
+    // Chunk 10 changed the contract: seekToSlide must NEVER no-op.
+    // If no exact transition matches, pick the greatest transition ≤
+    // target, else action 0. Previously the method silently returned
+    // and the caller was left with a mismatched slide/action cursor,
+    // which manifested as "pressing Play restarts from the wrong
+    // position" in the demo.
+    const ae = new MAICActionEngine({ ttsEndpoint: '/tts', token: 't' });
+    vi.spyOn(ae, 'execute').mockImplementation(() => Promise.resolve());
+    const pe = new MAICPlaybackEngine(ae);
+
+    pe.loadScene({
+      id: 's1',
+      title: 's',
+      type: 'lecture',
+      actions: [
+        { type: 'speech', agentId: 'a1', text: 'intro' },     // 0
+        { type: 'transition', slideIndex: 1 },                // 1
+        { type: 'speech', agentId: 'a1', text: 'body' },      // 2
+        { type: 'transition', slideIndex: 3 },                // 3
+        { type: 'speech', agentId: 'a1', text: 'outro' },     // 4
+      ],
+    } as any);
+
+    // Target slide 5 has no transition — nearest below is slideIndex=3
+    // at action index 3. After seekToSlide fires processNext, cursor
+    // advances past 3, so ≥ 3 is the acceptable landing zone.
+    pe.seekToSlide(5);
+    expect(pe.getCurrentActionIndex()).toBeGreaterThanOrEqual(3);
+  });
+
+  test('empty action list resolves to index 0 (defensive)', () => {
+    const ae = new MAICActionEngine({ ttsEndpoint: '/tts', token: 't' });
+    vi.spyOn(ae, 'execute').mockImplementation(() => Promise.resolve());
+    const pe = new MAICPlaybackEngine(ae);
+    pe.loadScene({ id: 's0', title: '', type: 'lecture', actions: [] } as any);
+    // Shouldn't throw; cursor stays at 0.
+    pe.seekToSlide(99);
+    expect(pe.getCurrentActionIndex()).toBe(0);
+  });
+
+  test('seekToSlidePaused leaves engine idle for user Play', () => {
     const ae = new MAICActionEngine({ ttsEndpoint: '/tts', token: 't' });
     vi.spyOn(ae, 'execute').mockImplementation(() => Promise.resolve());
     const pe = new MAICPlaybackEngine(ae);
@@ -94,12 +135,12 @@ describe('MAICPlaybackEngine.seekToSlide', () => {
       actions: [
         { type: 'speech', agentId: 'a1', text: 'intro' },
         { type: 'transition', slideIndex: 1 },
+        { type: 'speech', agentId: 'a1', text: 'body' },
       ],
     } as any);
 
-    // No transition with slideIndex === 99 → no-op, cursor stays at 0.
-    pe.seekToSlide(99);
-    expect(pe.getCurrentActionIndex()).toBe(0);
+    pe.seekToSlidePaused(1);
+    expect(pe.getCurrentActionIndex()).toBe(1);
     expect(pe.getState()).toBe('idle');
   });
 });
