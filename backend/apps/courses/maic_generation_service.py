@@ -27,6 +27,7 @@ from apps.courses.maic_voices import (
     VOICE_BY_ID,
     infer_gender_from_name,
     voice_matches_role,
+    voices_for_gender,
 )
 from apps.courses.prompts.loader import load_prompt
 
@@ -221,6 +222,82 @@ def _parse_json_from_llm(text: str) -> dict | list | None:
 
 # ─── Agent Profile Generation ────────────────────────────────────────────────
 
+def _auto_fix_voice_gender_mismatches(agents: list[dict]) -> tuple[list[dict], list[str]]:
+    """Deterministically swap voiceIds to repair name↔voice gender mismatches.
+
+    LLMs are inconsistent about matching voice gender to Indian first-name
+    convention even with explicit instructions. Rather than fail the whole
+    generation when a mismatch slips through, try to fix it locally.
+
+    Uses a two-pass release-then-reassign strategy to handle the common
+    "swap chain" case — e.g. agent-1 has Priya+male-voice and agent-2 has
+    Arjun+female-voice. If we fix them one at a time, the first fix sees
+    no free female voice (still held by agent-2) and bails out. So we
+    first release all mismatched agents' voices into a free pool, then
+    assign each mismatched agent a fresh gender-matched voice from that
+    pool. Correctly-paired agents keep their voices untouched.
+
+    Returns a new list (leaves the input untouched) plus a list of
+    human-readable fix notes for logging. Only returns a valid roster
+    when every mismatch is fixable; otherwise the caller re-prompts the
+    LLM with the error context.
+    """
+    fixed: list[dict] = [dict(a) for a in agents]
+    notes: list[str] = []
+
+    # Pass 1: identify mismatched agents + release their voices.
+    mismatched_indices: list[int] = []
+    kept_voices: set[str] = set()
+    for i, a in enumerate(fixed):
+        voice_id = a.get("voiceId")
+        voice = VOICE_BY_ID.get(voice_id) if voice_id else None
+        if not voice:
+            kept_voices.add(voice_id) if voice_id else None
+            continue
+        inferred = infer_gender_from_name(a.get("name", ""))
+        if inferred == "unknown" or inferred == voice["gender"]:
+            kept_voices.add(voice_id)
+            continue
+        mismatched_indices.append(i)
+
+    # Pass 2: assign each mismatched agent a fresh matched voice.
+    for i in mismatched_indices:
+        a = fixed[i]
+        old_voice = a.get("voiceId")
+        inferred = infer_gender_from_name(a.get("name", ""))
+        candidates = [
+            v for v in voices_for_gender(inferred)
+            if v["id"] not in kept_voices
+            and a.get("role") in v.get("suits", [])
+        ]
+        if not candidates:
+            notes.append(
+                f"could not auto-fix {a.get('name')!r}: no unused "
+                f"{inferred} voice available for role {a.get('role')!r}"
+            )
+            # Intentionally do NOT add the old (wrong) voice back to the
+            # kept pool — it might have just been taken by a prior fix
+            # in this same pass, which would leave the roster with
+            # duplicate voiceIds. Downstream validation will see the
+            # unchanged wrong voice and report the mismatch, triggering
+            # an LLM re-prompt.
+            continue
+
+        # Prefer voices whose suits list contains ONLY the matching role
+        # (e.g. Prabhat -> professor), then fall back to any candidate.
+        exact = [v for v in candidates if v["suits"] == [a.get("role")]]
+        picked = exact[0] if exact else candidates[0]
+
+        a["voiceId"] = picked["id"]
+        kept_voices.add(picked["id"])
+        notes.append(
+            f"auto-swapped {a.get('name')!r}: {old_voice} -> {picked['id']} "
+            f"(matched {inferred} voice)"
+        )
+
+    return fixed, notes
+
+
 def generate_agent_profiles_json(
     topic: str,
     language: str,
@@ -229,7 +306,16 @@ def generate_agent_profiles_json(
 ) -> dict:
     """Generate an agent roster via LLM, validated against our constraints.
 
-    Retries once on validation failure. Raises AgentValidationError on persistent failure.
+    Strategy:
+      1. Call the LLM, parse JSON, run `validate_agents`.
+      2. If validation fails with a voice/name gender mismatch AND the
+         fix is a local voice swap, apply the deterministic auto-fix
+         and re-validate. This prevents the whole flow from failing on
+         an LLM hiccup that we can repair in-process.
+      3. If auto-fix doesn't resolve it, re-prompt the LLM with the
+         specific error message so the next attempt has context.
+
+    Raises AgentValidationError on persistent failure after 3 attempts.
     """
     system_prompt = load_prompt("agent_profiles")
 
@@ -240,12 +326,21 @@ def generate_agent_profiles_json(
     rendered = rendered.replace("{{role_slots_json}}", json.dumps(role_slots, indent=2))
     rendered = rendered.replace("{{voices_json}}", json.dumps(AZURE_IN_VOICES, indent=2))
 
-    user_prompt = f'Generate the agents for the topic "{topic}" in {language}.'
+    base_user_prompt = f'Generate the agents for the topic "{topic}" in {language}.'
 
     last_error = None
-    # 3 attempts (up from 2) to give the stricter name↔voice gender
-    # validator room to re-prompt the LLM if its first pick mismatches.
     for attempt in range(3):
+        # On retry, inject the prior error so the LLM has explicit
+        # guidance instead of blindly repeating the same pick.
+        user_prompt = base_user_prompt
+        if last_error and attempt > 0:
+            user_prompt = (
+                f"{base_user_prompt}\n\n"
+                f"Your previous attempt failed validation with this error: {last_error}\n"
+                "Fix this specifically. Double-check voice gender against the "
+                "first name of every agent BEFORE returning."
+            )
+
         raw = _call_llm(config, rendered, user_prompt, temperature=0.9, max_tokens=2048)
         if not raw:
             last_error = "LLM returned empty"
@@ -260,7 +355,20 @@ def generate_agent_profiles_json(
         except AgentValidationError as e:
             last_error = str(e)
             logger.warning("Agent profile validation failed (attempt %d): %s", attempt + 1, e)
-            continue
+            # Try to auto-correct voice gender mismatches locally before
+            # burning another LLM call. Covers the most common LLM drift.
+            fixed, notes = _auto_fix_voice_gender_mismatches(parsed["agents"])
+            if notes:
+                logger.info("Auto-fix notes: %s", "; ".join(notes))
+            try:
+                validate_agents(fixed, role_slots)
+                parsed["agents"] = fixed
+                logger.info("Agent roster auto-fixed after attempt %d", attempt + 1)
+                return parsed
+            except AgentValidationError as e2:
+                logger.info("Auto-fix insufficient: %s", e2)
+                last_error = str(e2)
+                continue
 
     raise AgentValidationError(
         f"generation failed after 3 attempts: {last_error}"

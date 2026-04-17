@@ -11,6 +11,7 @@ from apps.courses.maic_generation_service import (
     validate_agents,
 )
 from apps.courses.maic_voices import (
+    VOICE_BY_ID,
     infer_gender_from_name,
     voices_for_gender,
 )
@@ -213,6 +214,82 @@ def test_validate_allows_unknown_name_on_any_voice():
         {"role": "teaching_assistant", "count": 1},
         {"role": "student", "count": 1},
     ])
+
+
+def test_auto_fix_swaps_mismatched_voice():
+    """When the LLM hands us a female-name agent with a male voice and a
+    male-name agent with a female voice, the two-pass auto-fixer should
+    release both voices and re-pair them correctly."""
+    from apps.courses.maic_generation_service import _auto_fix_voice_gender_mismatches
+
+    # Both professors (so Neerja suits both role-wise). The swap chain
+    # is: Neha has Prabhat (male), Aarav has Neerja (female). After fix:
+    # Neha should have Neerja, Aarav should have Prabhat.
+    agents = [
+        {"id": "agent-1", "name": "Dr. Neha Khanna", "role": "professor",
+         "avatar": "👩‍🏫", "color": "#4338CA",
+         "voiceId": "en-IN-PrabhatNeural", "voiceProvider": "azure",
+         "personality": "x", "expertise": "x", "speakingStyle": "x"},
+        {"id": "agent-2", "name": "Dr. Aarav Menon", "role": "professor",
+         "avatar": "👨‍🏫", "color": "#0F766E",
+         "voiceId": "en-IN-NeerjaNeural", "voiceProvider": "azure",
+         "personality": "x", "expertise": "x", "speakingStyle": "x"},
+        {"id": "agent-3", "name": "Rohan Menon", "role": "student",
+         "avatar": "🙋‍♂️", "color": "#D97706",
+         "voiceId": "en-IN-AaravNeural", "voiceProvider": "azure",
+         "personality": "x", "expertise": "x", "speakingStyle": "x"},
+    ]
+    fixed, notes = _auto_fix_voice_gender_mismatches(agents)
+
+    neha = next(a for a in fixed if a["name"].endswith("Neha Khanna"))
+    aarav = next(a for a in fixed if a["name"].endswith("Aarav Menon"))
+    assert neha["voiceId"] == "en-IN-NeerjaNeural"  # female voice
+    assert aarav["voiceId"] == "en-IN-PrabhatNeural"  # male voice
+    assert len(notes) == 2  # both swaps logged
+    # Full roster must now validate cleanly
+    validate_agents(fixed, role_slots=[
+        {"role": "professor", "count": 2},
+        {"role": "student", "count": 1},
+    ])
+
+
+def test_auto_fix_preserves_already_correct_agents():
+    """Agents whose gender already matches should not be touched."""
+    from apps.courses.maic_generation_service import _auto_fix_voice_gender_mismatches
+
+    agents = sample_agents()
+    fixed, notes = _auto_fix_voice_gender_mismatches(agents)
+    assert notes == []  # no fixes required
+    for before, after in zip(agents, fixed):
+        assert before["voiceId"] == after["voiceId"]
+
+
+def test_auto_fix_reports_when_no_candidate_available():
+    """When no unused gender-matched voice suits the role, the fixer
+    leaves the agent alone and reports the shortfall."""
+    from apps.courses.maic_generation_service import _auto_fix_voice_gender_mismatches
+
+    # Build a roster where every female voice that suits `professor`
+    # (Neerja) is already taken, forcing the fixer to fail on a female
+    # professor with a male voice.
+    agents = [
+        {"id": "agent-1", "name": "Dr. Priya Sharma", "role": "professor",
+         "avatar": "👩‍🏫", "color": "#4338CA",
+         "voiceId": "en-IN-PrabhatNeural",  # wrong (male)
+         "voiceProvider": "azure",
+         "personality": "x", "expertise": "x", "speakingStyle": "x"},
+        {"id": "agent-2", "name": "Ms. Neha Iyer", "role": "teaching_assistant",
+         "avatar": "👩‍🏫", "color": "#0F766E",
+         "voiceId": "en-IN-NeerjaNeural",  # takes the only female-prof-suiting voice
+         "voiceProvider": "azure",
+         "personality": "x", "expertise": "x", "speakingStyle": "x"},
+    ]
+    fixed, notes = _auto_fix_voice_gender_mismatches(agents)
+    # Priya still has the wrong voice (couldn't find an unused female
+    # voice that suits professor — Neerja taken)
+    priya = next(a for a in fixed if a["name"].endswith("Priya Sharma"))
+    assert priya["voiceId"] == "en-IN-PrabhatNeural"
+    assert any("could not auto-fix" in n.lower() for n in notes)
 
 
 def test_voices_for_gender_returns_matching_voices():
@@ -442,8 +519,15 @@ def test_generate_agent_profiles_returns_valid(mock_llm, ai_config):
 
 @patch("apps.courses.maic_generation_service._call_llm")
 def test_generate_agent_profiles_retries_on_validation_error(mock_llm, ai_config):
+    # Use a mismatch the auto-fixer CAN'T repair (e.g. a male student
+    # sharing the male professor's voice — duplicate of a gender-
+    # matching voice). The auto-fix won't kick in because the genders
+    # already align per-agent; only the cross-roster duplicate check
+    # fails. That forces the LLM retry path to trigger.
     bad = sample_agents()
-    bad[1]["voiceId"] = bad[0]["voiceId"]  # duplicate -> invalid
+    # agent-3 (Rohan, male, student) — steal agent-1's voice. Both are
+    # male so no gender mismatch exists for auto-fix to latch onto.
+    bad[2]["voiceId"] = bad[0]["voiceId"]
     good = sample_agents()
     mock_llm.side_effect = [
         json.dumps({"agents": bad}),
@@ -460,6 +544,38 @@ def test_generate_agent_profiles_retries_on_validation_error(mock_llm, ai_config
     )
     assert len(result["agents"]) == 3
     assert mock_llm.call_count == 2  # retry happened
+
+
+@patch("apps.courses.maic_generation_service._call_llm")
+def test_generate_agent_profiles_auto_fixes_gender_mismatch(mock_llm, ai_config):
+    """When the LLM returns a fixable gender mismatch, we should NOT burn
+    another LLM call — auto-fix resolves it in-process."""
+    bad = sample_agents()
+    # Priya (female) gets the male Prabhat voice — fixable by swapping
+    # to Neerja which is free after the fixer releases it from Priya.
+    # Wait: sample_agents already has Priya with Neerja. Let's swap:
+    # agent-1 (Aarav, male) keeps Prabhat; force agent-2 (Priya, female)
+    # onto AaravNeural (male, student-suiting) — agent-3 will then need
+    # its voice swapped too. The simpler path: swap agent-1 and agent-2
+    # voices so Priya has Prabhat (male) and Aarav has Neerja (female).
+    bad[0]["voiceId"] = "en-IN-NeerjaNeural"   # Aarav (male) + female voice
+    bad[1]["voiceId"] = "en-IN-PrabhatNeural"  # Priya (female) + male voice
+    mock_llm.return_value = json.dumps({"agents": bad})
+    result = generate_agent_profiles_json(
+        topic="X", language="en",
+        role_slots=[
+            {"role": "professor", "count": 1},
+            {"role": "teaching_assistant", "count": 1},
+            {"role": "student", "count": 1},
+        ],
+        config=ai_config,
+    )
+    # Exactly 1 LLM call — auto-fix resolved the mismatch without retry.
+    assert mock_llm.call_count == 1
+    # The fixed roster should have Aarav -> male voice, Priya -> female voice.
+    by_name = {a["name"]: a["voiceId"] for a in result["agents"]}
+    assert VOICE_BY_ID[by_name["Dr. Aarav Sharma"]]["gender"] == "male"
+    assert VOICE_BY_ID[by_name["Ms. Priya Iyer"]]["gender"] == "female"
 
 
 # ---------------------------------------------------------------------------

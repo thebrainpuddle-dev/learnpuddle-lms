@@ -57,7 +57,12 @@ Three reference agents from DIFFERENT regions — use them as style anchors, do 
 - **No stereotypes.** No "aunty" or "uncle" tropes. No IT/coding clichés. No caste references.
 - **`personality`:** 1–2 sentences, topic-grounded. Mention how the agent relates to the topic.
 - **`speakingStyle`:** 1–2 sentences describing English register (warm, precise, crisp, Socratic, informal, measured, etc.) and a teaching tic expressed IN ENGLISH (e.g. "pauses to check in", "reframes with a question", "names what landed before adding nuance"). Do not include Hindi words or code-switching examples, even as hints.
-- **`voiceId`:** MUST be one from the available voice list I provide. The voice's `suits` list MUST contain the agent's role. Match voice gender to the first-name convention (Priya/Neha/Kavya/Aditi → female voice; Arjun/Rahul/Prabhat/Aarav → male voice).
+- **`voiceId`:** MUST be one from the available voice list I provide. The voice's `suits` list MUST contain the agent's role.
+- **Voice gender MUST match first-name gender.** This is strictly enforced and your output will be rejected if it mismatches.
+  - Before assigning `voiceId`, inspect that voice's `gender` field in the `Available voices` list.
+  - Feminine first names (Priya, Neha, Kavya, Aditi, Anjali, Meera, Pooja, Lakshmi, Aashi, …) MUST get a voice whose `gender` is `female`.
+  - Masculine first names (Arjun, Rahul, Prabhat, Aarav, Kunal, Rohan, Vikram, Rehaan, …) MUST get a voice whose `gender` is `male`.
+  - Example of the correct logic: name = `Dr. Neha Khanna` → first name `Neha` is feminine → pick from voices where `gender == "female"` AND `suits` contains `professor` → `en-IN-NeerjaNeural`. NOT `en-IN-PrabhatNeural` (that voice is `male`).
 - **No two agents share a voiceId.**
 - **`color`:** pick from this exact palette — `#4338CA` (indigo), `#0F766E` (teal), `#D97706` (saffron), `#166534` (forest), `#9F1239` (cranberry), `#334155` (slate). No two agents share a color.
 - **`avatar`:** pick from this exact emoji set — 👨‍🏫 👩‍🏫 🧑‍🎓 👨‍🎓 👩‍🎓 🧕 🙋‍♀️ 🙋‍♂️. No two agents share an avatar.
