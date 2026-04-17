@@ -404,12 +404,18 @@ jobs:
           docker compose -f docker-compose.prod.yml build --no-cache nginx
 
           # ── Run migrations BEFORE restarting (prevents schema mismatch) ─
-          docker compose -f docker-compose.prod.yml up -d db redis
-          docker compose -f docker-compose.prod.yml run --rm -T web python manage.py migrate --noinput
-          docker compose -f docker-compose.prod.yml run --rm -T -u root web python manage.py collectstatic --noinput
+          # IMPORTANT: every `docker compose run` below redirects stdin from
+          # /dev/null. Without it, compose-run swallows the heredoc's stdin
+          # (even with `-T`) and bash hits EOF prematurely — the remaining
+          # commands (collectstatic, up -d, health check) are silently
+          # skipped while the SSH step still reports exit 0 = success.
+          # Found the hard way after a deploy shipped stale frontend.
+          docker compose -f docker-compose.prod.yml up -d db redis < /dev/null
+          docker compose -f docker-compose.prod.yml run --rm -T web python manage.py migrate --noinput < /dev/null
+          docker compose -f docker-compose.prod.yml run --rm -T -u root web python manage.py collectstatic --noinput < /dev/null
 
           # ── Restart all services with new code ────────────────────────
-          docker compose -f docker-compose.prod.yml up -d --remove-orphans
+          docker compose -f docker-compose.prod.yml up -d --remove-orphans < /dev/null
 
           # ── Health check — auto-rollback on failure ───────────────────
           sleep 10
