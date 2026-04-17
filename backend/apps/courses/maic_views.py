@@ -594,6 +594,10 @@ def teacher_maic_classroom_detail(request, classroom_id):
             for s in sections
         ],
         "config": classroom.config,
+        # Full generated payload (agents, scenes, actions, slides, audioManifest).
+        # The player needs every nested field to render; a bare metadata
+        # response made existing READY classrooms look empty in the UI.
+        "content": classroom.content or {},
         "audioManifest": (classroom.content or {}).get("audioManifest"),
         "created_at": classroom.created_at.isoformat(),
         "updated_at": classroom.updated_at.isoformat(),

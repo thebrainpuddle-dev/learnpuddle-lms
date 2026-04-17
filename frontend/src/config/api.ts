@@ -23,9 +23,14 @@ const API_BASE_URL =
  * Create axios instance with default config
  * Note: Don't set Content-Type here - let axios auto-detect for FormData
  */
+// 10-minute timeout is deliberate for MAIC generation endpoints. Scene-content
+// and scene-actions can each take 60-120s per scene, and a 14-scene classroom
+// may chain ~20+ min across requests. Short connections (hotspot, flaky wifi)
+// also benefit: axios returns a clean timeout error instead of the user seeing
+// a stuck UI. Individual callers can override via `api.post(url, data, { timeout })`.
 export const api: AxiosInstance = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 120000,
+  timeout: 600000,
 });
 
 const AUTH_HEADER_BYPASS_PATHS = [

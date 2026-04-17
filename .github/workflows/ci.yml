@@ -395,13 +395,18 @@ jobs:
           # ── Pull new images (skip locally-built services like nginx) ──
           docker compose -f docker-compose.prod.yml pull --ignore-buildable
 
-          # ── Build nginx (frontend baked into the image) ─────────────
-          # --no-cache is deliberate: Docker's layer cache has bitten us when
-          # frontend/ source changes didn't invalidate the build layer (e.g.
-          # BuildKit cache preservation across runs). Costs ~2-3 min per deploy
-          # for a guaranteed-fresh bundle — cheaper than a stealth-stale deploy.
+          # ── Build nginx (frontend baked) + backend services ─────────
+          # docker-compose.prod.yml declares `build:` for web/asgi/worker/beat
+          # AND for nginx, so none of them are pulled from a registry by
+          # `compose pull --ignore-buildable`. If we don't rebuild them here
+          # the droplet keeps running whatever image was last built manually,
+          # and pushes to main have no visible effect on the backend.
+          # --no-cache on nginx because the frontend COPY has historically
+          # missed invalidation; backend builds can use cache (only the Django
+          # source COPY layer invalidates, which is what we want anyway).
           git pull origin main
           docker compose -f docker-compose.prod.yml build --no-cache nginx
+          docker compose -f docker-compose.prod.yml build web asgi worker beat
 
           # ── Run migrations BEFORE restarting (prevents schema mismatch) ─
           # IMPORTANT: every `docker compose run` below redirects stdin from
