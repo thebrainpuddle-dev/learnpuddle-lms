@@ -99,7 +99,7 @@ export const ProactiveCard: React.FC<ProactiveCardProps> = ({
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: 20, scale: 0.95 }}
           transition={{ type: 'spring', stiffness: 400, damping: 30 }}
-          className="pointer-events-auto max-w-md w-full"
+          className="pointer-events-auto max-w-md w-full max-h-[38vh] overflow-y-auto"
         >
           <div className="relative bg-white rounded-xl shadow-lg border border-gray-200 overflow-hidden flex">
             {/* Left accent bar */}

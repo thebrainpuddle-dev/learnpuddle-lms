@@ -316,6 +316,15 @@ export const Stage: React.FC<StageProps> = ({ role }) => {
                 role={role}
               />
             )}
+
+            {/* Proactive discussion suggestion cards — overlay inside the
+                aspect-ratio viewport so they never overflow the stage or
+                push past the scene navigator below. */}
+            <div className="absolute inset-x-0 bottom-3 z-20 flex justify-center px-4 pointer-events-none max-h-[40%]">
+              <ProactiveCardManager
+                enabled={isClassPlaying && !discussionMode}
+              />
+            </div>
           </div>
 
           {/* Speaking agent overlay (bottom-left) */}
@@ -332,11 +341,6 @@ export const Stage: React.FC<StageProps> = ({ role }) => {
             </div>
           )}
         </div>
-
-          {/* Proactive discussion suggestion cards */}
-          <ProactiveCardManager
-            enabled={isClassPlaying && !discussionMode}
-          />
         </div>
 
         {/* Right sidebar: Chat + Lecture Notes tabs live inside ChatPanel */}

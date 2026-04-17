@@ -119,8 +119,17 @@ export const SceneRenderer = React.memo<SceneRendererProps>(function SceneRender
     }
   }, [content, scene.id, scene.title, mode, slides, currentSlideIndex, totalSlides]);
 
+  // Quiz scenes can have lots of questions — let them scroll within the
+  // 16:9 viewport. All other scene types stay overflow-hidden so animations
+  // and absolute-positioned overlays (highlight/spotlight/laser) aren't
+  // visually truncated against the parent's rounded corners.
+  const wrapperClass =
+    content.type === 'quiz'
+      ? 'relative w-full h-full overflow-y-auto'
+      : 'relative w-full h-full overflow-hidden';
+
   return (
-    <div className="relative w-full h-full overflow-hidden" role="region" aria-label={`Scene: ${scene.title}`}>
+    <div className={wrapperClass} role="region" aria-label={`Scene: ${scene.title}`}>
       {rendered}
     </div>
   );

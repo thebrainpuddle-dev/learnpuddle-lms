@@ -200,19 +200,20 @@ export const ProactiveCardManager: React.FC<ProactiveCardManagerProps> = ({ enab
   }, [scenes]);
 
   // ─── Render ───────────────────────────────────────────────────────────
+  // Wrapper is just a flex container — the caller (Stage.tsx) is
+  // responsible for placement. Rendering the card here inside an absolute
+  // overlay keeps the card bounded to the stage viewport.
   if (!enabled || !activeSuggestion) return null;
 
   return (
-    <div className="flex justify-center px-4 py-2 pointer-events-none">
-      <ProactiveCard
-        suggestion={activeSuggestion.text}
-        type={activeSuggestion.type}
-        agentName={activeSuggestion.agentName}
-        agentColor={activeSuggestion.agentColor}
-        onAccept={handleAccept}
-        onDismiss={handleDismiss}
-        visible={cardVisible}
-      />
-    </div>
+    <ProactiveCard
+      suggestion={activeSuggestion.text}
+      type={activeSuggestion.type}
+      agentName={activeSuggestion.agentName}
+      agentColor={activeSuggestion.agentColor}
+      onAccept={handleAccept}
+      onDismiss={handleDismiss}
+      visible={cardVisible}
+    />
   );
 };

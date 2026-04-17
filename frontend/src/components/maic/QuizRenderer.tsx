@@ -377,8 +377,14 @@ export const QuizRenderer = React.memo<QuizRendererProps>(function QuizRenderer(
     );
   }
 
+  // Layout: full-height column with scrollable questions + sticky submit
+  // footer. Parent SceneRenderer sets overflow-y-auto for quiz scenes so
+  // the combined list fits inside the 16:9 viewport no matter how many
+  // questions there are. Scrolling is handled by the parent, not this div,
+  // so the sticky submit button anchors to the viewport bottom.
   return (
-    <div className="space-y-6 p-4 overflow-y-auto max-h-full" role="form" aria-label="Quiz">
+    <div className="flex flex-col h-full" role="form" aria-label="Quiz">
+      <div className="flex-1 space-y-6 p-4 overflow-y-auto">
       {/* Timer bar */}
       {timerEnabled && (
         <div
@@ -540,9 +546,12 @@ export const QuizRenderer = React.memo<QuizRendererProps>(function QuizRenderer(
         return renderLegacyQuestion(q, qi, state, handleSelect, reviewMode, questionRefs);
       })}
 
-      {/* Submit button */}
+      </div>
+
+      {/* Submit button — pinned to the bottom of the quiz pane so it's
+          always reachable without scrolling. */}
       {!state.submitted && (
-        <div className="flex justify-end">
+        <div className="sticky bottom-0 flex justify-end px-4 py-3 bg-white/95 backdrop-blur border-t border-gray-100">
           <button
             type="button"
             onClick={handleSubmit}
