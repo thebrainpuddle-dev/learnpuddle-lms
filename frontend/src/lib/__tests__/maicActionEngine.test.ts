@@ -98,6 +98,21 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+// URL.createObjectURL / revokeObjectURL are JSDOM-stubbed via counters so
+// we can observe leak-free cleanup after prefetch aborts.
+let _nextBlobId = 0;
+const _revokedUrls = new Set<string>();
+beforeEach(() => {
+  _nextBlobId = 0;
+  _revokedUrls.clear();
+  // @ts-expect-error jsdom lacks these; vitest provides partial impl
+  global.URL.createObjectURL = vi.fn(() => `blob:mock-${++_nextBlobId}`);
+  // @ts-expect-error same
+  global.URL.revokeObjectURL = vi.fn((u: string) => {
+    _revokedUrls.add(u);
+  });
+});
+
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
 describe('MAICActionEngine.executeSpeech', () => {
@@ -191,6 +206,64 @@ describe('MAICActionEngine.executeSpeech', () => {
     }
     // @ts-expect-error testing internal
     expect(engine.audioElement).toBeNull();
+  });
+
+  test('prefetchSpeech populates cache, fetchTtsBlob consumes it without a second network call', async () => {
+    // Mock fetch to return a 200 MP3 blob. Count how many times it's
+    // called — with prefetch, only ONE call total: the prefetch. The
+    // subsequent executeSpeech should pull from cache.
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(new Blob([new Uint8Array([0xff, 0xfb])], { type: 'audio/mpeg' }), {
+        status: 200,
+      }),
+    );
+    // @ts-expect-error browser global
+    global.fetch = fetchMock;
+
+    const engine = new MAICActionEngine({ ttsEndpoint: '/tts', token: 't' });
+    const action = {
+      type: 'speech',
+      agentId: 'a1',
+      text: 'Hello students',
+    } as any;
+
+    // Kick off prefetch. Wait for the fetch + blob decode to settle.
+    engine.prefetchSpeech(action);
+    await new Promise((r) => setTimeout(r, 15));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // Now play the same action. It must consume the cache, NOT hit fetch again.
+    const playPromise = engine.execute(action);
+    await new Promise((r) => setTimeout(r, 20));
+    // Still one fetch call — cache hit avoided a second network round-trip.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // Complete the audio so the engine releases resources.
+    mockAudios[0]?.endNow();
+    await playPromise;
+  });
+
+  test('abortCurrentAction revokes all prefetched blob URLs', async () => {
+    // Return a FRESH Response each call — Response bodies are single-use,
+    // so a shared mocked Response causes the second .blob() to throw.
+    const fetchMock = vi.fn().mockImplementation(
+      () => Promise.resolve(new Response(
+        new Blob([new Uint8Array([0xff, 0xfb])], { type: 'audio/mpeg' }),
+        { status: 200 },
+      )),
+    );
+    // @ts-expect-error browser global
+    global.fetch = fetchMock;
+
+    const engine = new MAICActionEngine({ ttsEndpoint: '/tts', token: 't' });
+    engine.prefetchSpeech({ type: 'speech', agentId: 'a1', text: 'one' } as any);
+    engine.prefetchSpeech({ type: 'speech', agentId: 'a1', text: 'two' } as any);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(_revokedUrls.size).toBe(0);
+
+    // Aborting should clear the cache + revoke both URLs.
+    engine.abortCurrentAction();
+    expect(_revokedUrls.size).toBeGreaterThanOrEqual(2);
   });
 
   test('readingTimeFallback starts on fetch failure and aborts cleanly', async () => {

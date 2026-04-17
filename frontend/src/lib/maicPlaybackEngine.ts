@@ -253,6 +253,32 @@ export class MAICPlaybackEngine {
     return this.discussionPending;
   }
 
+  /**
+   * Scan forward from `startIdx` and prefetch the first N speech
+   * actions so their TTS audio is decoded by the time playback reaches
+   * them. N is small (2) to bound memory — the action engine's LRU
+   * cache caps at 4 entries total. Best-effort: each prefetchSpeech
+   * call is a no-op on any error condition.
+   */
+  private prefetchUpcomingSpeech(startIdx: number): void {
+    const MAX_LOOKAHEAD = 2;
+    let prefetched = 0;
+    for (let i = startIdx; i < this.actions.length && prefetched < MAX_LOOKAHEAD; i++) {
+      const a = this.actions[i];
+      if (a.type !== 'speech') continue;
+      const speech = a as import('../types/maic-actions').SpeechAction;
+      if (speech.audioUrl) {
+        // Pre-gen already handled; just count against the budget so a
+        // long run of mixed pre-gen + live speech still warms 2 live
+        // fetches ahead.
+        prefetched++;
+        continue;
+      }
+      this.actionEngine.prefetchSpeech(speech);
+      prefetched++;
+    }
+  }
+
   // ─── State ──────────────────────────────────────────────────────────
 
   getState(): PlaybackState {
@@ -328,6 +354,13 @@ export class MAICPlaybackEngine {
       // Gated on BOTH mode==='playing' AND session token matches. Prevents
       // a stale audio-end from racing a fresh seekToSlide → play() chain.
       case 'speech': {
+        // Kick off a best-effort prefetch of the next 1-2 speech actions
+        // so their TTS audio is decoded and ready by the time we reach
+        // them. Covers the "brief silence between speakers on slow
+        // networks" gap. Errors are swallowed inside prefetchSpeech —
+        // a miss falls back to the normal live-TTS fetch at playtime.
+        this.prefetchUpcomingSpeech(idx + 1);
+
         this.actionEngine
           .execute(action)
           .then(() => {

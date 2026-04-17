@@ -50,6 +50,10 @@ import type { WhiteboardAnnotation, WhiteboardPoint } from '../types/maic';
 // ─── Constants ──────────────────────────────────────────────────────────────
 
 const EFFECT_AUTO_CLEAR_MS = 5000;
+/** Max number of blob URLs held in the prefetch cache. Each entry is
+ *  a decoded MP3 (typically 50-200 KB). Cap keeps memory bounded on
+ *  long scenes. LRU eviction revokes the oldest URL. */
+const PREFETCH_CACHE_LIMIT = 4;
 const WB_ELEMENT_FADE_IN_MS = 800;
 const WB_CASCADE_DELETE_MS = 55;
 const WB_CLOSE_DELAY_MS = 700;
@@ -147,6 +151,16 @@ export class MAICActionEngine {
   private token: string;
   private disposed = false;
 
+  /** Look-ahead prefetch cache for upcoming speech actions. Key is a
+   *  content-hash of (voiceId, text); value is a ready-to-play blob URL.
+   *  Populated by prefetchSpeech() called from the playback engine when
+   *  a speech action starts. `fetchTtsBlob` consults this cache before
+   *  hitting the network. Capped at PREFETCH_CACHE_LIMIT entries (LRU). */
+  private prefetchCache = new Map<string, string>();
+  /** In-flight prefetch fetch controllers keyed by cache-key. Used to
+   *  abort parallel requests when the scene changes. */
+  private prefetchControllers = new Map<string, AbortController>();
+
   constructor(opts: MAICActionEngineOptions) {
     this.ttsEndpoint = opts.ttsEndpoint;
     this.token = opts.token;
@@ -184,6 +198,11 @@ export class MAICActionEngine {
       this.currentFetchController.abort();
       this.currentFetchController = null;
     }
+
+    // Abort in-flight prefetches and release cached blob URLs — they
+    // belong to the now-stale action sequence and the new sequence
+    // will build its own cache.
+    this.clearPrefetchCache();
 
     // Stop playing audio; detach all handlers so buffered events are no-ops.
     if (this.audioElement) {
@@ -428,6 +447,11 @@ export class MAICActionEngine {
    * success, or null when the server says "no audio" (204) or the request
    * errors out / is aborted. Caller is responsible for revoking the URL.
    *
+   * Consults the prefetch cache first — if a matching (voiceId, text)
+   * blob was prefetched by a prior prefetchSpeech() call, return it
+   * instantly and remove it from the cache so ownership transfers to
+   * the caller (who will revoke it after use).
+   *
    * Token check points:
    *   - After the await on `fetch()`
    *   - After the await on `res.blob()`
@@ -438,33 +462,23 @@ export class MAICActionEngine {
     voiceId: string,
     token: number,
   ): Promise<string | null> {
+    // Prefetch cache hit: transfer ownership to the caller.
+    const cacheKey = this.prefetchKey(voiceId, text);
+    const cached = this.prefetchCache.get(cacheKey);
+    if (cached) {
+      this.prefetchCache.delete(cacheKey);
+      if (token !== this.generationToken) {
+        // Stale at cache-lookup time — revoke and return null so the
+        // caller doesn't try to play old-scene audio.
+        URL.revokeObjectURL(cached);
+        return null;
+      }
+      return cached;
+    }
+
     const baseUrl = import.meta.env.VITE_API_BASE_URL || '';
     const url = `${baseUrl}${this.ttsEndpoint}`;
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${this.token}`,
-    };
-
-    // Tenant subdomain injection for local dev (preserved from original).
-    if (typeof window !== 'undefined') {
-      const hostname = window.location.hostname;
-      if (
-        hostname === 'localhost' ||
-        hostname === '127.0.0.1' ||
-        hostname.endsWith('.localhost')
-      ) {
-        const urlSubdomain = hostname.endsWith('.localhost')
-          ? hostname.replace('.localhost', '')
-          : null;
-        const subdomain =
-          urlSubdomain ||
-          sessionStorage.getItem('tenant_subdomain') ||
-          localStorage.getItem('tenant_subdomain');
-        if (subdomain) {
-          headers['X-Tenant-Subdomain'] = subdomain;
-        }
-      }
-    }
+    const headers = this.buildTtsHeaders();
 
     this.currentFetchController = new AbortController();
     try {
@@ -491,6 +505,135 @@ export class MAICActionEngine {
         this.currentFetchController = null;
       }
     }
+  }
+
+  /**
+   * Build HTTP headers used by BOTH the main TTS fetch and prefetch
+   * fetches. Centralized so tenant-subdomain injection stays in sync.
+   */
+  private buildTtsHeaders(): Record<string, string> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${this.token}`,
+    };
+    if (typeof window !== 'undefined') {
+      const hostname = window.location.hostname;
+      if (
+        hostname === 'localhost' ||
+        hostname === '127.0.0.1' ||
+        hostname.endsWith('.localhost')
+      ) {
+        const urlSubdomain = hostname.endsWith('.localhost')
+          ? hostname.replace('.localhost', '')
+          : null;
+        const subdomain =
+          urlSubdomain ||
+          sessionStorage.getItem('tenant_subdomain') ||
+          localStorage.getItem('tenant_subdomain');
+        if (subdomain) {
+          headers['X-Tenant-Subdomain'] = subdomain;
+        }
+      }
+    }
+    return headers;
+  }
+
+  /**
+   * Deterministic cache key for a TTS request. Text is sliced to 200
+   * chars — the backend preview endpoint caps at 200 anyway, and this
+   * keeps the key size bounded for memory.
+   */
+  private prefetchKey(voiceId: string, text: string): string {
+    return `${voiceId}::${(text || '').slice(0, 200)}`;
+  }
+
+  /**
+   * Look-ahead prefetch for an upcoming speech action. Kicks off a
+   * non-blocking `fetch()` to the TTS endpoint and stashes the decoded
+   * blob URL in `prefetchCache`. Called by the playback engine after
+   * starting the current speech action so that by the time the next
+   * one is needed, its audio is already decoded and ready to play.
+   *
+   * Silent no-op when:
+   *   - action has a pre-gen `audioUrl` (no fetch needed)
+   *   - cache already holds a blob for this (voiceId, text)
+   *   - disposed / cache at limit (graceful degradation)
+   *
+   * Errors are swallowed — prefetch is a best-effort optimization; a
+   * miss just falls back to the regular fetchTtsBlob path at playtime.
+   */
+  prefetchSpeech(action: SpeechAction): void {
+    if (this.disposed) return;
+    if (action.audioUrl) return;  // already cached by the browser
+    if (!action.text || !action.text.trim()) return;
+
+    const agents = this.stageStore.getState().agents;
+    const agent = agents.find((a) => a.id === action.agentId);
+    const voiceId =
+      action.voiceId ||
+      agent?.voiceId ||
+      agent?.voice ||
+      (agent?.role ? ROLE_VOICE_MAP[agent.role as keyof typeof ROLE_VOICE_MAP] : undefined) ||
+      'en-IN-NeerjaNeural';
+
+    const text = action.ssml || action.text;
+    const key = this.prefetchKey(voiceId, text);
+
+    // Already cached or in-flight — nothing to do.
+    if (this.prefetchCache.has(key) || this.prefetchControllers.has(key)) return;
+
+    // LRU eviction when cache is full — drop the oldest entry.
+    if (this.prefetchCache.size >= PREFETCH_CACHE_LIMIT) {
+      const oldestKey = this.prefetchCache.keys().next().value;
+      if (oldestKey) {
+        const oldUrl = this.prefetchCache.get(oldestKey);
+        if (oldUrl) URL.revokeObjectURL(oldUrl);
+        this.prefetchCache.delete(oldestKey);
+      }
+    }
+
+    const controller = new AbortController();
+    this.prefetchControllers.set(key, controller);
+    const myToken = this.generationToken;
+
+    const baseUrl = import.meta.env.VITE_API_BASE_URL || '';
+    const url = `${baseUrl}${this.ttsEndpoint}`;
+    fetch(url, {
+      method: 'POST',
+      headers: this.buildTtsHeaders(),
+      body: JSON.stringify({ text, voiceId, voice_id: voiceId }),
+      signal: controller.signal,
+    })
+      .then(async (res) => {
+        if (myToken !== this.generationToken) return;  // scene changed
+        if (res.status === 204 || !res.ok) return;
+        const blob = await res.blob();
+        if (myToken !== this.generationToken) return;
+        if (blob.size === 0) return;
+        // Re-check the cache — a competing prefetch or the actual
+        // fetchTtsBlob may have raced us. If so, drop ours.
+        if (this.prefetchCache.has(key) || this.disposed) return;
+        this.prefetchCache.set(key, URL.createObjectURL(blob));
+      })
+      .catch((err) => {
+        if (err instanceof DOMException && err.name === 'AbortError') return;
+        // Silent — prefetch is best-effort.
+      })
+      .finally(() => {
+        this.prefetchControllers.delete(key);
+      });
+  }
+
+  /** Abort all in-flight prefetches and revoke all cached blob URLs. */
+  private clearPrefetchCache(): void {
+    for (const controller of this.prefetchControllers.values()) {
+      controller.abort();
+    }
+    this.prefetchControllers.clear();
+    for (const blobUrl of this.prefetchCache.values()) {
+      URL.revokeObjectURL(blobUrl);
+    }
+    this.prefetchCache.clear();
   }
 
   /**
