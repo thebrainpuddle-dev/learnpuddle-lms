@@ -12,6 +12,11 @@ import { useMAICStageStore } from '../../stores/maicStageStore';
 import { useAuthStore } from '../../stores/authStore';
 import { streamMAIC } from '../../lib/maicSSE';
 import { updateClassroomChat } from '../../lib/maicDb';
+import {
+  hydrateChatFromSession,
+  persistChatToSession,
+  serializeChatHistoryForBackend,
+} from '../../lib/maicChatSession';
 import type { MAICChatMessage, MAICPlayerRole, MAICSSEEvent, MAICAgent } from '../../types/maic';
 import { AgentAvatar } from './AgentAvatar';
 import { StreamMarkdown } from './StreamMarkdown';
@@ -93,6 +98,7 @@ function agentBubbleBg(color: string): string {
 export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({ role, classroomId }) {
   const chatMessages = useMAICStageStore((s) => s.chatMessages);
   const addChatMessage = useMAICStageStore((s) => s.addChatMessage);
+  const setChatMessages = useMAICStageStore((s) => s.setChatMessages);
   const agents = useMAICStageStore((s) => s.agents);
   const scenes = useMAICStageStore((s) => s.scenes);
   const currentSceneIndex = useMAICStageStore((s) => s.currentSceneIndex);
@@ -146,12 +152,35 @@ export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({ role, c
     setNoteDraft('');
   }, [noteDraft, currentSceneIndex, currentSlideIndex, addUserNote]);
 
-  // Persist chat history to IndexedDB when messages change
+  // Hydrate chat history from sessionStorage on mount / classroom
+  // switch. If the store already has messages (e.g., IndexedDB path
+  // populated it first) skip — the store wins. Ref guards against
+  // re-hydrating after we've written new messages into the store.
+  const hydratedRef = useRef<string | null>(null);
   useEffect(() => {
-    if (chatMessages.length > 0 && classroomId) {
+    if (!classroomId) return;
+    if (hydratedRef.current === classroomId) return;
+    hydratedRef.current = classroomId;
+    const persisted = hydrateChatFromSession(classroomId);
+    if (persisted.length > 0 && chatMessages.length === 0) {
+      setChatMessages(persisted);
+    }
+    // Intentionally omit chatMessages from deps — we only want to
+    // hydrate once per classroomId, not every time messages change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [classroomId, setChatMessages]);
+
+  // Persist chat history to sessionStorage (session-scoped) and
+  // IndexedDB (classroom-scoped) whenever messages change. Session
+  // storage gives us instant refresh-resilient hydration; IndexedDB
+  // remains the classroom-level durable record.
+  useEffect(() => {
+    if (!classroomId) return;
+    if (chatMessages.length > 0) {
+      persistChatToSession(classroomId, chatMessages);
       updateClassroomChat(classroomId, chatMessages).catch(() => {});
     }
-  }, [chatMessages.length, classroomId]);
+  }, [chatMessages, classroomId]);
 
   // Resolve agent by id
   const getAgent = useCallback(
@@ -213,11 +242,23 @@ export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({ role, c
 
     const endpoint = maicChatUrl(role);
 
+    // Snapshot history BEFORE adding the user message above. The user's
+    // current turn is already in `trimmed` + addressed as `message`; we
+    // want the prior turns as context. slice(0, -1) drops the just-added
+    // user message so the backend doesn't see it twice.
+    const history = serializeChatHistoryForBackend(chatMessages.slice(0, -1));
+
+    // Track whether the stream produced a real assistant message. If it
+    // errors after a partial payload arrived, keep that payload — don't
+    // replace it with an error bubble.
+    let assistantArrived = false;
+
     await streamMAIC({
       url: endpoint,
       body: {
         classroomId,
         message: trimmed,
+        history,
       },
       token: accessToken,
       signal: controller.signal,
@@ -236,6 +277,7 @@ export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({ role, c
           };
           setStreamingMessageId(msgId);
           addChatMessage(assistantMsg);
+          assistantArrived = true;
         } else if (event.type === 'agent_thinking' || event.type === 'agent_speaking') {
           const data = event.data as { agentId?: string; step?: string };
           setThinkingAgentId(data.agentId || event.agentId || null);
@@ -246,10 +288,15 @@ export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({ role, c
         }
       },
       onError: (err) => {
+        // Keep any partial assistant message already rendered; append a
+        // visible error chip below so the user knows something went wrong
+        // without losing the response.
         const errorMsg: MAICChatMessage = {
           id: `msg-err-${Date.now()}`,
           role: 'system',
-          content: `Error: ${err.message}`,
+          content: assistantArrived
+            ? `Connection dropped: ${err.message}`
+            : `Couldn't reach the tutor: ${err.message}`,
           timestamp: Date.now(),
         };
         addChatMessage(errorMsg);
@@ -257,12 +304,16 @@ export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({ role, c
       onDone: () => {
         setIsSending(false);
         setThinkingAgentId(null);
+        // Only clear the streaming flag if we actually received an
+        // assistant message. If the stream ended before any chat_message
+        // event, leave the thinking indicator cleared but keep the
+        // streamingMessageId null (nothing was mid-stream).
         setStreamingMessageId(null);
       },
     });
 
     setIsSending(false);
-  }, [isSending, accessToken, role, classroomId, addChatMessage]);
+  }, [isSending, accessToken, role, classroomId, addChatMessage, chatMessages]);
 
   // Cleanup on unmount
   useEffect(() => {
