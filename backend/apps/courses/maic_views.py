@@ -293,15 +293,24 @@ def teacher_maic_chat(request):
     except (json.JSONDecodeError, UnicodeDecodeError):
         body = {}
 
-    # Look up classroom for context
+    # Look up classroom for context — title + agents + scene outline.
+    # Scene titles ground "summarize key concepts" queries even when
+    # no prior chat turn has been recorded.
     classroom_title = ""
     agents = []
+    scene_titles: list[str] = []
     classroom_id = body.get("classroomId")
     if classroom_id:
         try:
             classroom = MAICClassroom.objects.get(pk=classroom_id, tenant=request.tenant)
             classroom_title = classroom.title or classroom.topic
             agents = (classroom.config or {}).get("agents", [])
+            content = classroom.content or {}
+            for s in (content.get("scenes") or []):
+                if isinstance(s, dict):
+                    title = s.get("title")
+                    if isinstance(title, str) and title.strip():
+                        scene_titles.append(title.strip())
         except MAICClassroom.DoesNotExist:
             pass
 
@@ -311,6 +320,8 @@ def teacher_maic_chat(request):
             classroom_title=classroom_title,
             agents=agents,
             config=config,
+            history=body.get("history"),
+            scene_titles=scene_titles or None,
         ),
         content_type="text/event-stream",
     )
@@ -1033,12 +1044,19 @@ def student_maic_chat(request):
 
     classroom_title = ""
     agents = []
+    scene_titles: list[str] = []
     classroom_id = body.get("classroomId")
     if classroom_id:
         try:
             classroom = MAICClassroom.objects.get(pk=classroom_id, tenant=request.tenant)
             classroom_title = classroom.title or classroom.topic
             agents = (classroom.config or {}).get("agents", [])
+            content = classroom.content or {}
+            for s in (content.get("scenes") or []):
+                if isinstance(s, dict):
+                    title = s.get("title")
+                    if isinstance(title, str) and title.strip():
+                        scene_titles.append(title.strip())
         except MAICClassroom.DoesNotExist:
             pass
 
@@ -1048,6 +1066,8 @@ def student_maic_chat(request):
             classroom_title=classroom_title,
             agents=agents,
             config=config,
+            history=body.get("history"),
+            scene_titles=scene_titles or None,
         ),
         content_type="text/event-stream",
     )

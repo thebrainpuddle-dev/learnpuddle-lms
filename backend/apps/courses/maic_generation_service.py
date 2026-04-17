@@ -1164,6 +1164,8 @@ def _fallback_actions(scene: dict, agents: list) -> dict:
 
 CHAT_SYSTEM_PROMPT = """You are a panel of AI teaching agents in an interactive classroom. Multiple agents should respond to the student's question, each bringing their unique perspective and their own voice.
 
+HARD LANGUAGE RULE: Output ONLY English. No Hindi words, no transliterated slang ("theek hai", "bilkul", "achha"), no code-switching. Persona flavor comes from English register (warm/precise/crisp/informal), not from non-English interjections.
+
 You MUST return a valid JSON array of agent responses:
 [
   {"agentId": "agent-1", "agentName": "Dr. Aarav Sharma", "content": "Your response..."},
@@ -1176,20 +1178,107 @@ Rules:
 - Supporting agents add perspective, ask follow-ups, give analogies, or provide examples
 - Each response is 2-4 sentences
 - EACH AGENT MUST SPEAK IN THEIR OWN VOICE per their `personality` and `speakingStyle`. Do not write generic answers — make them identifiable.
-- Use each agent's cultural phrases (from speakingStyle) SPARINGLY — at most once per response
 - Be conversational, warm, and encouraging
-- Reference the classroom topic naturally
+- Reference the classroom topic + prior conversation naturally — if the student is asking a follow-up, tie it back to what was already discussed
 - If the question is off-topic, gently redirect"""
 
 
+# How many recent turns to inline verbatim; older turns are summarized.
+_CHAT_HISTORY_INLINE_LIMIT = 6
+# Max history entries to accept from the request body (mirrors frontend cap).
+_CHAT_HISTORY_MAX_ENTRIES = 12
+# Words shared between a "summarize" command and the set we short-circuit on.
+_SUMMARIZE_COMMANDS = frozenset({
+    "summarize", "summary", "summarise",
+    "summarize key concepts", "summarise key concepts",
+    "recap", "recap the key concepts", "recap so far",
+    "key concepts", "key takeaways",
+})
+
+
+def _sanitize_chat_history(history: list | None) -> list[dict]:
+    """Drop malformed entries, coerce to {'role', 'content'[, 'agentId']} shape,
+    and cap length so oversized client payloads can't blow the prompt."""
+    if not isinstance(history, list):
+        return []
+    out: list[dict] = []
+    for entry in history:
+        if not isinstance(entry, dict):
+            continue
+        role = entry.get("role")
+        content = entry.get("content")
+        if role not in ("user", "assistant") or not isinstance(content, str) or not content.strip():
+            continue
+        clean = {"role": role, "content": content.strip()}
+        agent_id = entry.get("agentId")
+        if role == "assistant" and isinstance(agent_id, str) and agent_id:
+            clean["agentId"] = agent_id
+        out.append(clean)
+    return out[-_CHAT_HISTORY_MAX_ENTRIES:]
+
+
+def _render_chat_history_block(history: list[dict]) -> str:
+    """Format sanitized history as a plain-text block the LLM can read.
+
+    Inline the last `_CHAT_HISTORY_INLINE_LIMIT` turns verbatim; anything
+    older is compressed into a deterministic one-line summary listing the
+    student's earlier questions. We avoid a second LLM call in the SSE
+    hot path — a simple join is good enough for continuity.
+    """
+    if not history:
+        return ""
+    recent = history[-_CHAT_HISTORY_INLINE_LIMIT:]
+    older = history[:-_CHAT_HISTORY_INLINE_LIMIT]
+    parts: list[str] = []
+    if older:
+        earlier_q = [e["content"] for e in older if e["role"] == "user"]
+        if earlier_q:
+            compressed = "; ".join(q[:120] for q in earlier_q[-5:])
+            parts.append(f"Earlier in this session the student also asked: {compressed}")
+    for e in recent:
+        speaker = "Student" if e["role"] == "user" else "Tutor"
+        parts.append(f"{speaker}: {e['content']}")
+    return "\n".join(parts)
+
+
 def generate_chat_sse(message: str, classroom_title: str, agents: list,
-                      config: TenantAIConfig):
+                      config: TenantAIConfig, history: list | None = None,
+                      scene_titles: list[str] | None = None):
     """
     Generator that yields SSE-formatted strings for multi-agent chat responses.
     Multiple agents respond, each with their unique perspective and voice.
+
+    history: optional list of {'role', 'content'} dicts from the frontend
+        session cache. Kept short (≤12); older turns are compressed into a
+        one-line summary so long sessions don't balloon the prompt.
+    scene_titles: optional classroom outline titles, used to ground
+        "summarize" commands even when no prior chat exists.
     """
     if not agents:
         agents = [{"id": "agent-1", "name": "Teaching Assistant", "role": "professor"}]
+
+    sanitized_history = _sanitize_chat_history(history)
+    message_stripped = (message or "").strip()
+
+    # Short-circuit: "summarize" commands with no history and no outline
+    # have nothing to summarize. Respond politely instead of asking the
+    # LLM to hallucinate a recap.
+    if (
+        message_stripped.lower() in _SUMMARIZE_COMMANDS
+        and not sanitized_history
+        and not scene_titles
+    ):
+        yield _sse_event("chat_message", {
+            "content": (
+                "Ask me a specific question first and I'll be happy to "
+                "summarize what we've discussed. For example: 'Explain X' "
+                "or 'Why does Y happen?' — then ask for a summary."
+            ),
+            "agentId": agents[0].get("id", "agent-1"),
+            "agentName": agents[0].get("name", "Teaching Assistant"),
+        })
+        yield _sse_done()
+        return
 
     agents_for_prompt = json.dumps([{
         "id": a.get("id"),
@@ -1199,15 +1288,34 @@ def generate_chat_sse(message: str, classroom_title: str, agents: list,
         "speakingStyle": a.get("speakingStyle", ""),
     } for a in agents[:4]], indent=2)  # Max 4 agents in chat
 
-    user_prompt = f"""Classroom topic: {classroom_title}
-Agents (each must speak in their own voice):
-{agents_for_prompt}
+    history_block = _render_chat_history_block(sanitized_history)
+    outline_block = ""
+    if scene_titles:
+        titles_joined = "; ".join(t for t in scene_titles[:20] if t)
+        if titles_joined:
+            outline_block = f"Classroom outline (scene titles in order): {titles_joined}\n"
 
-Student question: {message}
+    conversation_block = (
+        f"\nConversation so far:\n{history_block}\n" if history_block else ""
+    )
 
-Generate 2-3 agent responses."""
+    user_prompt = (
+        f"Classroom topic: {classroom_title}\n"
+        f"{outline_block}"
+        "Agents (each must speak in their own voice):\n"
+        f"{agents_for_prompt}\n"
+        f"{conversation_block}"
+        f"\nStudent's current question: {message_stripped}\n\n"
+        "Generate 2-3 agent responses. If this question is a follow-up, "
+        "reference the earlier conversation naturally. ENGLISH ONLY."
+    )
 
-    raw = _call_llm(config, CHAT_SYSTEM_PROMPT, user_prompt, temperature=0.7, max_tokens=2048)
+    try:
+        raw = _call_llm(config, CHAT_SYSTEM_PROMPT, user_prompt,
+                        temperature=0.7, max_tokens=2048)
+    except Exception as exc:  # noqa: BLE001 — defensive boundary for SSE
+        logger.warning("chat LLM call failed: %s", exc)
+        raw = None
 
     if not raw:
         yield _sse_event("chat_message", {
@@ -1218,9 +1326,14 @@ Generate 2-3 agent responses."""
         yield _sse_done()
         return
 
-    # Parse the multi-agent response
-    parsed = _parse_json_from_llm(raw)
+    try:
+        parsed = _parse_json_from_llm(raw)
+    except Exception as exc:  # noqa: BLE001 — defensive
+        logger.warning("chat LLM parse failed err=%s raw=%s", exc, str(raw)[:500])
+        parsed = None
+
     if isinstance(parsed, list):
+        emitted = 0
         for resp in parsed:
             if isinstance(resp, dict) and resp.get("content"):
                 yield _sse_event("chat_message", {
@@ -1228,10 +1341,19 @@ Generate 2-3 agent responses."""
                     "agentId": resp.get("agentId", agents[0].get("id")),
                     "agentName": resp.get("agentName", agents[0].get("name")),
                 })
+                emitted += 1
+        if emitted == 0:
+            # Parsed list but every item was malformed — fall back to raw.
+            logger.warning("chat LLM returned list with no valid entries; raw=%s", str(raw)[:500])
+            yield _sse_event("chat_message", {
+                "content": str(raw),
+                "agentId": agents[0].get("id", "agent-1"),
+                "agentName": agents[0].get("name", "Teaching Assistant"),
+            })
     else:
         # Fallback: treat as single response from lead agent
         yield _sse_event("chat_message", {
-            "content": raw,
+            "content": str(raw),
             "agentId": agents[0].get("id", "agent-1"),
             "agentName": agents[0].get("name", "Teaching Assistant"),
         })

@@ -274,6 +274,151 @@ def test_stamp_discussion_defaults_to_manual_trigger():
 
 
 # ---------------------------------------------------------------------------
+# Chat history merging (Chunk 8)
+# ---------------------------------------------------------------------------
+
+def test_sanitize_chat_history_drops_malformed():
+    from apps.courses.maic_generation_service import _sanitize_chat_history
+
+    history = [
+        {"role": "user", "content": "Hi"},
+        {"role": "assistant", "content": "Hello there", "agentId": "agent-1"},
+        {"role": "system", "content": "noise"},             # wrong role
+        {"role": "user"},                                    # no content
+        {"role": "user", "content": "   "},                  # whitespace
+        "not a dict",                                        # not dict
+        {"role": "assistant", "content": "Cool"},
+    ]
+    out = _sanitize_chat_history(history)
+    assert len(out) == 3
+    assert out[0] == {"role": "user", "content": "Hi"}
+    assert out[1] == {"role": "assistant", "content": "Hello there", "agentId": "agent-1"}
+    assert out[2] == {"role": "assistant", "content": "Cool"}
+
+
+def test_sanitize_chat_history_caps_at_12():
+    from apps.courses.maic_generation_service import _sanitize_chat_history
+
+    history = [{"role": "user", "content": f"q{i}"} for i in range(20)]
+    out = _sanitize_chat_history(history)
+    assert len(out) == 12  # oldest 8 dropped
+    assert out[0]["content"] == "q8"
+    assert out[-1]["content"] == "q19"
+
+
+def test_sanitize_chat_history_handles_non_list():
+    from apps.courses.maic_generation_service import _sanitize_chat_history
+
+    assert _sanitize_chat_history(None) == []
+    assert _sanitize_chat_history("not a list") == []
+    assert _sanitize_chat_history({}) == []
+
+
+def test_render_chat_history_inlines_recent_and_summarizes_older():
+    from apps.courses.maic_generation_service import _render_chat_history_block
+
+    # 8 turns total — 2 older student questions get summarized, last 6 inlined.
+    history = [
+        {"role": "user", "content": f"Question {i}"}
+        if i % 2 == 0 else
+        {"role": "assistant", "content": f"Answer {i}"}
+        for i in range(8)
+    ]
+    block = _render_chat_history_block(history)
+    # Summary references earlier questions
+    assert "Earlier in this session" in block
+    # Recent turns are inlined verbatim
+    assert "Student:" in block and "Tutor:" in block
+    assert "Question 6" in block  # inline
+    assert "Answer 7" in block    # inline
+
+
+def test_summarize_short_circuit_when_no_history():
+    from apps.courses.maic_generation_service import generate_chat_sse
+
+    class FakeConfig:
+        pass
+
+    agents = [{"id": "agent-1", "name": "Dr. Priya", "role": "professor"}]
+    events = list(generate_chat_sse(
+        message="Summarize key concepts",
+        classroom_title="Photosynthesis",
+        agents=agents,
+        config=FakeConfig(),
+        history=None,
+        scene_titles=None,
+    ))
+    # Should yield exactly one chat_message + DONE, no LLM called
+    assert any("chat_message" in e for e in events)
+    combined = "".join(events)
+    assert "specific question" in combined.lower() or "summarize" in combined.lower()
+    assert "[DONE]" in combined
+
+
+def test_summarize_proceeds_when_scene_titles_exist():
+    """Even without chat history, the outline gives the LLM material to summarize."""
+    from unittest.mock import patch
+    from apps.courses.maic_generation_service import generate_chat_sse
+
+    class FakeConfig:
+        pass
+
+    agents = [{"id": "agent-1", "name": "Dr. Priya", "role": "professor"}]
+    with patch("apps.courses.maic_generation_service._call_llm") as mock_llm:
+        mock_llm.return_value = json.dumps([
+            {"agentId": "agent-1", "agentName": "Dr. Priya",
+             "content": "We covered light reactions and dark reactions."},
+        ])
+        events = list(generate_chat_sse(
+            message="Summarize key concepts",
+            classroom_title="Photosynthesis",
+            agents=agents,
+            config=FakeConfig(),
+            history=None,
+            scene_titles=["Light reactions", "Dark reactions", "Calvin cycle"],
+        ))
+    combined = "".join(events)
+    # LLM was consulted (scene titles substitute for chat history)
+    mock_llm.assert_called_once()
+    assert "light reactions" in combined.lower()
+
+
+def test_chat_sends_history_to_llm():
+    """Prior turns must be injected into the user prompt so follow-up
+    questions ('what about the next step?') land coherently."""
+    from unittest.mock import patch
+    from apps.courses.maic_generation_service import generate_chat_sse
+
+    class FakeConfig:
+        pass
+
+    agents = [{"id": "agent-1", "name": "Dr. Priya", "role": "professor"}]
+    history = [
+        {"role": "user", "content": "Explain Ohm's Law"},
+        {"role": "assistant", "content": "V = IR", "agentId": "agent-1"},
+    ]
+    with patch("apps.courses.maic_generation_service._call_llm") as mock_llm:
+        mock_llm.return_value = json.dumps([
+            {"agentId": "agent-1", "agentName": "Dr. Priya",
+             "content": "Great follow-up!"},
+        ])
+        list(generate_chat_sse(
+            message="What about power?",
+            classroom_title="Circuits",
+            agents=agents,
+            config=FakeConfig(),
+            history=history,
+        ))
+    # The user_prompt passed to the LLM must contain both the earlier
+    # question and the earlier answer.
+    call_args = mock_llm.call_args
+    user_prompt = call_args[0][2]  # positional: (config, system, user, ...)
+    assert "Ohm's Law" in user_prompt
+    assert "V = IR" in user_prompt
+    assert "What about power?" in user_prompt
+
+
+# ---------------------------------------------------------------------------
 # generate_agent_profiles_json tests
 # ---------------------------------------------------------------------------
 
