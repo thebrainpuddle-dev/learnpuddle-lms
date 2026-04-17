@@ -95,7 +95,11 @@ export function AgentGenerationStep({
   }, []);
 
   const generateAll = useCallback(async () => {
-    setLoading(true);
+    // Only flip loading when there are no agents yet; otherwise keep the
+    // existing roster visible behind a non-blocking spinner so that a
+    // failed regeneration doesn't wipe what the user already has.
+    const hadAgents = agents.length > 0;
+    setLoading(!hadAgents);
     setError(null);
     stopPreview();
     try {
@@ -107,15 +111,19 @@ export function AgentGenerationStep({
       const next = response.data?.agents ?? [];
       if (next.length === 0) {
         setError("We couldn't generate agents for that topic. Please try again.");
+        // Keep the prior roster visible so the user has something to fall
+        // back on. No setAgents([]) here.
       } else {
         setAgents(next);
       }
     } catch {
       setError("We couldn't generate agents. Please try again.");
+      // Preserve the existing roster on failure — wiping it mid-session
+      // is a worse UX than showing stale agents next to an error banner.
     } finally {
       setLoading(false);
     }
-  }, [api, language, stopPreview, topic]);
+  }, [api, language, stopPreview, topic, agents.length]);
 
   // Load voices once. Uses the teacher-surface listVoices which is a tenant-
   // scoped read, so both wizards can call it.

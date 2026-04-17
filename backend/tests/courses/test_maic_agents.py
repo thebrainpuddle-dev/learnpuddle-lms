@@ -269,24 +269,33 @@ def test_auto_fix_reports_when_no_candidate_available():
     leaves the agent alone and reports the shortfall."""
     from apps.courses.maic_generation_service import _auto_fix_voice_gender_mismatches
 
-    # Build a roster where every female voice that suits `professor`
-    # (Neerja) is already taken, forcing the fixer to fail on a female
-    # professor with a male voice.
+    # Exhaust every female voice in the roster (Neerja, Aashi, Kavya) with
+    # correctly-paired female agents, then try to fix a female professor
+    # stuck with a male voice. Zero female voices remain -> shortfall.
     agents = [
         {"id": "agent-1", "name": "Dr. Priya Sharma", "role": "professor",
          "avatar": "👩‍🏫", "color": "#4338CA",
-         "voiceId": "en-IN-PrabhatNeural",  # wrong (male)
+         "voiceId": "en-IN-PrabhatNeural",  # wrong (male) — the one to fix
          "voiceProvider": "azure",
          "personality": "x", "expertise": "x", "speakingStyle": "x"},
         {"id": "agent-2", "name": "Ms. Neha Iyer", "role": "teaching_assistant",
-         "avatar": "👩‍🏫", "color": "#0F766E",
-         "voiceId": "en-IN-NeerjaNeural",  # takes the only female-prof-suiting voice
+         "avatar": "🧕", "color": "#0F766E",
+         "voiceId": "en-IN-NeerjaNeural",  # female TA — correct pairing
+         "voiceProvider": "azure",
+         "personality": "x", "expertise": "x", "speakingStyle": "x"},
+        {"id": "agent-3", "name": "Aditi Rao", "role": "student",
+         "avatar": "🙋‍♀️", "color": "#D97706",
+         "voiceId": "en-IN-AashiNeural",  # female student — correct pairing
+         "voiceProvider": "azure",
+         "personality": "x", "expertise": "x", "speakingStyle": "x"},
+        {"id": "agent-4", "name": "Ms. Kavya Nair", "role": "moderator",
+         "avatar": "👩‍🎓", "color": "#166534",
+         "voiceId": "en-IN-KavyaNeural",  # female moderator — correct pairing
          "voiceProvider": "azure",
          "personality": "x", "expertise": "x", "speakingStyle": "x"},
     ]
     fixed, notes = _auto_fix_voice_gender_mismatches(agents)
-    # Priya still has the wrong voice (couldn't find an unused female
-    # voice that suits professor — Neerja taken)
+    # Priya still has the wrong voice (no female voice left to steal)
     priya = next(a for a in fixed if a["name"].endswith("Priya Sharma"))
     assert priya["voiceId"] == "en-IN-PrabhatNeural"
     assert any("could not auto-fix" in n.lower() for n in notes)
