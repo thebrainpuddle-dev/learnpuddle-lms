@@ -7,17 +7,15 @@
 // into a unified interactive stage.
 
 import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
-import { Pencil } from 'lucide-react';
 import { useMAICStageStore } from '../../stores/maicStageStore';
 import { useMAICSettingsStore } from '../../stores/maicSettingsStore';
 import { initKeyboardListeners } from '../../stores/maicKeyboardStore';
 import { usePlaybackEngine } from '../../hooks/usePlaybackEngine';
 import { useKeyboardShortcuts } from '../../hooks/useKeyboardShortcuts';
-import type { MAICPlayerRole, MAICSlide } from '../../types/maic';
+import type { MAICPlayerRole } from '../../types/maic';
 import type { MAICSlideContent } from '../../types/maic-scenes';
 import { SceneRenderer } from './SceneRenderer';
 import { SlideRenderer } from './SlideRenderer';
-import { SlideEditor } from './slide-editor';
 import { Whiteboard } from './Whiteboard';
 import { ChatPanel } from './ChatPanel';
 import { SlideNavigator } from './SlideNavigator';
@@ -28,7 +26,6 @@ import { SpotlightOverlay } from './SpotlightOverlay';
 import { RoundtablePanel } from './RoundtablePanel';
 import { ExportMenu } from './ExportMenu';
 import { SceneSidebar } from './SceneSidebar';
-import { NotesPanel } from './NotesPanel';
 import { ProactiveCardManager } from './ProactiveCardManager';
 import { HighlightOverlay } from './HighlightOverlay';
 import { LaserPointer } from './LaserPointer';
@@ -43,7 +40,6 @@ export const Stage: React.FC<StageProps> = ({ role }) => {
   const currentSlideIndex = useMAICStageStore((s) => s.currentSlideIndex);
   const agents = useMAICStageStore((s) => s.agents);
   const speakingAgentId = useMAICStageStore((s) => s.speakingAgentId);
-  const viewMode = useMAICStageStore((s) => s.viewMode);
   const isFullscreen = useMAICStageStore((s) => s.isFullscreen);
   const setFullscreen = useMAICStageStore((s) => s.setFullscreen);
   const classroomId = useMAICStageStore((s) => s.classroomId);
@@ -55,14 +51,11 @@ export const Stage: React.FC<StageProps> = ({ role }) => {
   const nextScene = useMAICStageStore((s) => s.nextScene);
   const goToScene = useMAICStageStore((s) => s.goToScene);
 
-  const showNotesPanel = useMAICStageStore((s) => s.showNotesPanel);
-  const toggleNotesPanel = useMAICStageStore((s) => s.toggleNotesPanel);
   const goToSlide = useMAICStageStore((s) => s.goToSlide);
 
   const showChatPanel = useMAICSettingsStore((s) => s.showChatPanel);
   const setShowChatPanel = useMAICSettingsStore((s) => s.setShowChatPanel);
   const showWhiteboard = useMAICSettingsStore((s) => s.showWhiteboard);
-  const setShowWhiteboard = useMAICSettingsStore((s) => s.setShowWhiteboard);
   const audioVolume = useMAICSettingsStore((s) => s.audioVolume);
   const setAudioVolume = useMAICSettingsStore((s) => s.setAudioVolume);
 
@@ -73,20 +66,6 @@ export const Stage: React.FC<StageProps> = ({ role }) => {
 
   const [spotlightActive, setSpotlightActive] = useState(false);
   const [showSceneSidebar, setShowSceneSidebar] = useState(false);
-  const [editMode, setEditMode] = useState(false);
-
-  const setSlides = useMAICStageStore((s) => s.setSlides);
-
-  // ─── Slide Editor ─────────────────────────────────────────────────
-  const handleSlideUpdate = useCallback(
-    (updatedSlide: MAICSlide) => {
-      const newSlides = slides.map((s) =>
-        s.id === updatedSlide.id ? updatedSlide : s,
-      );
-      setSlides(newSlides);
-    },
-    [slides, setSlides],
-  );
 
   // ─── Mobile Swipe Navigation ──────────────────────────────────────
   const touchStartRef = useRef<number>(0);
@@ -170,26 +149,17 @@ export const Stage: React.FC<StageProps> = ({ role }) => {
       : currentSlide?.audioUrl;
 
   // ─── Discussion ──────────────────────────────────────────────────────
-  const [discussionTopic, setDiscussionTopic] = useState('');
-  const [discussionAgentIds, setDiscussionAgentIds] = useState<string[]>([]);
+  // Discussion mode activates automatically when the engine fires a
+  // `discussion` action during playback. There's no manual toggle button
+  // anymore — the handler below just ends the current discussion and
+  // resumes playback from the checkpoint.
+  const [discussionTopic] = useState('');
+  const [discussionAgentIds] = useState<string[]>([]);
 
   const handleCloseDiscussion = useCallback(() => {
     setDiscussionMode(null);
-    setDiscussionTopic('');
-    setDiscussionAgentIds([]);
-    // Resume playback from the checkpoint saved when discussion was triggered
     resumeAfterDiscussion();
   }, [setDiscussionMode, resumeAfterDiscussion]);
-
-  const handleToggleDiscussion = useCallback(() => {
-    if (discussionMode) {
-      handleCloseDiscussion();
-    } else {
-      setDiscussionMode('roundtable');
-      setDiscussionTopic(currentScene?.title || 'Open Discussion');
-      setDiscussionAgentIds(agents.map((a) => a.id));
-    }
-  }, [discussionMode, handleCloseDiscussion, setDiscussionMode, currentScene, agents]);
 
   // ─── Playback Controls ───────────────────────────────────────────────
   const handlePlayPause = useCallback(() => {
@@ -226,13 +196,10 @@ export const Stage: React.FC<StageProps> = ({ role }) => {
     onPrevScene: handlePrevScene,
     onToggleFullscreen: toggleFullscreen,
     onToggleChat: () => setShowChatPanel(!showChatPanel),
-    onToggleWhiteboard: () => setShowWhiteboard(!showWhiteboard),
     onVolumeUp: () => setAudioVolume(Math.min(1, audioVolume + 0.1)),
     onVolumeDown: () => setAudioVolume(Math.max(0, audioVolume - 0.1)),
     onMute: () => setAudioVolume(audioVolume > 0 ? 0 : 0.8),
     onToggleSceneSidebar: () => setShowSceneSidebar((v) => !v),
-    onToggleDiscussion: handleToggleDiscussion,
-    onToggleNotes: toggleNotesPanel,
     enabled: true,
   });
 
@@ -261,13 +228,7 @@ export const Stage: React.FC<StageProps> = ({ role }) => {
       aria-label="AI Classroom Stage"
     >
       {/* Top toolbar */}
-      <StageToolbar
-        role={role}
-        onDiscussionToggle={handleToggleDiscussion}
-        discussionActive={!!discussionMode}
-        onPlayPause={handlePlayPause}
-        onStop={stopClass}
-      />
+      <StageToolbar role={role} />
 
       {/* Main content area */}
       <div className="flex flex-1 min-h-0 overflow-hidden relative" data-testid="maic-stage">
@@ -288,45 +249,23 @@ export const Stage: React.FC<StageProps> = ({ role }) => {
         >
           {/* 16:9 aspect ratio container — fill viewport as much as possible */}
           <div className="relative w-full max-w-[95vw] max-h-[calc(100%-0.5rem)] aspect-video bg-white rounded-lg shadow-lg overflow-hidden">
-            {/* Edit mode: render SlideEditor (teacher only) */}
-            {editMode && role === 'teacher' && currentSlide ? (
+            {/* Scene-based rendering (preferred) */}
+            {hasScenes && currentScene ? (
               <div className="absolute inset-0">
-                <SlideEditor
-                  slide={currentSlide}
-                  onSlideUpdate={handleSlideUpdate}
-                />
+                <SceneRenderer scene={currentScene} mode="playback" role={role} />
               </div>
-            ) : (
-              <>
-                {/* Scene-based rendering (preferred) */}
-                {hasScenes && currentScene ? (
-                  <div className="absolute inset-0">
-                    <SceneRenderer scene={currentScene} mode="playback" role={role} />
-                  </div>
-                ) : (viewMode === 'slides' || viewMode === 'split') && currentSlide ? (
-                  <div className={cn('absolute inset-0', viewMode === 'split' && 'w-1/2')}>
-                    <SlideRenderer slide={currentSlide} />
-                  </div>
-                ) : null}
-              </>
-            )}
-
-            {/* Whiteboard layer (hidden in edit mode) */}
-            {!editMode && (viewMode === 'whiteboard' || viewMode === 'split' || showWhiteboard) && (
-              <div className={cn(
-                'absolute inset-0',
-                viewMode === 'split' && !hasScenes && 'left-1/2 w-1/2 border-l border-gray-300',
-              )}>
-                {viewMode === 'split' && !hasScenes && (
-                  <div className="absolute inset-0 bg-white" />
-                )}
-                <Whiteboard sceneId={sceneId} readonly={role === 'student'} />
+            ) : currentSlide ? (
+              <div className="absolute inset-0">
+                <SlideRenderer slide={currentSlide} />
               </div>
-            )}
+            ) : null}
 
-            {/* Whiteboard overlay for teacher annotations on slides */}
-            {!editMode && !showWhiteboard && viewMode === 'slides' && role === 'teacher' && !hasScenes && (
-              <Whiteboard sceneId={sceneId} readonly={false} />
+            {/* Whiteboard layer — opens automatically when an agent fires
+                a `wb_open` action during playback. No manual toggle. */}
+            {showWhiteboard && (
+              <div className="absolute inset-0">
+                <Whiteboard sceneId={sceneId} readonly={true} />
+              </div>
             )}
 
             {/* Spotlight / Laser overlay */}
@@ -387,22 +326,6 @@ export const Stage: React.FC<StageProps> = ({ role }) => {
             active={!!speakingAgent}
           />
 
-          {/* Edit mode toggle (teacher only) */}
-          {role === 'teacher' && currentSlide && (
-            <button
-              onClick={() => setEditMode((v) => !v)}
-              title={editMode ? 'Exit edit mode' : 'Edit slide'}
-              className={cn(
-                'absolute top-2 right-14 z-20 p-2 rounded-lg transition-colors shadow-sm',
-                editMode
-                  ? 'bg-blue-600 text-white hover:bg-blue-700'
-                  : 'bg-white/90 text-gray-600 hover:bg-white hover:text-gray-900',
-              )}
-            >
-              <Pencil className="w-4 h-4" />
-            </button>
-          )}
-
           {/* Export menu (teacher only) */}
           {role === 'teacher' && classroomId && (
             <div className="absolute top-2 right-2 z-20">
@@ -417,19 +340,10 @@ export const Stage: React.FC<StageProps> = ({ role }) => {
           />
         </div>
 
-        {/* Right sidebar panels */}
-        {(showChatPanel || showNotesPanel) && (
-          <div className="hidden md:flex flex-col shrink-0">
-            {showChatPanel && classroomId && (
-              <div className={cn('flex w-80', showNotesPanel ? 'flex-1 min-h-0' : 'h-full')}>
-                <ChatPanel role={role} classroomId={classroomId} />
-              </div>
-            )}
-            {showNotesPanel && (
-              <div className={cn('flex', showChatPanel ? 'h-1/2 border-t border-gray-200' : 'h-full')}>
-                <NotesPanel />
-              </div>
-            )}
+        {/* Right sidebar: Chat + Lecture Notes tabs live inside ChatPanel */}
+        {showChatPanel && classroomId && (
+          <div className="hidden md:flex w-80 shrink-0 h-full">
+            <ChatPanel role={role} classroomId={classroomId} />
           </div>
         )}
       </div>

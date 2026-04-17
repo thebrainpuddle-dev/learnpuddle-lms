@@ -11,7 +11,7 @@ interface UseKeyboardShortcutsOptions {
   onPrevScene: () => void;
   onToggleFullscreen: () => void;
   onToggleChat: () => void;
-  onToggleWhiteboard: () => void;
+  onToggleWhiteboard?: () => void;
   onVolumeUp: () => void;
   onVolumeDown: () => void;
   onMute: () => void;
@@ -102,8 +102,10 @@ export function useKeyboardShortcuts(opts: UseKeyboardShortcutsOptions): void {
 
         case 'w':
         case 'W':
-          e.preventDefault();
-          onToggleWhiteboard();
+          if (onToggleWhiteboard) {
+            e.preventDefault();
+            onToggleWhiteboard();
+          }
           break;
 
         case 'm':
