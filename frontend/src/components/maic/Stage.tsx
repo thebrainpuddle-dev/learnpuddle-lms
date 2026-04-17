@@ -83,19 +83,18 @@ export const Stage: React.FC<StageProps> = ({ role }) => {
     [goToSlide, currentSlideIndex],
   );
 
-  // Playback engine
+  // Playback engine. `seekToSlide` + `stopClass` are no longer wired to UI
+  // (scene-only navigator removed per-slide clicks) but the engine still
+  // exposes them for programmatic use.
   const {
     playbackState,
     isClassPlaying,
-    play,
     pause,
     resume,
     loadScene,
     resumeAfterDiscussion,
     startClass,
     playFromCurrent,
-    stopClass,
-    seekToSlide,
     consumeEngineDrivenSlideChange,
   } = usePlaybackEngine(role);
 
@@ -348,8 +347,8 @@ export const Stage: React.FC<StageProps> = ({ role }) => {
         )}
       </div>
 
-      {/* Bottom navigation bar — owns the canonical Play/Pause control */}
-      <SlideNavigator onSlideClick={seekToSlide} onPlayPause={handlePlayPause} />
+      {/* Bottom navigation bar — scene chips + canonical Play/Pause */}
+      <SlideNavigator onPlayPause={handlePlayPause} />
 
       {/* Headless audio player */}
       <AudioPlayer audioUrl={audioUrl} />
