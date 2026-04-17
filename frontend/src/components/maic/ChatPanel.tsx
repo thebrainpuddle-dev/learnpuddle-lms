@@ -96,6 +96,9 @@ export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({ role, c
   const agents = useMAICStageStore((s) => s.agents);
   const scenes = useMAICStageStore((s) => s.scenes);
   const currentSceneIndex = useMAICStageStore((s) => s.currentSceneIndex);
+  const currentSlideIndex = useMAICStageStore((s) => s.currentSlideIndex);
+  const userNotes = useMAICStageStore((s) => s.notes);
+  const addUserNote = useMAICStageStore((s) => s.addNote);
   const accessToken = useAuthStore((s) => s.accessToken);
 
   const [activeTab, setActiveTab] = useState<ChatTab>('chat');
@@ -107,20 +110,41 @@ export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({ role, c
   const [showReasoning, setShowReasoning] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
-  // Build lecture notes from scene speech actions
+  // Build lecture notes per scene: auto-generated speaker scripts +
+  // user-added notes that were saved against slides in this scene.
+  // A scene shows up even if it has no auto notes as long as the user
+  // added a note against one of its slides.
   const lectureNotes = useMemo(() => {
     return scenes.map((scene, idx) => {
       const speechTexts = (scene.actions || [])
         .filter((a) => a.type === 'speech' && (a as { text?: string }).text)
         .map((a) => (a as { text: string }).text);
+      const sceneUserNotes = userNotes
+        .filter((n) => n.sceneIdx === idx)
+        .sort((a, b) => a.timestamp - b.timestamp);
       return {
         sceneIndex: idx,
         title: scene.title,
         notes: speechTexts,
+        userNotes: sceneUserNotes,
         isCurrent: idx === currentSceneIndex,
       };
-    }).filter((s) => s.notes.length > 0);
-  }, [scenes, currentSceneIndex]);
+    }).filter((s) => s.notes.length > 0 || s.userNotes.length > 0);
+  }, [scenes, currentSceneIndex, userNotes]);
+
+  // User-note composer — writes to the current scene + slide.
+  const [noteDraft, setNoteDraft] = useState('');
+  const handleAddNote = useCallback(() => {
+    const trimmed = noteDraft.trim();
+    if (!trimmed) return;
+    addUserNote({
+      sceneIdx: currentSceneIndex,
+      slideIdx: currentSlideIndex,
+      text: trimmed,
+      timestamp: Date.now(),
+    });
+    setNoteDraft('');
+  }, [noteDraft, currentSceneIndex, currentSlideIndex, addUserNote]);
 
   // Persist chat history to IndexedDB when messages change
   useEffect(() => {
@@ -288,55 +312,109 @@ export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({ role, c
         </div>
       </div>
 
-      {/* Lecture Notes Tab */}
+      {/* Lecture Notes Tab (auto-generated speaker scripts + user notes) */}
       {activeTab === 'notes' && (
-        <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
-          {lectureNotes.length === 0 ? (
-            <p className="text-sm text-gray-400 text-center mt-8">
-              No lecture notes available yet.
-            </p>
-          ) : (
-            lectureNotes.map((section) => (
-              <div
-                key={section.sceneIndex}
-                className={cn(
-                  'rounded-lg border p-3 transition-colors',
-                  section.isCurrent
-                    ? 'border-primary-200 bg-primary-50'
-                    : 'border-gray-100 bg-white',
-                )}
-              >
-                <div className="flex items-center gap-2 mb-2">
-                  <span className={cn(
-                    'flex items-center justify-center h-5 w-5 rounded text-[10px] font-medium',
+        <div className="flex-1 flex flex-col min-h-0">
+          <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
+            {lectureNotes.length === 0 ? (
+              <p className="text-sm text-gray-400 text-center mt-8">
+                No lecture notes available yet.
+              </p>
+            ) : (
+              lectureNotes.map((section) => (
+                <div
+                  key={section.sceneIndex}
+                  className={cn(
+                    'rounded-lg border p-3 transition-colors',
                     section.isCurrent
-                      ? 'bg-primary-600 text-white'
-                      : 'bg-gray-200 text-gray-600',
-                  )}>
-                    {section.sceneIndex + 1}
-                  </span>
-                  <h4 className="text-xs font-semibold text-gray-800 truncate">
-                    {section.title}
-                  </h4>
-                  {section.isCurrent && (
-                    <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-primary-100 text-primary-700 font-medium">
-                      Current
+                      ? 'border-primary-200 bg-primary-50'
+                      : 'border-gray-100 bg-white',
+                  )}
+                >
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className={cn(
+                      'flex items-center justify-center h-5 w-5 rounded text-[10px] font-medium',
+                      section.isCurrent
+                        ? 'bg-primary-600 text-white'
+                        : 'bg-gray-200 text-gray-600',
+                    )}>
+                      {section.sceneIndex + 1}
                     </span>
+                    <h4 className="text-xs font-semibold text-gray-800 truncate">
+                      {section.title}
+                    </h4>
+                    {section.isCurrent && (
+                      <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-primary-100 text-primary-700 font-medium">
+                        Current
+                      </span>
+                    )}
+                  </div>
+                  <div className="space-y-1.5">
+                    {section.notes.map((note, ni) => (
+                      <div key={`lect-${ni}`} className="text-xs text-gray-600">
+                        <StreamMarkdown
+                          content={note}
+                          className="text-xs leading-relaxed"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  {section.userNotes.length > 0 && (
+                    <div className="mt-3 pt-3 border-t border-gray-100 space-y-1.5">
+                      {section.userNotes.map((un, ui) => (
+                        <div
+                          key={`user-${ui}`}
+                          className="text-xs text-amber-900 bg-amber-50 border border-amber-200 rounded-md px-2 py-1.5"
+                        >
+                          <div className="flex items-center gap-1.5 mb-0.5">
+                            <span className="text-[9px] font-semibold text-amber-700 uppercase tracking-wide">My note</span>
+                            <span className="text-[9px] text-amber-400 tabular-nums">
+                              Slide {un.slideIdx + 1}
+                            </span>
+                          </div>
+                          <p className="leading-relaxed">{un.text}</p>
+                        </div>
+                      ))}
+                    </div>
                   )}
                 </div>
-                <div className="space-y-1.5">
-                  {section.notes.map((note, ni) => (
-                    <div key={ni} className="text-xs text-gray-600">
-                      <StreamMarkdown
-                        content={note}
-                        className="text-xs leading-relaxed"
-                      />
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))
-          )}
+              ))
+            )}
+          </div>
+
+          {/* Add note composer — ties to current slide */}
+          <div className="shrink-0 px-4 py-3 border-t border-gray-100 bg-white">
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={noteDraft}
+                onChange={(e) => setNoteDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    handleAddNote();
+                  }
+                }}
+                placeholder="Add a note for this slide..."
+                className="flex-1 text-xs px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-amber-400/50 focus:border-transparent"
+              />
+              <button
+                type="button"
+                onClick={handleAddNote}
+                disabled={!noteDraft.trim()}
+                className={cn(
+                  'shrink-0 h-8 px-3 rounded-lg text-xs font-medium transition-colors',
+                  noteDraft.trim()
+                    ? 'bg-amber-500 text-white hover:bg-amber-600'
+                    : 'bg-gray-100 text-gray-300 cursor-not-allowed',
+                )}
+                title="Add note"
+              >
+                Add
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
