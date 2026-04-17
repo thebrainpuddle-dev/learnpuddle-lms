@@ -767,6 +767,11 @@ def _fallback_scene_content(scene: dict) -> dict:
 
 ACTIONS_SYSTEM_PROMPT = """You are an expert director choreographing a multi-agent interactive classroom. Your job is to create a dynamic, engaging sequence where MULTIPLE agents teach together across MULTIPLE SLIDES — like a real classroom with a professor and teaching assistants.
 
+HARD LANGUAGE RULE (read before anything else):
+- Output ONLY English. No Hindi words, no transliterated slang ("theek hai", "bilkul", "achha", "haan", "samjhe", "arre", "yaar", etc.), no code-switching, no mixed-script text.
+- If a persona's `speakingStyle` hints at multilingualism, render the flavor through English register (warm, precise, crisp, Socratic, informal) — never by inserting non-English words.
+- The audience is Indian learners who read and speak English in class. Anglo-Indian English is fine; Hinglish is NOT.
+
 Given a scene's multi-slide content and agents, generate a rich sequence of playback actions that creates DIALOGUE between agents AND navigates between slides.
 
 Return a valid JSON object:
@@ -775,7 +780,7 @@ Return a valid JSON object:
     {"type": "speech", "agentId": "agent-1", "text": "Welcome everyone! Today we are exploring..."},
     {"type": "spotlight", "elementId": "el-s1-1", "duration": 2500},
     {"type": "speech", "agentId": "agent-2", "text": "I am excited to dive into this topic with you all!"},
-    {"type": "pause", "duration": 800},
+    {"type": "pause", "duration": 200},
     {"type": "transition", "slideIndex": 1},
     {"type": "speech", "agentId": "agent-1", "text": "Now let us look at the key concepts..."},
     {"type": "spotlight", "elementId": "el-s2-1", "duration": 2000},
@@ -788,7 +793,7 @@ Return a valid JSON object:
     {"type": "wb_close"},
     {"type": "transition", "slideIndex": 2},
     {"type": "speech", "agentId": "agent-1", "text": "Notice how this diagram shows..."},
-    {"type": "discussion", "sessionType": "qa", "topic": "Why is this important?", "agentIds": ["agent-1", "agent-2"]},
+    {"type": "discussion", "sessionType": "qa", "topic": "Why is this important?", "agentIds": ["agent-1", "agent-2"], "triggerMode": "manual"},
     {"type": "transition", "slideIndex": 3},
     {"type": "speech", "agentId": "agent-2", "text": "Let me summarize what we have covered..."}
   ]
@@ -810,14 +815,14 @@ ACTION TYPES (12 types — use all of these for maximum engagement):
 12. discussion  — Start discussion segment (requires: sessionType ["qa"|"roundtable"], topic, agentIds)
 
 CRITICAL RULES:
-- VOICE DISCIPLINE: You MUST write speech text that reflects each agent's `speakingStyle`, including any cultural phrases the style notes. Each agent's lines should be identifiable as that agent's voice, not generic LLM prose. Use the cultural phrases SPARINGLY — one phrase per agent across the whole scene, not every line.
+- VOICE DISCIPLINE: You MUST write speech text that reflects each agent's `speakingStyle` through ENGLISH register only — warm vs crisp, Socratic vs supportive, formal vs informal. Each agent's lines should be identifiable as that agent's voice without relying on non-English words.
   BAD (both agents sound identical, generic):
-    - agent-1 (professor, style: "warm, unhurried, says 'theek hai?'"): "Photosynthesis is the process by which plants convert sunlight into energy."
+    - agent-1 (professor, style: "warm, unhurried, pauses to check understanding"): "Photosynthesis is the process by which plants convert sunlight into energy."
     - agent-2 (student, style: "curious, asks why, plays with analogies"):  "Yes, that's correct. The plant uses sunlight to make food."
-  GOOD (each agent's style lands in the sentence, cultural phrase used ONCE):
-    - agent-1 (professor): "Think of the leaf like a tiny kitchen — sunlight is the stove, and the sugar made inside is the meal. Theek hai?"
+  GOOD (each agent's register lands in the sentence, English only):
+    - agent-1 (professor): "Think of the leaf like a tiny kitchen — sunlight is the stove, and the sugar made inside is the meal. Does that picture work for everyone?"
     - agent-2 (student):   "Wait — but what happens at night when the stove is off? Does the plant just go hungry?"
-  Every agent's 3+ speech lines should read like THAT agent typed them, not a generic narrator.
+  Every agent's 3+ speech lines should read like THAT agent typed them, not a generic narrator. NEVER insert Hindi or Hinglish words.
 - Generate 15-25 actions per scene (more is better for engagement)
 - EVERY assigned agent MUST speak at least 3 times
 - For multi-slide scenes, you MUST include "transition" actions between slides
@@ -829,12 +834,12 @@ CRITICAL RULES:
   - Agent B asks "What about...?" -> Agent A answers
   - Agent A says fact -> Agent B gives analogy -> Agent A summarizes
 - Use WHITEBOARD (wb_open/wb_draw_text/wb_draw_shape/wb_close) at least once per scene for formulas, diagrams, or key concepts
-- Include at least one DISCUSSION action for interactive engagement
+- Discussion segments: if you include a "discussion" action, set `"triggerMode": "manual"` so the panel only opens when the teacher clicks the Roundtable button. Never rely on discussions auto-popping mid-scene.
 - Speech text should feel like a real conversation, not reading from notes
 - Each speech should be 1-3 sentences (short, punchy, conversational)
 - Use the speaker's role style: professors explain authoritatively, assistants ask clarifying questions, student reps voice common confusions
 - Spotlight the heading element first, then key content elements on each slide
-- Add pauses (500-1000ms) between speaker changes for natural pacing
+- Keep pauses between speakers SHORT (150-250ms) — the audio engine renders real silences, so large pauses stack into noticeable dead air. Rely on natural TTS cadence, not extra pause actions.
 - For introduction scenes: each agent introduces themselves personally
 - Use element IDs from the slide content for spotlight/highlight actions
 - End with a strong summary or transition statement
@@ -991,7 +996,7 @@ def _fallback_actions(scene: dict, agents: list) -> dict:
 
     # Second agent responds
     if secondary:
-        actions.append({"type": "pause", "duration": 800})
+        actions.append({"type": "pause", "duration": 200})
         actions.append({
             "type": "speech", "agentId": secondary["id"],
             "text": _persona_flavored(
@@ -1023,7 +1028,7 @@ def _fallback_actions(scene: dict, agents: list) -> dict:
             actions.append({"type": "highlight", "elementId": slide_elements[1].get("id", f"el-s{si+1}-2"), "color": "#DBEAFE"})
 
         if secondary:
-            actions.append({"type": "pause", "duration": 600})
+            actions.append({"type": "pause", "duration": 200})
             actions.append({
                 "type": "speech", "agentId": secondary["id"],
                 "text": _persona_flavored(
