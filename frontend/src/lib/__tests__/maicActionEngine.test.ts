@@ -101,7 +101,11 @@ afterEach(() => {
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
 describe('MAICActionEngine.executeSpeech', () => {
-  test('subtitle fires on audio `playing` event, not before', async () => {
+  test('subtitle fires EAGERLY at speech entry (Chunk 9) — no wait for audio.onplaying', async () => {
+    // Chunk 9 changed the contract: subtitles must land the same frame the
+    // engine commits to a speech action, not after the audio element
+    // buffers and fires onplaying (which lags 500ms-2s on slow networks).
+    // The old test asserted the opposite behavior — it's been flipped.
     const onStart = vi.fn();
     const engine = new MAICActionEngine({
       ttsEndpoint: '/tts',
@@ -116,19 +120,20 @@ describe('MAICActionEngine.executeSpeech', () => {
       audioUrl: 'https://example.com/hello.mp3',
     } as any);
 
-    // Before the mock's `playing` event fires (10 ms timer), onStart
-    // and speechText should be untouched.
-    await new Promise((r) => setTimeout(r, 5));
-    expect(onStart).not.toHaveBeenCalled();
-    expect(useMAICStageStore.getState().speechText).toBeNull();
-
-    // After 15 ms, `playing` fires → subtitle appears.
-    await new Promise((r) => setTimeout(r, 15));
+    // Subtitle + speaking indicator should be set IMMEDIATELY on entry,
+    // before any network / decoding completes.
+    await new Promise((r) => setTimeout(r, 0));
     expect(onStart).toHaveBeenCalledWith('a1', 'Hello students');
     expect(useMAICStageStore.getState().speechText).toBe('Hello students');
     expect(useMAICStageStore.getState().speakingAgentId).toBe('a1');
 
-    // Trigger end → promise resolves.
+    // After mock audio's `playing` event fires (10 ms), state is
+    // re-asserted idempotently — still the same values.
+    await new Promise((r) => setTimeout(r, 15));
+    expect(useMAICStageStore.getState().speechText).toBe('Hello students');
+    expect(useMAICStageStore.getState().speakingAgentId).toBe('a1');
+
+    // Trigger end → promise resolves, state clears.
     mockAudios[0].endNow();
     await promise;
     expect(useMAICStageStore.getState().speechText).toBeNull();

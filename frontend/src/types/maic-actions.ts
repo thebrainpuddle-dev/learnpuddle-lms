@@ -35,6 +35,10 @@ export interface SpeechAction {
   audioId?: string;
   audioUrl?: string;
   voiceId?: string;
+  /** Estimated speech duration in ms, stamped by the backend so the
+   *  playback engine can drive slide transitions and reading-fallback
+   *  timers without waiting for audio metadata. */
+  durationMs?: number;
 }
 
 // ─── Video ──────────────────────────────────────────────────────────────────
@@ -140,6 +144,12 @@ export interface DiscussionAction {
   sessionType: 'qa' | 'roundtable' | 'classroom';
   topic: string;
   agentIds: string[];
+  /** Whether the engine should auto-open the roundtable panel on this
+   *  action. Defaults to 'manual' — teacher must click a Roundtable
+   *  button to open. Generated classrooms from prompt v2 (Chunk 3) stamp
+   *  this explicitly; legacy classrooms with the field missing are
+   *  treated as manual. */
+  triggerMode?: 'auto' | 'manual';
 }
 
 // ─── LLM-generated utility actions ─────────────────────────────────────────

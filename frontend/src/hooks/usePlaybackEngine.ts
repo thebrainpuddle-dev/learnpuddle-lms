@@ -26,6 +26,12 @@ export function usePlaybackEngine(role: MAICRole = 'teacher') {
   const actionEngineRef = useRef<MAICActionEngine | null>(null);
   const autoAdvanceRef = useRef(false);
   const classStoppedRef = useRef(false);
+  // Engine-driven slide change flag: set by the action engine's
+  // onEngineDrivenTransition callback (and by `seekToSlide` below) so
+  // Stage.tsx's auto-pause effect can distinguish "engine is seeking"
+  // from "user is clicking". The useEffect consumes + clears the flag.
+  // Hoisted above the main init useEffect so the closure captures it.
+  const engineDrivenSlideChangeRef = useRef(false);
 
   const accessToken = useAuthStore((s) => s.accessToken);
   const setEngineMode = useMAICStageStore((s) => s.setEngineMode);
@@ -51,6 +57,12 @@ export function usePlaybackEngine(role: MAICRole = 'teacher') {
         useMAICStageStore
           .getState()
           .setDiscussionMode(sessionType as 'qa' | 'roundtable' | 'classroom');
+      },
+      // Flip the engine-driven flag BEFORE the slide index changes so
+      // Stage.tsx's auto-pause effect treats this as playback-driven
+      // (not a user click) and doesn't spuriously pause the engine.
+      onEngineDrivenTransition: () => {
+        engineDrivenSlideChangeRef.current = true;
       },
     });
 
@@ -153,17 +165,15 @@ export function usePlaybackEngine(role: MAICRole = 'teacher') {
     setCurrentActionIndex(index);
   }, []);
 
-  // Ref set true immediately before an engine-driven slide change so
-  // Stage's auto-pause-on-slide-change useEffect can differentiate
-  // "engine seeking to a new slide" from "user manually navigating".
-  // The useEffect consumes the flag and clears it.
-  const engineDrivenSlideChangeRef = useRef(false);
-
   /**
    * Seek to the transition action for a given slide index (within the current
    * scene) and start playing from there. Triggered by slide-thumbnail clicks
    * mid-playback. Uses `generationToken` + `sessionId` internally so the
    * previous slide's audio cannot wake up and corrupt the new slide's state.
+   *
+   * The engineDrivenSlideChangeRef is declared at hook top-level so both
+   * this manual seek and the action engine's automatic transitions (via
+   * the `onEngineDrivenTransition` callback) can flip it.
    */
   const seekToSlide = useCallback((slideIndex: number) => {
     if (!engineRef.current) return;

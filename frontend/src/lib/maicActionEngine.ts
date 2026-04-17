@@ -53,9 +53,18 @@ const EFFECT_AUTO_CLEAR_MS = 5000;
 const WB_ELEMENT_FADE_IN_MS = 800;
 const WB_CASCADE_DELETE_MS = 55;
 const WB_CLOSE_DELAY_MS = 700;
-/** Reading-fallback timing: ~60ms per character, minimum 2s. */
-const READING_FALLBACK_MS_PER_CHAR = 60;
-const READING_FALLBACK_MIN_MS = 2000;
+/** Reading-fallback timing when TTS is unavailable. Tightened from the old
+ *  60ms/char + 2s floor — it was stacking multi-second gaps between speakers
+ *  on networks where TTS was slow. 30ms/char approximates a natural English
+ *  reading pace and the 800ms floor still lets short utterances ("Right.",
+ *  "Exactly.") land on screen. If the backend stamped a `durationMs` on the
+ *  speech action (Chunk 5), we prefer that over the char-based estimate. */
+const READING_FALLBACK_MS_PER_CHAR = 30;
+const READING_FALLBACK_MIN_MS = 800;
+/** Default transition animation duration when the action JSON doesn't
+ *  specify one. Previously 600ms — shortened to 250ms so scene switches
+ *  feel instant rather than sluggish. */
+const DEFAULT_TRANSITION_DURATION_MS = 250;
 
 /** Default voice mapping by agent role */
 const ROLE_VOICE_MAP: Record<string, string> = {
@@ -103,6 +112,11 @@ export interface MAICActionEngineOptions {
   onSpeechStart?: (agentId: string, text: string) => void;
   onSpeechEnd?: () => void;
   onDiscussionTrigger?: (sessionType: string, topic: string, agentIds: string[]) => void;
+  /** Invoked just before the engine changes the current slide via a
+   *  `transition` action. Lets the host (usePlaybackEngine) flip its
+   *  `engineDrivenSlideChangeRef` so Stage.tsx's auto-pause effect
+   *  knows this slide change is playback-driven, not user-driven. */
+  onEngineDrivenTransition?: (slideIndex: number) => void;
 }
 
 export class MAICActionEngine {
@@ -127,6 +141,7 @@ export class MAICActionEngine {
   private onSpeechStart?: (agentId: string, text: string) => void;
   private onSpeechEnd?: () => void;
   private onDiscussionTrigger?: (sessionType: string, topic: string, agentIds: string[]) => void;
+  private onEngineDrivenTransition?: (slideIndex: number) => void;
 
   private ttsEndpoint: string;
   private token: string;
@@ -138,6 +153,7 @@ export class MAICActionEngine {
     this.onSpeechStart = opts.onSpeechStart;
     this.onSpeechEnd = opts.onSpeechEnd;
     this.onDiscussionTrigger = opts.onDiscussionTrigger;
+    this.onEngineDrivenTransition = opts.onEngineDrivenTransition;
   }
 
   // ─── Lifecycle ──────────────────────────────────────────────────────
@@ -341,6 +357,15 @@ export class MAICActionEngine {
     const myToken = ++this.generationToken;
     const { agentId, text, ssml } = action;
 
+    // Fire subtitles + speaking indicator EAGERLY at speech entry so
+    // the audience sees the line the same frame the engine commits to
+    // it. Previously these fired inside audio.onplaying which lags by
+    // 500ms-2s on slow networks. The token guard in onplaying + onend
+    // still cleans up if a scene change interrupts before audio starts.
+    this.onSpeechStart?.(agentId, text);
+    this.stageStore.getState().setSpeakingAgent(agentId);
+    this.stageStore.getState().setSpeechText(text);
+
     // Resolve per-agent voice ID (explicit on action > agent.voiceId > legacy
     // `agent.voice` > role-based default > fallback en-IN voice).
     const agents = this.stageStore.getState().agents;
@@ -377,7 +402,9 @@ export class MAICActionEngine {
     }
     if (!blobUrl) {
       // 3. Final fallback: timed reading window so slides don't snap-advance.
-      return this.readingTimeFallback(text, agentId, myToken);
+      //    Prefer the backend-stamped durationMs over a char estimate when
+      //    present (Chunk 5 stamps this on every speech action).
+      return this.readingTimeFallback(text, agentId, myToken, action.durationMs);
     }
     try {
       await this.playAudioSynced(blobUrl, text, agentId, volume, playbackSpeed, myToken);
@@ -458,8 +485,18 @@ export class MAICActionEngine {
   }
 
   /**
-   * Play `src` via a fresh HTMLAudioElement, firing subtitles + speaking
-   * indicator on the `playing` event (not before `play()`).
+   * Play `src` via a fresh HTMLAudioElement.
+   *
+   * Subtitle + speaking-indicator state fires EAGERLY at the start of
+   * the speech action (see `executeSpeech`) so the audience sees the
+   * line the moment the engine commits to playing it — not after the
+   * audio element buffers and fires `onplaying`, which on slow networks
+   * can lag by 500ms-2s and desync subtitles from audio.
+   *
+   * Here we just re-assert the state inside `onplaying` as an idempotent
+   * guard: if a scene change bumped the generation token between the
+   * eager fire and the actual audio start, the state was already cleared
+   * and we skip re-setting it.
    *
    * Every callback checks `token !== this.generationToken` and:
    *   - For `onplaying`: pauses immediately so buffered audio stops.
@@ -496,7 +533,9 @@ export class MAICActionEngine {
           }
           return;
         }
-        this.onSpeechStart?.(agentId, text);
+        // Idempotent — executeSpeech already fired these eagerly. We
+        // re-assert here in case setSpeakingAgent(null) was called by a
+        // competing action between the eager fire and actual audio start.
         this.stageStore.getState().setSpeakingAgent(agentId);
         this.stageStore.getState().setSpeechText(text);
       };
@@ -537,31 +576,36 @@ export class MAICActionEngine {
 
   /**
    * Reading-time fallback: when TTS is unavailable, advance on a timer
-   * sized to the text (~60ms/char, minimum 2s). Still fires
-   * onSpeechStart/onSpeechEnd so subtitles appear as if speech were playing.
+   * sized to either the backend-stamped `durationMs` (Chunk 5) or, if
+   * that's missing, a char-based estimate (~30 ms/char, min 800 ms).
    *
-   * The resolve fn is stored in `audioResolve` so `abortCurrentAction()` can
-   * release the pending await when a scene change interrupts reading mode.
+   * Subtitles are NOT re-fired here because `executeSpeech` already fired
+   * them eagerly on entry — we only need to clear them at the end.
+   *
+   * The resolve fn is stored in `audioResolve` so `abortCurrentAction()`
+   * can release the pending await when a scene change interrupts reading
+   * mode.
    */
   private readingTimeFallback(
     text: string,
     agentId: string,
     token: number,
+    stampedDurationMs?: number,
   ): Promise<void> {
     return new Promise((resolve) => {
       if (token !== this.generationToken) {
         resolve();
         return;
       }
-      this.onSpeechStart?.(agentId, text);
-      this.stageStore.getState().setSpeakingAgent(agentId);
-      this.stageStore.getState().setSpeechText(text);
 
       // Register resolve with abort so interrupting the fallback releases the
-      // awaiting playback engine immediately (rather than waiting up to 2 s).
+      // awaiting playback engine immediately (rather than waiting the full
+      // reading duration).
       this.audioResolve = resolve;
 
-      const ms = Math.max(READING_FALLBACK_MIN_MS, text.length * READING_FALLBACK_MS_PER_CHAR);
+      const ms = stampedDurationMs && stampedDurationMs > 0
+        ? stampedDurationMs
+        : Math.max(READING_FALLBACK_MIN_MS, text.length * READING_FALLBACK_MS_PER_CHAR);
       this.readingTimer = setTimeout(() => {
         if (token !== this.generationToken) return;
         this.onSpeechEnd?.();
@@ -571,6 +615,9 @@ export class MAICActionEngine {
         this.audioResolve = null;
         resolve();
       }, ms);
+      // agentId unused now that executeSpeech fires subtitles eagerly — keep
+      // the parameter for future fallback variations.
+      void agentId;
     });
   }
 
@@ -861,19 +908,37 @@ export class MAICActionEngine {
       const currentScene = this.stageStore.getState().currentSceneIndex;
       const sceneStart = bounds[currentScene]?.startSlide ?? 0;
       const absoluteSlideIndex = sceneStart + action.slideIndex;
+      // Signal the host BEFORE mutating the store so Stage.tsx's
+      // auto-pause effect (which reacts to currentSlideIndex changes)
+      // sees the engine-driven flag set for this tick.
+      this.onEngineDrivenTransition?.(absoluteSlideIndex);
       this.stageStore.getState().goToSlide(absoluteSlideIndex);
-      // Allow time for transition animation
-      await delay((action.duration ?? 600) / playbackSpeed);
+      await delay((action.duration ?? DEFAULT_TRANSITION_DURATION_MS) / playbackSpeed);
       return;
     }
 
     // Legacy transition: visual effect only, handled by Stage component
-    await delay((action.duration ?? 500) / playbackSpeed);
+    await delay((action.duration ?? DEFAULT_TRANSITION_DURATION_MS) / playbackSpeed);
   }
 
   // ─── Discussion ─────────────────────────────────────────────────────
 
+  /**
+   * Roundtable-panel trigger. Gated behind `action.triggerMode === 'auto'`
+   * so the panel never pops open mid-lesson unexpectedly. Legacy actions
+   * (and everything the new prompt generates) default to 'manual' — the
+   * panel only opens when the teacher explicitly clicks the Roundtable
+   * control. Auto discussions remain possible if a future flow needs
+   * them, but they must be explicit.
+   */
   private executeDiscussion(action: DiscussionAction): void {
+    const triggerMode = (action as DiscussionAction & { triggerMode?: string }).triggerMode;
+    if (triggerMode !== 'auto') {
+      // Intentional skip — not an error. Leaves the discussion metadata
+      // on the action for any teacher-facing "Open roundtable" button to
+      // consume later.
+      return;
+    }
     this.stageStore.getState().setDiscussionMode(action.sessionType);
     this.onDiscussionTrigger?.(action.sessionType, action.topic, action.agentIds);
   }
