@@ -48,7 +48,15 @@ export const MAICPlayerPage: React.FC = () => {
 
   usePageTitle(classroom?.title || 'AI Classroom');
 
-  // Load classroom content from IndexedDB into store
+  // Load classroom content from IndexedDB into store.
+  //
+  // Freshness rule: the API's `updated_at` wins when it's newer than the
+  // IndexedDB `syncedAt`. This prevents stale cached slides (with empty
+  // image src or old agent rosters) from shadowing a re-generated
+  // classroom whose backend record was refreshed after the user last
+  // visited. The old code path used IndexedDB unconditionally, which
+  // silently masked the image/voice fixes for anyone who had cached a
+  // previous version.
   useEffect(() => {
     if (!classroom || !id) return;
 
@@ -60,45 +68,65 @@ export const MAICPlayerPage: React.FC = () => {
       const stored = await getStoredClassroom(id!);
       if (cancelled) return;
 
+      const meta = classroom as unknown as Record<string, unknown>;
+      const apiContent = meta.content as {
+        slides?: unknown[]; scenes?: unknown[]; sceneSlideBounds?: unknown[];
+      } | undefined;
+      const apiConfig = meta.config as { agents?: unknown[] } | undefined;
+      const apiUpdatedAt = typeof meta.updated_at === 'string'
+        ? new Date(meta.updated_at as string).getTime()
+        : 0;
+
+      const apiHasSlides = Array.isArray(apiContent?.slides) && (apiContent!.slides as unknown[]).length > 0;
+      const cacheHasSlides = !!stored?.slides?.length;
+      const apiIsNewer = apiUpdatedAt > 0 && (!stored?.syncedAt || apiUpdatedAt > stored.syncedAt);
+
+      // Decision tree:
+      //   1. API has content AND (no cache OR cache is older OR cache is empty)
+      //      → use API, overwrite IndexedDB.
+      //   2. Cache has slides AND API is stale/absent → use cache.
+      //   3. Neither has slides → contentFound=false, page shows "Preparing".
+      const useApi = apiHasSlides && (apiIsNewer || !cacheHasSlides);
+
       let contentFound = false;
 
-      if (stored?.slides?.length) {
-        // Load from IndexedDB cache
+      if (useApi && apiContent) {
+        setSlides(apiContent.slides as Parameters<typeof setSlides>[0]);
+        contentFound = true;
+        if (apiContent.scenes?.length) {
+          setScenes(apiContent.scenes as Parameters<typeof setScenes>[0]);
+        }
+        if (apiContent.sceneSlideBounds?.length) {
+          setSceneSlideBounds(apiContent.sceneSlideBounds as Parameters<typeof setSceneSlideBounds>[0]);
+        }
+        if (apiConfig?.agents?.length) {
+          setAgents(apiConfig.agents as Parameters<typeof setAgents>[0]);
+        }
+        // Preserve chat history from IndexedDB if present — session chat
+        // is a per-user thing and the backend classroom record doesn't own it.
+        if (stored?.chatHistory?.length) setChatMessages(stored.chatHistory);
+
+        // Overwrite IndexedDB so future visits pick up the fresh copy.
+        saveClassroom({
+          id: id!,
+          title: String(meta.title || ''),
+          slides: (apiContent.slides || []) as Parameters<typeof setSlides>[0],
+          scenes: (apiContent.scenes || []) as Parameters<typeof setScenes>[0],
+          outlines: [],
+          agents: (apiConfig?.agents || []) as Parameters<typeof setAgents>[0],
+          chatHistory: stored?.chatHistory || [],
+          audioCache: stored?.audioCache || {},
+          config: stored?.config || {},
+          sceneSlideBounds: (apiContent.sceneSlideBounds || []) as Parameters<typeof setSceneSlideBounds>[0],
+          syncedAt: Date.now(),
+        }).catch(() => {});
+      } else if (cacheHasSlides && stored) {
+        // Cache wins — API either has no content or is older.
         if (stored.slides?.length) { setSlides(stored.slides); contentFound = true; }
         if (stored.agents?.length) setAgents(stored.agents);
         if (stored.chatHistory?.length) setChatMessages(stored.chatHistory);
         if (stored.scenes?.length) { setScenes(stored.scenes); contentFound = true; }
         if (stored.sceneSlideBounds?.length) setSceneSlideBounds(stored.sceneSlideBounds);
-      } else {
-        // IndexedDB empty — try loading from API response content field
-        const meta = classroom as unknown as Record<string, unknown>;
-        const apiContent = meta.content as {
-          slides?: unknown[]; scenes?: unknown[]; sceneSlideBounds?: unknown[];
-        } | undefined;
-        const config = meta.config as { agents?: unknown[] } | undefined;
-
-        if (apiContent?.slides?.length) {
-          setSlides(apiContent.slides as Parameters<typeof setSlides>[0]);
-          contentFound = true;
-          if (apiContent.scenes?.length) { setScenes(apiContent.scenes as Parameters<typeof setScenes>[0]); contentFound = true; }
-          if (apiContent.sceneSlideBounds?.length) setSceneSlideBounds(apiContent.sceneSlideBounds as Parameters<typeof setSceneSlideBounds>[0]);
-          if (config?.agents?.length) setAgents(config.agents as Parameters<typeof setAgents>[0]);
-
-          // Cache to IndexedDB for future visits
-          saveClassroom({
-            id: id!,
-            title: String(meta.title || ''),
-            slides: (apiContent.slides || []) as Parameters<typeof setSlides>[0],
-            scenes: (apiContent.scenes || []) as Parameters<typeof setScenes>[0],
-            outlines: [],
-            agents: (config?.agents || []) as Parameters<typeof setAgents>[0],
-            chatHistory: [],
-            audioCache: {},
-            config: {},
-            sceneSlideBounds: (apiContent.sceneSlideBounds || []) as Parameters<typeof setSceneSlideBounds>[0],
-            syncedAt: Date.now(),
-          }).catch(() => {});
-        }
       }
 
       setHasContent(contentFound);

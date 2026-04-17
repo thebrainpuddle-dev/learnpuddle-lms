@@ -70,14 +70,23 @@ const READING_FALLBACK_MIN_MS = 800;
  *  feel instant rather than sluggish. */
 const DEFAULT_TRANSITION_DURATION_MS = 250;
 
-/** Default voice mapping by agent role */
+/** Default voice mapping by agent role — en-IN Neural so the last-resort
+ *  fallback matches the Indian-schools audience. Previously this was
+ *  populated with en-US voices, which meant any agent whose per-agent
+ *  voiceId wasn't found in the store (e.g. Stage mounted before
+ *  setAgents() settled) would silently get an American accent AND every
+ *  agent of the same role would share a voice — "all students sounded
+ *  alike" during playback. Keeping the enum gender-distinct per role
+ *  ensures even the fallback renders distinctly.
+ *
+ *  Mirrors the backend AGENT_VOICE_MAP in maic_generation_service.py. */
 const ROLE_VOICE_MAP: Record<string, string> = {
-  professor: 'en-US-GuyNeural',
-  teaching_assistant: 'en-US-JennyNeural',
-  student_rep: 'en-US-AriaNeural',
-  moderator: 'en-US-DavisNeural',
-  student: 'en-US-AriaNeural',
-  assistant: 'en-US-JennyNeural',
+  professor: 'en-IN-PrabhatNeural',          // male
+  teaching_assistant: 'en-IN-NeerjaNeural',  // female
+  student_rep: 'en-IN-AaravNeural',          // male
+  moderator: 'en-IN-KavyaNeural',            // female
+  student: 'en-IN-AashiNeural',              // female (young)
+  assistant: 'en-IN-NeerjaNeural',           // female
 };
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -380,6 +389,16 @@ export class MAICActionEngine {
     // `agent.voice` > role-based default > fallback en-IN voice).
     const agents = this.stageStore.getState().agents;
     const agent = agents.find((a) => a.id === agentId);
+    if (!agent && typeof console !== 'undefined') {
+      // Diagnostic for future regressions: if we can't find the agent
+      // in the store, every speech for this agentId will fall through
+      // to the role-based default voice — which makes same-role agents
+      // sound identical. Surface it in the console (non-error) so
+      // production debugging can spot this quickly.
+      console.warn(
+        `[MAIC] speech for unknown agentId=${agentId} — falling back to ROLE_VOICE_MAP`,
+      );
+    }
     const voiceId =
       action.voiceId ||
       agent?.voiceId ||

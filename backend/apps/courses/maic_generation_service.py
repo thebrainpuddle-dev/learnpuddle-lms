@@ -668,7 +668,9 @@ Rules:
 - Each slide element MUST have a globally unique ID (use format "el-s{slideNum}-{elementNum}")
 - Each slide ID MUST be unique (use format "slide-{sceneId}-{slideNum}")
 - Create 3-6 elements per slide (mix of text and image types)
-- Include at least 2 image elements across all slides
+- **EVERY slide MUST include EXACTLY ONE image element.** No slide may be text-only. The image element's `content` field is the KEYWORD passed to the image generator — it MUST be a concrete, topic-relevant phrase describing what the image should depict (e.g. for a Geometry scene: "Diagram of a right triangle with labeled angles and hypotenuse" — NOT generic words like "education", "classroom", or "diagram").
+- Image placement: for title slides use full-width (x=100, y=200, width=600, height=260); for text-with-image slides place the image at the right side (x=460, y=90, width=300, height=240) and keep text elements on the left (x=40, width=400).
+- Leave `src: ""` on every image element — the backend fills real URLs via the image generation pipeline post-return.
 - Use \\n\\n for paragraph breaks in bullet content (NOT just \\n)
 - Heading: bold, 28-36px, dark color (#1E293B)
 - Body: 16-20px, readable color (#334155)
@@ -768,7 +770,7 @@ Language: {language}
 Number of slides to generate: {slide_count}
 Assigned agents: {json.dumps([a["name"] for a in agents if a["id"] in scene.get("agentIds", [])])}
 
-Generate exactly {slide_count} slides following the layout guidelines (title slide, content slides with images, diagram slide, deep dive, key concepts, transition). Include at least 2 image elements across the slides. Each slide must have a unique speakerScript.
+Generate exactly {slide_count} slides following the layout guidelines (title slide, content slides with images, diagram slide, deep dive, key concepts, transition). EVERY slide MUST have exactly one image element with a concrete topic-relevant keyword in its `content` field. Each slide must have a unique speakerScript.
 """
 
     raw = _call_llm(config, SCENE_CONTENT_SYSTEM_PROMPT, user_prompt,
@@ -798,6 +800,11 @@ Generate exactly {slide_count} slides following the layout guidelines (title sli
             for j, el in enumerate(slide["elements"]):
                 if not el.get("id"):
                     el["id"] = f"el-s{i + 1}-{j + 1}"
+            # Guarantee every slide has an image element — the prompt
+            # asks for one per slide, but LLMs sometimes skip. Synthesize
+            # a placeholder image element using the slide title as the
+            # image keyword; _fill_image_urls will fetch a real URL.
+            _ensure_slide_has_image(slide, scene_title=scene.get("title", ""), slide_idx=i)
         # Backward compatibility: include "slide" key pointing to first slide
         parsed["slide"] = parsed["slides"][0]
     elif "slide" in parsed:
@@ -812,10 +819,49 @@ Generate exactly {slide_count} slides following the layout guidelines (title sli
         for j, el in enumerate(slide["elements"]):
             if not el.get("id"):
                 el["id"] = f"el-{j + 1}"
+        _ensure_slide_has_image(slide, scene_title=scene.get("title", ""), slide_idx=0)
         parsed["slides"] = [slide]
 
     _fill_image_urls(parsed, scene_id, image_provider=image_provider)
     return parsed
+
+
+def _ensure_slide_has_image(slide: dict, *, scene_title: str, slide_idx: int) -> None:
+    """Guarantee the slide has at least one image element.
+
+    Called after the LLM response is parsed. If the LLM produced a
+    text-only slide (ignoring the prompt's "every slide must have an
+    image" rule), synthesize a well-positioned image element with a
+    topic-derived keyword so the image pipeline can fetch a real URL.
+    Mutates `slide['elements']` in place.
+    """
+    elements = slide.get("elements", [])
+    has_image = any(
+        isinstance(el, dict) and el.get("type") == "image"
+        for el in elements
+    )
+    if has_image:
+        return
+
+    # Derive a keyword from the slide title + scene title so the image is
+    # at least topically anchored rather than generic.
+    slide_title = str(slide.get("title") or "").strip()
+    keyword_parts = [p for p in [slide_title, scene_title] if p]
+    keyword = " — ".join(keyword_parts) or "educational illustration"
+    # Keep the keyword bounded so the image endpoint URL doesn't bloat.
+    keyword = f"Educational illustration: {keyword[:120]}"
+
+    synthesized = {
+        "type": "image",
+        "id": f"el-s{slide_idx + 1}-img-auto",
+        # Right-half layout — non-destructive for existing text elements
+        # on the left.
+        "x": 460, "y": 90, "width": 300, "height": 240,
+        "content": keyword,
+        "src": "",
+    }
+    elements.append(synthesized)
+    slide["elements"] = elements
 
 
 def _fallback_scene_content(scene: dict, *, image_provider: str = "disabled") -> dict:

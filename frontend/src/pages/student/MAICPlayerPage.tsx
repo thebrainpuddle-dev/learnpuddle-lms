@@ -42,7 +42,9 @@ export const StudentMAICPlayerPage: React.FC = () => {
 
   usePageTitle(classroom?.title || 'AI Classroom');
 
-  // Load classroom content from IndexedDB into store
+  // Load classroom content — API updated_at wins over stale IndexedDB.
+  // Same freshness logic as the teacher player; see MAICPlayerPage for
+  // the rationale.
   useEffect(() => {
     if (!classroom || !id) return;
 
@@ -54,42 +56,46 @@ export const StudentMAICPlayerPage: React.FC = () => {
       const stored = await getStoredClassroom(id!);
       if (cancelled) return;
 
-      if (stored?.slides?.length) {
-        // Load from IndexedDB cache
+      const meta = classroom as unknown as Record<string, unknown>;
+      const apiContent = meta.content as {
+        slides?: unknown[]; scenes?: unknown[]; sceneSlideBounds?: unknown[];
+      } | undefined;
+      const apiConfig = meta.config as { agents?: unknown[] } | undefined;
+      const apiUpdatedAt = typeof meta.updated_at === 'string'
+        ? new Date(meta.updated_at as string).getTime()
+        : 0;
+
+      const apiHasSlides = Array.isArray(apiContent?.slides) && (apiContent!.slides as unknown[]).length > 0;
+      const cacheHasSlides = !!stored?.slides?.length;
+      const apiIsNewer = apiUpdatedAt > 0 && (!stored?.syncedAt || apiUpdatedAt > stored.syncedAt);
+      const useApi = apiHasSlides && (apiIsNewer || !cacheHasSlides);
+
+      if (useApi && apiContent) {
+        setSlides(apiContent.slides as Parameters<typeof setSlides>[0]);
+        if (apiContent.scenes?.length) setScenes(apiContent.scenes as Parameters<typeof setScenes>[0]);
+        if (apiContent.sceneSlideBounds?.length) setSceneSlideBounds(apiContent.sceneSlideBounds as Parameters<typeof setSceneSlideBounds>[0]);
+        if (apiConfig?.agents?.length) setAgents(apiConfig.agents as Parameters<typeof setAgents>[0]);
+        if (stored?.chatHistory?.length) setChatMessages(stored.chatHistory);
+
+        saveClassroom({
+          id: id!,
+          title: String(meta.title || ''),
+          slides: (apiContent.slides || []) as Parameters<typeof setSlides>[0],
+          scenes: (apiContent.scenes || []) as Parameters<typeof setScenes>[0],
+          outlines: [],
+          agents: (apiConfig?.agents || []) as Parameters<typeof setAgents>[0],
+          chatHistory: stored?.chatHistory || [],
+          audioCache: stored?.audioCache || {},
+          config: stored?.config || {},
+          sceneSlideBounds: (apiContent.sceneSlideBounds || []) as Parameters<typeof setSceneSlideBounds>[0],
+          syncedAt: Date.now(),
+        }).catch(() => {});
+      } else if (cacheHasSlides && stored) {
         if (stored.slides?.length) setSlides(stored.slides);
         if (stored.agents?.length) setAgents(stored.agents);
         if (stored.chatHistory?.length) setChatMessages(stored.chatHistory);
         if (stored.scenes?.length) setScenes(stored.scenes);
         if (stored.sceneSlideBounds?.length) setSceneSlideBounds(stored.sceneSlideBounds);
-      } else {
-        // IndexedDB empty — load from API response content field
-        const meta = classroom as unknown as Record<string, unknown>;
-        const apiContent = meta.content as {
-          slides?: unknown[]; scenes?: unknown[]; sceneSlideBounds?: unknown[];
-        } | undefined;
-        const config = meta.config as { agents?: unknown[] } | undefined;
-
-        if (apiContent?.slides?.length) {
-          setSlides(apiContent.slides as Parameters<typeof setSlides>[0]);
-          if (apiContent.scenes?.length) setScenes(apiContent.scenes as Parameters<typeof setScenes>[0]);
-          if (apiContent.sceneSlideBounds?.length) setSceneSlideBounds(apiContent.sceneSlideBounds as Parameters<typeof setSceneSlideBounds>[0]);
-          if (config?.agents?.length) setAgents(config.agents as Parameters<typeof setAgents>[0]);
-
-          // Cache to IndexedDB for future visits
-          saveClassroom({
-            id: id!,
-            title: String(meta.title || ''),
-            slides: (apiContent.slides || []) as Parameters<typeof setSlides>[0],
-            scenes: (apiContent.scenes || []) as Parameters<typeof setScenes>[0],
-            outlines: [],
-            agents: (config?.agents || []) as Parameters<typeof setAgents>[0],
-            chatHistory: [],
-            audioCache: {},
-            config: {},
-            sceneSlideBounds: (apiContent.sceneSlideBounds || []) as Parameters<typeof setSceneSlideBounds>[0],
-            syncedAt: Date.now(),
-          }).catch(() => {});
-        }
       }
 
       setStoreReady(true);
