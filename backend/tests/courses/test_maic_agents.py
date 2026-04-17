@@ -10,6 +10,10 @@ from apps.courses.maic_generation_service import (
     regenerate_one_agent,
     validate_agents,
 )
+from apps.courses.maic_voices import (
+    infer_gender_from_name,
+    voices_for_gender,
+)
 
 pytestmark = pytest.mark.django_db
 
@@ -74,10 +78,15 @@ def test_duplicate_voice_rejected():
 
 def test_voice_role_mismatch_rejected():
     agents = sample_agents()
-    agents[2]["voiceId"] = "en-IN-PrabhatNeural"  # prof voice on student
-    # also fix duplicate on agent-1 so we test voice-role mismatch cleanly
-    agents[0]["voiceId"] = "en-IN-NeerjaNeural"
-    agents[1]["voiceId"] = "en-IN-KavyaNeural"
+    # Rename agent-0 to a female professor so we can keep NeerjaNeural (female
+    # voice that suits professor) and still have a male student voice free for
+    # the mismatch on agent-2. The name↔voice gender check that landed with
+    # Chunk 4 would otherwise trip before this assertion.
+    agents[0]["name"] = "Dr. Neha Sharma"
+    agents[0]["avatar"] = "👩‍🏫"
+    agents[0]["voiceId"] = "en-IN-NeerjaNeural"  # female voice, suits professor
+    agents[1]["voiceId"] = "en-IN-KavyaNeural"   # female voice, suits TA
+    agents[2]["voiceId"] = "en-IN-PrabhatNeural" # prof voice on student — mismatch target
     with pytest.raises(AgentValidationError, match="voice .* does not suit role"):
         validate_agents(agents, role_slots=[
             {"role": "professor", "count": 1},
@@ -87,7 +96,7 @@ def test_voice_role_mismatch_rejected():
 
 
 def test_gender_balance_with_3plus_agents():
-    # Valid: 2 males + 1 female (default sample)
+    # Valid: 2 males + 1 female (default sample — names + voices all aligned)
     agents = sample_agents()
     validate_agents(agents, role_slots=[
         {"role": "professor", "count": 1},
@@ -95,11 +104,14 @@ def test_gender_balance_with_3plus_agents():
         {"role": "student", "count": 1},
     ])
 
-    # Invalid: all male (3 agents, all male voices picked from roster where male suits each role)
+    # Invalid: all male — all names AND voices are male so the stricter
+    # name↔voice check still passes per agent and only the cross-roster
+    # gender-balance rule fires.
     all_male = [
-        {**agents[0], "voiceId": "en-IN-PrabhatNeural"},                 # male, suits professor
-        {**agents[1], "role": "moderator", "voiceId": "en-IN-KunalNeural"},  # male, suits moderator
-        {**agents[2], "voiceId": "en-IN-AaravNeural"},                   # male, suits student
+        {**agents[0], "name": "Dr. Arjun Sharma", "voiceId": "en-IN-PrabhatNeural"},
+        {**agents[1], "name": "Mr. Rahul Menon", "role": "moderator",
+         "voiceId": "en-IN-KunalNeural"},
+        {**agents[2], "name": "Karan Singh", "voiceId": "en-IN-AaravNeural"},
     ]
     with pytest.raises(AgentValidationError, match="gender balance"):
         validate_agents(all_male, role_slots=[
@@ -128,6 +140,92 @@ def test_role_count_mismatch_rejected():
             {"role": "teaching_assistant", "count": 1},
             {"role": "student", "count": 1},
         ])
+
+
+# ---------------------------------------------------------------------------
+# Name ↔ voice gender alignment (Chunk 4)
+# ---------------------------------------------------------------------------
+
+def test_infer_gender_from_name_known_female():
+    assert infer_gender_from_name("Priya") == "female"
+    assert infer_gender_from_name("Dr. Priya Reddy") == "female"
+    assert infer_gender_from_name("Prof. Neha Sharma") == "female"
+    assert infer_gender_from_name("Ms. Aditi Rao") == "female"
+    assert infer_gender_from_name("Kavya") == "female"
+
+
+def test_infer_gender_from_name_known_male():
+    assert infer_gender_from_name("Arjun") == "male"
+    assert infer_gender_from_name("Dr. Prabhat Kumar") == "male"
+    assert infer_gender_from_name("Mr. Aarav Gupta") == "male"
+    assert infer_gender_from_name("Rahul Menon") == "male"
+
+
+def test_infer_gender_from_name_unknown_falls_back():
+    # Names outside the curated table should return 'unknown' so the
+    # validator doesn't trash-can novel names in the long tail.
+    assert infer_gender_from_name("Zarmina") == "unknown"
+    assert infer_gender_from_name("Rumplestiltskin") == "unknown"
+    assert infer_gender_from_name("") == "unknown"
+    assert infer_gender_from_name("   ") == "unknown"
+
+
+def test_infer_gender_handles_honorific_only_gracefully():
+    # If the entire name collapses to honorifics (no real first name),
+    # we must still return 'unknown' rather than crash.
+    assert infer_gender_from_name("Dr.") == "unknown"
+    assert infer_gender_from_name("Mr. Prof.") == "unknown"
+
+
+def test_validate_rejects_female_name_on_male_voice():
+    # The canonical bug from the Keystone demo: "Dr. Priya Reddy" was
+    # handed the male Prabhat voice and shipped.
+    agents = sample_agents()
+    agents[0]["name"] = "Dr. Priya Reddy"
+    agents[0]["voiceId"] = "en-IN-PrabhatNeural"  # male voice
+    with pytest.raises(AgentValidationError, match="reads as female"):
+        validate_agents(agents, role_slots=[
+            {"role": "professor", "count": 1},
+            {"role": "teaching_assistant", "count": 1},
+            {"role": "student", "count": 1},
+        ])
+
+
+def test_validate_rejects_male_name_on_female_voice():
+    agents = sample_agents()
+    agents[2]["name"] = "Arjun Singh"
+    agents[2]["voiceId"] = "en-IN-AashiNeural"  # female voice, suits student
+    with pytest.raises(AgentValidationError, match="reads as male"):
+        validate_agents(agents, role_slots=[
+            {"role": "professor", "count": 1},
+            {"role": "teaching_assistant", "count": 1},
+            {"role": "student", "count": 1},
+        ])
+
+
+def test_validate_allows_unknown_name_on_any_voice():
+    # Unknown-gender names should NOT block validation — otherwise novel
+    # or region-specific names would thrash the regen loop.
+    agents = sample_agents()
+    agents[2]["name"] = "Zarmina Novikova"  # unknown -> skip gender check
+    validate_agents(agents, role_slots=[
+        {"role": "professor", "count": 1},
+        {"role": "teaching_assistant", "count": 1},
+        {"role": "student", "count": 1},
+    ])
+
+
+def test_voices_for_gender_returns_matching_voices():
+    female_voices = voices_for_gender("female")
+    assert all(v["gender"] == "female" for v in female_voices)
+    assert any(v["id"] == "en-IN-NeerjaNeural" for v in female_voices)
+
+    male_voices = voices_for_gender("male")
+    assert all(v["gender"] == "male" for v in male_voices)
+    assert any(v["id"] == "en-IN-PrabhatNeural" for v in male_voices)
+
+    assert voices_for_gender("unknown") == []
+    assert voices_for_gender("other") == []
 
 
 # ---------------------------------------------------------------------------

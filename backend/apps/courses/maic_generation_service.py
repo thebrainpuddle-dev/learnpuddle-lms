@@ -25,6 +25,7 @@ from apps.courses.maic_models import TenantAIConfig
 from apps.courses.maic_voices import (
     AZURE_IN_VOICES,
     VOICE_BY_ID,
+    infer_gender_from_name,
     voice_matches_role,
 )
 from apps.courses.prompts.loader import load_prompt
@@ -32,12 +33,18 @@ from apps.courses.prompts.loader import load_prompt
 logger = logging.getLogger(__name__)
 
 # ─── Agent Voice Mapping ─────────────────────────────────────────────────────
+#
+# Deterministic fallback when the LLM-chosen voice is missing or invalid.
+# Keys are the scene-action roles that agents commonly play; values are
+# en-IN Azure Neural voice IDs. Only consulted when validate_agents can't
+# accept the LLM output and we need a safe default.
 
 AGENT_VOICE_MAP = {
-    "professor": "en-US-GuyNeural",
-    "teaching_assistant": "en-US-JennyNeural",
-    "student_rep": "en-US-AriaNeural",
-    "moderator": "en-US-DavisNeural",
+    "professor": "en-IN-PrabhatNeural",
+    "teaching_assistant": "en-IN-NeerjaNeural",
+    "student_rep": "en-IN-AaravNeural",
+    "student": "en-IN-AaravNeural",
+    "moderator": "en-IN-KavyaNeural",
 }
 
 
@@ -90,6 +97,17 @@ def validate_agents(agents: list[dict], role_slots: list[dict]) -> None:
         if not voice_matches_role(voice_id, a["role"]):
             raise AgentValidationError(
                 f"voice {voice_id} does not suit role {a['role']}"
+            )
+        # Name ↔ voice gender alignment. Only enforced when the first name
+        # can be confidently classified — 'unknown' names skip the check
+        # so novel names in the long tail don't thrash the regen loop.
+        inferred_gender = infer_gender_from_name(a.get("name", ""))
+        voice_gender = VOICE_BY_ID[voice_id]["gender"]
+        if inferred_gender != "unknown" and inferred_gender != voice_gender:
+            raise AgentValidationError(
+                f"name {a.get('name')!r} reads as {inferred_gender}; "
+                f"voice {voice_id} is {voice_gender}. "
+                "Reassign a voice that matches the first-name gender."
             )
 
     # Gender balance when count ≥ 3
@@ -225,7 +243,9 @@ def generate_agent_profiles_json(
     user_prompt = f'Generate the agents for the topic "{topic}" in {language}.'
 
     last_error = None
-    for attempt in range(2):
+    # 3 attempts (up from 2) to give the stricter name↔voice gender
+    # validator room to re-prompt the LLM if its first pick mismatches.
+    for attempt in range(3):
         raw = _call_llm(config, rendered, user_prompt, temperature=0.9, max_tokens=2048)
         if not raw:
             last_error = "LLM returned empty"
@@ -243,7 +263,7 @@ def generate_agent_profiles_json(
             continue
 
     raise AgentValidationError(
-        f"generation failed after 2 attempts: {last_error}"
+        f"generation failed after 3 attempts: {last_error}"
     )
 
 
@@ -275,8 +295,14 @@ def regenerate_one_agent(
         f"The new agent MUST preserve these locked fields from the existing agent: {locked_fields}.\n"
         f"Existing agent (for locked fields only): "
         f"{json.dumps({k: existing.get(k) for k in locked_fields})}\n"
-        "Follow the same naming/styling rules as full roster generation: Indian names, "
-        "no stereotypes, 1 cultural phrase in speakingStyle (used sparingly).\n"
+        "Follow the same rules as full-roster generation:\n"
+        "- Indian first name, region-appropriate surname, no stereotypes.\n"
+        "- ENGLISH ONLY in every string field. No Hindi, no transliterated slang "
+        "(theek hai / bilkul / achha / haan / samjhe / yaar). `speakingStyle` "
+        "describes English register (warm / crisp / Socratic / informal).\n"
+        "- Match voice gender to the first-name gender convention: "
+        "Priya/Neha/Kavya/Aditi → female voice; Arjun/Rahul/Prabhat/Aarav → male voice.\n"
+        "- `voiceId` must come from the en-IN Azure roster and suit the role.\n"
         'Return ONLY JSON: {"agent": {...}}'
     )
     user_prompt = f"Generate replacement agent for id={target_agent_id}."
