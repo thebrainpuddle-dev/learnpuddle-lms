@@ -72,12 +72,19 @@ export function AgentCard({
         <span>{agent.avatar}</span>
       </div>
 
-      {/* Name + role */}
-      <h3 className="mb-1 text-base font-semibold leading-tight text-slate-900">
+      {/* Name + role. `truncate` on the name keeps long-name cards the
+          same height as short-name cards — no more 2-line "Mr. Kunal /
+          Reddy" squeeze. `whitespace-nowrap` on the role chip prevents
+          "Teaching Assistant" from splitting across two lines inside
+          its own pill. */}
+      <h3
+        className="mb-1 truncate text-base font-semibold leading-tight text-slate-900"
+        title={agent.name}
+      >
         {agent.name}
       </h3>
       <span
-        className="mb-3 inline-flex w-fit items-center rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium capitalize text-slate-600"
+        className="mb-3 inline-flex w-fit max-w-full items-center truncate whitespace-nowrap rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium capitalize text-slate-600"
       >
         {displayRole(agent.role)}
       </span>

@@ -379,8 +379,12 @@ export function AgentGenerationStep({
         </div>
       )}
 
-      {/* Grid */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      {/* Grid — 2-up on typical laptops, 4-up only on very wide (xl ≥
+          1280 px) screens. A 4-column grid at lg squeezes each card
+          below the width where "Dr. Priya Verma" and "Teaching
+          Assistant" fit on a single line, producing the mid-word
+          wraps that students complained looked broken. */}
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {agents.map((agent) => (
           <AgentCard
             key={agent.id}
