@@ -7,13 +7,10 @@ ENV NODE_OPTIONS=--max-old-space-size=1536
 COPY package.json package-lock.json ./
 RUN npm ci --legacy-peer-deps
 COPY . .
-ARG REACT_APP_API_URL=/api
-ARG REACT_APP_PLATFORM_DOMAIN=
-ARG REACT_APP_BOOK_DEMO_URL=
-ENV REACT_APP_API_URL=$REACT_APP_API_URL \
-    REACT_APP_PLATFORM_DOMAIN=$REACT_APP_PLATFORM_DOMAIN \
-    REACT_APP_BOOK_DEMO_URL=$REACT_APP_BOOK_DEMO_URL \
-    GENERATE_SOURCEMAP=false
+# REACT_APP_* values come from .env.production via Vite's loadEnv.
+# Do NOT declare them as ENV here — Vite's loadEnv treats an existing (empty)
+# process.env entry as a user override and silently wins over the .env file.
+ENV GENERATE_SOURCEMAP=false
 RUN npm run build
 
 # Stage 2: serve with nginx (non-root)
