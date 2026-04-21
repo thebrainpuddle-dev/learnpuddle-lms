@@ -24,16 +24,12 @@ RUN GIT_DIR=/tmp/.git npm run build
 FROM nginx:1.25-alpine
 COPY --from=frontend-build /app/build /usr/share/nginx/html
 COPY nginx/nginx.conf /etc/nginx/conf.d/default.conf
-# Shared location blocks included by both HTTP and HTTPS server blocks.
-# See nginx/includes/shared_locations.conf for routing / proxy / header config.
-COPY nginx/includes/ /etc/nginx/includes/
 # Fix ownership so nginx user can write to cache, logs, and pid file.
 # NET_BIND_SERVICE capability (granted by Docker by default) allows
 # the non-root nginx process to bind to privileged ports 80 and 443.
 RUN chown -R nginx:nginx /var/cache/nginx \
     && chown -R nginx:nginx /var/log/nginx \
     && chown -R nginx:nginx /etc/nginx/conf.d \
-    && chown -R nginx:nginx /etc/nginx/includes \
     && touch /var/run/nginx.pid \
     && chown nginx:nginx /var/run/nginx.pid
 # static_data and media_data are mounted at runtime
