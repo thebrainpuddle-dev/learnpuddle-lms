@@ -12,8 +12,10 @@ function normalizeHost(value: string): string {
   return value.trim().toLowerCase().replace(/\.$/, '');
 }
 
+const DEFAULT_PLATFORM_DOMAIN = 'learnpuddle.com';
+
 export function getPlatformDomain(): string {
-  return normalizeDomain(process.env.REACT_APP_PLATFORM_DOMAIN || '');
+  return normalizeDomain(process.env.REACT_APP_PLATFORM_DOMAIN || DEFAULT_PLATFORM_DOMAIN);
 }
 
 export function isPlatformHost(hostname: string): boolean {
