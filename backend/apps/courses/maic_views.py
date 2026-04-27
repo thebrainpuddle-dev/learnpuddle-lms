@@ -1175,6 +1175,106 @@ def teacher_maic_classroom_progress(request, classroom_id):
     })
 
 
+# ─── CG-P0-8: partial-classroom finalizer ────────────────────────────────────
+#
+# When the wizard's browser tab reloads/closes mid-generation (e.g. the user
+# pressed F5, a Vite full-reload fired, or an auth event redirected), the row
+# gets stranded on `status=GENERATING` with content_scenes already partially
+# populated by the per-scene persistPartial PATCH from CG-P0-4. Without a
+# recovery path the user is told "Generation appears stalled — delete and
+# restart" — which throws away minutes of LLM/image work that DID land.
+#
+# This finalizer flips the row to READY when there's anything worth playing,
+# leveraging the per-scene snapshots we already saved. It does NOT regenerate
+# missing scenes — those would still need a fresh wizard run.
+
+def finalize_partial_classroom(classroom) -> dict:
+    """Pure helper — flips a stalled classroom to READY when partial content is salvageable.
+
+    Returns ``{"ok": True, ...}`` on success or idempotent no-op for an
+    already-READY row. Returns ``{"ok": False, "error": ...}`` when there's
+    nothing to finalize (empty scenes, already-FAILED, already-ARCHIVED).
+
+    Caller is responsible for the queryset lookup, tenant check, and DRF
+    Response wrapping. This split keeps the helper unit-testable without DB.
+    """
+    current_status = getattr(classroom, "status", None)
+
+    # Idempotent: a READY classroom needs no work.
+    if current_status == "READY":
+        return {
+            "ok": True,
+            "status": "READY",
+            "scenes_ready": getattr(classroom, "scenes_ready", 0),
+            "scene_count": getattr(classroom, "scene_count", 0),
+            "noop": True,
+        }
+
+    # Only GENERATING/DRAFT rows can be finalized. Don't silently revive
+    # FAILED (operator chose to fail) or ARCHIVED (user deleted) rows.
+    if current_status not in ("GENERATING", "DRAFT"):
+        return {
+            "ok": False,
+            "error": f"Cannot finalize a classroom in status={current_status}",
+        }
+
+    scenes = list(getattr(classroom, "content_scenes", None) or [])
+    if not scenes:
+        return {
+            "ok": False,
+            "error": "Cannot finalize: no scenes have been saved yet.",
+        }
+
+    # Flip status + recompute counts from saved scenes. We trust scenes
+    # already in the shard — they passed through scrubSlideDataUrls and
+    # buildFallbackActions on the wizard side, so they're playable.
+    classroom.status = "READY"
+    classroom.scenes_ready = len(scenes)
+    classroom.scene_count = len(scenes)
+    # A previous transient error_message would now be stale — clear it.
+    if getattr(classroom, "error_message", ""):
+        classroom.error_message = ""
+
+    classroom.save(update_fields=[
+        "status",
+        "scenes_ready",
+        "scene_count",
+        "error_message",
+        "updated_at",
+    ])
+
+    return {
+        "ok": True,
+        "status": "READY",
+        "scenes_ready": classroom.scenes_ready,
+        "scene_count": classroom.scene_count,
+    }
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@teacher_or_admin
+@tenant_required
+@check_feature("feature_maic")
+def teacher_maic_classroom_finalize_partial(request, classroom_id):
+    """Recover a stalled classroom by flipping GENERATING→READY with
+    whatever content was saved by the per-scene persistPartial path.
+
+    Triggered from MAICPlayerPage's stall panel "Use what's saved" button.
+    """
+    try:
+        classroom = MAICClassroom.objects.get(
+            pk=classroom_id, tenant=request.tenant, creator=request.user,
+        )
+    except MAICClassroom.DoesNotExist:
+        return Response({"error": "Classroom not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    result = finalize_partial_classroom(classroom)
+    if not result.get("ok"):
+        return Response(result, status=status.HTTP_400_BAD_REQUEST)
+    return Response(result)
+
+
 @api_view(["DELETE"])
 @permission_classes([IsAuthenticated])
 @teacher_or_admin

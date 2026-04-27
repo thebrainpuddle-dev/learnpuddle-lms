@@ -113,6 +113,19 @@ export const maicApi = {
   publishClassroom: (id: string) =>
     api.post<{ audioManifest: AudioManifest }>(`/v1/teacher/maic/classrooms/${id}/publish/`, {}),
 
+  /** CG-P0-8 — recover a stalled classroom by flipping GENERATING → READY
+   *  with whatever scenes were saved by per-scene persistPartial. Used by
+   *  the stall-panel "Use what's saved" button on MAICPlayerPage. */
+  finalizePartialClassroom: (id: string) =>
+    api.post<{
+      ok: boolean;
+      status: string;
+      scenes_ready: number;
+      scene_count: number;
+      noop?: boolean;
+      error?: string;
+    }>(`/v1/teacher/maic/classrooms/${id}/finalize-partial/`, {}),
+
   /** Fire-and-forget progress ping. Server stamps last_progress_at +
    *  optional phase/phase_scene_index/scenes_ready. Callers should
    *  .catch(() => {}) so a failed ping doesn't break generation. */

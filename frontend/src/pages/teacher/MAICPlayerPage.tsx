@@ -469,12 +469,12 @@ export const MAICPlayerPage: React.FC = () => {
             </div>
           )}
           {isStalled ? (
-            <button
-              onClick={() => navigate('/teacher/ai-classroom')}
-              className="text-sm font-medium text-amber-700 hover:text-amber-800"
-            >
-              Back to library
-            </button>
+            <StallActions
+              classroomId={classroom.id}
+              savedSceneCount={(meta.scene_count as number | undefined) ?? 0}
+              onFinalized={() => refetch()}
+              onBack={() => navigate('/teacher/ai-classroom')}
+            />
           ) : (
             <p className="text-xs text-gray-400">
               Safe to leave this tab — we'll refresh this page the moment it's ready.
@@ -574,6 +574,80 @@ export const MAICPlayerPage: React.FC = () => {
       <div className="flex-1 min-h-0">
         <Stage role="teacher" imagesPending={imagesPending} />
       </div>
+    </div>
+  );
+};
+
+// ─── Stall recovery actions ────────────────────────────────────────────────
+//
+// CG-P0-8: when the wizard tab reloaded mid-generation, the row sits on
+// `status=GENERATING` with content_scenes already partially saved by the
+// per-scene persistPartial PATCH (CG-P0-4). The stall panel offers two
+// recovery paths instead of forcing the user to delete and start over:
+//   1. "Use what's saved (N scenes)" — calls finalize-partial → READY.
+//      Visible only when the row has at least 1 saved scene.
+//   2. "Back to library" — always available; user can delete from there.
+
+interface StallActionsProps {
+  classroomId: string;
+  savedSceneCount: number;
+  onFinalized: () => void;
+  onBack: () => void;
+}
+
+const StallActions: React.FC<StallActionsProps> = ({
+  classroomId,
+  savedSceneCount,
+  onFinalized,
+  onBack,
+}) => {
+  const [isFinalizing, setIsFinalizing] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const canFinalize = savedSceneCount > 0;
+
+  const handleFinalize = async () => {
+    setIsFinalizing(true);
+    setErrorMsg(null);
+    try {
+      const res = await maicApi.finalizePartialClassroom(classroomId);
+      if (!res.data.ok) {
+        setErrorMsg(res.data.error || 'Could not finalize this classroom.');
+        return;
+      }
+      // Refetch — when status flips to READY, MAICPlayerPage re-renders
+      // into the player view automatically.
+      onFinalized();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Finalize request failed.';
+      setErrorMsg(msg);
+    } finally {
+      setIsFinalizing(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col items-center gap-3">
+      {canFinalize && (
+        <button
+          onClick={handleFinalize}
+          disabled={isFinalizing}
+          className="rounded-lg px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 disabled:cursor-wait transition-colors"
+        >
+          {isFinalizing
+            ? 'Finalizing…'
+            : `Use what's saved (${savedSceneCount} scene${savedSceneCount === 1 ? '' : 's'})`}
+        </button>
+      )}
+      <button
+        onClick={onBack}
+        className="text-sm font-medium text-amber-700 hover:text-amber-800"
+      >
+        Back to library
+      </button>
+      {errorMsg && (
+        <p className="text-xs text-red-600 max-w-sm text-center">{errorMsg}</p>
+      )}
     </div>
   );
 };

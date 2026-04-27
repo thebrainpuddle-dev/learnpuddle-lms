@@ -29,6 +29,9 @@ teacher_urlpatterns = [
     path("classrooms/<uuid:classroom_id>/delete/", maic_views.teacher_maic_classroom_delete, name="teacher_maic_classroom_delete"),
     path("classrooms/<uuid:classroom_id>/publish/", maic_views.teacher_maic_classroom_publish, name="teacher_maic_classroom_publish"),
     path("classrooms/<uuid:classroom_id>/progress/", maic_views.teacher_maic_classroom_progress, name="teacher_maic_classroom_progress"),
+    # CG-P0-8 — recover an orphaned (GENERATING + partial content) classroom
+    # by flipping to READY with whatever scenes were saved by persistPartial.
+    path("classrooms/<uuid:classroom_id>/finalize-partial/", maic_views.teacher_maic_classroom_finalize_partial, name="teacher_maic_classroom_finalize_partial"),
 
     # Agent roster + per-agent regeneration + TTS preview
     path("agents/regenerate-one/", maic_views.teacher_maic_regenerate_one_agent, name="teacher_maic_regenerate_one_agent"),
