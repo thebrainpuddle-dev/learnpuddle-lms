@@ -64,8 +64,18 @@ export const maicApi = {
     api.delete(`/v1/teacher/maic/classrooms/${id}/delete/`),
 
   // Generation proxies (non-SSE)
-  generateSceneContent: (data: { scene: MAICOutlineScene; agents: MAICAgent[]; language: string }) =>
-    api.post('/v1/teacher/maic/generate/scene-content/', data),
+  // CG-P0-9: classroomId + sceneIdx are passed so the backend image_service
+  // has tenant/lesson/scene context — without them `_save_image_to_storage`
+  // runs `can_save=False` and Imagen returns a base64 `data:` URL which the
+  // frontend's `scrubSlideDataUrls` strips to empty → broken images. Both
+  // fields are optional for back-compat with student/preview callers.
+  generateSceneContent: (data: {
+    scene: MAICOutlineScene;
+    agents: MAICAgent[];
+    language: string;
+    classroomId?: string;
+    sceneIdx?: number;
+  }) => api.post('/v1/teacher/maic/generate/scene-content/', data),
 
   generateImage: (data: { prompt: string; style?: string }) =>
     api.post('/v1/teacher/maic/generate/image/', data),

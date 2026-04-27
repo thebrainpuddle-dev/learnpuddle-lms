@@ -1546,7 +1546,10 @@ SCENE_CONTENT_SYSTEM_PROMPT = build_scene_content_system_prompt()
 
 
 def _fill_image_urls(parsed: dict, scene_id: str, *,
-                     image_provider: str = "disabled") -> dict:
+                     image_provider: str = "disabled",
+                     tenant_id: str | None = None,
+                     classroom_id: str | None = None,
+                     scene_idx: int | None = None) -> dict:
     """Post-process slides to fill in image URLs using image_service.
 
     When `image_provider == 'disabled'`, skip the fetch entirely and stamp
@@ -1554,11 +1557,18 @@ def _fill_image_urls(parsed: dict, scene_id: str, *,
     frontend renders an honest "AI images off" placeholder rather than a
     random Unsplash photo. Any fetch error is logged (not silenced) so
     ops can see what providers are failing.
+
+    CG-P0-9: when ``tenant_id`` + ``classroom_id`` + ``scene_idx`` are all
+    provided, ``fetch_scene_image`` will save Imagen/Nano-Banana bytes to
+    ``default_storage`` (real /media URL) instead of returning a base64
+    ``data:`` URL that the frontend strips. Per-slide ``slide_idx`` is
+    appended into the storage path so multi-slide scenes don't collide.
     """
     from apps.courses.image_service import fetch_scene_image
 
     disabled = (image_provider or "disabled").lower() == "disabled"
     slides = parsed.get("slides", [])
+    have_storage_ctx = bool(tenant_id and classroom_id and scene_idx is not None)
     for slide_idx, slide in enumerate(slides):
         for element in slide.get("elements", []):
             if element.get("type") != "image":
@@ -1573,7 +1583,20 @@ def _fill_image_urls(parsed: dict, scene_id: str, *,
                 continue
             keyword = element.get("content", "educational illustration")
             try:
-                url = fetch_scene_image(keyword)
+                if have_storage_ctx:
+                    # Compose a unique scene_index per (scene_idx, slide_idx)
+                    # so multiple images in the same scene don't overwrite
+                    # each other in storage. 100 slides per scene is far
+                    # beyond anything we generate so the multiplier is safe.
+                    composite_idx = (scene_idx * 100) + slide_idx
+                    url = fetch_scene_image(
+                        keyword,
+                        tenant_id=tenant_id,
+                        lesson_id=classroom_id,
+                        scene_index=composite_idx,
+                    )
+                else:
+                    url = fetch_scene_image(keyword)
                 element["src"] = url
             except Exception as exc:  # noqa: BLE001 — log + fail open
                 logger.warning(
@@ -1609,7 +1632,9 @@ def generate_scene_content(scene: dict, agents: list, language: str,
                            subject: str = "",
                            syllabus_board: str = "Generic",
                            audience_role: str = "student",
-                           classroom_id: str | None = None) -> dict | None:
+                           classroom_id: str | None = None,
+                           tenant_id: str | None = None,
+                           scene_idx: int | None = None) -> dict | None:
     """Generate multi-slide content for a single scene. Returns parsed dict with 'slides' array.
 
     ``grade_level`` / ``subject`` / ``syllabus_board`` / ``audience_role``
@@ -1620,6 +1645,13 @@ def generate_scene_content(scene: dict, agents: list, language: str,
     from the caller). It is only used in the retry-log field so ops can
     grep retries back to a specific classroom. Optional — pass ``None`` if
     the caller is an ad-hoc generation path with no stable classroom id.
+
+    ``tenant_id`` + ``classroom_id`` + ``scene_idx`` (CG-P0-9): when ALL three
+    are present, the inline ``_fill_image_urls`` call has the storage
+    context it needs to save Imagen bytes to ``default_storage`` and return
+    a real ``/media/...`` URL. Without them, Imagen returns a base64
+    ``data:`` URL that the frontend's ``scrubSlideDataUrls`` strips —
+    leaving every slide image broken.
     """
     scene_type = scene.get("type", "lecture")
     scene_id = scene.get("id", "scene-1")
@@ -1822,7 +1854,14 @@ Generate exactly {slide_count} slides following the layout guidelines (title sli
         _ensure_slide_has_image(slide, scene_title=scene.get("title", ""), slide_idx=0)
         parsed["slides"] = [slide]
 
-    _fill_image_urls(parsed, scene_id, image_provider=image_provider)
+    _fill_image_urls(
+        parsed,
+        scene_id,
+        image_provider=image_provider,
+        tenant_id=tenant_id,
+        classroom_id=classroom_id,
+        scene_idx=scene_idx,
+    )
     # Post-gen layout fix: auto-resolve overlapping element rectangles that
     # the LLM still produces despite the STRICT NO-OVERLAP guidance in the
     # prompt. Mutates slides in place so the renderer receives a clean set.

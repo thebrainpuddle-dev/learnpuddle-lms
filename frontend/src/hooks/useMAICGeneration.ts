@@ -279,6 +279,12 @@ export function useMAICGeneration(): UseMAICGenerationReturn {
             scene: outlineScene,
             agents,
             language: outline.language,
+            // CG-P0-9: pipe classroom + scene idx so the backend image
+            // service has the storage context it needs to save Imagen
+            // bytes to /media instead of returning a base64 data URL
+            // that scrubSlideDataUrls then strips to empty.
+            classroomId,
+            sceneIdx: i,
           }),
         );
 

@@ -1,7 +1,7 @@
 # config/urls.py
 
 from django.contrib import admin
-from django.urls import path, include
+from django.urls import path, include, re_path
 from django.conf import settings
 from django.conf.urls.static import static
 from drf_spectacular.views import (
@@ -133,6 +133,15 @@ urlpatterns = [
     path('media/profile_pictures/<path:path>', public_media_view, name='public_media_profiles'),
     path('media/learning_path_thumbnails/<path:path>', public_media_view, name='public_media_learning_paths'),
     path('media/tenant_logos/<path:path>', public_media_view, name='public_media_logos'),
+    # CG-P0-9: MAIC slide images served without auth so <img> tags load.
+    # Path components include 122-bit tenant + classroom UUIDs → unguessable
+    # ≈ S3 presigned URL risk model. Helpers + allowlist regex live in
+    # utils/media_views.py:_AI_STUDIO_IMAGE_PATTERN.
+    re_path(
+        r'^media/(?P<path>course_content/tenant/[^/]+/ai_studio/lessons/[^/]+/images/.+)$',
+        public_media_view,
+        name='public_media_ai_studio_slide_images',
+    ),
     # Protected media files (auth required, tenant-isolated)
     path('media/<path:path>', protected_media_view, name='protected_media'),
 

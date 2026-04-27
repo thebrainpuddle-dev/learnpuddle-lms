@@ -46,10 +46,24 @@ def _get_tenant_from_path(path: str) -> str | None:
 # Paths that don't require authentication (non-sensitive, displayed in <img> tags).
 _PUBLIC_PREFIXES = ('course_thumbnails/', 'profile_pictures/', 'learning_path_thumbnails/', 'tenant_logos/')
 
+# CG-P0-9 (2026-04-27): AI-generated MAIC slide images live under
+# course_content/tenant/<tid>/ai_studio/lessons/<cid>/images/ and need to
+# be browser-fetchable via plain <img> tags (no auth header on image
+# requests). The path components are 122-bit UUIDs so the URL is
+# effectively unguessable — same risk model as a long S3 presigned URL.
+import re as _re  # noqa: E402
+_AI_STUDIO_IMAGE_PATTERN = _re.compile(
+    r"^course_content/tenant/[^/]+/ai_studio/lessons/[^/]+/images/"
+)
+
 
 def _is_public_path(path: str) -> bool:
-    """Check if a path is in the public allowlist (thumbnails, profile pics)."""
-    return any(path.startswith(prefix) for prefix in _PUBLIC_PREFIXES)
+    """Check if a path is in the public allowlist (thumbnails, profile pics,
+    AI-generated MAIC slide images)."""
+    if any(path.startswith(prefix) for prefix in _PUBLIC_PREFIXES):
+        return True
+    # AI-studio slide images: see _AI_STUDIO_IMAGE_PATTERN comment.
+    return bool(_AI_STUDIO_IMAGE_PATTERN.match(path))
 
 
 @api_view(['GET'])

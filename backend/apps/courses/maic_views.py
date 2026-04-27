@@ -736,12 +736,19 @@ def teacher_maic_generate_scene_content(request):
         body = {}
 
     ctx = _extract_generation_context(body, request)
+    classroom_id = body.get("classroomId") or None
+    scene_idx_raw = body.get("sceneIdx")
+    scene_idx = scene_idx_raw if isinstance(scene_idx_raw, int) and scene_idx_raw >= 0 else None
     data = generate_scene_content(
         scene=body.get("scene", {}),
         agents=body.get("agents", []),
         language=body.get("language", "en"),
         config=config,
-        classroom_id=body.get("classroomId") or None,
+        classroom_id=classroom_id,
+        # CG-P0-9: storage context for inline _fill_image_urls so Imagen
+        # bytes get persisted to /media instead of returned as a data: URL.
+        tenant_id=str(request.tenant.id) if request.tenant else None,
+        scene_idx=scene_idx,
         **ctx,
     )
     if data:
@@ -749,7 +756,6 @@ def teacher_maic_generate_scene_content(request):
         # actual image fetching to the fill_classroom_images Celery task.
         # SEC-P1-CROSS-TENANT-IMAGE-FILL: pass tenant so the deferred-fill
         # update is scoped to the caller's tenant.
-        classroom_id = body.get("classroomId") or None
         _defer_image_fill(
             data,
             image_provider=config.image_provider,

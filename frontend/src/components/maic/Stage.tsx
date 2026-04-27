@@ -71,6 +71,9 @@ export const Stage: React.FC<StageProps> = ({ role, imagesPending }) => {
   const goToScene = useMAICStageStore((s) => s.goToScene);
 
   const goToSlide = useMAICStageStore((s) => s.goToSlide);
+  // CG-P0-9: read sceneSlideBounds for converting absolute → scene-relative
+  // slide index when seeking the engine cursor on manual navigation.
+  const sceneSlideBounds = useMAICStageStore((s) => s.sceneSlideBounds);
 
   const showChatPanel = useMAICSettingsStore((s) => s.showChatPanel);
   const setShowChatPanel = useMAICSettingsStore((s) => s.setShowChatPanel);
@@ -199,6 +202,7 @@ export const Stage: React.FC<StageProps> = ({ role, imagesPending }) => {
     startClass,
     playFromCurrent,
     seekToScene,
+    seekToSlidePaused,
     consumeEngineDrivenSlideChange,
   } = usePlaybackEngine(role);
 
@@ -236,16 +240,44 @@ export const Stage: React.FC<StageProps> = ({ role, imagesPending }) => {
   //      a consume-once flag (covered by consumeEngineDrivenSlideChange).
   // Only user-driven changes (prev/next buttons, keyboard shortcuts) should
   // pause the engine.
+  //
+  // CG-P0-9 (2026-04-27): also seek the engine cursor to the action that
+  // matches the visible slide. Previously a manual slide click left the
+  // engine at action[0] of the (possibly newly-loaded) scene; pressing
+  // Play afterwards would replay the scene's intro speech regardless of
+  // which slide was visible — total audio/slide desync. We now convert
+  // the absolute `currentSlideIndex` to scene-relative (subtract the
+  // scene's startSlide from sceneSlideBounds) and call
+  // `seekToSlidePaused`, which the engine resolves via its
+  // `resolveSlideSeekTarget` helper to the matching transition action.
   const prevSlideIndexRef = useRef(currentSlideIndex);
   useEffect(() => {
     if (prevSlideIndexRef.current !== currentSlideIndex) {
       const engineDriven = consumeEngineDrivenSlideChange();
-      if (!engineDriven && !isClassPlaying && playbackState === 'playing') {
-        pause();
+      if (!engineDriven) {
+        if (!isClassPlaying && playbackState === 'playing') {
+          pause();
+        }
+        // Compute the scene-relative slide index. sceneSlideBounds is the
+        // {sceneIdx, startSlide, endSlide} mapping populated by the wizard.
+        // Fall back to the absolute index if no bounds yet (legacy 1:1).
+        const bound = sceneSlideBounds.find(
+          (b) => currentSlideIndex >= b.startSlide && currentSlideIndex <= b.endSlide,
+        );
+        const relative = bound ? currentSlideIndex - bound.startSlide : currentSlideIndex;
+        seekToSlidePaused(relative);
       }
       prevSlideIndexRef.current = currentSlideIndex;
     }
-  }, [currentSlideIndex, playbackState, isClassPlaying, pause, consumeEngineDrivenSlideChange]);
+  }, [
+    currentSlideIndex,
+    playbackState,
+    isClassPlaying,
+    pause,
+    consumeEngineDrivenSlideChange,
+    seekToSlidePaused,
+    sceneSlideBounds,
+  ]);
 
   const speakingAgent = useMemo(
     () => (speakingAgentId ? agents.find((a) => a.id === speakingAgentId) || null : null),

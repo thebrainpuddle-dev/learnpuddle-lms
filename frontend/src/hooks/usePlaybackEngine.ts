@@ -227,6 +227,23 @@ export function usePlaybackEngine(role: MAICRole = 'teacher') {
   }, []);
 
   /**
+   * CG-P0-9: cursor-only seek to the action that corresponds to a given
+   * slide. Doesn't auto-play. Used by Stage when the user manually clicks
+   * a slide thumbnail or swipes — so the SUBSEQUENT Play press starts the
+   * engine at the speech that matches the visible slide instead of
+   * restarting from the scene's intro speech.
+   *
+   * `slideIndex` is SCENE-RELATIVE (matches `TransitionAction.slideIndex`,
+   * which is documented as "Target slide index within the current scene").
+   * Caller is responsible for the absolute → relative conversion via
+   * `sceneSlideBounds`.
+   */
+  const seekToSlidePaused = useCallback((slideIndex: number) => {
+    if (!engineRef.current) return;
+    engineRef.current.seekToSlidePaused(slideIndex);
+  }, []);
+
+  /**
    * Scene-chip click handler. Synchronizes the engine atomically with the
    * scene change so a subsequent Play button press cannot race a
    * partially-loaded scene:
@@ -363,6 +380,7 @@ export function usePlaybackEngine(role: MAICRole = 'teacher') {
     stop,
     seekTo,
     seekToSlide,
+    seekToSlidePaused,
     seekToScene,
     loadScene,
     resumeAfterDiscussion,
