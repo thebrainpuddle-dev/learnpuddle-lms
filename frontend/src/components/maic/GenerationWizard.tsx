@@ -390,8 +390,16 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
     setWebSearchContext(undefined);
   }, [resetGeneration, clearTopicDraft, clearGradeDraft, clearSubjectDraft, clearBoardDraft]);
 
+  // CG-P1-6 (2026-04-27): step 2 ("Meet your classroom") needs more
+  // horizontal room than other steps so 4 agent cards don't crush
+  // names ("Dr. Meera D…"). Other steps (topic input, outline review,
+  // generation progress, complete) read better at the original
+  // narrower max-w-2xl. Single conditional instead of layout-shift
+  // keyframes so the stepper stays visually stable.
+  const stepContainerWidthClass = effectiveStep === 2 ? 'max-w-4xl' : 'max-w-2xl';
+
   return (
-    <div className="max-w-2xl mx-auto">
+    <div className={cn(stepContainerWidthClass, 'mx-auto')}>
       {/* Progress steps */}
       <nav className="mb-8" aria-label="Wizard progress">
         <ol className="flex items-center">

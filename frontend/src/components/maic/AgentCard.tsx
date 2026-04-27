@@ -72,13 +72,15 @@ export function AgentCard({
         <span>{agent.avatar}</span>
       </div>
 
-      {/* Name + role. `truncate` on the name keeps long-name cards the
-          same height as short-name cards — no more 2-line "Mr. Kunal /
-          Reddy" squeeze. `whitespace-nowrap` on the role chip prevents
-          "Teaching Assistant" from splitting across two lines inside
-          its own pill. */}
+      {/* Name + role. CG-P1-6 (2026-04-27): allow names to wrap to 2
+          lines so "Dr. Meera Deshpande" / "Mr. Kunal Reddy" don't
+          truncate to "Dr. Meera D…". Pin a min-height so cards stay
+          aligned across the row when one agent has a 1-line name and
+          another has 2. `whitespace-nowrap` on the role chip still
+          prevents "Teaching Assistant" from splitting across two
+          lines inside its own pill. */}
       <h3
-        className="mb-1 truncate text-base font-semibold leading-tight text-slate-900"
+        className="mb-1 line-clamp-2 min-h-[2.5rem] text-base font-semibold leading-tight text-slate-900 break-words"
         title={agent.name}
       >
         {agent.name}
@@ -89,9 +91,13 @@ export function AgentCard({
         {displayRole(agent.role)}
       </span>
 
-      {/* Persona / teaser */}
+      {/* Persona / teaser. CG-P1-6: line-clamp-3 (was 2) — descriptions
+          like "Inquisitive and approachable. Loves drawing analogies
+          to everyday life." need 3 lines to fit. Title-attribute keeps
+          full text accessible via mouse hover; full edit lives in
+          AgentEditModal. */}
       <p
-        className="mb-4 line-clamp-2 min-h-[2.5rem] text-xs leading-relaxed text-slate-600"
+        className="mb-4 line-clamp-3 min-h-[3.75rem] text-xs leading-relaxed text-slate-600"
         title={agent.personality ?? ''}
       >
         {agent.personality ?? 'No persona description.'}
