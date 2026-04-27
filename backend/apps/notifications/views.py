@@ -31,7 +31,12 @@ def notification_list(request):
     if getattr(request.user, 'role', '') == 'STUDENT':
         return Response([], status=status.HTTP_200_OK)
 
-    qs = Notification.objects.filter(teacher=request.user, tenant=request.tenant)
+    # select_related eliminates N+1 from serializer fields
+    # ``course_title`` (source='course.title') and ``assignment_title``
+    # (source='assignment.title') that access FK objects per row.
+    qs = Notification.objects.filter(
+        teacher=request.user, tenant=request.tenant
+    ).select_related('course', 'assignment')
     
     unread_only = request.GET.get('unread_only', '').lower() == 'true'
     if unread_only:

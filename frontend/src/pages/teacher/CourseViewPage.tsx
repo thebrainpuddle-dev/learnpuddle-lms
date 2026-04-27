@@ -6,6 +6,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ContentPlayer } from '../../components/teacher';
 import { ChatWidget } from '../../components/ai/ChatWidget';
 import type { ContentContext } from '../../components/ai/ChatWidget';
+import { ChatbotLauncher } from '../../components/chatbot';
 import { CompletionRing } from '../../components/teacher/dashboard/CompletionRing';
 import { ConfettiBurst } from '../../components/teacher/dashboard/ConfettiBurst';
 import api from '../../config/api';
@@ -28,6 +29,7 @@ import { useTenantStore } from '../../stores/tenantStore';
 import { CheckCircleIcon as CheckCircleSolidIcon } from '@heroicons/react/24/solid';
 import { usePageTitle } from '../../hooks/usePageTitle';
 import { useToast } from '../../components/common';
+import { CourseSearchBar } from '../../components/search/CourseSearchBar';
 
 type ContentItem = TeacherCourseDetail['modules'][number]['contents'][number];
 
@@ -240,8 +242,15 @@ export const CourseViewPage: React.FC = () => {
   }
 
   return (
-    <div className="flex h-[calc(100dvh-6.5rem)] flex-col lg:h-[calc(100vh-8rem)]">
+    <div className="flex h-[calc(100dvh-6.5rem)] flex-col lg:h-[calc(100dvh-8rem)]">
       <ConfettiBurst active={showConfetti} />
+
+      {/* Semantic course search — top of page, does not conflict with bottom-right chatbot */}
+      {courseId && (
+        <div className="mb-3">
+          <CourseSearchBar courseId={courseId} className="w-full sm:max-w-lg" />
+        </div>
+      )}
 
       <div className="flex flex-col gap-3 border-b border-slate-200 pb-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex min-w-0 items-center">
@@ -548,8 +557,11 @@ export const CourseViewPage: React.FC = () => {
         </main>
       </div>
 
-      {/* AI Chat Widget — context-aware mentor */}
+      {/* AI Chat Widget — context-aware session-based mentor */}
       {courseId && <ChatWidget courseId={courseId} contentContext={chatContentContext} />}
+
+      {/* RAG Q&A Chatbot Launcher — single-turn course Q&A with citations (TASK-061) */}
+      {courseId && <ChatbotLauncher courseId={courseId} />}
 
       {showHonorCodeModal && selectedAssignment && (
         <div className="fixed inset-0 z-40 flex items-end justify-center bg-slate-900/50 backdrop-blur-[2px] p-2 sm:items-center sm:px-4">

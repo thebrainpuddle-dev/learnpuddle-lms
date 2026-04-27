@@ -99,11 +99,12 @@ def _get_tenant_error_message(reason, tenant):
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
+@tenant_required
 def tenant_me_view(request):
     """
     Authenticated endpoint to fetch current tenant details.
     """
-    tenant = getattr(request, "tenant", None) or get_tenant_from_request(request)
+    tenant = request.tenant
     serializer = TenantThemeSerializer(tenant, context={"request": request})
     return Response(serializer.data, status=status.HTTP_200_OK)
 

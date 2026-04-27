@@ -1,48 +1,37 @@
 // src/components/analytics/ApprovalTrendsChart.tsx
 //
-// Stacked bar chart showing skip request volume + approval rates over time.
-// Two series: Approved (green) and Rejected (red).
-// Uses placeholder data — TODO: wire to backend analytics endpoint.
+// Stacked bar chart: skip request volume + approval rates over time.
+// Two series: Approved (green), Rejected (red), Pending (amber).
+// Data fetched live from /reports/analytics/approval-trends/.
 
 import React, { useMemo } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
   ResponsiveContainer,
 } from 'recharts';
 import { CheckBadgeIcon, EyeIcon } from '@heroicons/react/24/outline';
+import {
+  adminReportsService,
+  type ApprovalTrendsPoint,
+} from '../../services/adminReportsService';
 
-/* ── Types ─────────────────────────────────────────────────────── */
-
-interface ApprovalDataPoint {
-  period: string; // e.g. "Jan 2026"
-  approved: number;
-  rejected: number;
-  pending: number;
-}
+/* ── Component ─────────────────────────────────────────────────── */
 
 interface ApprovalTrendsChartProps {
   onViewDetails?: () => void;
 }
 
-/* ── Placeholder data (TODO: replace with API call) ──────────── */
-
-const MOCK_DATA: ApprovalDataPoint[] = [
-  { period: 'Oct 2025', approved: 8, rejected: 3, pending: 1 },
-  { period: 'Nov 2025', approved: 12, rejected: 4, pending: 0 },
-  { period: 'Dec 2025', approved: 5, rejected: 2, pending: 0 },
-  { period: 'Jan 2026', approved: 15, rejected: 5, pending: 2 },
-  { period: 'Feb 2026', approved: 10, rejected: 3, pending: 1 },
-  { period: 'Mar 2026', approved: 14, rejected: 2, pending: 3 },
-];
-
-/* ── Component ─────────────────────────────────────────────────── */
-
 export const ApprovalTrendsChart: React.FC<ApprovalTrendsChartProps> = ({
   onViewDetails,
 }) => {
-  // TODO: Replace with useQuery call to backend endpoint
-  // const { data } = useQuery({ queryKey: ['approvalTrends'], queryFn: ... });
-  const data = MOCK_DATA;
+  const { data: rawData, isLoading, isError } = useQuery<ApprovalTrendsPoint[]>({
+    queryKey: ['approvalTrends'],
+    queryFn: () => adminReportsService.approvalTrends(),
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const data: ApprovalTrendsPoint[] = rawData ?? [];
 
   const chartData = useMemo(
     () => data.map((d) => ({
@@ -79,12 +68,24 @@ export const ApprovalTrendsChart: React.FC<ApprovalTrendsChartProps> = ({
 
       {/* Summary stat */}
       <div className="mb-3 flex items-baseline gap-2">
-        <span className="text-2xl font-bold text-gray-900">{approvalRate}%</span>
-        <span className="text-sm text-gray-500">overall approval rate ({totalAll} total requests)</span>
+        <span className="text-2xl font-bold text-gray-900">
+          {isLoading || isError ? '—' : `${approvalRate}%`}
+        </span>
+        <span className="text-sm text-gray-500">
+          {isLoading || isError ? 'overall approval rate' : `overall approval rate (${totalAll} total requests)`}
+        </span>
       </div>
 
       <div className="h-56">
-        {data.length > 0 ? (
+        {isLoading ? (
+          <div className="flex items-center justify-center h-full">
+            <div className="h-6 w-6 border-2 border-amber-300 border-t-amber-600 rounded-full animate-spin" />
+          </div>
+        ) : isError ? (
+          <div className="flex items-center justify-center h-full text-red-400 text-sm">
+            Failed to load skip request data
+          </div>
+        ) : data.length > 0 ? (
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={chartData}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} />

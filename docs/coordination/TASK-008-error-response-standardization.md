@@ -2,9 +2,10 @@
 
 **Priority:** P2 (Code Quality)
 **Phase:** 2
-**Status:** review
+**Status:** done
 **Assigned:** backend-engineer
 **Estimated:** 3-4 hours
+**Reworked:** 2026-04-20
 
 ## Problem
 
@@ -75,10 +76,13 @@ Replace all manual `Response({"error": ...})` with `error_response(...)`.
 
 - [x] All API errors return `{"error": "...", "details": [...]}` format
 - [x] DRF auto-generated errors normalized to same format (`{"detail":"..."}`→`{"error":"..."}`)
-- [x] Field validation errors preserved as-is (serializer errors — non-`detail` keys untouched)
-- [ ] Frontend error handling simplified (pending frontend-engineer TASK-012)
-- [ ] No regression in error display on any page (pending TASK-012)
-- [ ] Tests pass (pending Docker)
+- [x] Field validation errors flattened into `details` list (no longer passed through as raw DRF dict)
+- [x] Both paths (`exception_handler.py` and `responses.py::error_response`) emit the same shape
+- [x] `error` key is always a plain string — never a nested object
+- [x] Unit tests added: `backend/tests/test_exception_handler.py` (20 assertions) and `backend/tests/test_responses.py` (20 assertions)
+- [x] Frontend `extractErrorMessage` reads canonical shape; new `extractErrorDetails` helper added
+- [ ] No regression in error display on any page (pending TASK-012 full FE audit)
+- [ ] Tests pass in Docker CI (pending runner)
 
 ## Implementation Notes
 
@@ -87,3 +91,236 @@ handler then renames `response.data["detail"]` → `response.data["error"]` for 
 non-serializer-error responses.  `utils/responses.py` already had `error_response()`
 with the `{"error": ..., "details": [...]}` shape; no duplication added.
 Registered in `config/settings.py` under `REST_FRAMEWORK["EXCEPTION_HANDLER"]`.
+
+## Review (2026-04-20)
+
+**Verdict: REQUEST_CHANGES**
+
+### Blocker — Error response shapes are NOT unified
+
+The whole purpose of this task is a single error shape the frontend can rely
+on. After these changes, the API now emits **two incompatible shapes**:
+
+1. **Exception-handler path** (`utils/exception_handler.py` L48-54):
+   ```json
+   {"error": "Authentication credentials were not provided."}
+   ```
+   — `error` is a plain string.
+
+2. **Manual-error path** (`utils/responses.py::error_response` L44-49):
+   ```json
+   {"error": {"message": "Not found", "fields": {...}}}
+   ```
+   — `error` is a nested object.
+
+Any frontend code doing `err.error.message` crashes on a DRF-normalized error;
+anything doing `String(err.error)` gets `[object Object]` on a manual error.
+This is worse than the pre-task state (which at least had DRF's `detail` as a
+recognizable, documented shape).
+
+The spec explicitly lists the target as
+``{"error": "...", "details": [...]}`` (flat string + optional list). Neither
+path produces that shape. Options to resolve:
+
+- **Option A (recommended, minimal):** Change
+  `utils/exception_handler.py` to emit the nested shape —
+  ```python
+  response.data = {"error": {"message": str(detail_value)}}
+  ```
+  This aligns DRF-generated errors with the existing `error_response()` shape
+  used throughout the codebase (14+ view files already import it).
+- **Option B:** Change `utils/responses.py::error_response` to emit the flat
+  shape matching the spec (`{"error": "<msg>", "details": [...]}`). Churn
+  across every current caller, but matches the spec verbatim.
+
+Pick one and apply consistently. Document the chosen shape in
+`docs/api/error-format.md` or similar so FE (TASK-012) has a single source of
+truth.
+
+### Secondary — Test coverage missing
+
+No unit tests were added for `custom_exception_handler`. Tests should assert:
+- `AuthenticationFailed` → `{"error": {"message": "..."}}` or flat string
+  (depending on resolution above), status 401.
+- `NotFound` → same shape, 404.
+- Serializer ValidationError (`{"email": ["bad"]}`) → untouched.
+- No regression on non-dict `response.data` (rare but `ValidationError` can
+  produce a list at the top level).
+
+### Nit — `responses.py` docstring/spec divergence
+
+The task spec's own signature example uses
+`error_response(message, details=None, status_code=...)` but the actual code
+signature is `error_response(message, status_code=400, field_errors=None,
+**extra)`. The pre-existing code is fine but the task's own docs misrepresent
+it. Update the spec or the helper so they agree.
+
+### Observations (non-blocking)
+
+- `error_response()` is already adopted in 14+ view files — good reuse story,
+  no duplicate helper was introduced.
+- `EXCEPTION_HANDLER` wiring in `config/settings.py` L316 is correct.
+- Serializer field-error preservation logic in the handler is correct — it
+  only touches the top-level `detail` key.
+
+### Action
+
+Pick a single shape, align both the exception handler and `error_response`
+to it, add unit tests, and document the contract. Re-submit for review.
+
+Status remains `review`.
+
+## Rework Notes (2026-04-20)
+
+**Chosen shape — Option B (spec-verbatim flat string)**
+
+```json
+{
+  "error": "Human-readable summary",
+  "details": [
+    {"field": "email", "message": "Enter a valid email address."},
+    {"field": null,    "message": "Passwords do not match."}
+  ],
+  "code": "optional_snake_case_code"
+}
+```
+
+Rules:
+- `error` is **always a plain string** — never a dict, never null.
+- `details` is a **list of objects** (present only when field/extra info is available).
+- `code` is only present for DRF system errors (e.g. `"not_authenticated"`) or when a caller explicitly passes `code=`.
+- DRF field-level validation errors (`{"email": ["bad"]}`) are now **flattened** into `details` instead of passed through raw — this was the previous unhandled case.
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `backend/utils/exception_handler.py` | Full rewrite: handles system errors (detail→error+code), field ValidationError (flattened into details), list ValidationError, non-dict fallback |
+| `backend/utils/responses.py` | `error_response` now emits flat `{"error": str}` + optional `details` list; signature unchanged; docstring updated to match spec |
+| `backend/tests/test_exception_handler.py` | New: 20 test cases covering all exception types + `_flatten_drf_errors` helper |
+| `backend/tests/test_responses.py` | New: 20 test cases covering basic, field_errors, code/extra kwargs, success_response |
+| `frontend/src/components/courses/ai-generation/helpers.ts` | `extractErrorMessage` updated (no behavior change for canonical shape); `extractErrorDetails` helper added |
+
+### Call sites (14+ view files)
+
+No call-site changes needed. The `error_response(message, status_code=..., field_errors=..., **extra)` signature is identical — only the payload body changed from `{"error": {"message": ...}}` to `{"error": "..."}`. All 14 files already pass a plain string as `message`, so they benefit automatically.
+
+### Frontend contract
+
+```typescript
+const msg = err.response?.data?.error ?? "Unexpected error";   // always a string
+const details = err.response?.data?.details ?? [];             // [{field, message}]
+```
+
+## Review (2026-04-20 — rework)
+
+**Verdict: APPROVE — Status: done**
+
+### Shape unification verified
+
+Both code paths emit the same canonical shape.
+
+1. **`exception_handler.py`** — `ValidationError({"email": ["Required"]})`
+   is flattened at `utils/exception_handler.py:150-158` into
+   `{"error": "Validation failed.", "details": [{"field":"email","message":"Required"}]}`.
+   System errors (NotAuthenticated/NotFound/etc.) go through the
+   single-key `detail` branch at L128-137, producing
+   `{"error": "<msg>", "code": "<default_code>"}` — `details` absent.
+2. **`responses.py::error_response`** — `error_response("msg", field_errors={"email": ["Required"]})`
+   produces the exact same `{"error": "msg", "details": [{"field":"email","message":"Required"}]}`
+   via `_normalise_field_errors` at L102-132.
+3. **`error_response("Unauthorized")`** — produces `{"error": "Unauthorized"}`
+   with `details` absent (guarded at L87 by `if field_errors:`). Consistent
+   with the exception-handler no-details-for-system-errors branch.
+
+`error` is always a plain string in every path verified. The
+`"invalid"/"error"` generic-code filter (L134) correctly suppresses
+noise for serializer ValidationError.
+
+### Backward compatibility (call sites)
+
+Spot-checked `backend/apps/billing/views.py`, `backend/apps/reports/views.py`,
+`backend/apps/courses/teacher_views.py` — all callers pass plain-string
+`message` as first arg, so the payload change from
+`{"error": {"message": ...}}` → `{"error": "..."}` is a pure upgrade.
+15 importer files total.
+
+### Test coverage
+
+- `backend/tests/test_exception_handler.py`: 21 methods across 4 test
+  classes covering NotAuthenticated/NotFound/PermissionDenied/
+  AuthenticationFailed/MethodNotAllowed/Throttled codes, dict and list
+  ValidationError, non-field-errors → `field: null`, nested serializer
+  errors, non-DRF exception returns None, and `_flatten_drf_errors`
+  helper. Claim of 20 holds.
+- `backend/tests/test_responses.py`: 20 methods across 4 test classes
+  covering default status, no-details-when-no-field-errors, dict/list
+  field_errors, non-field-errors key, code param, extra kwargs at top
+  level (not nested), full-shape combo, and `success_response`. Claim
+  of 20 holds.
+
+Tests are behavior-focused (asserting shape invariants the FE relies
+on), not implementation-coupled. They would fail if either path
+regressed.
+
+### Frontend
+
+`frontend/src/components/courses/ai-generation/helpers.ts`:
+`extractErrorMessage` prefers canonical `data.error` string, falls back
+to legacy `data.detail` and `data.message` (safe during any transition).
+New `extractErrorDetails` helper reads `data.details[]` defensively
+(filters non-string messages, coerces missing field → null). Won't
+crash on old-shape responses.
+
+### Minor observations (non-blocking)
+
+- Settings wiring in `backend/config/settings.py:316` correct.
+- `extractErrorMessage` legacy-shape fallback is intentional safety;
+  consider removing once TASK-012 FE audit confirms no producer sends
+  the old `detail` shape.
+- Tests use only the handler's public surface — good.
+
+### Acceptance criteria
+
+All checklist items in this task are either ticked or explicitly
+deferred (full FE regression audit is TASK-012; Docker CI run is
+ops). The unified-shape contract, tests, and FE contract are all
+in place.
+
+---
+
+## Rework Notes (2026-04-20 — M2 fix: frontend backward compat)
+
+**Addresses reviewer M2**: Multiple frontend pages (SkillRadarPage, GamificationPage,
+EngagementHeatmapPage, AchievementsPage) contain local `getErrorMessage` helpers
+that only read `data?.detail` and do NOT fall back to `data?.error`. After the
+rework the exception handler only emitted `"error"` — these helpers would silently
+fall through to their generic fallback strings, masking real error messages from users.
+
+**Zero-risk fix chosen**: emit BOTH keys simultaneously during the TASK-012 transition period.
+
+```json
+{
+  "error": "Authentication credentials were not provided.",
+  "detail": "Authentication credentials were not provided.",
+  "code": "not_authenticated"
+}
+```
+
+- `error` is the canonical key (new frontend code reads this)
+- `detail` is the legacy key (old helpers that only read `.detail` keep working)
+- Both are identical plain strings — there is no ambiguity
+- Each case has a `# TASK-012 transition: drop once frontend cleanup is done` comment
+
+**Files changed**
+
+| File | Change |
+|------|--------|
+| `backend/utils/exception_handler.py` | All four response cases now emit both `"error"` and `"detail"` (same value). Docstring updated with transition note. |
+| `backend/tests/test_exception_handler.py` | 6 new `_legacy_detail_key` / `_detail_is_plain_string` tests assert `"detail" in data` and `data["detail"] == data["error"]` across system errors and ValidationError paths. Total: ~26 tests. |
+
+**Cleanup action for TASK-012**: search for `# TASK-012 transition` in
+`utils/exception_handler.py` and remove the `"detail"` line from each case.
+That is the only change needed once the frontend cleanup pass lands.
+
+**Status → review**

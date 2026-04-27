@@ -3,7 +3,7 @@
 // Teacher AI Classroom player — loads classroom data from IndexedDB + API
 // and renders the full Stage. Handles DRAFT/GENERATING/FAILED states gracefully.
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { usePageTitle } from '../../hooks/usePageTitle';
@@ -11,6 +11,7 @@ import { maicApi } from '../../services/openmaicService';
 import { useMAICStageStore } from '../../stores/maicStageStore';
 import { getStoredClassroom, saveClassroom } from '../../lib/maicDb';
 import { Stage } from '../../components/maic/Stage';
+import { computeRefetchInterval } from '../../lib/maicPollingPolicy';
 
 const ArrowLeftIcon = () => (
   <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
@@ -23,6 +24,9 @@ export const MAICPlayerPage: React.FC = () => {
   const navigate = useNavigate();
   const [storeReady, setStoreReady] = useState(false);
   const [hasContent, setHasContent] = useState(false);
+  // SPRINT-2-BATCH-5-F7: true when images_pending has been true for >10min
+  // without flipping false (Celery task stalled or OOM-killed).
+  const [imagesStalled, setImagesStalled] = useState(false);
 
   const setClassroomId = useMAICStageStore((s) => s.setClassroomId);
   const setSlides = useMAICStageStore((s) => s.setSlides);
@@ -32,19 +36,97 @@ export const MAICPlayerPage: React.FC = () => {
   const setSceneSlideBounds = useMAICStageStore((s) => s.setSceneSlideBounds);
   const reset = useMAICStageStore((s) => s.reset);
 
-  const { data: classroom, isLoading, error } = useQuery({
+  // Track the previous images_pending value so we can detect the
+  // true→false flip and force a slide-asset refresh.
+  const prevImagesPendingRef = useRef<boolean | undefined>(undefined);
+
+  const { data: classroom, isLoading, error, refetch } = useQuery({
     queryKey: ['maic-classroom', id],
     queryFn: async () => {
       const res = await maicApi.getClassroom(id!);
       return res.data;
     },
     enabled: !!id,
-    // Poll while GENERATING so we can detect when it becomes READY
-    refetchInterval: (query) => {
-      const status = query.state.data?.status;
-      return status === 'GENERATING' || status === 'DRAFT' ? 3000 : false;
-    },
+    // PERF-P0-2 (2026-04-23): polling was a fixed 3s while GENERATING with
+    // no backoff, no stop-on-stall, no pause-on-hidden. At 100 teachers
+    // that's ~33 RPS against classroom-detail — wasteful for stalled runs,
+    // unnecessary for hidden tabs.
+    //
+    // SPRINT-2-BATCH-5-F7/F8: logic extracted to lib/maicPollingPolicy.ts
+    // so both this component and its tests import the same source of truth.
+    // The F7 stall detector stops the 5s images_pending poll after 10 min.
+    refetchInterval: (query) => computeRefetchInterval(
+      query.state.data as { status?: string; images_pending?: boolean; updated_at?: string; progress?: { last_progress_at?: string | null } } | undefined,
+    ),
+    refetchIntervalInBackground: false,
   });
+
+  // CG-P0-3: When images_pending flips true → false, the Celery task has
+  // finished filling all image src URLs. The polled classroom object
+  // already carries updated slide content (with real image srcs) — push
+  // it directly into the store without a full reset (preserves chat
+  // history). Also overwrite IndexedDB so future visits see real images.
+  useEffect(() => {
+    if (!classroom) return;
+    const meta = classroom as unknown as Record<string, unknown>;
+    const currentPending = meta.images_pending as boolean | undefined;
+    const prev = prevImagesPendingRef.current;
+
+    if (prev === true && currentPending === false) {
+      // The polled payload has the freshly-filled slides — push them
+      // into the store directly so ImageElement re-renders with real srcs.
+      const apiContent = meta.content as {
+        slides?: unknown[]; scenes?: unknown[]; sceneSlideBounds?: unknown[];
+      } | undefined;
+      if (apiContent?.slides?.length) {
+        setSlides(apiContent.slides as Parameters<typeof setSlides>[0]);
+      }
+      if (apiContent?.scenes?.length) {
+        setScenes(apiContent.scenes as Parameters<typeof setScenes>[0]);
+      }
+      // Overwrite IndexedDB with the image-filled payload so the next
+      // visit doesn't show empty-src slides.
+      const apiConfig = meta.config as { agents?: unknown[] } | undefined;
+      const stored = getStoredClassroom(id!);
+      stored.then((s) => {
+        saveClassroom({
+          id: id!,
+          title: String(meta.title || ''),
+          slides: (apiContent?.slides || []) as Parameters<typeof setSlides>[0],
+          scenes: (apiContent?.scenes || []) as Parameters<typeof setScenes>[0],
+          outlines: [],
+          agents: (apiConfig?.agents || []) as Parameters<typeof setAgents>[0],
+          chatHistory: s?.chatHistory || [],
+          config: s?.config || {},
+          sceneSlideBounds: (apiContent?.sceneSlideBounds || []) as Parameters<typeof setSceneSlideBounds>[0],
+          syncedAt: Date.now(),
+        }).catch(() => {});
+      }).catch(() => {});
+    }
+
+    prevImagesPendingRef.current = currentPending;
+  }, [classroom, id, setSlides, setScenes, setSceneSlideBounds, setAgents]);
+
+  // SPRINT-2-BATCH-5-F7: detect when the images_pending poll has stalled.
+  // computeRefetchInterval returns `false` when updated_at is >10min old,
+  // which stops the interval — but the component doesn't know WHY it stopped.
+  // Here we mirror the stall condition and set imagesStalled so the UI can
+  // surface the "image fetching is taking unusually long" banner.
+  useEffect(() => {
+    if (!classroom) return;
+    const meta = classroom as unknown as Record<string, unknown>;
+    const pending = meta.images_pending as boolean | undefined;
+    if (pending !== true) {
+      setImagesStalled(false);
+      return;
+    }
+    const updatedAt = meta.updated_at as string | undefined;
+    if (!updatedAt) return;
+    const ageMs = Date.now() - new Date(updatedAt).getTime();
+    if (ageMs > 10 * 60 * 1000) {
+      setImagesStalled(true);
+    }
+  }, [classroom]);
 
   usePageTitle(classroom?.title || 'AI Classroom');
 
@@ -64,6 +146,23 @@ export const MAICPlayerPage: React.FC = () => {
 
     async function loadContent() {
       setClassroomId(id!);
+
+      // T1 — if the store already has scenes for THIS classroom (i.e.
+      // the user opened the classroom mid-generation via the wizard's
+      // "Open classroom now" button and the loop is still writing),
+      // skip the API/IndexedDB overwrite so we don't clobber live
+      // partial state. The wizard's generation loop continues to push
+      // scenes into the same store; Stage.tsx re-renders as they land.
+      const storeState = useMAICStageStore.getState();
+      if (
+        storeState.classroomId === id &&
+        storeState.scenes.length > 0 &&
+        classroom?.status === 'GENERATING'
+      ) {
+        setStoreReady(true);
+        setHasContent(true);
+        return;
+      }
 
       const stored = await getStoredClassroom(id!);
       if (cancelled) return;
@@ -115,7 +214,6 @@ export const MAICPlayerPage: React.FC = () => {
           outlines: [],
           agents: (apiConfig?.agents || []) as Parameters<typeof setAgents>[0],
           chatHistory: stored?.chatHistory || [],
-          audioCache: stored?.audioCache || {},
           config: stored?.config || {},
           sceneSlideBounds: (apiContent.sceneSlideBounds || []) as Parameters<typeof setSceneSlideBounds>[0],
           syncedAt: Date.now(),
@@ -216,7 +314,9 @@ export const MAICPlayerPage: React.FC = () => {
     // If we have content in IndexedDB (partial generation), show the Stage
     if (storeReady && hasContent) {
       return (
-        <div className="flex flex-col h-[calc(100vh-80px)]">
+        // MOB-P0-4 — `100dvh` (dynamic viewport height) avoids the iOS URL-bar
+        // jump that `100vh` hits when Safari hides its bottom chrome on scroll.
+        <div className="flex flex-col h-[calc(100dvh-80px)]">
           <div className="flex items-center gap-3 px-3 py-2 border-b border-gray-200 bg-white flex-shrink-0">
             <button
               onClick={() => navigate('/teacher/ai-classroom')}
@@ -235,26 +335,71 @@ export const MAICPlayerPage: React.FC = () => {
             </span>
           </div>
           <div className="flex-1 min-h-0">
-            <Stage role="teacher" />
+            <Stage role="teacher" imagesPending={
+              !!((classroom as unknown as Record<string, unknown>).images_pending)
+            } />
           </div>
         </div>
       );
     }
 
     // No content yet — show honest generation progress.
-    // `scene_count` is stamped by the worker as scenes finish, giving us a
-    // real ordinal to display without needing a separate status endpoint.
-    // The outer query already polls every 3s while GENERATING.
+    // Prefer live server-stamped progress from `progress.*` (set by the
+    // wizard's pingClassroomProgress calls and by the update endpoint's
+    // auto-heartbeat on partial content saves). Fall back to legacy
+    // scene_count + created_at for classrooms generated before the
+    // progress fields existed.
     const meta = classroom as unknown as Record<string, unknown>;
+    const progress = (meta.progress ?? {}) as {
+      phase?: '' | 'outline' | 'content' | 'actions' | 'saving' | 'complete';
+      phase_scene_index?: number;
+      scenes_ready?: number;
+      expected_scenes?: number | null;
+      started_at?: string | null;
+      last_progress_at?: string | null;
+    };
     const plannedScenes =
-      (meta.expected_scenes as number | undefined) ??
+      progress.expected_scenes ??
       ((meta.config as { sceneCount?: number } | undefined)?.sceneCount) ??
       undefined;
-    const doneScenes = (meta.scene_count as number | undefined) ?? 0;
+    const doneScenes =
+      progress.scenes_ready ??
+      (meta.scene_count as number | undefined) ??
+      0;
     const createdAt = meta.created_at as string | undefined;
-    const elapsedMs = createdAt ? Date.now() - new Date(createdAt).getTime() : 0;
+    // Elapsed timer: server-reported started_at is the truth once
+    // generation has produced any progress; fall back to row creation
+    // (original behavior) so already-in-flight rows still show a timer.
+    const startRef = progress.started_at ?? createdAt;
+    const elapsedMs = startRef ? Date.now() - new Date(startRef).getTime() : 0;
     const elapsedMin = Math.floor(elapsedMs / 60000);
     const elapsedSec = Math.floor((elapsedMs % 60000) / 1000);
+    // Stalled detection: if we have a last_progress_at and it's older
+    // than 3 minutes, the wizard/worker has almost certainly died.
+    // Keeps the UI honest — no more forever-spinning "Generating...".
+    const STALE_MS = 3 * 60 * 1000;
+    const lastProgressMs = progress.last_progress_at
+      ? Date.now() - new Date(progress.last_progress_at).getTime()
+      : null;
+    const isStalled =
+      classroom.status === 'GENERATING' &&
+      lastProgressMs !== null &&
+      lastProgressMs > STALE_MS;
+
+    const phaseLabel: Record<string, string> = {
+      outline: 'Generating outline…',
+      content: plannedScenes
+        ? `Generating scene ${progress.phase_scene_index ?? 1} of ${plannedScenes} — content`
+        : 'Generating scene content…',
+      actions: plannedScenes
+        ? `Generating scene ${progress.phase_scene_index ?? 1} of ${plannedScenes} — actions`
+        : 'Generating scene actions…',
+      saving: 'Saving…',
+      complete: 'Finishing up…',
+    };
+    const currentPhaseText =
+      (progress.phase && phaseLabel[progress.phase]) ||
+      'AI agents are composing slides, scripts, and interactive content.';
 
     return (
       <div className="space-y-4 p-6">
@@ -266,22 +411,40 @@ export const MAICPlayerPage: React.FC = () => {
           Back to Library
         </button>
         <div className="max-w-md mx-auto text-center py-16 space-y-6">
-          <div className="inline-flex items-center justify-center h-20 w-20 rounded-full bg-indigo-50 mx-auto">
-            <svg className="h-10 w-10 text-indigo-500 animate-spin" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-            </svg>
+          <div
+            className={`inline-flex items-center justify-center h-20 w-20 rounded-full mx-auto ${
+              isStalled ? 'bg-amber-50' : 'bg-indigo-50'
+            }`}
+          >
+            {isStalled ? (
+              <svg className="h-10 w-10 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+            ) : (
+              <svg className="h-10 w-10 text-indigo-500 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+            )}
           </div>
           <div>
             <h2 className="text-xl font-semibold text-gray-900 mb-2">
-              {classroom.status === 'GENERATING'
-                ? 'Generating your classroom'
-                : 'Preparing classroom'}
+              {isStalled
+                ? 'Generation appears stalled'
+                : classroom.status === 'GENERATING'
+                  ? 'Generating your classroom'
+                  : 'Preparing classroom'}
             </h2>
             <p className="text-sm text-gray-500">
-              AI agents are composing slides, scripts, and interactive content.
-              Full classrooms typically take <span className="font-medium">5–10 minutes</span>.
+              {isStalled
+                ? `No progress for ${Math.floor((lastProgressMs ?? 0) / 60000)}m. The wizard tab may have closed or the LLM stalled. You can delete this classroom and start a new one.`
+                : currentPhaseText}
             </p>
+            {!isStalled && classroom.status === 'GENERATING' && (
+              <p className="text-sm text-gray-500 mt-1">
+                Full classrooms typically take <span className="font-medium">5–10 minutes</span>.
+              </p>
+            )}
           </div>
           {plannedScenes && (
             <div className="max-w-xs mx-auto">
@@ -290,12 +453,14 @@ export const MAICPlayerPage: React.FC = () => {
                   {doneScenes} of {plannedScenes} scenes ready
                 </span>
                 <span>
-                  {createdAt ? `Elapsed ${elapsedMin}m ${elapsedSec.toString().padStart(2, '0')}s` : ''}
+                  {startRef ? `Elapsed ${elapsedMin}m ${elapsedSec.toString().padStart(2, '0')}s` : ''}
                 </span>
               </div>
               <div className="w-full bg-gray-200 rounded-full h-1.5 overflow-hidden">
                 <div
-                  className="bg-indigo-500 h-1.5 rounded-full transition-all duration-700"
+                  className={`h-1.5 rounded-full transition-all duration-700 ${
+                    isStalled ? 'bg-amber-400' : 'bg-indigo-500'
+                  }`}
                   style={{
                     width: `${Math.min(100, Math.round((doneScenes / plannedScenes) * 100))}%`,
                   }}
@@ -303,9 +468,18 @@ export const MAICPlayerPage: React.FC = () => {
               </div>
             </div>
           )}
-          <p className="text-xs text-gray-400">
-            Safe to leave this tab — we'll refresh this page the moment it's ready.
-          </p>
+          {isStalled ? (
+            <button
+              onClick={() => navigate('/teacher/ai-classroom')}
+              className="text-sm font-medium text-amber-700 hover:text-amber-800"
+            >
+              Back to library
+            </button>
+          ) : (
+            <p className="text-xs text-gray-400">
+              Safe to leave this tab — we'll refresh this page the moment it's ready.
+            </p>
+          )}
         </div>
       </div>
     );
@@ -345,8 +519,16 @@ export const MAICPlayerPage: React.FC = () => {
 
   // ─── READY — full Stage ──────────────────────────────────────────────────────
 
+  // CG-P0-3: extract images_pending from the polled classroom so the Stage
+  // can show the "fetching image…" skeleton on slides with empty src.
+  const imagesPending = !!(
+    (classroom as unknown as Record<string, unknown>).images_pending
+  );
+
   return (
-    <div className="flex flex-col h-[calc(100vh-80px)]">
+    // MOB-P0-4 — `100dvh` (dynamic viewport height) avoids the iOS URL-bar
+    // jump that `100vh` hits when Safari hides its bottom chrome on scroll.
+    <div className="flex flex-col h-[calc(100dvh-80px)]">
       <div className="flex items-center gap-3 px-3 py-2 border-b border-gray-200 bg-white flex-shrink-0">
         <button
           onClick={() => navigate('/teacher/ai-classroom')}
@@ -360,9 +542,37 @@ export const MAICPlayerPage: React.FC = () => {
             {classroom.title}
           </h1>
         </div>
+        {imagesPending && (
+          <span className="shrink-0 text-xs font-medium px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 animate-pulse">
+            Fetching images…
+          </span>
+        )}
       </div>
+      {/* SPRINT-2-BATCH-5-F7: stall banner — shown when images_pending has
+          been true for >10min without flipping false, meaning the Celery
+          fill_classroom_images task probably crashed before completing. */}
+      {imagesStalled && (
+        <div
+          data-testid="images-stall-banner"
+          className="flex items-center gap-2 px-3 py-2 bg-amber-50 border-b border-amber-200 text-sm text-amber-800"
+          role="alert"
+        >
+          <svg className="h-4 w-4 shrink-0 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+          </svg>
+          <span className="flex-1">
+            Image fetching is taking unusually long. Refresh to retry.
+          </span>
+          <button
+            onClick={() => { setImagesStalled(false); refetch(); }}
+            className="shrink-0 text-xs font-medium px-2 py-1 rounded bg-amber-100 hover:bg-amber-200 transition-colors cursor-pointer"
+          >
+            Refresh
+          </button>
+        </div>
+      )}
       <div className="flex-1 min-h-0">
-        <Stage role="teacher" />
+        <Stage role="teacher" imagesPending={imagesPending} />
       </div>
     </div>
   );

@@ -20,7 +20,17 @@ import {
   FolderIcon as FolderTreeIcon,
   BuildingLibraryIcon,
   ClipboardDocumentListIcon,
+  ClipboardDocumentCheckIcon,
   CalendarDaysIcon,
+  TableCellsIcon,
+  CircleStackIcon,
+  TrophyIcon,
+  Squares2X2Icon,
+  ChartPieIcon,
+  FireIcon,
+  DocumentChartBarIcon,
+  SparklesIcon,
+  MagnifyingGlassIcon,
 } from '@heroicons/react/24/outline';
 import { useAuthStore } from '../../stores/authStore';
 import { authService } from '../../services/authService';
@@ -56,6 +66,14 @@ const NAV_SECTIONS: NavSection[] = [
     ],
   },
   {
+    label: 'CONTENT',
+    items: [
+      { name: 'Course Templates', href: '/admin/course-templates', icon: Squares2X2Icon, feature: null, tourId: 'admin-nav-course-templates' },
+      { name: 'AI Course Generator', href: '/admin/ai-course-generator', icon: SparklesIcon, feature: null, tourId: 'admin-nav-ai-course-generator' },
+      { name: 'Search', href: '/admin/search', icon: MagnifyingGlassIcon, feature: null, tourId: 'admin-nav-search' },
+    ],
+  },
+  {
     label: 'PEOPLE',
     items: [
       { name: 'Teachers', href: '/admin/teachers', icon: UserGroupIcon, feature: null, tourId: 'admin-nav-teachers' },
@@ -68,8 +86,16 @@ const NAV_SECTIONS: NavSection[] = [
     label: 'INSIGHTS',
     items: [
       { name: 'Attendance', href: '/admin/attendance', icon: CalendarDaysIcon, feature: null, tourId: 'admin-nav-attendance' },
+      { name: 'Gradebook', href: '/admin/gradebook', icon: ClipboardDocumentListIcon, feature: null, tourId: 'admin-nav-gradebook' },
+      { name: 'Assessments', href: '/admin/gradebook/assessments', icon: TableCellsIcon, feature: null, tourId: 'admin-nav-assessments' },
+      { name: 'Question Banks', href: '/admin/question-banks', icon: CircleStackIcon, feature: null, tourId: 'admin-nav-question-banks' },
+      { name: 'Rubrics', href: '/admin/rubrics', icon: ClipboardDocumentCheckIcon, feature: null, tourId: 'admin-nav-rubrics' },
       { name: 'Certifications', href: '/admin/certifications', icon: ShieldCheckIcon, feature: null, tourId: 'admin-nav-certifications' },
       { name: 'Analytics', href: '/admin/analytics', icon: ChartBarIcon, feature: null, tourId: 'admin-nav-analytics' },
+      { name: 'Skill Radar', href: '/admin/analytics/skills', icon: ChartPieIcon, feature: null, tourId: 'admin-nav-skill-radar' },
+      { name: 'Engagement Heatmap', href: '/admin/analytics/engagement', icon: FireIcon, feature: null, tourId: 'admin-nav-engagement' },
+      { name: 'Report Builder', href: '/admin/reports/builder', icon: DocumentChartBarIcon, feature: null, tourId: 'admin-nav-report-builder' },
+      { name: 'Gamification', href: '/admin/gamification', icon: TrophyIcon, feature: null, tourId: 'admin-nav-gamification' },
     ],
   },
   {

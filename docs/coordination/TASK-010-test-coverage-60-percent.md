@@ -5,6 +5,7 @@
 **Status:** in-progress
 **Assigned:** qa-tester
 **Estimated:** 6-8 hours (ongoing)
+**Last updated:** 2026-04-20 (178 tests added, est. 58-62% coverage)
 
 ## Problem
 
@@ -130,3 +131,34 @@ Created (or in progress):
 - `backend/apps/uploads/tests_extended.py` — auth (401), admin-only (403), oversized files, JPEG/WebP/DOCX/PPTX valid types, editor-image endpoint (full coverage of untested endpoint)
 - `backend/apps/reports/tests_extended.py` — auth (401), missing params (400), status/search filters, assignment submission report with data, CSV export with feature flag
 - `backend/apps/reminders/tests_extended.py` — auth (401), ASSIGNMENT_DUE type, send to all teachers, no recipients (400), history with campaigns, automation status with upcoming courses
+
+## Progress Notes (2026-04-20)
+
+### Coverage push: 178 new tests targeting lowest-coverage views
+
+**Goal:** Close the 43.7% → 60% gap by targeting the highest-impact untested views.
+
+**Files created (178 total tests):**
+- `backend/apps/users/tests_admin_views.py` (30 tests) — teachers_list, detail, deleted, restore, bulk import, bulk action
+- `backend/apps/courses/tests_teacher_course_views.py` (16 tests) — teacher_course_list, course_detail, video transcript
+- `backend/apps/progress/tests_progress_views.py` (49 tests) — dashboard, calendar, search, progress start/update/complete, assignment list/submit, quiz detail/start/submit
+- `backend/apps/tenants/tests_views_extended.py` (26 tests) — theme, me, config, stats, analytics, settings
+- `backend/apps/tenants/tests_superadmin_views.py` (20 tests) — platform stats, tenant list/create, tenant detail, tenant usage
+- `backend/apps/courses/tests_admin_course_views.py` (21 tests) — course list/create, course detail CRUD, module CRUD, content create
+- `backend/apps/notifications/tests_services.py` (16 tests) — service functions with mocked WebSocket (0% → ~80%)
+
+**Key coverage modules targeted:**
+- `progress/teacher_views.py`: 21.7% → estimated ~65%
+- `users/admin_views.py`: 26.1% → estimated ~75%
+- `courses/views.py`: 30.0% → estimated ~60%
+- `tenants/superadmin_views.py`: 31.1% → estimated ~60%
+- `notifications/services.py`: 0.0% → estimated ~80%
+
+**Estimated total coverage: ~58-62%** (conservative; requires `pytest --cov` run to confirm)
+
+**Still low-coverage (needs future work):**
+- `notifications/consumers.py` (0%) — needs channels test layer
+- `courses/tasks.py` (12.4%) — Celery mocking needed
+- `tenants/tasks.py` (0%), `webhooks/services.py` (0%), `webhooks/tasks.py` (0%)
+- `users/sso_pipeline.py` (0%), `users/twofa_views.py` (26%)
+- `courses/learning_path_views.py` (32%), `courses/video_views.py` (36%)

@@ -8,6 +8,54 @@ import uuid
 from utils.storage_paths import tenant_logo_upload_to
 
 
+# ---------------------------------------------------------------------------
+# TASK-020 — Education vs Corporate mode terminology map
+# ---------------------------------------------------------------------------
+#
+# A tenant's `mode` field switches the default display terminology between
+# an academic context ("Teachers", "Courses", "Badges", "League") and a
+# corporate L&D context ("Employees", "Training Programs", "Achievements",
+# "Tier").  The map is a pure display layer: backend data (XP rows, badges,
+# leagues) is NOT re-keyed when the mode flips.  Frontend code is expected
+# to read `Tenant.get_mode_labels()` (exposed via `/api/v1/tenants/me/`) and
+# substitute strings on render.
+#
+# Tenants may layer per-instance overrides via `mode_label_overrides`
+# (e.g., `{"course": "Masterclass"}`) to customise specific labels without
+# touching the base map.
+
+MODE_LABEL_DEFAULTS = {
+    "education": {
+        "learner":        "Teacher",
+        "learner_plural": "Teachers",
+        "course":         "Course",
+        "course_plural":  "Courses",
+        "module":         "Module",
+        "lesson":         "Lesson",
+        "assignment":     "Assignment",
+        "badge":          "Badge",
+        "league":         "League",
+        "xp":             "XP",
+        "streak":         "Streak",
+        "dashboard":      "Dashboard",
+    },
+    "corporate": {
+        "learner":        "Employee",
+        "learner_plural": "Employees",
+        "course":         "Training Program",
+        "course_plural":  "Training Programs",
+        "module":         "Module",
+        "lesson":         "Task",
+        "assignment":     "Task",
+        "badge":          "Achievement",
+        "league":         "Tier",
+        "xp":             "Points",
+        "streak":         "Streak",
+        "dashboard":      "Workspace",
+    },
+}
+
+
 class Tenant(models.Model):
     """
     Represents a school/institution.
@@ -67,6 +115,10 @@ class Tenant(models.Model):
     feature_teacher_authoring = models.BooleanField(default=False)
     feature_ai_studio = models.BooleanField(default=False, help_text="AI lesson builder & interactive slides")
     feature_sso = models.BooleanField(default=False)
+    feature_saml = models.BooleanField(
+        default=False,
+        help_text="Enable SAML 2.0 SSO (per TASK-045). Distinct from OAuth-style feature_sso.",
+    )
     feature_2fa = models.BooleanField(default=False)
     feature_students = models.BooleanField(default=False, help_text="Enable student portal")
     feature_maic = models.BooleanField(default=False, help_text="Enable OpenMAIC AI Classroom feature")
@@ -168,10 +220,48 @@ class Tenant(models.Model):
         help_text="Footer/about text, e.g. 'Powered by the Idea-Loom Model'",
     )
 
+    # ─── Education vs Corporate Mode (TASK-020) ───────────────────────────
+    MODE_CHOICES = [
+        ('education', 'Education'),
+        ('corporate', 'Corporate'),
+    ]
+    mode = models.CharField(
+        max_length=20,
+        choices=MODE_CHOICES,
+        default='education',
+        help_text=(
+            "Display-terminology mode. 'education' uses Teacher/Course/Badge; "
+            "'corporate' uses Employee/Training Program/Achievement. Purely "
+            "a display switch — no stored gamification data is re-keyed."
+        ),
+    )
+    mode_label_overrides = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text=(
+            "Per-tenant overrides layered on top of MODE_LABEL_DEFAULTS for "
+            "the active mode, e.g., {'course': 'Masterclass'}."
+        ),
+    )
+
+    # ─── Default content language (TASK-058) ─────────────────────────────
+    # Source language pinned per-tenant for the auto-translation service.
+    # Always set (default "en"); never blank, never null. Used by the
+    # translation provider to pick the ``from`` side.
+    default_language = models.CharField(
+        max_length=20,
+        default='en',
+        help_text=(
+            "BCP-47 language code for this tenant's source content. "
+            "Used by the auto-translation service (TASK-058) as the "
+            "'from' language when translating Course / Module / Content."
+        ),
+    )
+
     # Metadata
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    
+
     class Meta:
         db_table = 'tenants'
         ordering = ['name']
@@ -185,11 +275,60 @@ class Tenant(models.Model):
     
     def __str__(self):
         return self.name
-    
+
     def save(self, *args, **kwargs):
         if not self.slug:
             self.slug = slugify(self.name)
         super().save(*args, **kwargs)
+
+    def get_mode_labels(self) -> dict:
+        """
+        Return the merged terminology map for this tenant.
+
+        Starts from MODE_LABEL_DEFAULTS[self.mode] (falling back to
+        'education' if the mode somehow does not match — defensive, since
+        choices validate on save) and layers ``self.mode_label_overrides``
+        on top so admin-supplied custom labels win.
+
+        Callers should treat this as the authoritative label source for UI
+        rendering; unknown keys should fall back to the canonical English
+        terms client-side.
+        """
+        base = MODE_LABEL_DEFAULTS.get(self.mode, MODE_LABEL_DEFAULTS['education'])
+        labels = dict(base)  # shallow copy — values are strings
+        if isinstance(self.mode_label_overrides, dict) and self.mode_label_overrides:
+            # Only layer overrides whose values are strings to avoid polluting
+            # the map with garbage types.
+            for key, value in self.mode_label_overrides.items():
+                if isinstance(value, str) and value.strip():
+                    labels[key] = value
+        return labels
+
+    @property
+    def features(self) -> dict:
+        """Read-only dict view over the tenant's feature_* BooleanFields.
+
+        This lets callers use the spec-blessed form ``tenant.features.get('saml')``
+        without requiring a separate JSONField.  Adding a new flag here requires
+        updating the mapping.
+        """
+        return {
+            "saml": self.feature_saml,
+            "sso": self.feature_sso,
+            "2fa": self.feature_2fa,
+            "video_upload": self.feature_video_upload,
+            "auto_quiz": self.feature_auto_quiz,
+            "transcripts": self.feature_transcripts,
+            "reminders": self.feature_reminders,
+            "custom_branding": self.feature_custom_branding,
+            "reports_export": self.feature_reports_export,
+            "groups": self.feature_groups,
+            "certificates": self.feature_certificates,
+            "teacher_authoring": self.feature_teacher_authoring,
+            "ai_studio": self.feature_ai_studio,
+            "students": self.feature_students,
+            "maic": self.feature_maic,
+        }
 
 
 class AuditLog(models.Model):
@@ -208,6 +347,43 @@ class AuditLog(models.Model):
         ('PASSWORD_RESET', 'Password Reset'),
         ('SETTINGS_CHANGE', 'Settings Change'),
         ('IMPORT', 'Bulk Import'),
+        # TASK-053 additions
+        ('RUN_REPORT', 'Run Report'),
+        ('EXPORT_REPORT', 'Export Report'),
+        # TASK-052 backfill (requested in TASK-053 spec)
+        ('EXPORT_SCORM', 'Export SCORM'),
+        ('IMPORT_SCORM', 'Import SCORM'),
+        # TASK-055 — Chat integration audit actions
+        ('CHAT_INTEGRATION_CREATED', 'Chat Integration Created'),
+        ('CHAT_INTEGRATION_DELETED', 'Chat Integration Deleted'),
+        ('CHAT_DELIVERY_FAILED', 'Chat Delivery Failed (DLQ)'),
+        # TASK-054 — Calendar integration audit actions
+        ('CONNECT_CALENDAR', 'Calendar Connected'),
+        ('DISCONNECT_CALENDAR', 'Calendar Disconnected'),
+        ('SYNC_CALENDAR_ERROR', 'Calendar Sync Error'),
+        # TASK-058 — Auto-Translation Service audit actions
+        ('TRANSLATION_STARTED', 'Translation Started'),
+        ('TRANSLATION_FINISHED', 'Translation Finished'),
+        ('TRANSLATION_FAILED', 'Translation Failed'),
+        ('TRANSLATION_PURGED', 'Translation Purged'),
+        # TASK-057 — Semantic-search reindex audit actions
+        ('SEMANTIC_REINDEX_STARTED', 'Semantic Reindex Started'),
+        ('SEMANTIC_REINDEX_FINISHED', 'Semantic Reindex Finished'),
+        ('SEMANTIC_REINDEX_FAILED', 'Semantic Reindex Failed'),
+        # TASK-060 — AI Course Generator audit actions
+        ('COURSE_GENERATION_STARTED', 'Course Generation Started'),
+        ('COURSE_GENERATION_SUCCEEDED', 'Course Generation Succeeded'),
+        ('COURSE_GENERATION_FAILED', 'Course Generation Failed'),
+        ('COURSE_MATERIALISED', 'Course Materialised'),
+        ('COURSE_GENERATION_PURGED', 'Course Generation Purged'),
+        # TASK-059 — AI Chatbot Tutor audit actions
+        ('CHAT_QUERY_ASKED', 'Chat Query Asked'),
+        ('CHAT_QUERY_PURGED', 'Chat Query Purged'),
+        # TASK-064b — Translation per-field review audit actions
+        ('TRANSLATION_FIELD_APPROVED', 'Translation Field Approved'),
+        ('TRANSLATION_FIELD_REJECTED', 'Translation Field Rejected'),
+        ('TRANSLATION_FIELD_EDITED', 'Translation Field Edited'),
+        ('TRANSLATION_PUBLISHED', 'Translation Published'),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -219,7 +395,7 @@ class AuditLog(models.Model):
         'users.User', on_delete=models.SET_NULL,
         null=True, blank=True, related_name='audit_actions',
     )
-    action = models.CharField(max_length=20, choices=ACTION_CHOICES)
+    action = models.CharField(max_length=30, choices=ACTION_CHOICES)
     target_type = models.CharField(max_length=100, help_text="e.g. 'User', 'Course'")
     target_id = models.CharField(max_length=255, blank=True)
     target_repr = models.CharField(max_length=500, blank=True)
@@ -288,3 +464,7 @@ class DemoBooking(models.Model):
 
 # Import accreditation models so Django discovers them via this module
 from .accreditation_models import SchoolAccreditation, AccreditationMilestone, RankingEntry, ComplianceItem, StaffCertification  # noqa: E402, F401
+
+# SAML SSO + per-tenant password policy models.
+from .saml_models import TenantSAMLConfig  # noqa: E402, F401
+from .password_policy_models import TenantPasswordPolicy  # noqa: E402, F401

@@ -7,3 +7,4 @@ class ProgressConfig(AppConfig):
 
     def ready(self):
         import apps.progress.gamification_signals  # noqa: F401
+        import apps.progress.challenge_signals  # noqa: F401

@@ -193,19 +193,27 @@ def _call_guardrail_llm(config: TenantAIConfig, system_prompt: str,
     if not api_key:
         return None
 
-    # Build URL
+    # Build URL. SSRF guard (SEC-P0-3, 2026-04-23): `llm_base_url` is
+    # user-editable; validate scheme + resolve DNS before using. Silent
+    # fallback to provider default keeps guardrail checks running even
+    # when a tenant admin has misconfigured or attempted to abuse the
+    # base-url override.
+    from utils.url_safety import safe_outbound_url_or_fallback
+    provider_urls = {
+        "openai": "https://api.openai.com/v1/chat/completions",
+        "openrouter": "https://openrouter.ai/api/v1/chat/completions",
+        "anthropic": "https://api.anthropic.com/v1/messages",
+        "google": "https://generativelanguage.googleapis.com/v1beta/chat/completions",
+    }
+    default_url = provider_urls.get(
+        config.llm_provider,
+        "https://openrouter.ai/api/v1/chat/completions",
+    )
     if config.llm_base_url:
-        base = config.llm_base_url.rstrip("/")
-        url = f"{base}/chat/completions"
+        candidate = f"{config.llm_base_url.rstrip('/')}/chat/completions"
+        url = safe_outbound_url_or_fallback(candidate, default_url)
     else:
-        provider_urls = {
-            "openai": "https://api.openai.com/v1/chat/completions",
-            "openrouter": "https://openrouter.ai/api/v1/chat/completions",
-            "anthropic": "https://api.anthropic.com/v1/messages",
-            "google": "https://generativelanguage.googleapis.com/v1beta/chat/completions",
-        }
-        url = provider_urls.get(config.llm_provider,
-                                "https://openrouter.ai/api/v1/chat/completions")
+        url = default_url
 
     headers = {
         "Authorization": f"Bearer {api_key}",

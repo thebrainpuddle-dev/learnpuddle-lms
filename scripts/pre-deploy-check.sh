@@ -243,7 +243,7 @@ fi
 # ── 8. Required Files ───────────────────────────────────────────────────────
 header "Required Files"
 
-for f in backend/Dockerfile nginx/nginx.conf; do
+for f in backend/Dockerfile nginx/nginx.conf nginx/production.conf nginx/proxy_params; do
   if [ -f "$f" ]; then
     pass "$f exists"
   else

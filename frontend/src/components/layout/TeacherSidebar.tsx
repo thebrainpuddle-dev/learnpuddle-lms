@@ -22,10 +22,12 @@ import {
   Sparkles,
   ShieldCheck,
   FileText,
+  Trophy,
 } from 'lucide-react';
 import { cn } from '../../design-system/theme/cn';
 import { useAuthStore } from '../../stores/authStore';
 import { useTenantStore } from '../../stores/tenantStore';
+import { useModeLabels } from '../../hooks/useModeLabels';
 import { authService } from '../../services/authService';
 import { broadcastLogout } from '../../utils/authSession';
 
@@ -39,6 +41,7 @@ const MY_LEARNING_NAV = [
   { label: 'My Courses', href: '/teacher/courses', icon: BookOpen },
   { label: 'Assessments', href: '/teacher/assignments', icon: ClipboardList },
   { label: 'My Growth', href: '/teacher/growth', icon: TrendingUp },
+  { label: 'Achievements', href: '/teacher/achievements', icon: Trophy },
 ];
 
 const MY_CLASSROOM_NAV = [
@@ -102,6 +105,7 @@ function NavItem({
 export const TeacherSidebar: React.FC<TeacherSidebarProps> = ({ open, onClose }) => {
   const { user, clearAuth, refreshToken } = useAuthStore();
   const { theme } = useTenantStore();
+  const { label } = useModeLabels();
 
   const tenantName = theme?.name || 'LearnPuddle';
   const tenantInitial = tenantName.charAt(0).toUpperCase();
@@ -160,7 +164,7 @@ export const TeacherSidebar: React.FC<TeacherSidebarProps> = ({ open, onClose })
             <p className="text-[13px] font-medium text-tp-text truncate leading-tight">
               {user?.first_name} {user?.last_name}
             </p>
-            <p className="text-[11px] text-gray-400 font-medium">Teacher</p>
+            <p className="text-[11px] text-gray-400 font-medium">{label('learner')}</p>
           </div>
         </div>
       </div>

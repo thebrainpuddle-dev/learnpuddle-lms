@@ -98,7 +98,7 @@ const usageResponse = {
 
 describe('SchoolDetailPage tab URL stability', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
 
     mockSuperAdminService.getTenant.mockResolvedValue(tenantResponse);
     mockSuperAdminService.getTenantUsage.mockResolvedValue(usageResponse);

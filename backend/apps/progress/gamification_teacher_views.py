@@ -11,10 +11,15 @@ from utils.decorators import teacher_or_admin, tenant_required
 from utils.helpers import make_pagination_class
 from utils.responses import error_response
 
-from .gamification_engine import get_or_create_config
+from .gamification_engine import (
+    get_or_create_config,
+    spend_streak_freeze_token,
+)
 from .gamification_models import (
     BadgeDefinition,
     LeaderboardSnapshot,
+    StreakFreezeLedger,
+    StreakFreezeToken,
     TeacherBadge,
     TeacherStreak,
     TeacherXPSummary,
@@ -22,6 +27,8 @@ from .gamification_models import (
 )
 from .gamification_serializers import (
     BadgeDefinitionSerializer,
+    StreakFreezeLedgerSerializer,
+    StreakFreezeTokenSerializer,
     TeacherBadgeSerializer,
     TeacherXPSummarySerializer,
     XPTransactionSerializer,
@@ -237,12 +244,28 @@ def teacher_opt_in(request):
 # ---------------------------------------------------------------------------
 
 
+def _available_tokens_qs(teacher, now=None):
+    """Unconsumed, unexpired tokens for ``teacher``."""
+    from django.db.models import Q
+
+    now = now or timezone.now()
+    return StreakFreezeToken.all_objects.filter(
+        teacher=teacher,
+        consumed_at__isnull=True,
+    ).filter(Q(expires_at__isnull=True) | Q(expires_at__gt=now))
+
+
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 @teacher_or_admin
 @tenant_required
 def teacher_streak_freeze(request):
-    """Use a streak freeze to protect the current streak."""
+    """
+    Use a streak freeze to protect the current streak.
+
+    Prefers consuming a StreakFreezeToken from the teacher's inventory. Falls
+    back to the legacy monthly-counter mechanism for backward compatibility.
+    """
     config = get_or_create_config(request.tenant)
 
     streak, _ = TeacherStreak.all_objects.get_or_create(
@@ -250,6 +273,27 @@ def teacher_streak_freeze(request):
         defaults={'tenant': request.tenant}
     )
 
+    from datetime import timedelta
+    today = timezone.localdate()
+
+    # Preferred path: consume an inventory token.
+    spent = spend_streak_freeze_token(
+        request.user, description='Freeze applied to protect streak',
+    )
+    if spent is not None:
+        streak.freeze_used_today = True
+        streak.streak_frozen_until = today + timedelta(days=1)
+        streak.save(update_fields=[
+            'freeze_used_today', 'streak_frozen_until', 'updated_at',
+        ])
+        tokens_remaining = _available_tokens_qs(request.user).count()
+        return Response({
+            "success": True,
+            "tokens_remaining": tokens_remaining,
+            "freezes_remaining": tokens_remaining,  # legacy alias
+        })
+
+    # Legacy fallback: monthly counter (only if no tokens available).
     if streak.freeze_count_this_month >= config.streak_freeze_max:
         return error_response(
             f"No freezes remaining this month (max {config.streak_freeze_max}).",
@@ -259,15 +303,152 @@ def teacher_streak_freeze(request):
     if streak.freeze_used_today:
         return error_response("Freeze already used today.", status_code=400)
 
-    from datetime import timedelta
-    today = timezone.localdate()
     streak.freeze_used_today = True
     streak.freeze_count_this_month += 1
     streak.streak_frozen_until = today + timedelta(days=1)
-    streak.save(update_fields=['freeze_used_today', 'freeze_count_this_month', 'streak_frozen_until', 'updated_at'])
+    streak.save(update_fields=[
+        'freeze_used_today', 'freeze_count_this_month',
+        'streak_frozen_until', 'updated_at',
+    ])
 
     freezes_remaining = config.streak_freeze_max - streak.freeze_count_this_month
     return Response({
         "success": True,
         "freezes_remaining": freezes_remaining,
+        "tokens_remaining": 0,
     })
+
+
+# ---------------------------------------------------------------------------
+# Streak Freeze — Inventory / Use / Weekend Mode / Ledger
+# ---------------------------------------------------------------------------
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+@teacher_or_admin
+@tenant_required
+def teacher_streak_freeze_inventory(request):
+    """
+    Return the teacher's current streak-freeze token inventory and mode state.
+    """
+    config = get_or_create_config(request.tenant)
+    streak, _ = TeacherStreak.all_objects.get_or_create(
+        teacher=request.user,
+        defaults={'tenant': request.tenant},
+    )
+
+    available_qs = _available_tokens_qs(request.user)
+    tokens = StreakFreezeTokenSerializer(
+        available_qs.order_by('earned_at'),
+        many=True,
+    ).data
+
+    in_grace_period = bool(
+        streak.grace_period_ends_at
+        and streak.grace_period_ends_at > timezone.now()
+    )
+
+    return Response({
+        "token_count": available_qs.count(),
+        "max_inventory": config.freeze_token_max_inventory,
+        "earn_every_n_days": config.freeze_token_earn_every_n_days,
+        "expires_days": config.freeze_token_expires_days,
+        "tokens": tokens,
+        "weekend_mode_enabled": streak.weekend_mode_enabled,
+        "weekend_mode_available": config.weekend_mode_available,
+        "grace_period_hours": config.grace_period_hours,
+        "in_grace_period": in_grace_period,
+        "grace_period_ends_at": streak.grace_period_ends_at,
+        "current_streak": streak.current_streak,
+        "longest_streak": streak.longest_streak,
+    })
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@teacher_or_admin
+@tenant_required
+def teacher_streak_freeze_use(request):
+    """
+    Consume one streak-freeze token from the teacher's inventory to protect
+    the current streak.
+    """
+    streak, _ = TeacherStreak.all_objects.get_or_create(
+        teacher=request.user,
+        defaults={'tenant': request.tenant},
+    )
+
+    spent = spend_streak_freeze_token(
+        request.user, description='Token consumed via /streak-freeze/use/',
+    )
+    if spent is None:
+        return error_response(
+            "No streak freeze tokens available.",
+            status_code=400,
+        )
+
+    from datetime import timedelta
+    today = timezone.localdate()
+    streak.freeze_used_today = True
+    streak.streak_frozen_until = today + timedelta(days=1)
+    streak.save(update_fields=[
+        'freeze_used_today', 'streak_frozen_until', 'updated_at',
+    ])
+
+    tokens_remaining = _available_tokens_qs(request.user).count()
+    return Response({
+        "success": True,
+        "tokens_remaining": tokens_remaining,
+        "token_id": str(spent.id),
+    })
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@teacher_or_admin
+@tenant_required
+def teacher_streak_freeze_weekend_mode(request):
+    """
+    Enable or disable weekend mode for the teacher's streak.
+
+    Body: ``{"enabled": true|false}``.
+    """
+    config = get_or_create_config(request.tenant)
+    if not config.weekend_mode_available:
+        return error_response(
+            "Weekend mode is disabled for this tenant.",
+            status_code=400,
+        )
+
+    enabled = bool(request.data.get('enabled', False))
+
+    streak, _ = TeacherStreak.all_objects.get_or_create(
+        teacher=request.user,
+        defaults={'tenant': request.tenant},
+    )
+    streak.weekend_mode_enabled = enabled
+    streak.save(update_fields=['weekend_mode_enabled', 'updated_at'])
+
+    return Response({
+        "success": True,
+        "weekend_mode_enabled": streak.weekend_mode_enabled,
+    })
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+@teacher_or_admin
+@tenant_required
+def teacher_streak_freeze_ledger(request):
+    """Paginated history of the teacher's streak-freeze events."""
+    entries = StreakFreezeLedger.all_objects.filter(
+        tenant=request.tenant,
+        teacher=request.user,
+    ).order_by('-created_at')
+
+    PaginationCls = make_pagination_class(page_size=25, max_page_size=100)
+    paginator = PaginationCls()
+    page = paginator.paginate_queryset(entries, request)
+    data = StreakFreezeLedgerSerializer(page, many=True).data
+    return paginator.get_paginated_response(data)

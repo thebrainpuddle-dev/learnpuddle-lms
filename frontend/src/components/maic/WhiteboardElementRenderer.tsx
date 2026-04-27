@@ -5,7 +5,17 @@
 
 import React from 'react';
 import katex from 'katex';
+import DOMPurify from 'dompurify';
 import type { WhiteboardAnnotation } from '../../types/maic';
+
+// DOMPurify config locked down for LLM-generated whiteboard HTML:
+// forbid <script>, <style>, <iframe>, <object>, <embed>, all event handlers.
+// Keeps basic formatting (b/i/u/span/ul/li/br/p/code/pre/h1-h6) legal.
+const WHITEBOARD_HTML_ALLOWED_TAGS = [
+  'b', 'i', 'u', 'em', 'strong', 'span', 'ul', 'ol', 'li',
+  'br', 'p', 'code', 'pre', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+  'sup', 'sub', 'small',
+];
 
 interface Props {
   annotation: WhiteboardAnnotation;
@@ -40,6 +50,48 @@ export const WhiteboardElementRenderer = React.memo<Props>(function WhiteboardEl
   // ── Line with markers ──
   if (meta.startMarker !== undefined || meta.endMarker !== undefined) {
     return renderLine(x0, y0, x1, y1, annotation.color, annotation.strokeWidth, meta.startMarker, meta.endMarker, annotation.id);
+  }
+
+  // ── Code block (Porting P2.2) ──
+  // Rendered as a monospace block. Each line is its own row so the motion
+  // wrapper around this element can stay mounted across `wb_edit_code`
+  // mutations — we only animate the parent on first mount, and the
+  // <foreignObject> contents update in place like a live code buffer.
+  if (meta.code) {
+    const lines = meta.codeLines ?? [];
+    return (
+      <foreignObject x={x} y={y} width={w} height={h || Math.max(40, lines.length * 20 + 16)}>
+        <div
+          style={{
+            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+            fontSize: meta.fontSize ?? 14,
+            color: annotation.color,
+            background: '#0F172A',
+            padding: '8px 12px',
+            borderRadius: 6,
+            boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.06)',
+            width: '100%',
+            height: '100%',
+            overflow: 'hidden',
+            lineHeight: 1.45,
+            whiteSpace: 'pre',
+          }}
+        >
+          {lines.length === 0 ? (
+            <span style={{ color: '#64748B', fontStyle: 'italic' }}>// about to type…</span>
+          ) : (
+            lines.map((line, i) => (
+              <div key={i} style={{ color: '#E2E8F0' }}>
+                <span style={{ color: '#475569', display: 'inline-block', width: 24, userSelect: 'none' }}>
+                  {i + 1}
+                </span>
+                {line || '\u00A0'}
+              </div>
+            ))
+          )}
+        </div>
+      </foreignObject>
+    );
   }
 
   // ── LaTeX ──
@@ -105,7 +157,14 @@ export const WhiteboardElementRenderer = React.memo<Props>(function WhiteboardEl
         {meta.html ? (
           <div
             style={{ fontSize: meta.fontSize ?? 16, color: annotation.color, overflow: 'hidden' }}
-            dangerouslySetInnerHTML={{ __html: meta.html }}
+            dangerouslySetInnerHTML={{
+              __html: DOMPurify.sanitize(meta.html, {
+                ALLOWED_TAGS: WHITEBOARD_HTML_ALLOWED_TAGS,
+                FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed'],
+                FORBID_ATTR: ['onerror', 'onload', 'onclick', 'onmouseover', 'style'],
+                ALLOWED_URI_REGEXP: /^$/,  // strip all URIs; LLM text never needs links
+              }),
+            }}
           />
         ) : (
           <div style={{ fontSize: meta.fontSize ?? 16, color: annotation.color, overflow: 'hidden', whiteSpace: 'pre-wrap' }}>

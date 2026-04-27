@@ -86,6 +86,9 @@ scripts/agents/
 # Test results / reports
 .test-results/
 e2e/playwright-report/
+frontend/e2e-report/
+frontend/playwright-report/
+frontend/test-results/
 
 # TypeScript build info
 frontend/tsconfig.tsbuildinfo

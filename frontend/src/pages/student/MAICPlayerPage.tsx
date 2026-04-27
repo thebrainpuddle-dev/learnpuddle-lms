@@ -3,7 +3,7 @@
 // Student AI Classroom player — loads classroom data and renders the Stage
 // in student mode (read-only whiteboard, no edit controls).
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { usePageTitle } from '../../hooks/usePageTitle';
@@ -11,6 +11,7 @@ import { maicStudentApi } from '../../services/openmaicService';
 import { useMAICStageStore } from '../../stores/maicStageStore';
 import { getStoredClassroom, saveClassroom } from '../../lib/maicDb';
 import { Stage } from '../../components/maic/Stage';
+import { computeRefetchInterval } from '../../lib/maicPollingPolicy';
 
 const ArrowLeftIcon = () => (
   <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
@@ -22,6 +23,9 @@ export const StudentMAICPlayerPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [storeReady, setStoreReady] = useState(false);
+  // SPRINT-2-BATCH-5-F7: true when images_pending has been true for >10min
+  // without flipping false (Celery task stalled or OOM-killed).
+  const [imagesStalled, setImagesStalled] = useState(false);
 
   const setClassroomId = useMAICStageStore((s) => s.setClassroomId);
   const setSlides = useMAICStageStore((s) => s.setSlides);
@@ -31,14 +35,80 @@ export const StudentMAICPlayerPage: React.FC = () => {
   const setSceneSlideBounds = useMAICStageStore((s) => s.setSceneSlideBounds);
   const reset = useMAICStageStore((s) => s.reset);
 
-  const { data: classroom, isLoading, error } = useQuery({
+  // CG-P0-3: track images_pending flip to push refreshed slide assets
+  // when the Celery fill task completes.
+  const prevImagesPendingRef = useRef<boolean | undefined>(undefined);
+
+  const { data: classroom, isLoading, error, refetch } = useQuery({
     queryKey: ['student-maic-classroom', id],
     queryFn: async () => {
       const res = await maicStudentApi.getClassroom(id!);
       return res.data;
     },
     enabled: !!id,
+    // SPRINT-2-BATCH-5-F7/F8: delegate to shared computeRefetchInterval
+    // from lib/maicPollingPolicy.ts so both teacher + student players share
+    // identical logic, and tests import the same source of truth.
+    refetchInterval: (query) => computeRefetchInterval(
+      query.state.data as { status?: string; images_pending?: boolean; updated_at?: string; progress?: { last_progress_at?: string | null } } | undefined,
+    ),
+    refetchIntervalInBackground: false,
   });
+
+  // CG-P0-3: push freshly-filled slide assets into the store when
+  // images_pending flips true → false (mirrors teacher player logic).
+  useEffect(() => {
+    if (!classroom) return;
+    const meta = classroom as unknown as Record<string, unknown>;
+    const currentPending = meta.images_pending as boolean | undefined;
+    const prev = prevImagesPendingRef.current;
+
+    if (prev === true && currentPending === false) {
+      const apiContent = meta.content as {
+        slides?: unknown[]; scenes?: unknown[]; sceneSlideBounds?: unknown[];
+      } | undefined;
+      if (apiContent?.slides?.length) {
+        setSlides(apiContent.slides as Parameters<typeof setSlides>[0]);
+      }
+      if (apiContent?.scenes?.length) {
+        setScenes(apiContent.scenes as Parameters<typeof setScenes>[0]);
+      }
+      const apiConfig = meta.config as { agents?: unknown[] } | undefined;
+      getStoredClassroom(id!).then((s) => {
+        saveClassroom({
+          id: id!,
+          title: String(meta.title || ''),
+          slides: (apiContent?.slides || []) as Parameters<typeof setSlides>[0],
+          scenes: (apiContent?.scenes || []) as Parameters<typeof setScenes>[0],
+          outlines: [],
+          agents: (apiConfig?.agents || []) as Parameters<typeof setAgents>[0],
+          chatHistory: s?.chatHistory || [],
+          config: s?.config || {},
+          sceneSlideBounds: (apiContent?.sceneSlideBounds || []) as Parameters<typeof setSceneSlideBounds>[0],
+          syncedAt: Date.now(),
+        }).catch(() => {});
+      }).catch(() => {});
+    }
+
+    prevImagesPendingRef.current = currentPending;
+  }, [classroom, id, setSlides, setScenes, setSceneSlideBounds, setAgents]);
+
+  // SPRINT-2-BATCH-5-F7: detect stalled images_pending (mirrors teacher player).
+  useEffect(() => {
+    if (!classroom) return;
+    const meta = classroom as unknown as Record<string, unknown>;
+    const pending = meta.images_pending as boolean | undefined;
+    if (pending !== true) {
+      setImagesStalled(false);
+      return;
+    }
+    const updatedAt = meta.updated_at as string | undefined;
+    if (!updatedAt) return;
+    const ageMs = Date.now() - new Date(updatedAt).getTime();
+    if (ageMs > 10 * 60 * 1000) {
+      setImagesStalled(true);
+    }
+  }, [classroom]);
 
   usePageTitle(classroom?.title || 'AI Classroom');
 
@@ -85,7 +155,6 @@ export const StudentMAICPlayerPage: React.FC = () => {
           outlines: [],
           agents: (apiConfig?.agents || []) as Parameters<typeof setAgents>[0],
           chatHistory: stored?.chatHistory || [],
-          audioCache: stored?.audioCache || {},
           config: stored?.config || {},
           sceneSlideBounds: (apiContent.sceneSlideBounds || []) as Parameters<typeof setSceneSlideBounds>[0],
           syncedAt: Date.now(),
@@ -172,8 +241,15 @@ export const StudentMAICPlayerPage: React.FC = () => {
     );
   }
 
+  // CG-P0-3: extract images_pending for the Stage skeleton indicator.
+  const imagesPending = !!(
+    (classroom as unknown as Record<string, unknown>).images_pending
+  );
+
   return (
-    <div className="flex flex-col h-[calc(100vh-80px)]">
+    // MOB-P0-4 — `100dvh` (dynamic viewport height) avoids the iOS URL-bar
+    // jump that `100vh` hits when Safari hides its bottom chrome on scroll.
+    <div className="flex flex-col h-[calc(100dvh-80px)]">
       {/* Minimal header */}
       <div className="flex items-center gap-3 px-3 py-2 border-b border-gray-200 bg-white flex-shrink-0">
         <button
@@ -190,9 +266,30 @@ export const StudentMAICPlayerPage: React.FC = () => {
         </div>
       </div>
 
+      {/* SPRINT-2-BATCH-5-F7: stall banner — mirrors teacher player. */}
+      {imagesStalled && (
+        <div
+          data-testid="images-stall-banner"
+          className="flex items-center gap-2 px-3 py-2 bg-amber-50 border-b border-amber-200 text-sm text-amber-800"
+          role="alert"
+        >
+          <svg className="h-4 w-4 shrink-0 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+          </svg>
+          <span className="flex-1">
+            Image fetching is taking unusually long. Refresh to retry.
+          </span>
+          <button
+            onClick={() => { setImagesStalled(false); refetch(); }}
+            className="shrink-0 text-xs font-medium px-2 py-1 rounded bg-amber-100 hover:bg-amber-200 transition-colors cursor-pointer"
+          >
+            Refresh
+          </button>
+        </div>
+      )}
       {/* Full Stage in student mode */}
       <div className="flex-1 min-h-0">
-        <Stage role="student" />
+        <Stage role="student" imagesPending={imagesPending} />
       </div>
     </div>
   );

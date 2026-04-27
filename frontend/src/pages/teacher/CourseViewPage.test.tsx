@@ -104,7 +104,7 @@ const courseResponse = {
 
 describe('CourseViewPage locking behavior', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     mockedUseTenantStore.mockReturnValue({
       hasFeature: vi.fn(() => true),
     });

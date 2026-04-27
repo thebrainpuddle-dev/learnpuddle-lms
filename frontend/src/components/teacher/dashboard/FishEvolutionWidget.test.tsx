@@ -21,7 +21,7 @@ function mockMatchMedia(matches: boolean) {
 
 describe('FishEvolutionWidget', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     mockMatchMedia(false);
   });
 

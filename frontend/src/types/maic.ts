@@ -87,7 +87,7 @@ export interface MAICOutlineScene {
   id: string;
   title: string;
   description: string;
-  type: 'introduction' | 'lecture' | 'discussion' | 'quiz' | 'activity' | 'summary';
+  type: 'introduction' | 'lecture' | 'discussion' | 'quiz' | 'activity' | 'interactive' | 'summary';
   estimatedMinutes: number;
   agentIds: string[];
   /** Number of slides for this scene (1 for legacy, 5-8 for multi-slide). Defaults to 1. */
@@ -159,6 +159,15 @@ export interface MAICClassroomMeta {
   config?: Record<string, unknown>;
   created_at: string;
   updated_at: string;
+  /**
+   * Set to `true` by the backend when `fill_classroom_images` Celery task
+   * has been enqueued but not yet completed (CG-P0-3 async image fill).
+   * Flips back to `false` once the task finishes filling all scene image
+   * elements.  The FE uses this to:
+   *   1. Keep polling even when status is READY (images still loading).
+   *   2. Show a "fetching image…" skeleton on slides with empty image src.
+   */
+  images_pending?: boolean;
 }
 
 // ─── Whiteboard Types ─────────────────────────────────────────────────────
@@ -187,6 +196,10 @@ export interface WhiteboardMeta {
   // Table
   headers?: string[];
   rows?: string[][];
+  // Code block (Porting P2.2 — live code typing)
+  code?: boolean;
+  codeLines?: string[];
+  language?: string;
   // Dimensions (shared)
   width?: number;
   height?: number;
@@ -238,6 +251,17 @@ export interface MAICGenerationConfig {
    *  context (OpenMAIC-style grounding). Default ON in the wizard. */
   enableWebSearch?: boolean;
   courseId?: string;
+  /**
+   * FULL-1 — Grade / subject / syllabus board metadata feeding the
+   * grade-aware prompt builder in `_extract_generation_context` on the
+   * backend (apps/courses/maic_views.py:84-113). All optional; backend
+   * falls back to safe defaults (Generic syllabus, no grade hint) when
+   * omitted. Sent to the API as snake_case `grade_level`, `subject`,
+   * `syllabus_board` — conversion happens at the network boundary.
+   */
+  gradeLevel?: string;
+  subject?: string;
+  syllabusBoard?: string;
 }
 
 // ─── View Mode ────────────────────────────────────────────────────────────

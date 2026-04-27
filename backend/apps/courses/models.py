@@ -209,6 +209,7 @@ class Content(SoftDeleteMixin, models.Model):
         ('TEXT', 'Text Content'),
         ('AI_CLASSROOM', 'AI Classroom'),
         ('CHATBOT', 'AI Chatbot'),
+        ('SCORM', 'SCORM Package'),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -245,6 +246,11 @@ class Content(SoftDeleteMixin, models.Model):
     # Settings
     is_mandatory = models.BooleanField(default=True)
     is_active = models.BooleanField(default=True)
+
+    # Free-form metadata. Populated by clone flows (e.g. template clones use
+    # ``meta_json["is_placeholder"] = True`` to flag content rows whose real
+    # artefact must be re-uploaded in the tenant).
+    meta_json = models.JSONField(default=dict, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -317,3 +323,15 @@ from .study_summary_models import StudySummary  # noqa: E402,F401
 
 # Parent Portal models
 from .parent_models import ParentSession, ParentMagicToken  # noqa: E402,F401
+
+# SCORM 1.2 models
+from .scorm_models import SCORMPackage, SCORMTrackingData  # noqa: E402,F401
+
+# xAPI (Experience API) minimal LRS model
+from .xapi_models import XAPIStatement  # noqa: E402,F401
+
+# Platform-level course templates (TASK-049)
+from .template_models import CourseTemplate  # noqa: E402,F401
+
+# Content versioning (TASK-048)
+from .versioning_models import ContentRevision  # noqa: E402,F401

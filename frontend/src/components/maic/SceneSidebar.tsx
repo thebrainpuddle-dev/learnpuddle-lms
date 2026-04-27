@@ -15,6 +15,17 @@ import { cn } from '../../lib/utils';
 interface SceneSidebarProps {
   visible: boolean;
   onClose: () => void;
+  /** T6 — optional gated seek. When provided, clicks route here instead
+   *  of the store's `goToScene` so Stage.tsx can gate switches during
+   *  active discussions with a confirm dialog. */
+  onSceneSelect?: (sceneIndex: number) => void;
+  /** T4 — when provided, tiles flagged in `failedOutlineIds` render a
+   *  Retry button. Clicking it calls back with the scene's outline id;
+   *  the caller re-runs action generation and clears the flag. When
+   *  omitted, failed tiles still render the red state but without a
+   *  retry affordance — used in the classroom surface where the
+   *  wizard-owned retry callback isn't available. */
+  onSceneRetry?: (outlineId: string) => void;
 }
 
 // ─── Scene type emoji map ─────────────────────────────────────────────────
@@ -84,6 +95,8 @@ function SceneThumbnail({ slide, isActive }: { slide?: MAICSlide; isActive: bool
 export const SceneSidebar = React.memo<SceneSidebarProps>(function SceneSidebar({
   visible,
   onClose,
+  onSceneSelect,
+  onSceneRetry,
 }) {
   const scenes = useMAICStageStore((s) => s.scenes);
   const slides = useMAICStageStore((s) => s.slides);
@@ -91,6 +104,10 @@ export const SceneSidebar = React.memo<SceneSidebarProps>(function SceneSidebar(
   const currentSceneIndex = useMAICStageStore((s) => s.currentSceneIndex);
   const currentSlideIndex = useMAICStageStore((s) => s.currentSlideIndex);
   const goToScene = useMAICStageStore((s) => s.goToScene);
+  const failedOutlineIds = useMAICStageStore((s) => s.failedOutlineIds);
+  // Lookup for O(1) "is this scene failed?" per tile. Using a Set keeps
+  // the scan off the hot render path.
+  const failedSet = useMemo(() => new Set(failedOutlineIds), [failedOutlineIds]);
 
   // Sidebar resizing
   const [sidebarWidth, setSidebarWidth] = useState(288); // 18rem default
@@ -147,9 +164,10 @@ export const SceneSidebar = React.memo<SceneSidebarProps>(function SceneSidebar(
 
   const handleSceneClick = useCallback(
     (index: number) => {
-      goToScene(index);
+      if (onSceneSelect) onSceneSelect(index);
+      else goToScene(index);
     },
-    [goToScene],
+    [goToScene, onSceneSelect],
   );
 
   return (
@@ -196,6 +214,8 @@ export const SceneSidebar = React.memo<SceneSidebarProps>(function SceneSidebar(
           const emoji = SCENE_EMOJI_MAP[scene.type] || SCENE_EMOJI_MAP.slide || '';
           const label = SCENE_LABEL_MAP[scene.type] ?? scene.type;
           const estMin = estimateMinutes(scene, info.count);
+          // T4 — failed state: red border + optional retry button.
+          const isFailed = failedSet.has(scene.id);
 
           // Progress: how many slides in this scene have been "viewed"
           // (simple heuristic: currentSlideIndex >= slideIdx means viewed)
@@ -206,16 +226,18 @@ export const SceneSidebar = React.memo<SceneSidebarProps>(function SceneSidebar(
           const progressPct = info.count > 0 ? Math.round((viewedCount / info.count) * 100) : 0;
 
           return (
-            <li key={scene.id}>
+            <li key={scene.id} className="relative">
               <button
                 type="button"
                 onClick={() => handleSceneClick(index)}
                 className={cn(
                   'w-full flex items-start gap-2.5 px-3 py-2.5 text-left transition-colors',
                   'focus:outline-none focus:ring-2 focus:ring-inset focus:ring-primary-500',
-                  isActive
-                    ? 'bg-primary-50 dark:bg-primary-900/30 border-l-[3px] border-l-primary-600 dark:border-l-primary-400'
-                    : 'border-l-[3px] border-l-transparent hover:bg-gray-50 dark:hover:bg-gray-800',
+                  isFailed
+                    ? 'bg-red-50 dark:bg-red-900/20 border-l-[3px] border-l-red-500'
+                    : isActive
+                      ? 'bg-primary-50 dark:bg-primary-900/30 border-l-[3px] border-l-primary-600 dark:border-l-primary-400'
+                      : 'border-l-[3px] border-l-transparent hover:bg-gray-50 dark:hover:bg-gray-800',
                 )}
                 aria-current={isActive ? 'true' : undefined}
               >
@@ -287,14 +309,33 @@ export const SceneSidebar = React.memo<SceneSidebarProps>(function SceneSidebar(
                 <span
                   className={cn(
                     'shrink-0 flex items-center justify-center h-5 w-5 rounded text-[10px] font-medium mt-0.5',
-                    isActive
-                      ? 'bg-primary-600 text-white dark:bg-primary-500'
-                      : 'bg-gray-200 text-gray-600 dark:bg-gray-700 dark:text-gray-400',
+                    isFailed
+                      ? 'bg-red-500 text-white'
+                      : isActive
+                        ? 'bg-primary-600 text-white dark:bg-primary-500'
+                        : 'bg-gray-200 text-gray-600 dark:bg-gray-700 dark:text-gray-400',
                   )}
                 >
                   {scene.order}
                 </span>
               </button>
+              {/* T4 — retry affordance for failed scenes. Only rendered
+                  when the caller supplied `onSceneRetry`; the button is
+                  absolutely positioned at the bottom-right of the tile
+                  so it doesn't mess with the tile's own click target. */}
+              {isFailed && onSceneRetry && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onSceneRetry(scene.id);
+                  }}
+                  className="absolute bottom-1.5 right-3 text-[10px] font-semibold text-red-600 hover:text-red-800 bg-white/80 hover:bg-white rounded px-1.5 py-0.5 shadow-sm border border-red-200 transition-colors"
+                  aria-label={`Retry scene ${scene.order} generation`}
+                >
+                  Retry
+                </button>
+              )}
             </li>
           );
         })}

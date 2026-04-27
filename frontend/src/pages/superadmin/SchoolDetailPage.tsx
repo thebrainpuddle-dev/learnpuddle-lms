@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { Controller } from 'react-hook-form';
 import { superAdminService, PLAN_OPTIONS, FEATURE_FLAGS } from '../../services/superAdminService';
 import { Button, useToast } from '../../components/common';
+import { ConfirmDialog } from '../../components/common/ConfirmDialog';
 import { useZodForm } from '../../hooks/useZodForm';
 import { usePageTitle } from '../../hooks/usePageTitle';
 import {
@@ -109,6 +110,7 @@ export const SchoolDetailPage: React.FC = () => {
   });
 
   const [showEmailForm, setShowEmailForm] = React.useState(false);
+  const [showResetPwConfirm, setShowResetPwConfirm] = React.useState(false);
 
   const emailForm = useZodForm({
     schema: SchoolEmailSchema,
@@ -161,6 +163,19 @@ export const SchoolDetailPage: React.FC = () => {
 
   return (
     <div className="space-y-4 pb-4 sm:space-y-6">
+      <ConfirmDialog
+        isOpen={showResetPwConfirm}
+        onClose={() => setShowResetPwConfirm(false)}
+        onConfirm={() => {
+          resetPwMut.mutate();
+          setShowResetPwConfirm(false);
+        }}
+        title="Reset Admin Password"
+        message="Send a password reset email to the school admin? They will receive a link to set a new password."
+        confirmLabel="Reset Password"
+        variant="warning"
+      />
+
       {/* Header */}
       <div data-tour="superadmin-school-header" className="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:gap-4">
         <button type="button" onClick={() => navigate('/super-admin/schools')} className="p-2 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-lg"><ArrowLeftIcon className="h-5 w-5" /></button>
@@ -241,7 +256,7 @@ export const SchoolDetailPage: React.FC = () => {
               <button type="button" onClick={() => updateMut.mutate({ is_active: !tenant.is_active })} className={`w-full text-[13px] font-medium px-4 py-2 rounded-xl border ${tenant.is_active ? 'border-red-200 text-red-700 hover:bg-red-50' : 'border-emerald-200 text-emerald-700 hover:bg-emerald-50'}`}>
                 {tenant.is_active ? 'Deactivate School' : 'Activate School'}
               </button>
-              <button type="button" onClick={() => { if (window.confirm('Reset admin password?')) resetPwMut.mutate(); }} className="w-full text-[13px] font-medium px-4 py-2 rounded-xl border border-slate-200/80 text-slate-700 hover:bg-slate-50">
+              <button type="button" onClick={() => setShowResetPwConfirm(true)} className="w-full text-[13px] font-medium px-4 py-2 rounded-xl border border-slate-200/80 text-slate-700 hover:bg-slate-50">
                 Reset Admin Password
               </button>
               <button type="button" onClick={() => setShowEmailForm(!showEmailForm)} className="w-full text-[13px] font-medium px-4 py-2 rounded-xl border border-indigo-200 text-indigo-700 hover:bg-indigo-50 flex items-center justify-center gap-2">

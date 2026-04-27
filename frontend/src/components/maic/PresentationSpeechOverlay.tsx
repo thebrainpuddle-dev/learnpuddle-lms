@@ -9,6 +9,10 @@ import { motion, AnimatePresence } from 'motion/react';
 import type { MAICAgent } from '../../types/maic';
 import { AgentAvatar } from './AgentAvatar';
 import { VoiceWaveIndicator } from './VoiceWaveIndicator';
+import { TypewriterText } from './TypewriterText';
+import { ThinkingDots } from './ThinkingDots';
+import { useMAICStageStore } from '../../stores/maicStageStore';
+import { useSprintFlag, SPRINT1_FLAGS } from '../../lib/sprintFlags';
 import { cn } from '../../lib/utils';
 
 interface PresentationSpeechOverlayProps {
@@ -42,38 +46,54 @@ function truncateSpeech(text: string | null, maxLen = 80): string {
 
 export const PresentationSpeechOverlay = React.memo<PresentationSpeechOverlayProps>(
   function PresentationSpeechOverlay({ agent, speechText, active }) {
+    const typewriterOn = useSprintFlag(SPRINT1_FLAGS.typewriter);
+    const bouncySwapOn = useSprintFlag(SPRINT1_FLAGS.bubbleSwap);
+    const thinkingDotsOn = useSprintFlag(SPRINT1_FLAGS.thinkingDots);
+    const speechFetchLoading = useMAICStageStore((s) => s.speechFetchLoading);
+    // T0.2 — live-playback flag used for the voice-wave animation. When
+    // false (between speakers) we keep the bubble on-screen with the last
+    // line but drop the wave so it doesn't look like the agent is still
+    // talking to themselves.
+    const isSpeaking = useMAICStageStore((s) => s.isSpeaking);
+
+    // Sprint 1 · B.4 — 200ms bouncy easing on speaker swap. We keep the
+    // legacy spring when the flag is off so we can A/B compare.
+    const swapTransition = bouncySwapOn
+      ? { duration: 0.2, ease: [0.34, 1.56, 0.64, 1] as [number, number, number, number] }
+      : { type: 'spring' as const, stiffness: 300, damping: 28, mass: 0.8 };
+
+    const truncated = truncateSpeech(speechText);
+    const showThinking =
+      thinkingDotsOn && speechFetchLoading && !speechText;
+
     return (
       <AnimatePresence mode="wait">
         {active && agent && (
           <motion.div
             key={agent.id}
-            initial={{ y: 40, opacity: 0 }}
+            initial={{ y: bouncySwapOn ? 16 : 40, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
-            exit={{ y: 30, opacity: 0 }}
-            transition={{
-              type: 'spring',
-              stiffness: 300,
-              damping: 28,
-              mass: 0.8,
-            }}
+            exit={{ y: bouncySwapOn ? 12 : 30, opacity: 0 }}
+            transition={swapTransition}
             className={cn(
-              // Moved to top-left (was bottom-left) so the speech
-              // overlay never collides with the ProactiveCard / activity
-              // popups that live at bottom-center within the same stage
-              // viewport. z-30 keeps it above the spotlight layer but
-              // below full-screen modals.
-              'absolute top-4 left-4 z-30',
-              'flex items-center gap-3',
+              // Bottom-left of the stage, above the scene navigator and
+              // to the left of the center-anchored ProactiveCard, so the
+              // overlay never covers slide title/body content (prior
+              // top-left placement overlapped slide text). The stage has
+              // ~56px of bottom chrome (scene navigator) — bottom-16
+              // sits cleanly above it.
+              'absolute bottom-16 left-3 z-30',
+              'flex items-center gap-2 sm:gap-3',
               'bg-black/70 backdrop-blur-md',
               'rounded-2xl border border-white/10',
-              'px-4 py-3',
-              'max-w-sm',
+              'px-2.5 py-2 sm:px-4 sm:py-3',
+              'max-w-[220px] sm:max-w-xs',
               'shadow-lg',
             )}
           >
             {/* Agent avatar (medium size) */}
             <div className="shrink-0">
-              <AgentAvatar agent={agent} isSpeaking size="md" />
+              <AgentAvatar agent={agent} isSpeaking={isSpeaking} size="md" />
             </div>
 
             {/* Agent info + speech preview */}
@@ -95,17 +115,29 @@ export const PresentationSpeechOverlay = React.memo<PresentationSpeechOverlayPro
               <div className="flex items-center gap-2">
                 <div className="shrink-0">
                   <VoiceWaveIndicator
-                    active
+                    active={isSpeaking}
                     color={agent.color}
                     barCount={4}
                     size="sm"
                   />
                 </div>
-                {speechText && (
-                  <p className="text-xs text-gray-300 leading-snug truncate">
-                    {truncateSpeech(speechText)}
-                  </p>
-                )}
+                {showThinking ? (
+                  <ThinkingDots color={agent.color} />
+                ) : speechText ? (
+                  typewriterOn ? (
+                    <TypewriterText
+                      key={truncated}
+                      text={truncated}
+                      speedMs={30}
+                      as="p"
+                      className="text-xs text-gray-300 leading-snug truncate"
+                    />
+                  ) : (
+                    <p className="text-xs text-gray-300 leading-snug truncate">
+                      {truncated}
+                    </p>
+                  )
+                ) : null}
               </div>
             </div>
           </motion.div>

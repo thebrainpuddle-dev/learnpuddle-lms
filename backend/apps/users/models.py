@@ -87,6 +87,12 @@ class User(AbstractUser):
         default=False,
         help_text="Force password change on next login (e.g., after bulk import)"
     )
+    # Any refresh token issued before this timestamp is rejected at refresh.
+    # Bumped on password change + admin-triggered session-invalidate.
+    password_changed_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text="When the user last changed their password; used to invalidate stale refresh tokens.",
+    )
 
     # Soft delete fields
     is_deleted = models.BooleanField(default=False, db_index=True)
@@ -247,3 +253,7 @@ class TeacherInvitation(models.Model):
         if not self.expires_at:
             self.expires_at = timezone.now() + timezone.timedelta(days=7)
         super().save(*args, **kwargs)
+
+
+# Password history (reuse prevention) + SAML auth audit events.
+from .password_history_models import PasswordHistory, SAMLAuthEvent  # noqa: E402, F401

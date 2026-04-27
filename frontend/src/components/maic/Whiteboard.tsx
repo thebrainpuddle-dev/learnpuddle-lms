@@ -173,7 +173,14 @@ export const Whiteboard = React.memo<WhiteboardProps>(function Whiteboard({
       className="absolute inset-0 w-full h-full"
       initial={{ opacity: 0, scale: 0.95 }}
       animate={{ opacity: 1, scale: 1 }}
-      transition={{ type: 'spring', stiffness: 120, damping: 18, mass: 1.2 }}
+      // T7.b — 500ms cubic-bezier fade on close. Entry still uses the
+      // original spring for its soft "unfold" feel; exit is deliberately
+      // crisper so `wb_close` reads as intentional rather than stuck.
+      exit={{ opacity: 0, scale: 0.96 }}
+      transition={{
+        opacity: { duration: 0.5, ease: [0.4, 0, 0.2, 1] },
+        scale: { type: 'spring', stiffness: 120, damping: 18, mass: 1.2 },
+      }}
     >
       {/* SVG drawing surface */}
       <svg
@@ -190,25 +197,43 @@ export const Whiteboard = React.memo<WhiteboardProps>(function Whiteboard({
         aria-label="Whiteboard drawing area"
         role="img"
       >
-        {/* Existing annotations */}
-        {sceneAnnotations.map((ann) =>
-          ann.meta ? (
-            <WhiteboardElementRenderer key={ann.id} annotation={ann} />
-          ) : (
-            <path
-              key={ann.id}
-              d={pointsToPathD(ann.points)}
-              fill="none"
-              stroke={ann.color}
-              strokeWidth={ann.tool === 'highlighter' ? ann.strokeWidth * 4 : ann.strokeWidth}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              style={getAnnotationStyle(ann)}
-              data-annotation-id={ann.id}
-              className={activeTool === 'eraser' && !readonly ? 'cursor-pointer hover:opacity-50' : ''}
-            />
-          )
-        )}
+        {/* Existing annotations. Porting P2.1 — meta-driven elements
+            now enter with a fade-from-blur animation instead of popping
+            in instantly. Free-hand strokes keep their per-path exit
+            from Sprint 4 · B.6. `ELEMENT_ENTRY_MS` is tuned to match
+            `WB_ELEMENT_FADE_IN_MS` in maicActionEngine so the engine's
+            `await delay(...)` lands exactly as the animation completes. */}
+        <AnimatePresence initial={false}>
+          {sceneAnnotations.map((ann) =>
+            ann.meta ? (
+              <motion.g
+                key={ann.id}
+                initial={{ opacity: 0, scale: 0.9, filter: 'blur(4px)' }}
+                animate={{ opacity: 1, scale: 1, filter: 'blur(0px)' }}
+                exit={{ opacity: 0, scale: 0.9, filter: 'blur(4px)' }}
+                transition={{ duration: 0.45, ease: [0.21, 1, 0.36, 1] }}
+              >
+                <WhiteboardElementRenderer annotation={ann} />
+              </motion.g>
+            ) : (
+              <motion.path
+                key={ann.id}
+                d={pointsToPathD(ann.points)}
+                fill="none"
+                stroke={ann.color}
+                strokeWidth={ann.tool === 'highlighter' ? ann.strokeWidth * 4 : ann.strokeWidth}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                style={getAnnotationStyle(ann)}
+                data-annotation-id={ann.id}
+                className={activeTool === 'eraser' && !readonly ? 'cursor-pointer hover:opacity-50' : ''}
+                initial={{ opacity: 1 }}
+                exit={{ opacity: 0, scale: 0.9 }}
+                transition={{ duration: 0.18, ease: 'easeOut' }}
+              />
+            ),
+          )}
+        </AnimatePresence>
 
         {/* Current stroke being drawn */}
         {isDrawing && currentPoints.length > 0 && (

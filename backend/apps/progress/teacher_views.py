@@ -24,6 +24,14 @@ from apps.progress.models import (
     AssignmentSubmission,
     QuizSubmission,
 )
+from apps.progress.quiz_helpers import (
+    _utcnow,
+    get_in_progress_attempt,
+    grade_quiz_answers,
+    serialize_attempt,
+    start_quiz_attempt,
+    validate_answers_payload,
+)
 from utils.decorators import tenant_required, teacher_or_admin
 from utils.course_access import is_teacher_assigned_to_course as _teacher_assigned_to_course
 from utils.responses import error_response
@@ -34,9 +42,12 @@ from .teacher_serializers import (
     TeacherAssignmentSubmissionSerializer,
 )
 
-
-def _utcnow():
-    return datetime.now(timezone.utc)
+# Legacy aliases kept for any external importers (deprecated — import from
+# ``apps.progress.quiz_helpers`` directly in new code).
+_validate_answers_payload = validate_answers_payload
+_grade_quiz_answers = grade_quiz_answers
+_get_or_start_quiz_attempt = start_quiz_attempt
+_serialize_attempt = serialize_attempt
 
 
 def _teacher_assigned_courses_qs(request, with_prefetch=False):
@@ -111,10 +122,12 @@ def teacher_dashboard(request):
         submissions.filter(status__in=["SUBMITTED", "GRADED"]).values_list("assignment_id", flat=True)
     )
     submitted_quiz_ids = set(
+        # Only count completed submissions (score IS NOT NULL).
+        # In-progress attempts (score IS NULL) are not yet submitted.
         QuizSubmission.objects.filter(
             teacher=user,
             quiz__assignment__in=assignments,
-        ).values_list("quiz__assignment_id", flat=True)
+        ).exclude(score__isnull=True).values_list("quiz__assignment_id", flat=True)
     )
     submitted_assignment_ids = submitted_regular_ids | submitted_quiz_ids
     pending_assignments = assignments.exclude(id__in=submitted_assignment_ids).count()
@@ -396,8 +409,19 @@ def assignment_list(request):
     submissions = AssignmentSubmission.objects.filter(teacher=request.user, assignment__in=qs).select_related("assignment")
     submissions_map = {s.assignment_id: s for s in submissions}
 
-    quiz_submissions = QuizSubmission.objects.filter(teacher=request.user, quiz__assignment__in=qs).select_related("quiz")
-    quiz_submissions_map = {qs_item.quiz.assignment_id: qs_item for qs_item in quiz_submissions}
+    # Only completed submissions (score IS NOT NULL) — highest score per assignment.
+    quiz_submissions = (
+        QuizSubmission.objects.filter(teacher=request.user, quiz__assignment__in=qs)
+        .exclude(score__isnull=True)
+        .select_related("quiz")
+        .order_by("-score", "-attempt_number")
+    )
+    # Keep best-scoring submission per assignment.
+    quiz_submissions_map = {}
+    for qs_item in quiz_submissions:
+        asgn_id = qs_item.quiz.assignment_id
+        if asgn_id not in quiz_submissions_map:
+            quiz_submissions_map[asgn_id] = qs_item
 
     def _derive_status(assignment):
         """Derive display status for an assignment, handling both quiz and regular types."""
@@ -482,6 +506,92 @@ def assignment_submission_detail(request, assignment_id):
     return Response(TeacherAssignmentSubmissionSerializer(submission).data, status=status.HTTP_200_OK)
 
 
+def _build_quiz_detail_response(*, assignment, quiz, teacher):
+    """Assemble the quiz-detail payload shared by GET and POST ``/start/``.
+
+    Does **not** create any rows — only reads the current in-progress attempt
+    (if one already exists). Attempt creation is an explicit POST action via
+    ``quiz_start`` (M3 fix — GET is side-effect free).
+    """
+    completed_submissions = list(
+        QuizSubmission.all_objects.filter(quiz=quiz, teacher=teacher)
+        .exclude(score__isnull=True)
+        .order_by("attempt_number")
+    )
+    attempts_used = len(completed_submissions)
+    max_attempts = quiz.max_attempts  # 0 = unlimited
+
+    in_progress = get_in_progress_attempt(quiz, teacher)
+
+    # Best score across completed attempts.
+    best_score = None
+    if completed_submissions:
+        scores = [float(s.score) for s in completed_submissions if s.score is not None]
+        best_score = max(scores) if scores else None
+
+    # Best-scoring submission (matches serializer semantics in the
+    # assignment-list endpoint — see m5 in review).
+    best_submission = None
+    if completed_submissions:
+        best_submission = max(
+            completed_submissions,
+            key=lambda s: (float(s.score) if s.score is not None else -1.0, s.attempt_number),
+        )
+
+    questions = [
+        {
+            "id": str(q.id),
+            "order": q.order,
+            "question_type": q.question_type,
+            "selection_mode": q.selection_mode,
+            "prompt": q.prompt,
+            "options": q.options or [],
+            "points": q.points,
+        }
+        for q in quiz.questions.all().order_by("order")
+    ]
+
+    attempts_exhausted = (
+        max_attempts > 0
+        and attempts_used >= max_attempts
+        and in_progress is None
+    )
+
+    return {
+        "assignment_id": str(assignment.id),
+        "quiz_id": str(quiz.id),
+        "schema_version": quiz.schema_version,
+        # Attempt configuration
+        "max_attempts": max_attempts,
+        "time_limit_minutes": quiz.time_limit_minutes,
+        "attempts_used": attempts_used,
+        "attempts_remaining": (
+            None if max_attempts == 0 else max(0, max_attempts - attempts_used)
+        ),
+        "best_score": best_score,
+        # Current in-progress attempt — null until the client POSTs to /start/.
+        "current_attempt": (
+            {
+                "attempt_number": in_progress.attempt_number,
+                "started_at": in_progress.started_at,
+            }
+            if in_progress
+            else None
+        ),
+        "attempts_exhausted": attempts_exhausted,
+        # History of completed attempts (scores visible after grading).
+        "attempt_history": [serialize_attempt(s) for s in completed_submissions],
+        # Questions (always returned so teacher can review past attempts).
+        "questions": questions,
+        # Legacy field — now aligned to **best-score** semantics (was
+        # previously the latest completed attempt, which conflicted with the
+        # serializers' best-score behaviour — see m5 in review TASK-013).
+        "submission": (
+            serialize_attempt(best_submission) if best_submission else None
+        ),
+    }
+
+
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 @teacher_or_admin
@@ -489,7 +599,30 @@ def assignment_submission_detail(request, assignment_id):
 def quiz_detail(request, assignment_id):
     """
     Fetch quiz questions for a quiz-type assignment.
-    (Does not return correct answers.)
+
+    GET is **read-only** — it does NOT create an in-progress attempt. Clients
+    call ``POST .../quizzes/<id>/start/`` when the teacher explicitly begins
+    an attempt. This prevents bookmark reloads, prefetchers, and silent
+    background fetches from burning attempt slots (M3 fix).
+
+    Response:
+      {
+        "assignment_id": "...",
+        "quiz_id": "...",
+        "schema_version": 1,
+        "max_attempts": 3,         // 0 = unlimited
+        "time_limit_minutes": 30,  // null = no limit
+        "attempts_used": 1,
+        "attempts_remaining": 2,   // null when unlimited
+        "best_score": 85.0,        // null if no completed attempt yet
+        "current_attempt": {       // null if no in-progress attempt
+          "attempt_number": 2,
+          "started_at": "...",
+        },
+        "attempts_exhausted": false,
+        "attempt_history": [{ "attempt_number": 1, "score": 70.0, ... }],
+        "questions": [...]
+      }
     """
     assignment = get_object_or_404(
         Assignment,
@@ -506,41 +639,54 @@ def quiz_detail(request, assignment_id):
     if not quiz:
         return error_response("Quiz not found for assignment", status_code=status.HTTP_404_NOT_FOUND)
 
-    submission = QuizSubmission.objects.filter(quiz=quiz, teacher=request.user).first()
-
-    questions = []
-    for q in quiz.questions.all().order_by("order"):
-        questions.append(
-            {
-                "id": str(q.id),
-                "order": q.order,
-                "question_type": q.question_type,
-                "selection_mode": q.selection_mode,
-                "prompt": q.prompt,
-                "options": q.options or [],
-                "points": q.points,
-            }
-        )
-
-    return Response(
-        {
-            "assignment_id": str(assignment.id),
-            "quiz_id": str(quiz.id),
-            "schema_version": quiz.schema_version,
-            "questions": questions,
-            "submission": (
-                {
-                    "answers": submission.answers,
-                    "score": float(submission.score) if submission.score is not None else None,
-                    "graded_at": submission.graded_at,
-                    "submitted_at": submission.submitted_at,
-                }
-                if submission
-                else None
-            ),
-        },
-        status=status.HTTP_200_OK,
+    payload = _build_quiz_detail_response(
+        assignment=assignment, quiz=quiz, teacher=request.user,
     )
+    return Response(payload, status=status.HTTP_200_OK)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@teacher_or_admin
+@tenant_required
+def quiz_start(request, assignment_id):
+    """
+    Explicitly start (or resume) a quiz attempt.
+
+    Creates a new in-progress ``QuizSubmission`` if:
+
+    * no in-progress attempt exists and ``max_attempts`` allows, or
+    * the previous in-progress attempt's time limit has elapsed (the stale
+      row is closed out as ``time_expired=True, score=0``).
+
+    If an un-expired in-progress attempt already exists, the same row is
+    returned (idempotent resume).
+
+    Returns the same payload shape as ``quiz_detail``.
+    """
+    assignment = get_object_or_404(
+        Assignment,
+        id=assignment_id,
+        is_active=True,
+        course__tenant=request.tenant,
+        course__is_published=True,
+        course__is_active=True,
+    )
+    if not _teacher_assigned_to_course(request.user, assignment.course):
+        return error_response("Not assigned to this course", status_code=status.HTTP_403_FORBIDDEN)
+
+    quiz = getattr(assignment, "quiz", None)
+    if not quiz:
+        return error_response("Quiz not found for assignment", status_code=status.HTTP_404_NOT_FOUND)
+
+    _submission, error = start_quiz_attempt(quiz, request.user, request.tenant)
+    if error:
+        return error_response(error, status_code=status.HTTP_400_BAD_REQUEST)
+
+    payload = _build_quiz_detail_response(
+        assignment=assignment, quiz=quiz, teacher=request.user,
+    )
+    return Response(payload, status=status.HTTP_200_OK)
 
 
 @api_view(["POST"])
@@ -549,7 +695,13 @@ def quiz_detail(request, assignment_id):
 @tenant_required
 def quiz_submit(request, assignment_id):
     """
-    Submit quiz answers. Objective questions are auto-graded; short answers are stored for review.
+    Submit quiz answers for the current in-progress attempt.
+
+    Objective questions (MCQ, TRUE_FALSE) are auto-graded immediately.
+    Short-answer questions are stored for manual review by the admin.
+
+    If the quiz has a time_limit_minutes and the limit has expired, the submission
+    is accepted but marked time_expired=True (the teacher's partial answers are saved).
 
     Payload:
       {
@@ -576,105 +728,76 @@ def quiz_submit(request, assignment_id):
     if not quiz:
         return error_response("Quiz not found for assignment", status_code=status.HTTP_404_NOT_FOUND)
 
+    # Validate answers payload.
     answers = request.data.get("answers") or {}
-    if not isinstance(answers, dict):
-        return error_response("answers must be an object", status_code=status.HTTP_400_BAD_REQUEST)
+    payload_error = validate_answers_payload(answers)
+    if payload_error:
+        return error_response(payload_error, status_code=status.HTTP_400_BAD_REQUEST)
 
-    # Limit answers payload size: max 200 keys, each value must be a flat dict
-    max_answers = 200
-    if len(answers) > max_answers:
-        return error_response(f"Too many answers (max {max_answers})", status_code=status.HTTP_400_BAD_REQUEST)
-    for key, val in answers.items():
-        if not isinstance(val, dict):
-            return error_response(f"Each answer must be an object, got {type(val).__name__} for '{key}'", status_code=status.HTTP_400_BAD_REQUEST)
-        # Reject nested objects. Allow option_indices as a flat list for multi-select MCQ.
-        for inner_key, inner_val in val.items():
-            if isinstance(inner_val, dict):
-                return error_response("Answer values cannot contain nested objects", status_code=status.HTTP_400_BAD_REQUEST)
-            if isinstance(inner_val, list):
-                if inner_key != "option_indices":
-                    return error_response("Only option_indices may be an array value", status_code=status.HTTP_400_BAD_REQUEST)
-                if any(isinstance(v, (dict, list)) for v in inner_val):
-                    return error_response("option_indices must be a flat array", status_code=status.HTTP_400_BAD_REQUEST)
+    from django.db import transaction as _transaction
+    from django.utils import timezone as _tz
 
-    # Auto-grade objective questions; track whether manual review is needed for short-answer
-    all_questions = list(quiz.questions.all())
-    has_short_answer = any(q.question_type == "SHORT_ANSWER" for q in all_questions)
-    mcq_score = 0.0
-    for q in all_questions:
-        if q.question_type == "SHORT_ANSWER":
-            continue
+    with _transaction.atomic():
+        # Lock the current in-progress row (if any) for this (quiz, teacher)
+        # pair. The select_for_update serialises parallel submits on the same
+        # attempt so the second submit sees the first's score and does not
+        # silently overwrite it (m3 in review).
+        in_progress = (
+            QuizSubmission.all_objects.select_for_update()
+            .filter(quiz=quiz, teacher=request.user, score__isnull=True)
+            .order_by("-attempt_number")
+            .first()
+        )
+        if not in_progress:
+            # No in-progress attempt — client must POST /start/ first.
+            completed_count = QuizSubmission.all_objects.filter(
+                quiz=quiz, teacher=request.user,
+            ).exclude(score__isnull=True).count()
+            max_attempts = quiz.max_attempts
+            if max_attempts > 0 and completed_count >= max_attempts:
+                return error_response(
+                    f"Maximum attempts reached ({max_attempts})",
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                )
+            return error_response(
+                "No in-progress attempt found. POST to /start/ to begin an attempt.",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
 
-        got = answers.get(str(q.id)) or {}
-        if not isinstance(got, dict):
-            continue
+        # Check time limit.
+        time_expired = False
+        if quiz.time_limit_minutes and in_progress.started_at:
+            elapsed_seconds = (_tz.now() - in_progress.started_at).total_seconds()
+            if elapsed_seconds > quiz.time_limit_minutes * 60:
+                time_expired = True
 
-        if q.question_type == "MCQ":
-            mode = (q.selection_mode or "SINGLE").upper()
-            if mode == "MULTIPLE":
-                expected_raw = (q.correct_answer or {}).get("option_indices") or []
-                if not isinstance(expected_raw, list):
-                    continue
-                try:
-                    expected = {int(v) for v in expected_raw}
-                except Exception:
-                    continue
-                selected_raw = got.get("option_indices") or []
-                if not isinstance(selected_raw, list):
-                    continue
-                try:
-                    selected = {int(v) for v in selected_raw}
-                except Exception:
-                    continue
-                if selected and selected == expected:
-                    mcq_score += float(q.points or 1)
-                continue
+        # Grade the answers.
+        mcq_score, has_short_answer = grade_quiz_answers(quiz, answers)
 
-            try:
-                expected = int((q.correct_answer or {}).get("option_index"))
-            except Exception:
-                continue
-            try:
-                selected = int(got.get("option_index"))
-            except Exception:
-                selected = None
-            if selected is not None and selected == expected:
-                mcq_score += float(q.points or 1)
-            continue
+        # Save the submission.
+        in_progress.answers = answers
+        in_progress.time_expired = time_expired
 
-        if q.question_type == "TRUE_FALSE":
-            expected = (q.correct_answer or {}).get("value")
-            selected = got.get("value")
-            if isinstance(expected, bool) and isinstance(selected, bool) and selected == expected:
-                mcq_score += float(q.points or 1)
-            continue
+        if has_short_answer:
+            # Needs manual review for short-answer questions.
+            # Store MCQ partial score; graded_at remains NULL until admin reviews.
+            in_progress.score = mcq_score
+            in_progress.graded_at = None
+        else:
+            # All questions are objective — fully auto-graded.
+            in_progress.score = mcq_score
+            in_progress.graded_at = _utcnow()
 
-    obj, _created = QuizSubmission.objects.get_or_create(
-        quiz=quiz,
-        teacher=request.user,
-        defaults={"tenant": request.tenant, "answers": answers},
-    )
-    obj.answers = answers
-
-    if has_short_answer:
-        # Quiz needs manual review for short-answer questions.
-        # Store the MCQ partial score so it can be combined with manual grading later.
-        # Do NOT set graded_at — this keeps status as "SUBMITTED" until admin reviews.
-        obj.score = mcq_score
-        obj.graded_at = None
-    else:
-        # All questions are MCQ — fully auto-graded.
-        obj.score = mcq_score
-        obj.graded_at = _utcnow()
-
-    obj.save()
+        in_progress.save()
 
     return Response(
         {
             "quiz_id": str(quiz.id),
             "assignment_id": str(assignment.id),
-            "score": float(obj.score) if obj.score is not None else None,
-            "graded_at": obj.graded_at,
+            "attempt_number": in_progress.attempt_number,
+            "score": float(in_progress.score) if in_progress.score is not None else None,
+            "graded_at": in_progress.graded_at,
+            "time_expired": time_expired,
         },
         status=status.HTTP_200_OK,
     )

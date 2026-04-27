@@ -11,6 +11,12 @@ const DYNAMIC_CACHE = `brain-lms-dynamic-v${SW_VERSION}`;
 const API_CACHE = `brain-lms-api-v${SW_VERSION}`;
 const OFFLINE_QUEUE_CACHE = 'brain-lms-offline-queue';
 
+// Dedicated cache for MAIC scene images and tenant-served image assets.
+// Uses stale-while-revalidate with a hard LRU cap of IMAGE_CACHE_MAX_ENTRIES.
+// Version-stamped so stale image caches are pruned on SW update.
+const IMAGE_CACHE = `brain-lms-images-v${SW_VERSION}`;
+const IMAGE_CACHE_MAX_ENTRIES = 50;
+
 // Resources to cache immediately on install
 const STATIC_ASSETS = [
   '/',
@@ -44,7 +50,7 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   console.log(`[SW] Activating service worker v${SW_VERSION}...`);
   
-  const currentCaches = [CACHE_NAME, STATIC_CACHE, DYNAMIC_CACHE, API_CACHE, OFFLINE_QUEUE_CACHE];
+  const currentCaches = [CACHE_NAME, STATIC_CACHE, DYNAMIC_CACHE, API_CACHE, OFFLINE_QUEUE_CACHE, IMAGE_CACHE];
   
   event.waitUntil(
     caches.keys()
@@ -74,19 +80,42 @@ self.addEventListener('fetch', (event) => {
   if (request.method !== 'GET') {
     return;
   }
-  
+
   // Skip cross-origin requests
   if (url.origin !== location.origin) {
     return;
   }
-  
+
   // Never intercept API calls in the service worker.
   // API auth/session flow must always go directly browser -> origin to avoid
   // replay/amplification behavior during token/session transitions.
   if (url.pathname.startsWith('/api/')) {
     return;
   }
-  
+
+  // Skip any request that carries an Authorization header — those are
+  // authenticated fetches that must not be served from a shared cache.
+  //
+  // NOTE: This Authorization-skip happens BEFORE the image-request branch below.
+  // In practice, <img src="..."> elements do NOT attach an Authorization header
+  // (browsers use cookies/credentials for same-origin image loads), so MAIC scene
+  // images rendered via <img> are unaffected and will still hit the image cache.
+  // Only explicit fetch() calls with `headers: { Authorization: '...' }` (e.g.
+  // blob-URL downloads) will early-return here and bypass all caching entirely.
+  if (request.headers.has('Authorization')) {
+    return;
+  }
+
+  // ── MAIC / tenant image cache ─────────────────────────────────────────
+  // Intercept same-origin image requests (media uploads, MAIC scene images,
+  // tenant assets) with stale-while-revalidate and an LRU cap of
+  // IMAGE_CACHE_MAX_ENTRIES so the cache doesn't grow unboundedly.
+  if (isImageRequest(url.pathname)) {
+    event.respondWith(imageStaleWhileRevalidate(request));
+    return;
+  }
+  // ─────────────────────────────────────────────────────────────────────
+
   // Handle static assets
   if (isStaticAsset(url.pathname)) {
     event.respondWith(cacheFirstStrategy(request));
@@ -157,9 +186,56 @@ async function staleWhileRevalidate(request) {
   return cachedResponse || fetchPromise;
 }
 
-// Check if URL is a static asset
+// Check if URL is a static asset (JS/CSS/fonts handled by the static/dynamic caches)
 function isStaticAsset(pathname) {
-  return /\.(js|css|png|jpg|jpeg|gif|svg|woff|woff2|ttf|eot|ico)$/i.test(pathname);
+  return /\.(js|css|woff|woff2|ttf|eot|ico)$/i.test(pathname);
+}
+
+// Check if a same-origin URL is an image asset that should go into the
+// dedicated MAIC / tenant image cache.
+// Matches:
+//   • /media/...  — tenant-served uploads (course thumbnails, content files
+//                    with image extensions, MAIC scene images)
+//   • /static/...  *.{png,jpg,jpeg,gif,webp,svg,avif}  — built image assets
+//   • any other same-origin pathname ending with an image extension
+function isImageRequest(pathname) {
+  if (/\.(png|jpg|jpeg|gif|webp|svg|avif)$/i.test(pathname)) {
+    return true;
+  }
+  // /media/ paths are always image/asset downloads from tenant uploads
+  if (pathname.startsWith('/media/')) {
+    return true;
+  }
+  return false;
+}
+
+// Stale-while-revalidate strategy for images, backed by the dedicated
+// IMAGE_CACHE with an LRU eviction cap of IMAGE_CACHE_MAX_ENTRIES.
+// Skips caching for non-200 responses so broken images aren't persisted.
+async function imageStaleWhileRevalidate(request) {
+  const cachedResponse = await caches.match(request, { cacheName: IMAGE_CACHE });
+
+  const fetchPromise = fetch(request)
+    .then(async (networkResponse) => {
+      // Only cache successful, non-opaque responses.
+      if (networkResponse.ok && networkResponse.status === 200) {
+        const responseToCache = networkResponse.clone();
+        const cache = await caches.open(IMAGE_CACHE);
+        cache.put(request, responseToCache);
+
+        // LRU eviction: keep cache under IMAGE_CACHE_MAX_ENTRIES.
+        // Cache.keys() returns entries in insertion order (oldest first).
+        const keys = await cache.keys();
+        if (keys.length > IMAGE_CACHE_MAX_ENTRIES) {
+          const toDelete = keys.slice(0, keys.length - IMAGE_CACHE_MAX_ENTRIES);
+          await Promise.all(toDelete.map((k) => cache.delete(k)));
+        }
+      }
+      return networkResponse;
+    })
+    .catch(() => null);
+
+  return cachedResponse || fetchPromise;
 }
 
 // Push notification handling

@@ -253,10 +253,15 @@ def assignment_status_export(request):
     is_quiz = hasattr(assignment, "quiz") and assignment.quiz is not None
 
     if is_quiz:
-        quiz_subs_map = {
-            qs.teacher_id: qs
-            for qs in QuizSubmission.objects.filter(quiz=assignment.quiz, teacher__in=teachers)
-        }
+        # Only include completed submissions; keep highest-scoring attempt per teacher.
+        quiz_subs_map = {}
+        for qs in (
+            QuizSubmission.objects.filter(quiz=assignment.quiz, teacher__in=teachers)
+            .exclude(score__isnull=True)
+            .order_by("-score", "-attempt_number")
+        ):
+            if qs.teacher_id not in quiz_subs_map:
+                quiz_subs_map[qs.teacher_id] = qs
     else:
         regular_subs_map = {
             s.teacher_id: s

@@ -8,6 +8,7 @@ import {
   ArrowLeftIcon,
   EyeIcon,
   GlobeAltIcon,
+  LanguageIcon,
 } from '@heroicons/react/24/outline';
 import type { CourseEditorState } from './useCourseEditor';
 
@@ -63,6 +64,16 @@ export const CourseEditorHeader: React.FC<CourseEditorHeaderProps> = ({
       </div>
 
       <div className="flex items-center space-x-3">
+        {isEditing && !isTeacherAuthoring && (
+          <Button
+            variant="outline"
+            onClick={() => navigate(`/admin/courses/${state.courseId}/translate`)}
+            title="Translate course content into other languages"
+          >
+            <LanguageIcon className="h-4 w-4 mr-1.5" />
+            Translate
+          </Button>
+        )}
         {isEditing && canManageAssignments && (
           <>
             <span

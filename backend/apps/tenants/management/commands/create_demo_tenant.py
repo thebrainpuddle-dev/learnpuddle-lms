@@ -36,6 +36,22 @@ DEMO_USERS = [
 class Command(BaseCommand):
     help = 'Creates a demo tenant with admin, teacher, and student accounts'
 
+    # ── E2E test dependency note ──────────────────────────────────────────────
+    # The default credentials in DEMO_USERS (above) are the source of truth for
+    # the automated e2e test suite.  Specifically:
+    #
+    #   TEACHER_EMAIL    = 'teacher@demo.learnpuddle.com'  (DEMO_USERS[1]['email'])
+    #   TEACHER_PASSWORD = 'Teacher@123'                   (DEMO_USERS[1]['password'])
+    #
+    # These defaults are read by:
+    #   frontend/e2e/maic-full-playback.spec.js  (E2E_TEACHER_PASSWORD fallback)
+    #   .github/workflows/e2e.yml               (E2E_TEACHER_PASSWORD fallback env)
+    #
+    # If you change either value here you MUST update the matching defaults in
+    # both files above, and rotate the E2E_TEACHER_PASSWORD repository secret
+    # in GitHub Settings → Secrets & Variables → Actions.
+    # ─────────────────────────────────────────────────────────────────────────
+
     def handle(self, *args, **options):
         admin_email = os.getenv('DEMO_TENANT_ADMIN_EMAIL', DEMO_USERS[0]['email'])
         admin_password = os.getenv('DEMO_TENANT_ADMIN_PASSWORD', DEMO_USERS[0]['password'])

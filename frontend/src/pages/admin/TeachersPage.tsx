@@ -25,6 +25,7 @@ import {
 } from '@heroicons/react/24/outline';
 import type { User } from '../../types';
 import { usePageTitle } from '../../hooks/usePageTitle';
+import { useModeLabels } from '../../hooks/useModeLabels';
 import { EmptyState } from '../../components/common/EmptyState';
 
 // ── Zod Schemas ──────────────────────────────────────────────────────
@@ -59,6 +60,7 @@ export const TeachersPage: React.FC = () => {
   const navigate = useNavigate();
   const toast = useToast();
   const qc = useQueryClient();
+  const { label } = useModeLabels();
   const csvRef = useRef<HTMLInputElement>(null);
   const inviteCsvRef = useRef<HTMLInputElement>(null);
   const { usage } = useTenantStore();
@@ -212,7 +214,7 @@ export const TeachersPage: React.FC = () => {
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Teachers</h1>
+          <h1 className="text-2xl font-bold text-gray-900">{label('learner_plural')}</h1>
           <p className="mt-1 text-sm text-gray-500">
             Create and manage teacher accounts.
             {usage && <span className="ml-2 text-gray-400">({usage.teachers.used}/{usage.teachers.limit} used)</span>}

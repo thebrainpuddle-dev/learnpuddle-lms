@@ -92,7 +92,7 @@ def _collect_activity_days(user_id, course_ids: Iterable[str]) -> Set:
     quiz_submission_days = QuizSubmission.objects.filter(
         teacher_id=user_id,
         quiz__assignment__course_id__in=course_ids,
-    ).values_list("submitted_at", flat=True)
+    ).exclude(score__isnull=True).values_list("submitted_at", flat=True)
 
     days = set()
     for dt in list(progress_days) + list(regular_submission_days) + list(quiz_submission_days):
@@ -192,10 +192,11 @@ def build_teacher_gamification_summary(user, courses_qs) -> Dict:
         assignment__course_id__in=course_ids,
         status__in=["SUBMITTED", "GRADED"],
     ).count()
+    # Only count completed submissions (score IS NOT NULL); ignore in-progress attempts.
     quiz_submissions = QuizSubmission.objects.filter(
         teacher=user,
         quiz__assignment__course_id__in=course_ids,
-    ).count()
+    ).exclude(score__isnull=True).count()
 
     activity_days = _collect_activity_days(user.id, course_ids)
     current_streak = _compute_current_streak(activity_days)

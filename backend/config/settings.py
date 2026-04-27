@@ -98,6 +98,14 @@ INSTALLED_APPS = [
     'apps.discussions',
     'apps.ops',
     'apps.academics',
+    'apps.reports_builder',  # Custom Report Builder (TASK-053)
+    'apps.integrations_common',    # Shared crypto + helpers (TASK-055 / TASK-054)
+    'apps.integrations_chat',      # Slack / Teams webhook bots (TASK-055)
+    'apps.integrations_calendar',  # Google / Outlook / iCal calendar sync (TASK-054)
+    'apps.translations',           # Auto-translation service (TASK-058)
+    'apps.semantic_search',        # pgvector semantic search (TASK-057)
+    'apps.course_generator',       # AI Course Generator (TASK-060)
+    'apps.chatbot',                # AI Chatbot Tutor (TASK-059)
 ]
 
 # Custom User Model
@@ -166,11 +174,17 @@ DATABASES = {
 }
 
 # Password validation
+# The TenantPasswordValidator reads the current tenant's
+# TenantPasswordPolicy (see apps.tenants.password_policy_models) and
+# enforces composition, common-password and history rules.  If no
+# policy row exists (super-admin / mgmt commands) it falls back to a
+# strict baseline (12 chars, mixed case, digit, common rejected).
 AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},
     {'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator', 'OPTIONS': {'min_length': 12}},
     {'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator'},
     {'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator'},
+    {'NAME': 'apps.users.password_validators.TenantPasswordValidator'},
 ]
 
 # Password reset token expiration (Django default is 3 days = 259200 seconds)
@@ -279,8 +293,12 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # -----------------------------------------------------------------------------
 # File upload settings (large video files must stream to disk, not memory)
 # -----------------------------------------------------------------------------
-DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10MB before streaming to temp
-FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024
+DATA_UPLOAD_MAX_MEMORY_SIZE = 50 * 1024 * 1024  # 50MB (MAIC classroom sync
+#   payloads can approach this — PATCH /classrooms/<id>/update/ ships
+#   content {slides, scenes, sceneSlideBounds} for ~20-scene classrooms.
+#   Was 10 MB and silently 400-rejected large classrooms. See PERF-P0-3.
+FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10MB — video uploads stream
+#   to disk via FILE_UPLOAD_HANDLERS below, so this threshold stays tight.
 MAX_VIDEO_UPLOAD_SIZE_MB = config("MAX_VIDEO_UPLOAD_SIZE_MB", default=500, cast=int)
 # Shorter HLS segments improve startup latency and recovery on weak networks.
 HLS_SEGMENT_DURATION_SECONDS = max(config("HLS_SEGMENT_DURATION_SECONDS", default=4, cast=int), 2)
@@ -359,6 +377,18 @@ REST_FRAMEWORK = {
         'client_error_ingest': '30/minute',
         # AI Chatbot chat endpoint
         'chatbot_chat': '30/minute',
+        # Stripe webhook ingestion (public endpoint, signature-verified).
+        # Rate-limit per-IP to mitigate DoS from invalid-signature spam.
+        'stripe_webhook': '120/minute',
+        # SAML Assertion Consumer Service — per-IP rate limit deters
+        # signature-spam / replay attempts.
+        'saml_acs': config('THROTTLE_SAML_ACS', default='30/minute'),
+        # Chat integration /test/ endpoint — prevent webhook spam / abuse.
+        'chat_integration_test': config('THROTTLE_CHAT_INTEGRATION_TEST', default='5/hour'),
+        # Semantic search query endpoint (TASK-057) — 60/min/user.
+        'search_semantic': config('THROTTLE_SEARCH_SEMANTIC', default='60/minute'),
+        # Teacher translation-read endpoint (TASK-058): 120/min/user.
+        'teacher_translation_read': config('THROTTLE_TEACHER_TRANSLATION_READ', default='120/minute'),
     },
     # OpenAPI schema generation
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
@@ -645,6 +675,16 @@ CELERY_BEAT_SCHEDULE = {
         "task": "billing.cleanup_stale_webhook_events",
         "schedule": crontab(hour=3, minute=0, day_of_week=6),
     },
+    # Chat integrations: prune terminal delivery rows older than 30 days — daily 02:00.
+    "prune-chat-deliveries-daily": {
+        "task": "integrations_chat.prune_chat_deliveries",
+        "schedule": crontab(hour=2, minute=0),
+    },
+    # Calendar integrations: push LMS deadlines to Google/Outlook — every 15 min.
+    "sync-all-calendar-connections": {
+        "task": "integrations_calendar.sync_all_calendar_connections",
+        "schedule": crontab(minute="*/15"),
+    },
 }
 
 # -----------------------------------------------------------------------------
@@ -698,6 +738,17 @@ OPS_PROBE_BASE_URL = config("OPS_PROBE_BASE_URL", default="")
 OPS_PROBE_SCHEME = config("OPS_PROBE_SCHEME", default="https" if not DEBUG else "http")
 OPS_HARNESS_SHARED_SECRET = config("OPS_HARNESS_SHARED_SECRET", default="")
 OPS_RETENTION_DAYS = config("OPS_RETENTION_DAYS", default=30, cast=int)
+
+# TEST-P1-10: Prometheus /metrics scrape endpoint allowlist.
+# Comma-separated list of IPs that may scrape /metrics/. Empty list (default)
+# means deny-all to non-staff. SUPER_ADMIN + SCHOOL_ADMIN sessions always pass.
+# In production set this to the Prometheus scraper's IP (e.g. internal VPC).
+# Example: METRICS_ALLOW_IPS=10.0.0.5,10.0.0.6
+METRICS_ALLOW_IPS = [
+    ip.strip()
+    for ip in config("METRICS_ALLOW_IPS", default="").split(",")
+    if ip.strip()
+]
 
 # -----------------------------------------------------------------------------
 # Content Security Policy (CSP) configuration
@@ -781,6 +832,20 @@ SOCIAL_AUTH_GOOGLE_OAUTH2_WHITELISTED_DOMAINS = config(
 )
 
 # -----------------------------------------------------------------------------
+# Calendar Integrations (TASK-054) — Google Calendar + Outlook / MS Graph
+# -----------------------------------------------------------------------------
+GOOGLE_CALENDAR_CLIENT_ID = config('GOOGLE_CALENDAR_CLIENT_ID', default='')
+GOOGLE_CALENDAR_CLIENT_SECRET = config('GOOGLE_CALENDAR_CLIENT_SECRET', default='')
+# Full redirect URI, e.g. https://app.learnpuddle.com/api/v1/calendar/google/callback/
+GOOGLE_CALENDAR_REDIRECT_URI = config('GOOGLE_CALENDAR_REDIRECT_URI', default='')
+
+OUTLOOK_CLIENT_ID = config('OUTLOOK_CLIENT_ID', default='')
+OUTLOOK_CLIENT_SECRET = config('OUTLOOK_CLIENT_SECRET', default='')
+# Use "common" for multi-tenant MS apps, or a specific tenant UUID.
+OUTLOOK_TENANT_ID = config('OUTLOOK_TENANT_ID', default='common')
+OUTLOOK_CALENDAR_REDIRECT_URI = config('OUTLOOK_CALENDAR_REDIRECT_URI', default='')
+
+# -----------------------------------------------------------------------------
 # Two-Factor Authentication (2FA / MFA)
 # -----------------------------------------------------------------------------
 OTP_TOTP_ISSUER = config('OTP_ISSUER', default='LearnPuddle')
@@ -800,3 +865,58 @@ STRIPE_WEBHOOK_SECRET = config('STRIPE_WEBHOOK_SECRET', default='')
 # ElevenLabs TTS (Text-to-Speech)
 # -----------------------------------------------------------------------------
 ELEVENLABS_API_KEY = config('ELEVENLABS_API_KEY', default='')
+
+# -----------------------------------------------------------------------------
+# Auto-Translation Service (TASK-058)
+# -----------------------------------------------------------------------------
+# Provider selection: 'auto' (OpenRouter → Azure → Stub), 'openrouter',
+# 'azure', or 'stub'. Stub is disallowed in production unless
+# TRANSLATION_ALLOW_STUB=1 (defence against accidental deploys).
+TRANSLATION_PROVIDER = config('TRANSLATION_PROVIDER', default='auto')
+TRANSLATION_ALLOW_STUB = config('TRANSLATION_ALLOW_STUB', default=False, cast=bool)
+TRANSLATION_OPENROUTER_MODEL = config(
+    'TRANSLATION_OPENROUTER_MODEL',
+    default='meta-llama/llama-3.1-70b-instruct',
+)
+
+# Allowlisted target languages (comma-separated BCP-47 codes). Values not
+# in this list are rejected by the API with 400 UNSUPPORTED_LANGUAGE.
+TRANSLATION_TARGET_LANGUAGES = config(
+    'TRANSLATION_TARGET_LANGUAGES',
+    default='es,fr,de,hi,zh-CN,ar',
+)
+
+# Azure Translator credentials (optional fallback provider).
+AZURE_TRANSLATOR_KEY = config('AZURE_TRANSLATOR_KEY', default='')
+AZURE_TRANSLATOR_REGION = config('AZURE_TRANSLATOR_REGION', default='')
+AZURE_TRANSLATOR_ENDPOINT = config(
+    'AZURE_TRANSLATOR_ENDPOINT',
+    default='https://api.cognitive.microsofttranslator.com',
+)
+
+# -----------------------------------------------------------------------------
+# AI Course Generator (TASK-060)
+# -----------------------------------------------------------------------------
+# Provider selection: 'auto' (OpenRouter → Ollama → Stub), 'openrouter',
+# 'ollama', or 'stub'. Stub is disallowed in production unless
+# COURSE_GENERATOR_ALLOW_STUB=1.
+COURSE_GENERATOR_LLM_PROVIDER = config('COURSE_GENERATOR_LLM_PROVIDER', default='auto')
+COURSE_GENERATOR_ALLOW_STUB = config('COURSE_GENERATOR_ALLOW_STUB', default=False, cast=bool)
+COURSE_GENERATOR_OPENROUTER_MODEL = config(
+    'COURSE_GENERATOR_OPENROUTER_MODEL',
+    default='meta-llama/llama-3.1-70b-instruct',
+)
+COURSE_GENERATOR_OLLAMA_MODEL = config('COURSE_GENERATOR_OLLAMA_MODEL', default='llama3')
+
+# AI Chatbot Tutor (TASK-059)
+# -----------------------------------------------------------------------------
+# Provider selection: 'auto' (OpenRouter → Ollama → Stub), 'openrouter',
+# 'ollama', or 'stub'. Stub is disallowed in production unless
+# CHATBOT_ALLOW_STUB=1.
+CHATBOT_LLM_PROVIDER = config('CHATBOT_LLM_PROVIDER', default='auto')
+CHATBOT_ALLOW_STUB = config('CHATBOT_ALLOW_STUB', default=False, cast=bool)
+CHATBOT_OPENROUTER_MODEL = config(
+    'CHATBOT_OPENROUTER_MODEL',
+    default='meta-llama/llama-3.1-70b-instruct',
+)
+CHATBOT_OLLAMA_MODEL = config('CHATBOT_OLLAMA_MODEL', default='llama3')

@@ -3,19 +3,24 @@
 // Multi-step wizard for creating a new AI classroom. Steps: topic input,
 // outline review, generation progress, and completion with preview.
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
+import { useToast } from '../common/Toast';
+import { AnimatePresence, motion } from 'motion/react';
 import {
   BookOpen,
   ChevronRight,
   ChevronLeft,
   Loader2,
   CheckCircle,
+  CheckCircle2,
   AlertCircle,
   Sparkles,
   Play,
   Globe,
 } from 'lucide-react';
 import { useMAICGeneration, type GenerationStep } from '../../hooks/useMAICGeneration';
+import { useMAICStageStore } from '../../stores/maicStageStore';
+import { useDraftCache } from '../../hooks/useDraftCache';
 import { maicApi } from '../../services/openmaicService';
 import type { MAICAgent, MAICGenerationConfig, MAICOutlineScene } from '../../types/maic';
 import { AgentGenerationStep } from './AgentGenerationStep';
@@ -51,6 +56,60 @@ const LANGUAGES = [
   { value: 'ja', label: 'Japanese' },
   { value: 'ko', label: 'Korean' },
   { value: 'ar', label: 'Arabic' },
+];
+
+// FULL-1 — grade-aware prompt knobs. Backend `_extract_generation_context`
+// at apps/courses/maic_views.py:84-113 only `.strip()`s these values, so
+// the canonical lists below are pure UX hygiene; any string the user types
+// in `subject` flows through verbatim.
+const GRADE_LEVELS = [
+  '',
+  'KG',
+  'Grade 1',
+  'Grade 2',
+  'Grade 3',
+  'Grade 4',
+  'Grade 5',
+  'Grade 6',
+  'Grade 7',
+  'Grade 8',
+  'Grade 9',
+  'Grade 10',
+  'Grade 11',
+  'Grade 12',
+  'Undergraduate',
+  'Postgraduate',
+  'Adult Learner',
+];
+
+const SYLLABUS_BOARDS = [
+  'Generic',
+  'CBSE',
+  'ICSE',
+  'IB MYP',
+  'IB DP',
+  'Cambridge IGCSE',
+  'Cambridge A-Level',
+  'State Board',
+  'AP',
+  'Common Core',
+];
+
+const SUBJECT_SUGGESTIONS = [
+  'Mathematics',
+  'Science',
+  'Physics',
+  'Chemistry',
+  'Biology',
+  'English',
+  'History',
+  'Geography',
+  'Computer Science',
+  'Economics',
+  'Social Studies',
+  'Art',
+  'Music',
+  'Physical Education',
 ];
 
 function stepFromGeneration(genStep: GenerationStep, currentWizardStep: WizardStep): WizardStep {
@@ -89,8 +148,20 @@ const STEP_LABELS = [
 ];
 
 export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, onComplete }) => {
-  // Form state
-  const [topic, setTopic] = useState('');
+  // Form state. Topic persists to localStorage so a surprise refresh
+  // during generation doesn't erase the typed prompt. Cleared on reset.
+  const { value: topic, setValue: setTopic, clearDraft: clearTopicDraft } =
+    useDraftCache<string>('maic.draft.topic', '');
+  // FULL-1 — grade / subject / syllabus board persist alongside topic so a
+  // refresh during generation doesn't wipe them. Cache key bumped to v2 to
+  // avoid colliding with any pre-existing draft cache schema. Each field is
+  // independent so dropping one doesn't invalidate the others.
+  const { value: gradeLevel, setValue: setGradeLevel, clearDraft: clearGradeDraft } =
+    useDraftCache<string>('maic.draft.gradeLevel.v2', '');
+  const { value: subject, setValue: setSubject, clearDraft: clearSubjectDraft } =
+    useDraftCache<string>('maic.draft.subject.v2', '');
+  const { value: syllabusBoard, setValue: setSyllabusBoard, clearDraft: clearBoardDraft } =
+    useDraftCache<string>('maic.draft.syllabusBoard.v2', 'Generic');
   const [pdfText, setPdfText] = useState<string | undefined>();
   const [language, setLanguage] = useState('en');
   const [agentCount, setAgentCount] = useState(3);
@@ -121,15 +192,49 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
     error,
     startedAt,
     isTabHidden,
+    firstSceneReadyAt,
     startOutlineGeneration,
     updateOutline,
     startContentGeneration,
+    retryScene,
     cancel,
     reset: resetGeneration,
   } = useMAICGeneration();
 
   // Derive effective step (sync wizard step with generation state)
   const effectiveStep = stepFromGeneration(genStep, wizardStep);
+
+  // T4 — scenes whose generation failed. Rendered as a "Some scenes
+  // need a retry" callout inside step 4 + 5 with per-scene retry buttons.
+  const failedOutlineIds = useMAICStageStore((s) => s.failedOutlineIds);
+  const failedScenes = useMemo(() => {
+    if (!outline) return [];
+    const failedSet = new Set(failedOutlineIds);
+    return outline.scenes.filter((s) => failedSet.has(s.id));
+  }, [outline, failedOutlineIds]);
+
+  // Sprint 3 · C.6 — surface generation failures as toasts so an error
+  // isn't only visible in the inline banner (easy to miss when the user
+  // has tabbed away). Dedupe against `lastToastedError` so the same
+  // error doesn't re-toast on every render.
+  const toast = useToast();
+  const lastToastedErrorRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (error && error !== lastToastedErrorRef.current) {
+      lastToastedErrorRef.current = error;
+      toast.error('Generation failed', error);
+    }
+    if (!error) lastToastedErrorRef.current = null;
+  }, [error, toast]);
+  // Fire a success toast the first time we land on the complete step.
+  const successToastedRef = useRef(false);
+  useEffect(() => {
+    if (genStep === 'complete' && !successToastedRef.current) {
+      successToastedRef.current = true;
+      toast.success('Classroom ready', outline?.topic);
+    }
+    if (genStep !== 'complete') successToastedRef.current = false;
+  }, [genStep, outline?.topic, toast]);
 
   // ─── Step 1: Generate outline ─────────────────────────────────────────────
 
@@ -167,12 +272,29 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
         enableTTS: true,
         enableImages: true,
         courseId,
+        // FULL-1 — only thread non-empty values; backend defaults handle
+        // the rest. Empty strings would land as a garbage grade hint.
+        gradeLevel: gradeLevel.trim() || undefined,
+        subject: subject.trim() || undefined,
+        syllabusBoard: syllabusBoard.trim() || undefined,
       };
 
       setWizardStep(3);
       await startOutlineGeneration(config, approvedAgents);
     },
-    [topic, pdfText, webSearchContext, language, sceneCount, courseId, startOutlineGeneration],
+    [
+      topic,
+      pdfText,
+      webSearchContext,
+      webSearchEnabled,
+      language,
+      sceneCount,
+      courseId,
+      gradeLevel,
+      subject,
+      syllabusBoard,
+      startOutlineGeneration,
+    ],
   );
 
   // ─── Step 2: Start full generation ────────────────────────────────────────
@@ -187,9 +309,18 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
         topic: outline.topic,
         language: outline.language,
         course_id: courseId,
+        // FULL-1 — also send grade-aware fields at top level (snake_case)
+        // so the create endpoint can stamp them on the Classroom record
+        // and downstream regenerations/exports keep the same audience.
+        ...(gradeLevel.trim() ? { grade_level: gradeLevel.trim() } : {}),
+        ...(subject.trim() ? { subject: subject.trim() } : {}),
+        ...(syllabusBoard.trim() ? { syllabus_board: syllabusBoard.trim() } : {}),
         config: {
           agentCount,
           sceneCount: outline.scenes.length,
+          ...(gradeLevel.trim() ? { grade_level: gradeLevel.trim() } : {}),
+          ...(subject.trim() ? { subject: subject.trim() } : {}),
+          ...(syllabusBoard.trim() ? { syllabus_board: syllabusBoard.trim() } : {}),
         },
       });
 
@@ -201,15 +332,21 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
     } catch (err) {
       // Error is handled inside useMAICGeneration
     }
-  }, [outline, courseId, agentCount, startContentGeneration]);
+  }, [outline, courseId, agentCount, gradeLevel, subject, syllabusBoard, startContentGeneration]);
 
   // ─── Step 4: Open classroom ───────────────────────────────────────────────
 
   const handleOpenClassroom = useCallback(() => {
     if (classroomId) {
+      // Successful submission — drop the cached draft so the next
+      // classroom starts on a clean slate.
+      clearTopicDraft();
+      clearGradeDraft();
+      clearSubjectDraft();
+      clearBoardDraft();
       onComplete?.(classroomId);
     }
-  }, [classroomId, onComplete]);
+  }, [classroomId, onComplete, clearTopicDraft, clearGradeDraft, clearSubjectDraft, clearBoardDraft]);
 
   // ─── Outline change handler ───────────────────────────────────────────────
 
@@ -224,7 +361,10 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
 
   const handleReset = useCallback(() => {
     resetGeneration();
-    setTopic('');
+    clearTopicDraft();
+    clearGradeDraft();
+    clearSubjectDraft();
+    clearBoardDraft();
     setPdfText(undefined);
     setLanguage('en');
     setAgentCount(3);
@@ -234,7 +374,7 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
     setWizardStep(1);
     setShowWebSearch(false);
     setWebSearchContext(undefined);
-  }, [resetGeneration]);
+  }, [resetGeneration, clearTopicDraft, clearGradeDraft, clearSubjectDraft, clearBoardDraft]);
 
   return (
     <div className="max-w-2xl mx-auto">
@@ -421,6 +561,67 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
             </select>
           </div>
 
+          {/* FULL-1 — Audience shaping (all optional). Backend defaults to
+              Generic syllabus / no grade hint when omitted; values flow into
+              the grade-aware prompt builder via _extract_generation_context. */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div>
+              <label htmlFor="maic-grade-level" className="block text-sm font-medium text-gray-700 mb-1">
+                Grade level <span className="text-xs text-gray-400 font-normal">(optional)</span>
+              </label>
+              <select
+                id="maic-grade-level"
+                value={gradeLevel}
+                onChange={(e) => setGradeLevel(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+              >
+                {GRADE_LEVELS.map((g) => (
+                  <option key={g || 'none'} value={g}>
+                    {g || 'No preference'}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label htmlFor="maic-subject" className="block text-sm font-medium text-gray-700 mb-1">
+                Subject <span className="text-xs text-gray-400 font-normal">(optional)</span>
+              </label>
+              <input
+                id="maic-subject"
+                type="text"
+                value={subject}
+                onChange={(e) => setSubject(e.target.value)}
+                placeholder="e.g., Mathematics"
+                list="maic-subject-suggestions"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+              />
+              <datalist id="maic-subject-suggestions">
+                {SUBJECT_SUGGESTIONS.map((s) => (
+                  <option key={s} value={s} />
+                ))}
+              </datalist>
+            </div>
+
+            <div>
+              <label htmlFor="maic-syllabus-board" className="block text-sm font-medium text-gray-700 mb-1">
+                Syllabus board
+              </label>
+              <select
+                id="maic-syllabus-board"
+                value={syllabusBoard}
+                onChange={(e) => setSyllabusBoard(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+              >
+                {SYLLABUS_BOARDS.map((b) => (
+                  <option key={b} value={b}>
+                    {b}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
           {/* Agent count slider */}
           <div>
             <label htmlFor="maic-agents" className="flex items-center justify-between text-sm font-medium text-gray-700 mb-1">
@@ -497,25 +698,63 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
         />
       )}
 
-      {/* ─── Step 3: Outline Review ────────────────────────────────────────── */}
+      {/* ─── Step 3: Outline streaming — Sprint 2 · A.2 ──────────────────────
+          Each SSE `outline` event grows the scene list; we render the
+          latest snapshot as a growing checklist so the student can watch
+          their outline materialize instead of staring at a spinner. */}
       {effectiveStep === 3 && (!outline || genStep === 'outlining') && (
-        <div className="py-10 text-center">
-          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-indigo-100">
-            <Loader2 className="h-6 w-6 animate-spin text-indigo-500" />
-          </div>
-          <h2 className="text-lg font-semibold text-gray-900">Building your outline…</h2>
-          <p className="mt-1 text-sm text-gray-500">
-            Arranging scenes for {agents.length} agent{agents.length === 1 ? '' : 's'}.
-          </p>
-          {progress > 0 && (
-            <div className="mx-auto mt-5 w-56">
-              <div className="w-full bg-indigo-100 rounded-full h-1 overflow-hidden">
-                <div
-                  className="h-1 rounded-full bg-gradient-to-r from-indigo-500 to-indigo-400 transition-all duration-700"
-                  style={{ width: `${progress}%` }}
-                />
-              </div>
+        <div className="py-8">
+          <div className="text-center mb-6">
+            <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-indigo-100">
+              <Loader2 className="h-6 w-6 animate-spin text-indigo-500" />
             </div>
+            <h2 className="text-lg font-semibold text-gray-900">Building your outline…</h2>
+            <p className="mt-1 text-sm text-gray-500">
+              Arranging scenes for {agents.length} agent{agents.length === 1 ? '' : 's'}.
+            </p>
+            {progress > 0 && (
+              <div className="mx-auto mt-4 w-56">
+                <div className="w-full bg-indigo-100 rounded-full h-1 overflow-hidden">
+                  <div
+                    className="h-1 rounded-full bg-gradient-to-r from-indigo-500 to-indigo-400 transition-all duration-700"
+                    style={{ width: `${progress}%` }}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
+          {outline && outline.scenes.length > 0 && (
+            <ol className="mx-auto max-w-lg space-y-2">
+              <AnimatePresence initial={false}>
+                {outline.scenes.map((scene, i) => (
+                  <motion.li
+                    key={`${scene.title || 'scene'}-${i}`}
+                    layout
+                    initial={{ opacity: 0, x: -16 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.25, ease: [0.21, 1, 0.36, 1] }}
+                    className="flex items-start gap-3 rounded-lg border border-indigo-100 bg-white px-3 py-2 shadow-sm"
+                  >
+                    <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-indigo-500" />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium text-gray-800 truncate">
+                        {scene.title || `Scene ${i + 1}`}
+                      </p>
+                      {scene.description && (
+                        <p className="text-xs text-gray-500 line-clamp-2 mt-0.5">
+                          {scene.description}
+                        </p>
+                      )}
+                    </div>
+                    <span className="text-[10px] font-medium tabular-nums text-gray-400">
+                      {i + 1}
+                    </span>
+                  </motion.li>
+                ))}
+              </AnimatePresence>
+            </ol>
           )}
         </div>
       )}
@@ -581,6 +820,57 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
             startedAt={startedAt ?? undefined}
             isTabHidden={isTabHidden}
           />
+
+          {/* T4 — failed-scene callout. Lists any scenes whose content
+              or actions failed to generate and exposes per-scene retry.
+              Non-blocking: remaining scenes keep going via per-iteration
+              try/catch so one flaky LLM call doesn't abort the pipeline. */}
+          {failedScenes.length > 0 && (
+            <div className="mx-auto max-w-md rounded-lg border border-red-200 bg-red-50 px-3 py-2 space-y-1.5">
+              <div className="flex items-start gap-2">
+                <AlertCircle className="h-4 w-4 shrink-0 text-red-500 mt-0.5" />
+                <p className="text-xs font-medium text-red-800">
+                  {failedScenes.length} scene{failedScenes.length === 1 ? '' : 's'} need retry
+                </p>
+              </div>
+              <ul className="pl-6 space-y-1">
+                {failedScenes.map((s) => (
+                  <li key={s.id} className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] text-red-700 truncate">
+                      {s.title || s.id}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => void retryScene(s.id)}
+                      className="shrink-0 text-[10px] font-semibold text-red-700 hover:text-red-900 bg-white border border-red-200 rounded px-1.5 py-0.5 hover:bg-red-50 transition-colors"
+                    >
+                      Retry
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Scene 1 ready notice — informational only. The "Open classroom"
+              button was removed here: user feedback said early-open produced
+              broken/incomplete playback (audio lag, partial content). The
+              classroom only opens once generation fully completes (step 5).
+              Partial-state streaming into the store is kept (live scenes
+              render as they arrive if the teacher watches the wizard). */}
+          {firstSceneReadyAt && totalScenes > 1 && classroomId && (
+            <div className="mx-auto max-w-md rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-3 flex items-start gap-2">
+              <CheckCircle className="h-4 w-4 shrink-0 text-emerald-500 mt-0.5" />
+              <div className="min-w-0">
+                <p className="text-xs font-medium text-emerald-800">
+                  Scene 1 is ready
+                </p>
+                <p className="text-[11px] text-emerald-700/80 mt-0.5">
+                  Preparing the rest of the class. The classroom will open automatically when all scenes finish.
+                </p>
+              </div>
+            </div>
+          )}
 
           <div className="text-center">
             <button

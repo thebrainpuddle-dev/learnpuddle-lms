@@ -60,7 +60,7 @@ describe('TourContext', () => {
   beforeEach(() => {
     localStorage.clear();
     sessionStorage.clear();
-    vi.clearAllMocks();
+    vi.resetAllMocks();
 
     mockedTourSteps.SUPER_ADMIN = [];
     mockedTourSteps.SCHOOL_ADMIN = [];

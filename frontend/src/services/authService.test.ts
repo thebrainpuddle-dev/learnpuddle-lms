@@ -22,7 +22,7 @@ const mockedApi = api as unknown as {
 
 describe('authService', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
   });
 
   describe('login', () => {

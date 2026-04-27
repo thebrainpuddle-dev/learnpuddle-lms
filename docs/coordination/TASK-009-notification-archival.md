@@ -2,7 +2,7 @@
 
 **Priority:** P2 (Operations)
 **Phase:** 2
-**Status:** review
+**Status:** done
 **Assigned:** backend-engineer
 **Estimated:** 2-3 hours
 
@@ -113,3 +113,40 @@ CELERY_BEAT_SCHEDULE = {
 **`config/settings.py`:**
 - Added `CELERY_BEAT_SCHEDULE` dict with both tasks and their crontab schedules.
 - Added `from celery.schedules import crontab` import at the Celery config block.
+
+## Review (2026-04-20)
+
+**Verdict: APPROVE**
+
+- Migration chain verified complete: `0005_notification_archived_at` adds
+  `archived_at` (db_index=True), `0006_notification_is_archived` adds the
+  boolean flag (db_index=True), `0007_rename_*` updates index names. All three
+  are `AddField` / `RenameIndex` — zero-downtime additive.
+- `ActiveNotificationManager(TenantManager)` in `apps/notifications/models.py`
+  L7-21 correctly chains `filter(is_archived=False, archived_at__isnull=True)`
+  on top of the tenant filter. `objects = ActiveNotificationManager()` is the
+  default; `all_objects = models.Manager()` kept for archival bypass.
+- `archive_old_notifications` (tasks.py L337-357) stamps
+  `is_archived=True, archived_at=now` on rows `created_at__lte=cutoff` with
+  `archived_at__isnull=True`. Uses `Notification.all_objects` to bypass the
+  default manager — correct. Returns `{"archived": count}`.
+- `delete_archived_notifications` (tasks.py L360-379) hard-deletes rows with
+  `archived_at__lte=cutoff` (30 days). Uses `all_objects`. 120-day total
+  lifecycle matches spec.
+- `config/settings.py` L635-645 wires Celery Beat: `archive-old-notifications`
+  at `crontab(hour=3, minute=0)` daily and `delete-archived-notifications` at
+  `crontab(hour=4, minute=0, day_of_week=0)` weekly Sunday. Task names
+  `notifications.archive_old_notifications` / `notifications.delete_archived_notifications`
+  match the `@shared_task(name=...)` decorators.
+- `apps/notifications/views.py` verified: default queries use `Notification.objects`
+  (auto-filters archived); admin/maintenance paths correctly switch to
+  `Notification.all_objects` when targeting archived rows.
+- Tenant isolation preserved: `ActiveNotificationManager` extends `TenantManager`
+  so `get_queryset` still applies current-tenant filter first.
+- Deferred items (acceptable, documented): admin manual-trigger endpoint and
+  integration tests (require Docker; to be added under TASK-010).
+- Non-blocking nit: `archive_old_notifications` uses `timezone.now()` twice
+  (`cutoff` and `now`). Tiny race risk only in philosophical terms — cutoff can
+  drift microseconds from now. No product impact.
+
+Status updated to `done`.

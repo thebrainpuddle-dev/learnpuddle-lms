@@ -18,6 +18,7 @@ urlpatterns = [
         name="student_assignment_submission_detail",
     ),
     path("quizzes/<uuid:assignment_id>/", student_views.student_quiz_detail, name="student_quiz_detail"),
+    path("quizzes/<uuid:assignment_id>/start/", student_views.student_quiz_start, name="student_quiz_start"),
     path("quizzes/<uuid:assignment_id>/submit/", student_views.student_quiz_submit, name="student_quiz_submit"),
     path("search/", student_views.student_search, name="student_search"),
 ]

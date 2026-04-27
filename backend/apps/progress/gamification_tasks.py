@@ -356,6 +356,59 @@ def _upsert_snapshots(tenant, period, snapshot_date, entries):
     return created_count, updated_count
 
 
+@shared_task(name='progress.close_league_week')
+def close_league_week_task(week_start_date_iso=None):
+    """
+    Celery task: close all open leagues across all tenants for a given week.
+
+    Runs Monday 00:00 UTC (see Celery beat schedule in config/celery.py).
+
+    Idempotent: a league already closed (``closed_at IS NOT NULL``) is skipped.
+
+    Params:
+        week_start_date_iso: optional ISO 8601 date string; defaults to the
+            Monday of the current ISO week. Supplying this lets ops replay a
+            prior week if the task missed a run.
+    """
+    from datetime import date as _date
+
+    from apps.progress.gamification_models import GamificationConfig
+    from apps.progress.league_engine import _iso_week_start, close_league_week
+
+    if week_start_date_iso:
+        week_start = _date.fromisoformat(week_start_date_iso)
+    else:
+        week_start = _iso_week_start()
+
+    aggregate = {
+        'tenants_processed': 0,
+        'leagues_closed': 0,
+        'snapshots_written': 0,
+        'promoted': 0,
+        'held': 0,
+        'demoted': 0,
+    }
+
+    configs = GamificationConfig.objects.filter(
+        is_active=True, leagues_enabled=True,
+    ).select_related('tenant')
+
+    for config in configs:
+        tenant = config.tenant
+        if not tenant.is_active:
+            continue
+        result = close_league_week(tenant=tenant, week_start_date=week_start)
+        aggregate['tenants_processed'] += 1
+        aggregate['leagues_closed'] += result['leagues_closed']
+        aggregate['snapshots_written'] += result['snapshots_written']
+        aggregate['promoted'] += result['promoted']
+        aggregate['held'] += result['held']
+        aggregate['demoted'] += result['demoted']
+
+    logger.info("close_league_week_task complete: %s", aggregate)
+    return aggregate
+
+
 @shared_task(name='progress.backfill_xp_for_existing_progress')
 def backfill_xp_for_existing_progress(tenant_id=None):
     """
@@ -487,9 +540,16 @@ def backfill_xp_for_existing_progress(tenant_id=None):
                 summary['assignment_submissions_awarded'] += 1
 
         # --- Quiz submissions ---
-        quiz_submissions = QuizSubmission.all_objects.filter(
-            tenant=tenant,
-        ).select_related('teacher', 'quiz')
+        # Only backfill completed submissions (score IS NOT NULL).
+        # In-progress attempts (score IS NULL) should not earn XP.
+        # Abandoned timed attempts (time_expired=True, score=0) were closed out
+        # by quiz_helpers.start_quiz_attempt() and must not earn XP either.
+        quiz_submissions = (
+            QuizSubmission.all_objects.filter(tenant=tenant)
+            .exclude(score__isnull=True)
+            .exclude(time_expired=True, score=0)
+            .select_related('teacher', 'quiz')
+        )
 
         for submission in quiz_submissions.iterator():
             exists = XPTransaction.all_objects.filter(

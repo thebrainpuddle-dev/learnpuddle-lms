@@ -15,6 +15,51 @@ Usage example:
         assert response.status_code == 200
 """
 
+# ---------------------------------------------------------------------------
+# Host-env guard: fail fast with one clear error instead of 20+ cryptic ones.
+#
+# `utils/logging.py` imports `pythonjsonlogger` at module level (line 32).
+# If the host `pytest` binary (e.g. Homebrew Python 3.13) is used instead of
+# the project venv, packages may be missing and every test that transitively
+# imports `utils.logging` (or future utils) errors at collection time.
+#
+# This block is inert inside Docker (all packages ARE installed there).
+# Outside Docker it raises ONE actionable error before any test is collected,
+# naming the missing module so the developer knows exactly what to install.
+#
+# SPRINT-2-BATCH-2-F9: tuple-based iteration replaces the single hardcoded
+# try/except so a future requirements addition that lands in utils/logging.py
+# (or any other conftest-imported util) can be added to _REQUIRED_HOST_MODULES
+# without touching the error-handling logic.
+# ---------------------------------------------------------------------------
+_REQUIRED_HOST_MODULES = (
+    "pythonjsonlogger",
+)
+
+for _mod_name in _REQUIRED_HOST_MODULES:
+    try:
+        __import__(_mod_name)
+    except ImportError as _exc:
+        raise ImportError(
+            "\n\n"
+            "========================================================\n"
+            f"  ENV-P1-1: {_mod_name!r} is missing from the Python\n"
+            "  interpreter that is running pytest.\n"
+            "\n"
+            "  Root cause: host pytest (/usr/local/bin/pytest) uses\n"
+            "  Homebrew Python 3.13 which does not have this package,\n"
+            "  while the project venv (backend/.venv / backend/venv)\n"
+            "  does. utils/logging.py fails to import.\n"
+            "\n"
+            "  Canonical fix (recommended):\n"
+            "    docker compose exec web pytest <args>\n"
+            "\n"
+            "  Host escape-hatch:\n"
+            f"    pip install {_mod_name}\n"
+            "  (must target the same Python that `which pytest` uses)\n"
+            "========================================================\n"
+        ) from _exc
+
 import pytest
 from rest_framework.test import APIClient
 
@@ -243,6 +288,38 @@ def override_allowed_hosts(settings):
 
 
 # ---------------------------------------------------------------------------
+# PERF-P0-5: run Celery tasks (and chords) synchronously in tests
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _celery_eager_mode():
+    """Force Celery into eager mode for the test session.
+
+    PERF-P0-5 introduced a ``chord`` in ``pre_generate_classroom_tts`` —
+    eager mode runs each scene-task inline and immediately fires the
+    callback, which is what the existing test suite expects (it calls the
+    parent task synchronously and then asserts on the post-state).
+
+    We mutate the live celery app config rather than ``settings`` because
+    ``django-celery-results`` pulls the app config once at autodiscovery.
+    """
+    try:
+        from config.celery import app as _celery_app
+    except Exception:  # noqa: BLE001
+        yield
+        return
+    prev_always_eager = _celery_app.conf.task_always_eager
+    prev_propagates = _celery_app.conf.task_eager_propagates
+    _celery_app.conf.task_always_eager = True
+    _celery_app.conf.task_eager_propagates = True
+    try:
+        yield
+    finally:
+        _celery_app.conf.task_always_eager = prev_always_eager
+        _celery_app.conf.task_eager_propagates = prev_propagates
+
+
+# ---------------------------------------------------------------------------
 # Tenant context cleanup
 # ---------------------------------------------------------------------------
 
@@ -256,3 +333,87 @@ def clear_tenant_context():
     clear_current_tenant()
     yield
     clear_current_tenant()
+
+
+# ---------------------------------------------------------------------------
+# SPRINT-2-BATCH-8-F8: Prometheus registry isolation fixture
+# ---------------------------------------------------------------------------
+#
+# Counters / histograms in :mod:`utils.metrics` are module-level singletons
+# attached to ``prometheus_client.REGISTRY`` — the canonical pattern, but it
+# means tests that exercise the same metrics in different modules can
+# carry-pollute each other's sample values.  Tests inside
+# ``backend/tests/test_metrics.py`` defend against this with
+# delta-based ``after == before + 1`` assertions, but absolute-value
+# assertions are unsafe without explicit cleanup.
+#
+# This fixture provides an opt-in snapshot/restore for test modules that
+# want absolute counter assertions: it captures every sample value
+# emitted by every collector before the test runs and resets each
+# Counter / Gauge / Histogram back to its pre-test state afterwards.
+# Use sparingly — most metric tests should still prefer the cheaper
+# delta-based ``_sample()`` approach.
+#
+# Usage::
+#
+#     def test_my_absolute_counter(metrics_registry_snapshot):
+#         my_counter.inc()
+#         assert REGISTRY.get_sample_value("my_counter_total") == 1.0
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def metrics_registry_snapshot():
+    """Snapshot/restore prometheus_client REGISTRY samples around a test.
+
+    Captures the full ``REGISTRY.collect()`` snapshot before the test and
+    rewinds Counter / Gauge values to their pre-test state on teardown.
+    Histograms are not perfectly restorable (they don't expose a public
+    ``_value.set()`` for buckets), so we record + log a deviation rather
+    than raising — most tests don't care about histogram drift.
+
+    Yields the captured snapshot dict so tests can inspect prior state
+    if needed.
+    """
+    from prometheus_client import REGISTRY
+
+    # Capture (collector, label_dict) -> value
+    snapshot: dict = {}
+    for collector in list(REGISTRY._collector_to_names.keys()):
+        for metric in collector.collect():
+            for sample in metric.samples:
+                snapshot[(metric.name, tuple(sorted(sample.labels.items())),
+                          sample.name)] = sample.value
+
+    yield snapshot
+
+    # Restore Counter / Gauge values; ignore Histograms (best-effort).
+    for collector in list(REGISTRY._collector_to_names.keys()):
+        # Reset any Counter / Gauge whose post-state diverges from
+        # captured pre-state.  We only know how to set Counters via the
+        # internal ``_value`` attribute; if the API changes upstream
+        # this fixture will need updating.
+        cls_name = type(collector).__name__
+        if cls_name not in ("Counter", "Gauge"):
+            continue
+        for metric in collector.collect():
+            for sample in metric.samples:
+                key = (metric.name,
+                       tuple(sorted(sample.labels.items())),
+                       sample.name)
+                pre = snapshot.get(key, 0.0)
+                if sample.value == pre:
+                    continue
+                # Best-effort: navigate the internal label map.
+                try:
+                    label_values = tuple(
+                        sample.labels[k] for k in collector._labelnames
+                    )
+                    metric_obj = collector._metrics.get(label_values)
+                    if metric_obj is None:
+                        continue
+                    if hasattr(metric_obj, "_value"):
+                        metric_obj._value.set(pre)
+                except Exception:
+                    # Fixture must never raise on teardown — observability
+                    # cleanup is best-effort, not a correctness boundary.
+                    continue

@@ -20,6 +20,7 @@ urlpatterns = [
         name="assignment_submission_detail",
     ),
     path("quizzes/<uuid:assignment_id>/", teacher_views.quiz_detail, name="quiz_detail"),
+    path("quizzes/<uuid:assignment_id>/start/", teacher_views.quiz_start, name="quiz_start"),
     path("quizzes/<uuid:assignment_id>/submit/", teacher_views.quiz_submit, name="quiz_submit"),
     path("competency/", teacher_views.teacher_competency_dashboard, name="teacher_competency_dashboard"),
     path("search/", teacher_views.teacher_search, name="teacher_search"),

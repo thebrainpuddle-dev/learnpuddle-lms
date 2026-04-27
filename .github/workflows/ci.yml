@@ -48,8 +48,8 @@ jobs:
       DB_HOST: localhost
       DB_PORT: "5432"
       REDIS_URL: redis://localhost:6379/0
-      # Current achievable threshold. Target: 60% — increase as tests are added.
-      COV_FAIL_UNDER: "45"
+      # Phase 2 target: 60%. Raise to 75% once integration tests are added.
+      COV_FAIL_UNDER: "60"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -173,44 +173,51 @@ jobs:
           REACT_APP_API_URL: /api
           CI: "false"  # don't treat warnings as errors
 
-  # ── E2E tests (requires a running deployment) ────────────────────────────
+  # ── E2E tests (BLOCKING — requires E2E_BASE_URL secret to be configured) ──
   # Set the E2E_BASE_URL repository secret to your staging/preview URL.
-  # When no URL is configured the job is skipped — backend + frontend unit
-  # tests and the pip-audit still gate merges.
+  # This job FAILS if E2E_BASE_URL is not set — E2E tests gate all deployments.
+  # To temporarily bypass during bootstrapping, add E2E_SKIP_BLOCKING=true as a
+  # repository variable (not secret) and the job will warn but not fail.
   e2e-test:
     runs-on: ubuntu-latest
     needs: [backend-test, frontend-test]
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check E2E target is configured
+      - name: Require E2E target is configured
         id: check
         run: |
           if [ -z "$E2E_URL" ]; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::E2E_BASE_URL secret not set — skipping e2e tests. Set it to your staging URL to enable."
+            if [ "$E2E_SKIP_BLOCKING" = "true" ]; then
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              echo "::warning::E2E_BASE_URL secret not set and E2E_SKIP_BLOCKING=true — E2E tests skipped. This is a TEMPORARY bypass; configure E2E_BASE_URL to gate deployments properly."
+            else
+              echo "::error::E2E_BASE_URL secret is not configured. Set it to your staging URL to enable E2E tests, or set repository variable E2E_SKIP_BLOCKING=true to temporarily bypass."
+              exit 1
+            fi
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
         env:
           E2E_URL: ${{ secrets.E2E_BASE_URL }}
+          E2E_SKIP_BLOCKING: ${{ vars.E2E_SKIP_BLOCKING }}
 
       - uses: actions/setup-node@v4
-        if: steps.check.outputs.skip == 'false'
+        if: steps.check.outputs.skip != 'true'
         with:
           node-version: "18"
           cache: npm
           cache-dependency-path: e2e/package-lock.json
 
       - name: Install Playwright
-        if: steps.check.outputs.skip == 'false'
+        if: steps.check.outputs.skip != 'true'
         run: |
           npm ci
           npx playwright install --with-deps chromium
         working-directory: e2e
 
       - name: Run E2E tests
-        if: steps.check.outputs.skip == 'false'
+        if: steps.check.outputs.skip != 'true'
         run: npm test -- --project=chromium
         working-directory: e2e
         env:
@@ -222,7 +229,7 @@ jobs:
 
       - name: Upload Playwright Report
         uses: actions/upload-artifact@v4
-        if: always() && steps.check.outputs.skip == 'false'
+        if: always() && steps.check.outputs.skip != 'true'
         with:
           name: playwright-report
           path: e2e/playwright-report/
@@ -285,6 +292,7 @@ jobs:
           STAGING_HOST: ${{ secrets.STAGING_HOST }}
           STAGING_USER: ${{ secrets.STAGING_USER }}
           STAGING_PORT: ${{ secrets.STAGING_PORT || '22' }}
+          NEW_SHA: ${{ github.sha }}
         run: |
           ssh \
             -p "$STAGING_PORT" \
@@ -292,24 +300,51 @@ jobs:
             -o StrictHostKeyChecking=yes \
             -o ServerAliveInterval=30 \
             -o ServerAliveCountMax=3 \
-            "$STAGING_USER@$STAGING_HOST" 'bash -se' <<'EOF'
+            "$STAGING_USER@$STAGING_HOST" 'bash -se' <<ENDSSH
           set -euo pipefail
           cd /opt/lms-staging
-          DOMAIN="$(awk -F= '/^STAGING_DOMAIN=/{print $2}' .env.staging 2>/dev/null | tail -1 | tr -d '\r')"
-          if [ -z "$DOMAIN" ]; then DOMAIN="staging.learnpuddle.com"; fi
+          DOMAIN="\$(awk -F= '/^STAGING_DOMAIN=/{print \$2}' .env.staging 2>/dev/null | tail -1 | tr -d '\r')"
+          if [ -z "\$DOMAIN" ]; then DOMAIN="staging.learnpuddle.com"; fi
+
+          # ── Capture rollback SHA before touching anything ──────────────
+          PREV_SHA="\$(cat .deployed-sha 2>/dev/null || echo '')"
+          echo "Current staging SHA: \${PREV_SHA:-none}"
+          echo "Deploying new staging SHA: ${NEW_SHA}"
+
           # Pull new staging images
-          docker compose -f docker-compose.staging.yml pull
+          docker compose -f docker-compose.staging.yml pull < /dev/null
           # Run migrations
-          docker compose -f docker-compose.staging.yml up -d db redis
-          docker compose -f docker-compose.staging.yml run --rm -T web python manage.py migrate --noinput
-          docker compose -f docker-compose.staging.yml run --rm -T -u root web python manage.py collectstatic --noinput
+          docker compose -f docker-compose.staging.yml up -d db redis < /dev/null
+          docker compose -f docker-compose.staging.yml run --rm -T web python manage.py migrate --noinput < /dev/null
+          docker compose -f docker-compose.staging.yml run --rm -T -u root web python manage.py collectstatic --noinput < /dev/null
           # Restart all services
-          docker compose -f docker-compose.staging.yml up -d --remove-orphans
-          # Verify container + nginx origin health (auto-restarts nginx once on failure)
+          docker compose -f docker-compose.staging.yml up -d --remove-orphans < /dev/null
+
+          # ── Health check — auto-rollback on failure ───────────────────
           sleep 10
-          ./scripts/check-origin-health.sh docker-compose.staging.yml "$DOMAIN"
-          echo "Staging deployment complete!"
-          EOF
+          if ! ./scripts/check-origin-health.sh docker-compose.staging.yml "\$DOMAIN"; then
+            echo "::error::Staging health check failed after deploy — initiating rollback to \${PREV_SHA:-unknown}"
+            if [ -n "\$PREV_SHA" ]; then
+              REGISTRY="ghcr.io/${{ github.repository }}"
+              docker pull "\${REGISTRY}/backend:\${PREV_SHA}" \
+                && docker tag "\${REGISTRY}/backend:\${PREV_SHA}" "\${REGISTRY}/backend:staging"
+              docker compose -f docker-compose.staging.yml up -d --remove-orphans < /dev/null
+              sleep 10
+              if ./scripts/check-origin-health.sh docker-compose.staging.yml "\$DOMAIN"; then
+                echo "::notice::Rollback to \$PREV_SHA succeeded on staging."
+              else
+                echo "::error::Rollback also failed on staging — manual intervention required!"
+              fi
+            else
+              echo "::warning::No previous SHA recorded; cannot auto-rollback staging."
+            fi
+            exit 1
+          fi
+
+          # ── Record new SHA for future rollbacks ───────────────────────
+          echo "${NEW_SHA}" > .deployed-sha
+          echo "Staging deployment of ${NEW_SHA} complete!"
+          ENDSSH
 
   # ── Build & push Docker images (production - main branch) ────────────────
   docker-build:

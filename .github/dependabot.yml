@@ -25,6 +25,20 @@ updates:
     labels:
       - dependencies
 
+  - package-ecosystem: docker
+    directory: /nginx
+    schedule:
+      interval: monthly
+    labels:
+      - dependencies
+
+  - package-ecosystem: docker
+    directory: /frontend
+    schedule:
+      interval: monthly
+    labels:
+      - dependencies
+
   - package-ecosystem: github-actions
     directory: /
     schedule:

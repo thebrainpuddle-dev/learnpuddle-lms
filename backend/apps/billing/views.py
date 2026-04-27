@@ -1,5 +1,7 @@
 import logging
+from urllib.parse import urlparse
 
+from django.conf import settings
 from django.shortcuts import get_object_or_404
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -19,6 +21,59 @@ from .serializers import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _is_tenant_redirect_url_allowed(url: str, tenant) -> bool:
+    """Validate that a user-supplied redirect URL belongs to this tenant.
+
+    Prevents open-redirect attacks via Stripe Checkout / Customer Portal:
+    an attacker with tenant-admin access could otherwise supply an arbitrary
+    return_url, obtain a signed Stripe URL, and phish other admins who
+    authenticate on Stripe and are then bounced to the attacker's domain.
+
+    Accepts only:
+      - https://<tenant.subdomain>.<PLATFORM_DOMAIN>[/...]
+      - https://<tenant.custom_domain>[/...]  (when verified)
+      - localhost variants in DEBUG mode
+    """
+    if not url or not isinstance(url, str):
+        return False
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False
+
+    scheme = (parsed.scheme or '').lower()
+    host = (parsed.hostname or '').lower()
+    if not host:
+        return False
+
+    # Enforce https in production; allow http only when DEBUG=True (local dev).
+    if settings.DEBUG:
+        if scheme not in ('http', 'https'):
+            return False
+    else:
+        if scheme != 'https':
+            return False
+
+    platform_domain = (getattr(settings, 'PLATFORM_DOMAIN', '') or '').lower()
+    allowed = set()
+    if platform_domain and getattr(tenant, 'subdomain', None):
+        allowed.add(f"{tenant.subdomain}.{platform_domain}".lower())
+    if (
+        getattr(tenant, 'custom_domain', '')
+        and getattr(tenant, 'custom_domain_verified', False)
+    ):
+        allowed.add(tenant.custom_domain.lower())
+
+    if settings.DEBUG:
+        allowed.update({
+            'localhost',
+            '127.0.0.1',
+            f"{tenant.subdomain}.localhost" if getattr(tenant, 'subdomain', None) else 'localhost',
+        })
+
+    return host in allowed
 
 
 @api_view(["GET"])
@@ -57,6 +112,13 @@ def create_checkout(request):
     if plan.is_custom_pricing:
         return error_response("Enterprise plans require contacting sales.", status_code=400)
 
+    # Prevent open redirect via Stripe: success_url / cancel_url must belong
+    # to this tenant's domain (subdomain or verified custom domain).
+    if not _is_tenant_redirect_url_allowed(data['success_url'], request.tenant):
+        return error_response("success_url must point to this tenant's domain.", status_code=400)
+    if not _is_tenant_redirect_url_allowed(data['cancel_url'], request.tenant):
+        return error_response("cancel_url must point to this tenant's domain.", status_code=400)
+
     from .stripe_service import create_checkout_session
     try:
         url = create_checkout_session(
@@ -80,7 +142,14 @@ def create_portal(request):
     """Create a Stripe Customer Portal session."""
     from .stripe_service import create_portal_session
 
-    return_url = request.data.get('return_url', request.build_absolute_uri('/admin/billing'))
+    # Default to a safe, server-generated URL on the current tenant host.
+    default_return_url = request.build_absolute_uri('/admin/billing')
+    return_url = request.data.get('return_url', default_return_url)
+
+    # Prevent open redirect via Stripe Customer Portal.
+    if not _is_tenant_redirect_url_allowed(return_url, request.tenant):
+        return error_response("return_url must point to this tenant's domain.", status_code=400)
+
     try:
         url = create_portal_session(request.tenant, return_url)
         return Response({"portal_url": url})

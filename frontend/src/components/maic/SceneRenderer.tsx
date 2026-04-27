@@ -30,12 +30,19 @@ interface SceneRendererProps {
   /** Which portal rendered this scene. Forwarded to PBLRenderer so student
    *  PBL chat hits the student endpoint. Defaults to 'teacher' for legacy callers. */
   role?: MAICRole;
+  /**
+   * CG-P0-3: forwarded from the classroom detail response. When true the
+   * Celery image-fill task is still running; SlideRenderer shows a
+   * "fetching image…" skeleton instead of an immediate Unsplash fallback.
+   */
+  imagesPending?: boolean;
 }
 
 export const SceneRenderer = React.memo<SceneRendererProps>(function SceneRenderer({
   scene,
   mode = 'autonomous',
   role,
+  imagesPending,
 }) {
   const content = scene.content;
   const slides = useMAICStageStore((s) => s.slides);
@@ -56,6 +63,7 @@ export const SceneRenderer = React.memo<SceneRendererProps>(function SceneRender
               slide={currentSlide}
               slideNumber={currentSlideIndex + 1}
               totalSlides={totalSlides}
+              imagesPending={imagesPending}
             />
           );
         }
@@ -72,6 +80,7 @@ export const SceneRenderer = React.memo<SceneRendererProps>(function SceneRender
               speakerScript: slideContent.speakerScript,
               audioUrl: slideContent.audioUrl,
             }}
+            imagesPending={imagesPending}
           />
         );
       }

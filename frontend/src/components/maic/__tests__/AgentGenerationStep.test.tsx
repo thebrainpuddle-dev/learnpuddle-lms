@@ -2,7 +2,7 @@
 // generation step. The service module is mocked so no real API calls happen.
 
 import { beforeEach, describe, expect, test, vi } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { AgentGenerationStep } from '../AgentGenerationStep';
 import { maicApi, maicStudentApi } from '../../../services/openmaicService';
 import type { MAICAgent } from '../../../types/maic';
@@ -73,7 +73,7 @@ function installDefaultMocks() {
 
 describe('AgentGenerationStep', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     installDefaultMocks();
   });
 
@@ -88,10 +88,14 @@ describe('AgentGenerationStep', () => {
       />,
     );
 
-    await waitFor(() =>
-      expect(screen.getByText('Dr. Aarav Sharma')).toBeInTheDocument(),
-    );
-    expect(screen.getByText('Ms. Priya Iyer')).toBeInTheDocument();
+    // T1.2 — the reveal modal also renders the agent names. Scope the
+    // roster assertion to the inline grid so we don't double-count
+    // between the modal and the editable cards below it.
+    const grid = await screen.findByTestId('agent-inline-grid');
+    await waitFor(() => {
+      expect(within(grid).getByText('Dr. Aarav Sharma')).toBeInTheDocument();
+    });
+    expect(within(grid).getByText('Ms. Priya Iyer')).toBeInTheDocument();
   });
 
   test('"Looks good →" calls onComplete with the current agents', async () => {
@@ -106,17 +110,13 @@ describe('AgentGenerationStep', () => {
       />,
     );
 
-    await waitFor(() => screen.getByText('Dr. Aarav Sharma'));
+    const grid = await screen.findByTestId('agent-inline-grid');
+    await waitFor(() => within(grid).getByText('Dr. Aarav Sharma'));
     fireEvent.click(screen.getByRole('button', { name: /Looks good/i }));
     expect(onComplete).toHaveBeenCalledWith(mockAgents);
   });
 
-  test('"Regenerate all" shows a confirmation dialog', async () => {
-    // jsdom does not stub window.confirm by default — install a stub before spying
-    if (typeof window.confirm !== 'function') {
-      Object.defineProperty(window, 'confirm', { value: () => true, writable: true, configurable: true });
-    }
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+  test('"Regenerate all" opens a ConfirmDialog (not window.confirm)', async () => {
     render(
       <AgentGenerationStep
         topic="Photosynthesis"
@@ -127,10 +127,50 @@ describe('AgentGenerationStep', () => {
       />,
     );
 
-    await waitFor(() => screen.getByText('Dr. Aarav Sharma'));
+    const grid = await screen.findByTestId('agent-inline-grid');
+    await waitFor(() => within(grid).getByText('Dr. Aarav Sharma'));
+
+    // Before clicking, the confirm dialog title should not be present.
+    // (AgentRevealModal also renders a dialog, so we check by title text, not role.)
+    expect(screen.queryByText('Regenerate all agents?')).not.toBeInTheDocument();
+
     fireEvent.click(screen.getByRole('button', { name: /Regenerate all/i }));
-    expect(confirmSpy).toHaveBeenCalled();
-    confirmSpy.mockRestore();
+
+    // After clicking, the ConfirmDialog should appear with its title.
+    await waitFor(() =>
+      expect(screen.getByText('Regenerate all agents?')).toBeInTheDocument(),
+    );
+    // Confirm + cancel buttons should be present.
+    expect(screen.getByRole('button', { name: /^Regenerate$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Keep current/i })).toBeInTheDocument();
+  });
+
+  test('"Regenerate all" → Cancel keeps current agents and does not regenerate', async () => {
+    const onComplete = vi.fn();
+    render(
+      <AgentGenerationStep
+        topic="Photosynthesis"
+        language="en"
+        role="teacher"
+        onComplete={onComplete}
+        onBack={vi.fn()}
+      />,
+    );
+
+    const grid = await screen.findByTestId('agent-inline-grid');
+    await waitFor(() => within(grid).getByText('Dr. Aarav Sharma'));
+
+    // Open the dialog, then cancel.
+    fireEvent.click(screen.getByRole('button', { name: /Regenerate all/i }));
+    await waitFor(() => screen.getByText('Regenerate all agents?'));
+    fireEvent.click(screen.getByRole('button', { name: /Keep current/i }));
+
+    // Dialog dismissed.
+    await waitFor(() =>
+      expect(screen.queryByText('Regenerate all agents?')).not.toBeInTheDocument(),
+    );
+    // generateAgentProfiles called exactly once (the initial load) — NOT a second time.
+    expect(maicApi.generateAgentProfiles).toHaveBeenCalledTimes(1);
   });
 
   test('student role uses the student API surface', async () => {

@@ -229,12 +229,17 @@ services:
 
   # ── Celery worker ───────────────────────────────────────────────────
   # Diff from prod: concurrency=1 (vs 2), lower resource limits, console email.
+  # PERF-P0-5: in staging we keep a single worker drain BOTH the default
+  # queue and the new ``tts`` queue (prod runs a dedicated ``worker-tts``
+  # service). Concurrency stays at 1 — staging is a smoke-test environment,
+  # not a load target — and the chord still serialises onto this single
+  # process. Functional parity with prod, lower resource cost.
   worker:
     build:
       context: ./backend
       dockerfile: Dockerfile
     restart: always
-    command: celery -A config worker -l info --concurrency=1
+    command: celery -A config worker -l info --concurrency=1 -Q default,tts
     depends_on:
       web:
         condition: service_healthy

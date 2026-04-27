@@ -18,6 +18,7 @@ import {
 import { cn } from '../../design-system/theme/cn';
 import { teacherService } from '../../services/teacherService';
 import { usePageTitle } from '../../hooks/usePageTitle';
+import { useModeLabels } from '../../hooks/useModeLabels';
 
 type StatusFilter = 'ALL' | 'NOT_STARTED' | 'IN_PROGRESS' | 'COMPLETED';
 type ViewMode = 'grid' | 'list';
@@ -33,6 +34,7 @@ export const MyCoursesPage: React.FC = () => {
   usePageTitle('My Courses');
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
+  const { label } = useModeLabels();
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('ALL');
   const [viewMode, setViewMode] = useState<ViewMode>('grid');
 
@@ -242,7 +244,7 @@ export const MyCoursesPage: React.FC = () => {
         <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden shadow-sm">
           {/* List header */}
           <div className="hidden sm:grid grid-cols-12 gap-4 px-5 py-2.5 bg-gray-50/80 text-[10px] uppercase tracking-wider font-semibold text-gray-400 border-b border-gray-50">
-            <div className="col-span-5">Course</div>
+            <div className="col-span-5">{label('course')}</div>
             <div className="col-span-3">Progress</div>
             <div className="col-span-2">Status</div>
             <div className="col-span-2 text-right">Deadline</div>

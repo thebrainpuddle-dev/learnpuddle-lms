@@ -39,9 +39,17 @@ class ReminderCampaignSerializer(serializers.ModelSerializer):
         ]
 
     def get_sent_count(self, obj: ReminderCampaign):
+        # Use annotation precomputed by reminder_history view to avoid N+1.
+        # Falls back to a live count when the serializer is used outside that view
+        # (e.g. the single-campaign response from reminder_send).
+        if hasattr(obj, "_sent_count"):
+            return obj._sent_count
         return obj.deliveries.filter(status="SENT").count()
 
     def get_failed_count(self, obj: ReminderCampaign):
+        # Same pattern as get_sent_count above.
+        if hasattr(obj, "_failed_count"):
+            return obj._failed_count
         return obj.deliveries.filter(status="FAILED").count()
 
 

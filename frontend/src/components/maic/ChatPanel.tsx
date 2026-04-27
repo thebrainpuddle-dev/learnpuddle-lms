@@ -22,8 +22,10 @@ import { AgentAvatar } from './AgentAvatar';
 import { StreamMarkdown } from './StreamMarkdown';
 import { PromptInput } from './PromptInput';
 import { ConversationContainer } from './ConversationContainer';
+import { useSpeechInput } from '../../hooks/useSpeechInput';
 import { cn } from '../../lib/utils';
 import { maicChatUrl } from '../../lib/maic/endpoints';
+import { ConfirmDialog } from '../common';
 import {
   ChainOfThought,
   ChainOfThoughtTrigger,
@@ -37,6 +39,14 @@ type ChatTab = 'chat' | 'notes';
 interface ChatPanelProps {
   role: MAICPlayerRole;
   classroomId: string;
+  /** Porting P4.2 — when the lecture is currently playing, invoked
+   *  BEFORE the chat stream starts so Stage can pause playback and
+   *  save a checkpoint. Safe to omit (chat still sends, but playback
+   *  runs on as a side channel). */
+  onPlaybackInterrupt?: (text: string) => void;
+  /** Called when the chat stream finishes so Stage can resume from the
+   *  saved checkpoint. */
+  onPlaybackResume?: () => void;
 }
 
 // ─── Role badge labels ─────────────────────────────────────────────────────
@@ -95,7 +105,12 @@ function agentBubbleBg(color: string): string {
   return `${color}0D`; // ~5% opacity
 }
 
-export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({ role, classroomId }) {
+export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({
+  role,
+  classroomId,
+  onPlaybackInterrupt,
+  onPlaybackResume,
+}) {
   const chatMessages = useMAICStageStore((s) => s.chatMessages);
   const addChatMessage = useMAICStageStore((s) => s.addChatMessage);
   const setChatMessages = useMAICStageStore((s) => s.setChatMessages);
@@ -114,7 +129,43 @@ export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({ role, c
   const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
   const [reasoningSteps, setReasoningSteps] = useState<string[]>([]);
   const [showReasoning, setShowReasoning] = useState(false);
+  const [confirmClearOpen, setConfirmClearOpen] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  // Sprint 3 · B.11 — cooldown timer. `isSending` locks the send button
+  // while a prompt is in flight. To make chat feel snappy we release
+  // the lock as soon as the first SSE event lands OR 1.5 s elapses
+  // (whichever comes first), instead of waiting for the whole stream
+  // to finish. This ref tracks the cooldown timer so we can clear it
+  // when the first event arrives or the panel unmounts.
+  const cooldownRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const releaseCooldown = useCallback(() => {
+    if (cooldownRef.current) {
+      clearTimeout(cooldownRef.current);
+      cooldownRef.current = null;
+    }
+    setIsSending(false);
+  }, []);
+
+  // ─── ASR (voice input) — Gap.1 ──────────────────────────────────────
+  // Web Speech API (browser-native). We stream interim hypotheses
+  // straight into the input field so the user sees their words
+  // appearing live, and on "final" we don't auto-send — the user still
+  // clicks send so they have a chance to correct before committing.
+  const speech = useSpeechInput({
+    onInterim: (text) => setInput(text),
+    onFinal: (text) => setInput(text),
+  });
+  const handleMicToggle = useCallback(() => {
+    if (!speech.isSupported) return;
+    if (speech.listening) {
+      speech.stop();
+    } else {
+      // Clear previous draft on start so the interim doesn't append to
+      // old typed text and confuse the user.
+      setInput('');
+      speech.start();
+    }
+  }, [speech]);
 
   // Build lecture notes per scene: auto-generated speaker scripts +
   // user-added notes that were saved against slides in this scene.
@@ -218,15 +269,16 @@ export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({ role, c
 
   // Clear all chat messages for this classroom. Wipes in-memory store,
   // sessionStorage cache, AND the IndexedDB classroom-scoped record so
-  // the next page load starts from zero. Confirmed with a window.confirm
-  // because there's no undo.
+  // the next page load starts from zero. Opens a ConfirmDialog because
+  // there's no undo.
   const handleClearChat = useCallback(() => {
     if (chatMessages.length === 0) return;
-    const ok = typeof window === 'undefined'
-      ? true
-      : window.confirm(`Clear all ${chatMessages.length} chat messages? This can't be undone.`);
-    if (!ok) return;
-    // Abort any in-flight stream so we don't race our own wipe.
+    setConfirmClearOpen(true);
+  }, [chatMessages.length]);
+
+  // Executes the actual clear after the user confirms the dialog.
+  // Aborts any in-flight stream first to avoid racing the wipe.
+  const handleClearConfirmed = useCallback(() => {
     abortRef.current?.abort();
     setIsSending(false);
     setThinkingAgentId(null);
@@ -236,7 +288,7 @@ export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({ role, c
       persistChatToSession(classroomId, []);
       updateClassroomChat(classroomId, []).catch(() => {});
     }
-  }, [chatMessages.length, classroomId, setChatMessages]);
+  }, [classroomId, setChatMessages]);
 
   // Send a message (accepts text directly from PromptInput)
   const handleSubmit = useCallback(async (text: string) => {
@@ -247,6 +299,18 @@ export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({ role, c
     setIsSending(true);
     setReasoningSteps([]);
     setShowReasoning(false);
+    // Porting P4.2 — if playback is running, pause it and save a
+    // checkpoint before the chat stream starts. Stage owns the engine;
+    // it decides whether to actually pause (noops when not playing).
+    onPlaybackInterrupt?.(trimmed);
+    // Sprint 3 · B.11 — auto-release the send lock after 1.5 s so the
+    // input doesn't feel jammed during a slow stream. The first-event
+    // handler below also releases it; whichever fires first wins.
+    if (cooldownRef.current) clearTimeout(cooldownRef.current);
+    cooldownRef.current = setTimeout(() => {
+      cooldownRef.current = null;
+      setIsSending(false);
+    }, 1500);
 
     // Add user message locally
     const userMsg: MAICChatMessage = {
@@ -285,6 +349,10 @@ export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({ role, c
       token: accessToken,
       signal: controller.signal,
       onEvent: (event: MAICSSEEvent) => {
+        // First event landed — release the cooldown immediately so the
+        // user can queue a follow-up without waiting for the stream to
+        // finish. The onDone handler also calls releaseCooldown().
+        if (cooldownRef.current) releaseCooldown();
         if (event.type === 'chat_message') {
           setThinkingAgentId(null);
           const data = event.data as { content: string; agentId?: string; agentName?: string };
@@ -324,23 +392,26 @@ export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({ role, c
         addChatMessage(errorMsg);
       },
       onDone: () => {
-        setIsSending(false);
+        releaseCooldown();
         setThinkingAgentId(null);
         // Only clear the streaming flag if we actually received an
         // assistant message. If the stream ended before any chat_message
         // event, leave the thinking indicator cleared but keep the
         // streamingMessageId null (nothing was mid-stream).
         setStreamingMessageId(null);
+        // Porting P4.2 — stream done, resume playback if we interrupted.
+        onPlaybackResume?.();
       },
     });
 
-    setIsSending(false);
-  }, [isSending, accessToken, role, classroomId, addChatMessage, chatMessages]);
+    releaseCooldown();
+  }, [isSending, accessToken, role, classroomId, addChatMessage, chatMessages, releaseCooldown, onPlaybackInterrupt, onPlaybackResume]);
 
   // Cleanup on unmount
   useEffect(() => {
     return () => {
       abortRef.current?.abort();
+      if (cooldownRef.current) clearTimeout(cooldownRef.current);
     };
   }, []);
 
@@ -500,7 +571,7 @@ export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({ role, c
             type="button"
             onClick={handleClearChat}
             className={cn(
-              'inline-flex items-center gap-1 text-[11px] font-medium text-gray-500',
+              'inline-flex items-center justify-center gap-1 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 text-[11px] font-medium text-gray-500',
               'hover:text-red-600 transition-colors',
               'focus:outline-none focus:ring-2 focus:ring-red-400 rounded px-1.5 py-0.5',
             )}
@@ -520,15 +591,23 @@ export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({ role, c
         showScrollToBottom
       >
         {chatMessages.length === 0 && (
-          <p className="text-sm text-gray-400 text-center mt-8">
+          <p className="text-sm text-gray-500 text-center mt-8 px-6 leading-relaxed">
             No messages yet. Ask a question to start the conversation.
           </p>
         )}
 
-        {chatMessages.map((msg) => {
+        {chatMessages.map((msg, idx) => {
           const agent = getAgent(msg.agentId);
           const isUser = msg.role === 'user';
           const isSystem = msg.role === 'system';
+          // Spacing between consecutive messages from the same author:
+          // tighter (mt-1) for same-author runs, wider (mt-3) for turn
+          // changes. Mimics familiar messaging-app rhythm, easier to scan.
+          const prev = chatMessages[idx - 1];
+          const sameAuthor =
+            prev && prev.role === msg.role &&
+            prev.agentId === msg.agentId;
+          const topGap = idx === 0 ? '' : sameAuthor ? 'mt-1' : 'mt-3';
 
           if (isSystem) {
             return (
@@ -545,7 +624,7 @@ export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({ role, c
           return (
             <div
               key={msg.id}
-              className={cn('flex gap-2', isUser ? 'flex-row-reverse' : 'flex-row')}
+              className={cn('flex gap-2.5', topGap, isUser ? 'flex-row-reverse' : 'flex-row')}
               data-testid={isUser ? 'chat-user-message' : 'chat-agent-message'}
             >
               {/* Avatar */}
@@ -560,22 +639,23 @@ export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({ role, c
               ) : null}
 
               {/* Bubble */}
-              <div className={cn('max-w-[80%] min-w-0')}>
-                {/* Name + Role badge */}
-                {!isUser && (
-                  <div className="flex items-center gap-1.5 mb-0.5 px-1">
+              <div className={cn('max-w-[85%] min-w-0')}>
+                {/* Name + Role badge — hidden for consecutive same-author
+                    messages so the chat doesn't feel repetitive. */}
+                {!isUser && !sameAuthor && (
+                  <div className="flex items-center gap-1.5 mb-1 px-1">
                     <p
-                      className="text-xs font-medium"
-                      style={{ color: agent?.color || '#6B7280' }}
+                      className="text-[11px] font-semibold"
+                      style={{ color: agent?.color || '#4B5563' }}
                     >
                       {msg.agentName || agent?.name || 'Assistant'}
                     </p>
                     {roleLabel && (
                       <span
-                        className="text-[9px] px-1.5 py-0.5 rounded-full font-medium"
+                        className="text-[10px] px-1.5 py-0.5 rounded-full font-medium"
                         style={{
                           backgroundColor: agent ? `${agent.color}1A` : '#F3F4F6',
-                          color: agent?.color || '#6B7280',
+                          color: agent?.color || '#4B5563',
                         }}
                       >
                         {roleLabel}
@@ -585,10 +665,10 @@ export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({ role, c
                 )}
                 <div
                   className={cn(
-                    'rounded-2xl px-3 py-2 text-sm leading-relaxed',
+                    'rounded-2xl px-3.5 py-2.5 text-[13.5px] leading-[1.55]',
                     isUser
                       ? 'bg-primary-600 text-white rounded-br-md'
-                      : 'bg-gray-100 text-gray-800 rounded-bl-md',
+                      : 'bg-gray-50 text-gray-900 rounded-bl-md border border-gray-100',
                   )}
                   style={
                     !isUser && agent
@@ -704,15 +784,29 @@ export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({ role, c
           onChange={setInput}
           onSubmit={handleSubmit}
           onStop={handleStop}
-          placeholder="Ask the classroom..."
+          placeholder={speech.listening ? 'Listening…' : 'Ask the classroom...'}
           loading={isSending}
           disabled={!accessToken}
           suggestions={suggestions}
           onSuggestionClick={handleSuggestionClick}
           maxLength={2000}
           showCharCount
+          onMicToggle={speech.isSupported ? handleMicToggle : undefined}
+          micListening={speech.listening}
         />
       </div>
+
+      {/* Clear-chat confirmation dialog */}
+      <ConfirmDialog
+        isOpen={confirmClearOpen}
+        onClose={() => setConfirmClearOpen(false)}
+        onConfirm={handleClearConfirmed}
+        title="Clear all chat messages?"
+        message={`This will permanently remove all ${chatMessages.length} messages from this classroom session. This can't be undone.`}
+        confirmLabel="Clear chat"
+        cancelLabel="Keep messages"
+        variant="warning"
+      />
     </div>
   );
 });

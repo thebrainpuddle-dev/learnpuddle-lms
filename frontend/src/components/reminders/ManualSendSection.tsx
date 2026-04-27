@@ -11,12 +11,16 @@ import {
 import { Button } from '../common/Button';
 import { Input } from '../common/Input';
 import { useToast } from '../common';
-import { adminRemindersService } from '../../services/adminRemindersService';
+import { adminRemindersService, type ReminderPayload } from '../../services/adminRemindersService';
 import { adminTeachersService } from '../../services/adminTeachersService';
+import { adminReportsService } from '../../services/adminReportsService';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-type ReminderType = 'ASSIGNMENT_DUE' | 'CUSTOM';
+// Narrower than the service-layer ReminderType (no COURSE_DEADLINE option
+// in the manual-send UI).  Named ManualReminderType to avoid shadowing the
+// service export.
+type ManualReminderType = 'ASSIGNMENT_DUE' | 'CUSTOM';
 type SendMode = 'now' | 'schedule';
 
 // Debounce hook
@@ -41,7 +45,8 @@ export const ManualSendSection: React.FC<ManualSendSectionProps> = ({ onSent }) 
   const toast = useToast();
 
   // Form state
-  const [reminderType, setReminderType] = useState<ReminderType>('CUSTOM');
+  const [reminderType, setReminderType] = useState<ManualReminderType>('CUSTOM');
+  const [assignmentId, setAssignmentId] = useState('');
   const [subject, setSubject] = useState('');
   const [message, setMessage] = useState('');
   const [selectedTeacherIds, setSelectedTeacherIds] = useState<string[]>([]);
@@ -52,11 +57,35 @@ export const ManualSendSection: React.FC<ManualSendSectionProps> = ({ onSent }) 
   const debouncedTeacherSearch = useDebounce(teacherSearch, 300);
   const teacherIds = selectedTeacherIds.length > 0 ? selectedTeacherIds : undefined;
 
+  // Build the typed payload for preview/send, satisfying the ReminderPayload
+  // discriminated union: `assignment_id` is required when ASSIGNMENT_DUE,
+  // and must be absent (never) for all other types.
+  const reminderPayload: ReminderPayload = reminderType === 'ASSIGNMENT_DUE'
+    ? {
+        reminder_type: 'ASSIGNMENT_DUE',
+        assignment_id: assignmentId,
+        subject: subject || undefined,
+        message: message || undefined,
+        teacher_ids: teacherIds,
+      }
+    : {
+        reminder_type: reminderType,
+        subject: subject || undefined,
+        message: message || undefined,
+        teacher_ids: teacherIds,
+      };
+
   // Queries
   const { data: teachers } = useQuery({
     queryKey: ['adminTeachersManualSend', debouncedTeacherSearch],
     queryFn: () =>
       adminTeachersService.listTeachers({ search: debouncedTeacherSearch || undefined }),
+  });
+
+  const { data: assignments } = useQuery({
+    queryKey: ['manualSendAssignments'],
+    queryFn: () => adminReportsService.listAssignments(),
+    enabled: reminderType === 'ASSIGNMENT_DUE',
   });
 
   const availableTeachers = useMemo(() => {
@@ -70,35 +99,24 @@ export const ManualSendSection: React.FC<ManualSendSectionProps> = ({ onSent }) 
 
   // Mutations
   const previewMutation = useMutation({
-    mutationFn: () =>
-      adminRemindersService.preview({
-        reminder_type: reminderType,
-        subject: subject || undefined,
-        message: message || undefined,
-        teacher_ids: teacherIds,
-      }),
+    mutationFn: () => adminRemindersService.preview(reminderPayload),
     onSuccess: (data) => {
       toast.info('Preview ready', `${data.recipient_count} recipient(s) will receive this reminder.`);
     },
-    onError: (error: any) => {
+    onError: (error: unknown) => {
+      const err = error as { response?: { data?: { error?: string; detail?: string } }; message?: string };
       const msg =
-        error?.response?.data?.error ||
-        error?.response?.data?.detail ||
-        error?.message ||
+        err?.response?.data?.error ||
+        err?.response?.data?.detail ||
+        err?.message ||
         'Could not generate preview.';
       toast.error('Preview failed', msg);
     },
   });
 
   const sendMutation = useMutation({
-    mutationFn: () =>
-      adminRemindersService.send({
-        reminder_type: reminderType,
-        subject: subject || undefined,
-        message: message || undefined,
-        teacher_ids: teacherIds,
-        // TODO: Pass scheduled_at to API when sendMode === 'schedule'
-      }),
+    mutationFn: () => adminRemindersService.send(reminderPayload),
+    // TODO: Pass scheduled_at to API when sendMode === 'schedule'
     onSuccess: (data) => {
       toast.success(
         'Reminders sent!',
@@ -110,17 +128,27 @@ export const ManualSendSection: React.FC<ManualSendSectionProps> = ({ onSent }) 
       setSelectedTeacherIds([]);
       onSent?.();
     },
-    onError: (error: any) => {
+    onError: (error: unknown) => {
+      const err = error as { response?: { data?: { error?: string; detail?: string } }; message?: string };
       const msg =
-        error?.response?.data?.error ||
-        error?.response?.data?.detail ||
-        error?.message ||
+        err?.response?.data?.error ||
+        err?.response?.data?.detail ||
+        err?.message ||
         'Could not send reminders.';
       toast.error('Send failed', msg);
     },
   });
 
+  // Disable send/preview when required fields are missing.
+  // For ASSIGNMENT_DUE, an assignment must be selected before the payload
+  // satisfies the discriminated union at the API level.
+  const isPayloadValid = reminderType !== 'ASSIGNMENT_DUE' || !!assignmentId;
+
   const handleSend = () => {
+    if (!isPayloadValid) {
+      toast.error('Assignment required', 'Please select an assignment for this reminder type.');
+      return;
+    }
     if (sendMode === 'schedule' && !scheduledDate) {
       toast.error('Schedule required', 'Please select a date and time to schedule.');
       return;
@@ -148,13 +176,38 @@ export const ManualSendSection: React.FC<ManualSendSectionProps> = ({ onSent }) 
             <select
               id="manual-reminder-type"
               value={reminderType}
-              onChange={(e) => setReminderType(e.target.value as ReminderType)}
+              onChange={(e) => {
+                setReminderType(e.target.value as ManualReminderType);
+                setAssignmentId('');
+              }}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
             >
               <option value="CUSTOM">Custom message</option>
               <option value="ASSIGNMENT_DUE">Assignment due</option>
             </select>
           </div>
+
+          {/* Assignment picker — only shown for ASSIGNMENT_DUE */}
+          {reminderType === 'ASSIGNMENT_DUE' && (
+            <div>
+              <label htmlFor="manual-assignment-id" className="block text-sm font-medium text-gray-700 mb-1">
+                Assignment <span className="text-red-500">*</span>
+              </label>
+              <select
+                id="manual-assignment-id"
+                value={assignmentId}
+                onChange={(e) => setAssignmentId(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+              >
+                <option value="">Select an assignment…</option>
+                {(assignments ?? []).map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.title}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           {/* Subject */}
           <Input
@@ -301,6 +354,7 @@ export const ManualSendSection: React.FC<ManualSendSectionProps> = ({ onSent }) 
               size="sm"
               onClick={() => previewMutation.mutate()}
               loading={previewMutation.isPending}
+              disabled={!isPayloadValid || previewMutation.isPending}
             >
               <EyeIcon className="h-4 w-4 mr-2" />
               Preview
@@ -310,6 +364,7 @@ export const ManualSendSection: React.FC<ManualSendSectionProps> = ({ onSent }) 
               size="sm"
               onClick={handleSend}
               loading={sendMutation.isPending}
+              disabled={!isPayloadValid || sendMutation.isPending}
             >
               {sendMode === 'schedule' ? (
                 <ClockIcon className="h-4 w-4 mr-2" />

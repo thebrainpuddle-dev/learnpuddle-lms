@@ -60,11 +60,19 @@ class TeacherAssignmentListSerializer(serializers.ModelSerializer):
         ).first()
 
     def _quiz_submission(self, obj) -> QuizSubmission | None:
+        """Return the best (highest-scoring) completed attempt, or None if none exist."""
         teacher = self.context["request"].user
         quiz = getattr(obj, "quiz", None)
         if not quiz:
             return None
-        return QuizSubmission.objects.filter(quiz=quiz, teacher=teacher).first()
+        # Only look at completed submissions (score IS NOT NULL = graded/submitted).
+        # In-progress attempts (score IS NULL) are excluded so status stays PENDING.
+        completed = (
+            QuizSubmission.objects.filter(quiz=quiz, teacher=teacher)
+            .exclude(score__isnull=True)
+            .order_by("-score", "-attempt_number")
+        )
+        return completed.first()
 
     def get_submission_status(self, obj):
         # Quiz assignments derive status from QuizSubmission; reflection uses AssignmentSubmission.

@@ -56,10 +56,42 @@ interface MAICStageState {
   // Speech state
   speechText: string | null;
   setSpeechText: (text: string | null) => void;
+  /** True while the engine is waiting on a TTS fetch for the next
+   *  speaker. Used by PresentationSpeechOverlay to show thinking dots
+   *  during the silent window before audio starts. (Sprint 1 · B.3) */
+  speechFetchLoading: boolean;
+  setSpeechFetchLoading: (loading: boolean) => void;
+  /** True while audio is actively playing (or reading-timer running)
+   *  for the current speech action. Separated from `speakingAgentId`
+   *  so we can hold the bubble on the last spoken line between agents
+   *  — matches OpenMAIC's "last sentence stays on screen" feel (T0.2).
+   *  Drives VoiceWaveIndicator's animation. */
+  isSpeaking: boolean;
+  setIsSpeaking: (speaking: boolean) => void;
 
   // Discussion mode
   discussionMode: MAICDiscussionSessionType | null;
   setDiscussionMode: (mode: MAICDiscussionSessionType | null) => void;
+
+  // Discussion pending — the engine has paused for a discussion but the
+  // panel hasn't opened yet. Used for the "breath + Join/Skip countdown"
+  // UX so discussions never pop the panel on screen mid-speech without
+  // warning. The UI layer (DiscussionGateCard) owns the transition from
+  // `discussionPending` → `discussionMode`.
+  discussionPending: {
+    topic: string;
+    agentIds: string[];
+    sessionType: MAICDiscussionSessionType;
+    triggerAgentId?: string;
+  } | null;
+  setDiscussionPending: (
+    pending: {
+      topic: string;
+      agentIds: string[];
+      sessionType: MAICDiscussionSessionType;
+      triggerAgentId?: string;
+    } | null,
+  ) => void;
 
   // View
   viewMode: MAICViewMode;
@@ -75,6 +107,16 @@ interface MAICStageState {
   // Classroom context
   classroomId: string | null;
   setClassroomId: (id: string | null) => void;
+
+  // Generation failure tracking — T4. `failedOutlineIds` lists outline
+  // scene ids whose content/actions generation threw. The scene sidebar
+  // reads this to paint a retry affordance on the matching tile, and
+  // `retryScene` (in lib/maicGenerationRetry) clears the id on success.
+  failedOutlineIds: string[];
+  markOutlineFailed: (outlineId: string) => void;
+  clearOutlineFailure: (outlineId: string) => void;
+  /** Reset the failed set — called by the wizard's reset flow. */
+  clearAllOutlineFailures: () => void;
 
   // Reset
   reset: () => void;
@@ -96,11 +138,15 @@ const initialState = {
   notes: [] as MAICNote[],
   showNotesPanel: false,
   speechText: null as string | null,
+  speechFetchLoading: false,
+  isSpeaking: false,
   discussionMode: null as MAICDiscussionSessionType | null,
+  discussionPending: null as MAICStageState['discussionPending'],
   viewMode: 'slides' as MAICViewMode,
   isFullscreen: false,
   chatMessages: [] as MAICChatMessage[],
   classroomId: null as string | null,
+  failedOutlineIds: [] as string[],
 };
 
 export const useMAICStageStore = create<MAICStageState>((set, get) => ({
@@ -200,9 +246,12 @@ export const useMAICStageStore = create<MAICStageState>((set, get) => ({
 
   // Speech
   setSpeechText: (text) => set({ speechText: text }),
+  setSpeechFetchLoading: (loading) => set({ speechFetchLoading: loading }),
+  setIsSpeaking: (speaking) => set({ isSpeaking: speaking }),
 
   // Discussion
   setDiscussionMode: (mode) => set({ discussionMode: mode }),
+  setDiscussionPending: (pending) => set({ discussionPending: pending }),
 
   // View
   setViewMode: (mode) => set({ viewMode: mode }),
@@ -214,6 +263,17 @@ export const useMAICStageStore = create<MAICStageState>((set, get) => ({
 
   // Classroom context
   setClassroomId: (id) => set({ classroomId: id }),
+
+  // T4 — generation failure set
+  markOutlineFailed: (outlineId) =>
+    set((s) =>
+      s.failedOutlineIds.includes(outlineId)
+        ? s
+        : { failedOutlineIds: [...s.failedOutlineIds, outlineId] },
+    ),
+  clearOutlineFailure: (outlineId) =>
+    set((s) => ({ failedOutlineIds: s.failedOutlineIds.filter((id) => id !== outlineId) })),
+  clearAllOutlineFailures: () => set({ failedOutlineIds: [] }),
 
   // Reset
   reset: () => set(initialState),

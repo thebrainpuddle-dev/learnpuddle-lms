@@ -24,6 +24,7 @@ describe('MAICPlaybackEngine checkpoint', () => {
     // Short-circuit execute() so it doesn't try to hit the network — we're
     // testing playback engine wiring, not the action engine itself.
     vi.spyOn(ae, 'execute').mockImplementation(() => Promise.resolve());
+    vi.spyOn(ae, 'prefetchSpeech').mockImplementation(() => undefined);
     const pe = new MAICPlaybackEngine(ae);
 
     pe.loadScene({
@@ -60,6 +61,7 @@ describe('MAICPlaybackEngine.seekToSlide', () => {
   test('jumps to transition action for the matching slideIndex', () => {
     const ae = new MAICActionEngine({ ttsEndpoint: '/tts', token: 't' });
     vi.spyOn(ae, 'execute').mockImplementation(() => Promise.resolve());
+    vi.spyOn(ae, 'prefetchSpeech').mockImplementation(() => undefined);
     const pe = new MAICPlaybackEngine(ae);
 
     pe.loadScene({
@@ -91,6 +93,7 @@ describe('MAICPlaybackEngine.seekToSlide', () => {
     // position" in the demo.
     const ae = new MAICActionEngine({ ttsEndpoint: '/tts', token: 't' });
     vi.spyOn(ae, 'execute').mockImplementation(() => Promise.resolve());
+    vi.spyOn(ae, 'prefetchSpeech').mockImplementation(() => undefined);
     const pe = new MAICPlaybackEngine(ae);
 
     pe.loadScene({
@@ -116,6 +119,7 @@ describe('MAICPlaybackEngine.seekToSlide', () => {
   test('empty action list resolves to index 0 (defensive)', () => {
     const ae = new MAICActionEngine({ ttsEndpoint: '/tts', token: 't' });
     vi.spyOn(ae, 'execute').mockImplementation(() => Promise.resolve());
+    vi.spyOn(ae, 'prefetchSpeech').mockImplementation(() => undefined);
     const pe = new MAICPlaybackEngine(ae);
     pe.loadScene({ id: 's0', title: '', type: 'lecture', actions: [] } as any);
     // Shouldn't throw; cursor stays at 0.
@@ -126,6 +130,7 @@ describe('MAICPlaybackEngine.seekToSlide', () => {
   test('seekToSlidePaused leaves engine idle for user Play', () => {
     const ae = new MAICActionEngine({ ttsEndpoint: '/tts', token: 't' });
     vi.spyOn(ae, 'execute').mockImplementation(() => Promise.resolve());
+    vi.spyOn(ae, 'prefetchSpeech').mockImplementation(() => undefined);
     const pe = new MAICPlaybackEngine(ae);
 
     pe.loadScene({
@@ -142,5 +147,240 @@ describe('MAICPlaybackEngine.seekToSlide', () => {
     pe.seekToSlidePaused(1);
     expect(pe.getCurrentActionIndex()).toBe(1);
     expect(pe.getState()).toBe('idle');
+  });
+});
+
+// ─── Porting P4.1 — student interrupt during lecture ────────────────────────
+describe('MAICPlaybackEngine.handleUserInterrupt', () => {
+  test('pauses engine and checkpoints actionIndex-1 so the interrupted speech replays', () => {
+    const ae = new MAICActionEngine({ ttsEndpoint: '/tts', token: 't' });
+    vi.spyOn(ae, 'execute').mockImplementation(() => Promise.resolve());
+    vi.spyOn(ae, 'prefetchSpeech').mockImplementation(() => undefined);
+    const pauseSpy = vi
+      .spyOn(ae, 'pauseCurrentAudio')
+      .mockImplementation(() => undefined);
+    const pe = new MAICPlaybackEngine(ae);
+
+    pe.loadScene({
+      id: 's1',
+      title: 's',
+      type: 'lecture',
+      actions: [
+        { type: 'speech', agentId: 'a1', text: 'one' },
+        { type: 'speech', agentId: 'a1', text: 'two' },
+        { type: 'speech', agentId: 'a1', text: 'three' },
+      ],
+    } as any);
+
+    // Place the engine mid-speech at action 2 ('three') playing.
+    // @ts-expect-error private test-only access
+    pe.currentActionIndex = 2;
+    // @ts-expect-error private test-only access
+    pe.mode = 'playing';
+
+    pe.handleUserInterrupt('can you repeat?');
+
+    // Mode flips to paused BEFORE audio stop (load-bearing order).
+    expect(pe.getState()).toBe('paused');
+    expect(pauseSpy).toHaveBeenCalledTimes(1);
+    // Checkpoint rewinds one so 'three' replays on resume.
+    // @ts-expect-error private test-only access
+    expect(pe.checkpoint?.actionIndex).toBe(1);
+    expect(pe.isInterruptPending()).toBe(true);
+  });
+
+  test('no-ops when engine is not playing — just notifies host', () => {
+    const ae = new MAICActionEngine({ ttsEndpoint: '/tts', token: 't' });
+    vi.spyOn(ae, 'execute').mockImplementation(() => Promise.resolve());
+    vi.spyOn(ae, 'prefetchSpeech').mockImplementation(() => undefined);
+    const pauseSpy = vi
+      .spyOn(ae, 'pauseCurrentAudio')
+      .mockImplementation(() => undefined);
+    const onInterrupt = vi.fn();
+    const pe = new MAICPlaybackEngine(ae, { onUserInterrupt: onInterrupt });
+
+    pe.loadScene({
+      id: 's1',
+      title: 's',
+      type: 'lecture',
+      actions: [{ type: 'speech', agentId: 'a1', text: 'one' }],
+    } as any);
+
+    // Engine is still idle. Interrupt should fire the callback without
+    // pausing audio or checkpointing.
+    pe.handleUserInterrupt('hi');
+    expect(onInterrupt).toHaveBeenCalledWith('hi');
+    expect(pauseSpy).not.toHaveBeenCalled();
+    expect(pe.isInterruptPending()).toBe(false);
+  });
+
+  test('resumeAfterInterrupt restores the checkpoint and unpauses', () => {
+    const ae = new MAICActionEngine({ ttsEndpoint: '/tts', token: 't' });
+    vi.spyOn(ae, 'execute').mockImplementation(() => Promise.resolve());
+    vi.spyOn(ae, 'prefetchSpeech').mockImplementation(() => undefined);
+    vi.spyOn(ae, 'pauseCurrentAudio').mockImplementation(() => undefined);
+    const pe = new MAICPlaybackEngine(ae);
+
+    pe.loadScene({
+      id: 's1',
+      title: 's',
+      type: 'lecture',
+      actions: [
+        { type: 'speech', agentId: 'a1', text: 'one' },
+        { type: 'speech', agentId: 'a1', text: 'two' },
+        { type: 'speech', agentId: 'a1', text: 'three' },
+      ],
+    } as any);
+
+    // @ts-expect-error private test-only access
+    pe.currentActionIndex = 2;
+    // @ts-expect-error private test-only access
+    pe.mode = 'playing';
+    pe.handleUserInterrupt('q');
+    // @ts-expect-error private test-only access
+    expect(pe.checkpoint?.actionIndex).toBe(1);
+
+    pe.resumeAfterInterrupt();
+
+    // After resume, the engine should have restored the checkpoint index
+    // (processNext post-increments from 1 → 2 as it dispatches action 1).
+    expect(pe.getState()).toBe('playing');
+    expect(pe.isInterruptPending()).toBe(false);
+    expect(pe.getCurrentActionIndex()).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ─── T0.1 — engine drops actions for non-slide scene types ──────────────────
+describe('MAICPlaybackEngine.loadScene', () => {
+  test('drops actions for quiz scenes so the engine never voices agents over a quiz panel', () => {
+    const ae = new MAICActionEngine({ ttsEndpoint: '/tts', token: 't' });
+    vi.spyOn(ae, 'execute').mockImplementation(() => Promise.resolve());
+    vi.spyOn(ae, 'prefetchSpeech').mockImplementation(() => undefined);
+    vi.spyOn(ae, 'clearWhiteboardForNewScene').mockImplementation(() => undefined);
+    const pe = new MAICPlaybackEngine(ae);
+
+    pe.loadScene({
+      id: 's1',
+      title: 'Q',
+      type: 'quiz',
+      actions: [
+        // These would voice an agent and fire a spotlight if the engine
+        // ran them. After T0.1 the engine drops them entirely.
+        { type: 'speech', agentId: 'a1', text: 'Quiz intro' },
+        { type: 'spotlight', elementId: 'el-1', duration: 3000 },
+      ],
+    } as any);
+
+    expect(pe.getActionCount()).toBe(0);
+  });
+
+  test.each(['pbl', 'interactive'] as const)(
+    'drops actions for %s scenes',
+    (sceneType) => {
+      const ae = new MAICActionEngine({ ttsEndpoint: '/tts', token: 't' });
+      vi.spyOn(ae, 'execute').mockImplementation(() => Promise.resolve());
+      vi.spyOn(ae, 'prefetchSpeech').mockImplementation(() => undefined);
+      vi.spyOn(ae, 'clearWhiteboardForNewScene').mockImplementation(() => undefined);
+      const pe = new MAICPlaybackEngine(ae);
+      pe.loadScene({
+        id: 's1',
+        title: 'X',
+        type: sceneType,
+        actions: [{ type: 'speech', agentId: 'a1', text: 'x' }],
+      } as any);
+      expect(pe.getActionCount()).toBe(0);
+    },
+  );
+
+  test('slide scenes keep their actions', () => {
+    const ae = new MAICActionEngine({ ttsEndpoint: '/tts', token: 't' });
+    vi.spyOn(ae, 'execute').mockImplementation(() => Promise.resolve());
+    vi.spyOn(ae, 'prefetchSpeech').mockImplementation(() => undefined);
+    vi.spyOn(ae, 'clearWhiteboardForNewScene').mockImplementation(() => undefined);
+    const pe = new MAICPlaybackEngine(ae);
+    pe.loadScene({
+      id: 's1',
+      title: 'X',
+      type: 'slide',
+      actions: [
+        { type: 'speech', agentId: 'a1', text: 'one' },
+        { type: 'speech', agentId: 'a1', text: 'two' },
+      ],
+    } as any);
+    expect(pe.getActionCount()).toBe(2);
+  });
+
+  test('clears whiteboard annotations on every scene change (T0.3)', () => {
+    const ae = new MAICActionEngine({ ttsEndpoint: '/tts', token: 't' });
+    vi.spyOn(ae, 'execute').mockImplementation(() => Promise.resolve());
+    vi.spyOn(ae, 'prefetchSpeech').mockImplementation(() => undefined);
+    const clearSpy = vi
+      .spyOn(ae, 'clearWhiteboardForNewScene')
+      .mockImplementation(() => undefined);
+    const pe = new MAICPlaybackEngine(ae);
+    pe.loadScene({ id: 's1', title: '', type: 'slide', actions: [] } as any);
+    pe.loadScene({ id: 's2', title: '', type: 'slide', actions: [] } as any);
+    expect(clearSpy).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ─── V.1-fix — UI-initiated discussion entry ────────────────────────────────
+describe('MAICPlaybackEngine.enterDiscussionFromUI', () => {
+  test('pauses engine and saves checkpoint at the CURRENT action (no rewind)', () => {
+    const ae = new MAICActionEngine({ ttsEndpoint: '/tts', token: 't' });
+    vi.spyOn(ae, 'execute').mockImplementation(() => Promise.resolve());
+    vi.spyOn(ae, 'prefetchSpeech').mockImplementation(() => undefined);
+    vi.spyOn(ae, 'pauseCurrentAudio').mockImplementation(() => undefined);
+    const pe = new MAICPlaybackEngine(ae);
+
+    pe.loadScene({
+      id: 's1',
+      title: 's',
+      type: 'lecture',
+      actions: [
+        { type: 'speech', agentId: 'a1', text: 'one' },
+        { type: 'speech', agentId: 'a1', text: 'two' },
+      ],
+    } as any);
+
+    // @ts-expect-error private test-only access
+    pe.currentActionIndex = 1;
+    // @ts-expect-error private test-only access
+    pe.mode = 'playing';
+
+    pe.enterDiscussionFromUI();
+
+    // UI path captures actionIndex as-is — no -1 rewind. We weren't
+    // executing a scripted discussion action; we were between speeches
+    // when the user clicked the proactive "Let's discuss" card.
+    // @ts-expect-error private test-only access
+    expect(pe.checkpoint?.actionIndex).toBe(1);
+    expect(pe.isDiscussionPending()).toBe(true);
+    expect(pe.getState()).toBe('paused');
+  });
+
+  test('is idempotent when called twice', () => {
+    const ae = new MAICActionEngine({ ttsEndpoint: '/tts', token: 't' });
+    vi.spyOn(ae, 'execute').mockImplementation(() => Promise.resolve());
+    vi.spyOn(ae, 'prefetchSpeech').mockImplementation(() => undefined);
+    vi.spyOn(ae, 'pauseCurrentAudio').mockImplementation(() => undefined);
+    const pe = new MAICPlaybackEngine(ae);
+    pe.loadScene({
+      id: 's1',
+      title: 's',
+      type: 'lecture',
+      actions: [{ type: 'speech', agentId: 'a1', text: 'one' }],
+    } as any);
+
+    // @ts-expect-error private test-only access
+    pe.currentActionIndex = 1;
+    // @ts-expect-error private test-only access
+    pe.mode = 'playing';
+    pe.enterDiscussionFromUI();
+    pe.enterDiscussionFromUI(); // double click — no-op
+
+    // Checkpoint shouldn't advance.
+    // @ts-expect-error private test-only access
+    expect(pe.checkpoint?.actionIndex).toBe(1);
   });
 });

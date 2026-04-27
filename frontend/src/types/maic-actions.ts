@@ -176,6 +176,51 @@ export interface TransitionAction {
 
 // ─── Union Type ─────────────────────────────────────────────────────────────
 
+/**
+ * Line-level code edit on an existing `wb_draw_code` element. Lets an
+ * agent "type code live" over the course of a scene: seed an empty or
+ * placeholder code block, then emit a sequence of `wb_edit_code` actions
+ * that insert_after / replace_lines / delete_lines. Porting P2.2.
+ */
+export interface WbEditCodeAction {
+  type: 'wb_edit_code';
+  /** ID of the target `wb_draw_code` element (must have been drawn earlier
+   *  in the same scene's action list). */
+  targetId: string;
+  operation: 'insert_after' | 'replace_lines' | 'delete_lines';
+  /** 0-based line number. For insert_after, the new content is inserted
+   *  AFTER this line. For replace_lines / delete_lines, this is the
+   *  starting line (inclusive). */
+  lineStart: number;
+  /** Inclusive end line for replace_lines / delete_lines. Ignored for
+   *  insert_after. Defaults to `lineStart` if omitted. */
+  lineEnd?: number;
+  /** New content for insert_after / replace_lines. Each element is one
+   *  line. Ignored for delete_lines. */
+  content?: string[];
+}
+
+/**
+ * Code block on the whiteboard. Rendered as a monospace block with
+ * syntax-highlightable lines — the target of subsequent `wb_edit_code`
+ * actions. Separate from `wb_draw_text` because the code block tracks
+ * individual lines for edit ops. Porting P2.2.
+ */
+export interface WbDrawCodeAction {
+  type: 'wb_draw_code';
+  id: string;
+  left: number;
+  top: number;
+  width: number;
+  height?: number;
+  /** Initial lines of code. Can be empty to seed a block the agent will
+   *  fill with subsequent `wb_edit_code` actions. */
+  lines: string[];
+  language?: string;
+  fontSize?: number;
+  color?: string;
+}
+
 export type MAICAction =
   | SpotlightAction
   | LaserAction
@@ -190,6 +235,8 @@ export type MAICAction =
   | WbDrawLatexAction
   | WbDrawTableAction
   | WbDrawLineAction
+  | WbDrawCodeAction
+  | WbEditCodeAction
   | WbDeleteAction
   | DiscussionAction
   | HighlightAction

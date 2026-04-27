@@ -19,3 +19,6 @@ export { useKeyboardShortcuts } from './useKeyboardShortcuts';
 
 export { useTTSPreview } from './useTTSPreview';
 export type { TTSPreviewOptions } from './useTTSPreview';
+
+export { useModeLabels } from './useModeLabels';
+export type { UseModeLabelsResult } from './useModeLabels';

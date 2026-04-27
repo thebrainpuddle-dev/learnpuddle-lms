@@ -8,6 +8,7 @@ import { useNavigate } from 'react-router-dom';
 import { Bot, Plus, Search, Filter } from 'lucide-react';
 import { usePageTitle } from '../../hooks/usePageTitle';
 import { useToast } from '../../components/common';
+import { ConfirmDialog } from '../../components/common/ConfirmDialog';
 import { chatbotApi } from '../../services/openmaicService';
 import { useChatbotStore } from '../../stores/chatbotStore';
 import { ChatbotCard } from '../../components/maic/ChatbotCard';
@@ -22,6 +23,7 @@ export function ChatbotListPage() {
 
   const [search, setSearch] = useState('');
   const [sectionFilter, setSectionFilter] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
 
   const { chatbots, isLoading, error, setChatbots, setLoading, setError, removeChatbot, addChatbot } =
     useChatbotStore();
@@ -83,9 +85,15 @@ export function ChatbotListPage() {
     return result;
   }, [chatbots, search, sectionFilter]);
 
-  // Delete handler
-  async function handleDelete(id: string) {
-    if (!window.confirm('Are you sure you want to delete this tutor?')) return;
+  // Delete handler — opens ConfirmDialog first
+  function handleDelete(id: string) {
+    setDeleteTarget(id);
+  }
+
+  async function confirmDelete() {
+    if (!deleteTarget) return;
+    const id = deleteTarget;
+    setDeleteTarget(null);
     try {
       await chatbotApi.delete(id);
       removeChatbot(id);
@@ -107,6 +115,15 @@ export function ChatbotListPage() {
 
   return (
     <div className="space-y-6">
+      <ConfirmDialog
+        isOpen={deleteTarget !== null}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={confirmDelete}
+        title="Delete Tutor"
+        message="Are you sure you want to delete this tutor? This action cannot be undone."
+        confirmLabel="Delete"
+        variant="danger"
+      />
       {/* Header */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>

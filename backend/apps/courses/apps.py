@@ -28,3 +28,7 @@ class CoursesConfig(AppConfig):
 
         # Connect file cleanup signal for Content deletion
         import apps.courses.signals  # noqa: F401
+
+        # Connect content versioning signals (TASK-048)
+        from apps.courses.versioning_signals import connect_versioning_signals
+        connect_versioning_signals()

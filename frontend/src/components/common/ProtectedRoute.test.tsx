@@ -20,7 +20,7 @@ const SuperAdminDashboard = () => <div>Super Admin Dashboard</div>;
 
 describe('ProtectedRoute', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
   });
 
   describe('unauthenticated users', () => {

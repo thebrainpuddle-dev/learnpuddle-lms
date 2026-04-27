@@ -21,3 +21,14 @@ export function maicSceneActionsUrl(role: MAICRole): string {
 export function maicQuizGradeUrl(role: MAICRole): string {
   return `/api/v1/${role}/maic/quiz-grade/`;
 }
+
+export function maicDirectorTurnUrl(role: MAICRole): string {
+  return `/api/v1/${role}/maic/director/turn/`;
+}
+
+// Teacher-only: fire-and-forget progress ping during the generation
+// wizard. Server stamps last_progress_at + phase/phase_scene_index/
+// scenes_ready so MAICPlayerPage can render honest progress.
+export function maicClassroomProgressUrl(classroomId: string): string {
+  return `/api/v1/teacher/maic/classrooms/${classroomId}/progress/`;
+}

@@ -32,6 +32,7 @@ import logging
 import requests as http_requests
 from django.db import transaction
 from django.http import StreamingHttpResponse, HttpResponse
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -47,20 +48,69 @@ from apps.courses.maic_generation_service import (
     fallback_quiz_grade,
     generate_agent_profiles_json,
     regenerate_one_agent,
+    director_next_turn,
     AgentValidationError,
     AGENT_VOICE_MAP,
 )
 from apps.courses.maic_voices import AZURE_IN_VOICES
 from apps.courses.image_service import fetch_scene_image
 from apps.courses.content_guardrails import validate_topic, validate_pdf_content, validate_chat_message
+from apps.courses._log_helpers import MAICPhase, log_extra
 from utils.decorators import teacher_or_admin, student_or_admin, tenant_required, check_feature
 from utils.audit import log_audit
+# TEST-P1-10: Prometheus counter for classroom-detail polling rate.
+from utils.metrics import maic_classroom_polls_total
 
 logger = logging.getLogger(__name__)
 
 
+def _polling_state_label(classroom) -> str:
+    """Bucket for the maic_classroom_polls_total counter.
+
+    Mirrors the FE's polling decision tree: while the row is READY but
+    ``images_pending=True`` the FE keeps polling, so we count that as a
+    distinct state from the steady READY rest position.
+    """
+    raw = (classroom.status or "").lower() or "draft"
+    if raw == "ready" and getattr(classroom, "images_pending", False):
+        return "ready_pending_images"
+    return raw
+
+
 # ─── Rate Limiting ────────────────────────────────────────────────────────────
 # StudentGenerationThrottle removed — no rate limit for student classroom generation
+
+
+def _extract_generation_context(body: dict, request) -> dict:
+    """Pull grade_level / subject / syllabus_board / audience_role out of a
+    wizard POST body. Missing values fall through to safe defaults so legacy
+    flows that don't send these fields keep working.
+
+    `audience_role` is inferred from the authenticated user's role when the
+    body doesn't override it. Teachers creating their own content default to
+    "teacher" (CPD register); students default to "student".
+    """
+    grade_level = str(body.get("grade_level") or body.get("gradeLevel") or "").strip()
+    subject = str(body.get("subject") or "").strip()
+    syllabus_board = str(
+        body.get("syllabus_board") or body.get("syllabusBoard") or "Generic"
+    ).strip() or "Generic"
+
+    override = str(body.get("audience_role") or body.get("audienceRole") or "").strip().lower()
+    if override in ("teacher", "student"):
+        audience_role = override
+    else:
+        user_role = getattr(getattr(request, "user", None), "role", "") or ""
+        # Teacher creators default to CPD register; everyone else (students,
+        # admins previewing student content) gets the student register.
+        audience_role = "teacher" if user_role.upper() == "TEACHER" else "student"
+
+    return {
+        "grade_level": grade_level,
+        "subject": subject,
+        "syllabus_board": syllabus_board,
+        "audience_role": audience_role,
+    }
 
 
 OPENMAIC_BASE = "http://openmaic:3000"
@@ -132,7 +182,16 @@ def _proxy_sse(request, path, config):
             url, data=body, headers=headers, stream=True, timeout=(_SIDECAR_CONNECT_TIMEOUT, 300),
         )
     except http_requests.ConnectionError:
-        logger.error("OpenMAIC sidecar unreachable at %s", url)
+        logger.error(
+            "OpenMAIC sidecar unreachable at %s",
+            url,
+            extra=log_extra(
+                MAICPhase.SIDECAR_PROXY,
+                metric="sidecar_unreachable",
+                outcome="connection_error",
+                upstream_url=url,
+            ),
+        )
         return HttpResponse(
             json.dumps({"error": "AI Classroom service is temporarily unavailable."}),
             status=502,
@@ -242,6 +301,12 @@ def _fill_image_urls(data, *, image_provider: str = "disabled"):
     element so the frontend can render an honest "AI images disabled"
     placeholder instead of a random Unsplash photo the school didn't ask
     for.
+
+    NOTE (CG-P0-3): This function is still used for:
+    - Immediate security scrubbing of unsafe ``src`` values (SEC-P0-4)
+    - Stamping ``meta.imageProviderDisabled`` when provider is disabled
+    Image fetching for non-disabled providers is now deferred to the
+    ``fill_classroom_images`` Celery task (see _defer_image_fill).
     """
     disabled = (image_provider or "disabled").lower() == "disabled"
     slides = data.get("slides", [])
@@ -249,7 +314,32 @@ def _fill_image_urls(data, *, image_provider: str = "disabled"):
         for element in slide.get("elements", []):
             if element.get("type") != "image":
                 continue
-            if element.get("src"):
+            # SEC-P0-4 (2026-04-23): strip LLM-supplied `src` values that
+            # are not http(s) or site-relative. An LLM can emit
+            # `data:text/html;base64,...<script>` in src and the frontend
+            # <img> tag would execute it as HTML on some legacy render
+            # paths. Frontend does the same check (defense-in-depth); the
+            # backend strips before persist so DB never stores the payload.
+            existing_src = (element.get("src") or "").strip()
+            if existing_src:
+                if not (
+                    existing_src.startswith("https://")
+                    or existing_src.startswith("http://")
+                    or existing_src.startswith("/")
+                ):
+                    logger.warning(
+                        "dropping unsafe image src: %r (element=%r)",
+                        existing_src[:80], element.get("id"),
+                        extra=log_extra(
+                            MAICPhase.IMAGE_FETCH,
+                            metric="image_unsafe_src",
+                            outcome="dropped",
+                            element_id=element.get("id"),
+                        ),
+                    )
+                    element["src"] = ""
+                    existing_src = ""
+            if existing_src:
                 continue
             if disabled:
                 meta = element.setdefault("meta", {})
@@ -262,7 +352,200 @@ def _fill_image_urls(data, *, image_provider: str = "disabled"):
             except Exception as exc:  # noqa: BLE001 — log + fail open
                 logger.warning(
                     "image fill failed keyword=%r err=%s", keyword, exc,
+                    extra=log_extra(
+                        MAICPhase.IMAGE_FETCH,
+                        metric="image_fill_inline_error",
+                        outcome="exception",
+                        keyword=str(keyword)[:80],
+                        error_type=type(exc).__name__,
+                    ),
                 )
+    return data
+
+
+def _defer_image_fill(
+    data,
+    *,
+    image_provider: str = "disabled",
+    classroom_id: str | None = None,
+    tenant=None,
+):
+    """CG-P0-3: Security-scrub + disabled-stamp only; defer actual fetching.
+
+    Replaces the inline ``_fill_image_urls`` call at the per-scene-content
+    endpoints. The synchronous part is:
+      1. SEC-P0-4 unsafe-src strip (same as before — always runs).
+      2. When provider is "disabled", stamp ``meta.imageProviderDisabled``.
+      3. Leave ``src=""`` for non-disabled image elements (frontend renders
+         shimmer + Unsplash fallback while waiting).
+
+    Async part:
+      When ``classroom_id`` is present and provider is not disabled, enqueues
+      ``fill_classroom_images`` (60s countdown to give the wizard time to PATCH
+      the classroom content before the task runs).  Also flips
+      ``classroom.images_pending = True`` so the polling FE can show a
+      "images loading" indicator.
+
+    SEC-P1-CROSS-TENANT-IMAGE-FILL: ``classroom_id`` is body-supplied by the
+    caller (teacher or student MAIC scene-content endpoints).  Without a
+    tenant scope on the lookup, an attacker authenticated to Tenant A could
+    submit Tenant B's classroom UUID and cause this view to:
+      * flip ``images_pending=True`` on Tenant B's classroom row, and
+      * enqueue a Celery task referencing Tenant B's classroom.
+    Both are cross-tenant writes that violate the multi-tenant isolation
+    invariant, even though the Celery task itself re-binds tenant context
+    to the *target classroom's* tenant before doing anything else.  Pass
+    ``tenant`` from the request handler so we can scope the lookup; if the
+    classroom does not exist in the caller's tenant, we silently no-op
+    (matches the prior "best-effort" semantics for legitimate misses).
+
+    Returns ``data`` mutated in-place (same contract as ``_fill_image_urls``).
+    """
+    disabled = (image_provider or "disabled").lower() == "disabled"
+    slides = data.get("slides", [])
+    has_empty_images = False
+
+    for slide in slides:
+        for element in slide.get("elements", []):
+            if element.get("type") != "image":
+                continue
+            # SEC-P0-4: strip unsafe src (always — even on the deferred path).
+            existing_src = (element.get("src") or "").strip()
+            if existing_src:
+                if not (
+                    existing_src.startswith("https://")
+                    or existing_src.startswith("http://")
+                    or existing_src.startswith("/")
+                ):
+                    logger.warning(
+                        "dropping unsafe image src: %r (element=%r)",
+                        existing_src[:80], element.get("id"),
+                        extra=log_extra(
+                            MAICPhase.DEFER_IMAGE_FILL,
+                            classroom_id=classroom_id,
+                            metric="image_unsafe_src",
+                            outcome="dropped",
+                            element_id=element.get("id"),
+                        ),
+                    )
+                    element["src"] = ""
+                    existing_src = ""
+            if existing_src:
+                continue
+            # Empty src — mark disabled or leave empty for deferred fill.
+            if disabled:
+                meta = element.setdefault("meta", {})
+                meta["imageProviderDisabled"] = True
+            else:
+                has_empty_images = True  # deferred fill needed
+
+    # Enqueue the Celery task only when there are images to fill and we know
+    # the classroom row to update.
+    if has_empty_images and classroom_id and not disabled:
+        # SEC-P1-CROSS-TENANT-IMAGE-FILL (review follow-up #1, 2026-04-25):
+        # Harden the legacy ``tenant=None`` arm.  No production caller hits
+        # this path today (both teacher + student MAIC scene-content
+        # endpoints pass ``tenant=request.tenant``), but the unscoped
+        # ``MAICClassroom.all_objects.filter(id=classroom_id)`` lookup is
+        # the exact re-entry shape for the bug we just closed.  Refuse to
+        # service the call rather than let a future caller silently
+        # reintroduce the cross-tenant write.
+        if tenant is None:
+            logger.error(
+                "image fill refused: _defer_image_fill called with "
+                "classroom_id=%s but tenant=None — cross-tenant write "
+                "guard (SEC-P1-CROSS-TENANT-IMAGE-FILL).  Pass "
+                "tenant=request.tenant from the request handler.",
+                classroom_id,
+                extra=log_extra(
+                    MAICPhase.DEFER_IMAGE_FILL,
+                    classroom_id=classroom_id,
+                    metric="image_fill_refused",
+                    outcome="missing_tenant",
+                    tenant_id="",
+                ),
+            )
+            return data
+        try:
+            from apps.courses.maic_tasks import fill_classroom_images
+            # Mark images_pending on the classroom row (best-effort).
+            # Use a try/except so a missing classroom doesn't crash the endpoint.
+            #
+            # SEC-P1-CROSS-TENANT-IMAGE-FILL: scope the lookup by tenant so a
+            # body-supplied ``classroomId`` cannot be used to toggle/enqueue
+            # work against another tenant's classroom.  ``tenant=None`` is
+            # rejected above.
+            qs = MAICClassroom.all_objects.filter(
+                id=classroom_id, tenant=tenant
+            )
+            updated = qs.update(images_pending=True)
+            if not updated:
+                # No row matched — either classroom doesn't exist or belongs
+                # to another tenant.  Skip the Celery enqueue so we don't
+                # leak a task across tenants.
+                #
+                # SEC-P1-CROSS-TENANT-IMAGE-FILL (review follow-up #2,
+                # 2026-04-25): also report the *victim* tenant id when the
+                # classroom does exist in another tenant.  One extra
+                # ``values_list`` on the (already-rare) miss path lets the
+                # SOC pivot to "did Tenant A try to write to Tenant B's
+                # row?" — exactly the alerting question.  ``victim_tenant_id``
+                # is empty when the classroom_id matches no row at all
+                # (typo / stale UUID / hostile probe with random UUID).
+                victim_tenant_id = (
+                    MAICClassroom.all_objects
+                    .filter(id=classroom_id)
+                    .values_list("tenant_id", flat=True)
+                    .first()
+                )
+                logger.warning(
+                    "image fill skipped: classroom %s not in tenant %s "
+                    "(victim_tenant=%s) (SEC-P1-CROSS-TENANT-IMAGE-FILL)",
+                    classroom_id,
+                    getattr(tenant, "id", None),
+                    victim_tenant_id,
+                    extra=log_extra(
+                        MAICPhase.DEFER_IMAGE_FILL,
+                        classroom_id=classroom_id,
+                        metric="image_fill_skipped",
+                        outcome="cross_tenant",
+                        tenant_id=str(getattr(tenant, "id", "")),
+                        victim_tenant_id=(
+                            str(victim_tenant_id) if victim_tenant_id else ""
+                        ),
+                    ),
+                )
+                return data
+            # 60s countdown — gives the wizard time to PATCH the classroom
+            # with the scene content before the task reads the DB row.
+            fill_classroom_images.apply_async(
+                args=[classroom_id],
+                countdown=60,
+            )
+            logger.info(
+                "image fill deferred classroom_id=%s (CG-P0-3)",
+                classroom_id,
+                extra=log_extra(
+                    MAICPhase.DEFER_IMAGE_FILL,
+                    classroom_id=classroom_id,
+                    metric="image_fill_deferred",
+                    outcome="enqueued",
+                    countdown_seconds=60,
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001 — deferred path, fail open
+            logger.warning(
+                "could not enqueue fill_classroom_images for classroom_id=%s: %s",
+                classroom_id, exc,
+                extra=log_extra(
+                    MAICPhase.DEFER_IMAGE_FILL,
+                    classroom_id=classroom_id,
+                    metric="image_fill_enqueue_error",
+                    outcome="exception",
+                    error_type=type(exc).__name__,
+                ),
+            )
+
     return data
 
 
@@ -281,13 +564,41 @@ def teacher_maic_chat(request):
     if err:
         return err
 
+    # SEC-P1-5 (2026-04-23): validate classroom ownership BEFORE proxying
+    # to sidecar or hitting the direct-LLM fallback. Previously any teacher
+    # could pass another teacher's classroomId in the body and receive the
+    # target classroom's title + agents + scene outline as chat context.
+    # We parse the body here (cached by Django on first read) then let the
+    # downstream path re-parse freely.
+    try:
+        _preparse_body = json.loads(request.body) if request.body else {}
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        _preparse_body = {}
+    preparse_cid = _preparse_body.get("classroomId") if isinstance(_preparse_body, dict) else None
+    if preparse_cid:
+        if not MAICClassroom.objects.filter(
+            pk=preparse_cid, tenant=request.tenant, creator=request.user,
+        ).exists():
+            return Response(
+                {"error": "Classroom not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
     # Try sidecar first
     result = _proxy_sse(request, "/api/chat", config)
     if result.status_code != 502:
         return result
 
     # Sidecar unavailable — generate chat response directly via LLM
-    logger.info("Sidecar unavailable, using direct chat generation")
+    logger.info(
+        "Sidecar unavailable, using direct chat generation",
+        extra=log_extra(
+            MAICPhase.CHAT,
+            metric="chat_direct_fallback",
+            outcome="sidecar_unavailable",
+            audience="teacher",
+        ),
+    )
     try:
         body = json.loads(request.body) if request.body else {}
     except (json.JSONDecodeError, UnicodeDecodeError):
@@ -302,11 +613,17 @@ def teacher_maic_chat(request):
     classroom_id = body.get("classroomId")
     if classroom_id:
         try:
-            classroom = MAICClassroom.objects.get(pk=classroom_id, tenant=request.tenant)
+            # SEC-P1-5: tenant + creator filter. Upfront validation above
+            # already rejected cross-owner IDs, but keep the filter here as
+            # defense-in-depth against future refactors.
+            classroom = MAICClassroom.objects.get(
+                pk=classroom_id, tenant=request.tenant, creator=request.user,
+            )
             classroom_title = classroom.title or classroom.topic
             agents = (classroom.config or {}).get("agents", [])
-            content = classroom.content or {}
-            for s in (content.get("scenes") or []):
+            # PERF-P0-4 cutover: shard-only read.
+            scenes = list(classroom.content_scenes or [])
+            for s in scenes:
                 if isinstance(s, dict):
                     title = s.get("title")
                     if isinstance(title, str) and title.strip():
@@ -347,7 +664,15 @@ def teacher_maic_generate_outlines(request):
         return result
 
     # Sidecar unavailable — generate directly via LLM
-    logger.info("Sidecar unavailable, using direct outline generation")
+    logger.info(
+        "Sidecar unavailable, using direct outline generation",
+        extra=log_extra(
+            MAICPhase.GENERATE_PROFILES,
+            metric="outline_direct_fallback",
+            outcome="sidecar_unavailable",
+            audience="teacher",
+        ),
+    )
     try:
         body = json.loads(request.body) if request.body else {}
     except (json.JSONDecodeError, UnicodeDecodeError):
@@ -361,6 +686,7 @@ def teacher_maic_generate_outlines(request):
             content_type="application/json",
         )
 
+    ctx = _extract_generation_context(body, request)
     response = StreamingHttpResponse(
         generate_outline_sse(
             topic=body.get("topic", ""),
@@ -369,6 +695,7 @@ def teacher_maic_generate_outlines(request):
             scene_count=body.get("sceneCount", 6),
             pdf_text=body.get("pdfText"),
             config=config,
+            **ctx,
         ),
         content_type="text/event-stream",
     )
@@ -394,22 +721,41 @@ def teacher_maic_generate_scene_content(request):
         return result
 
     # Direct LLM fallback
-    logger.info("Sidecar unavailable, using direct scene content generation")
+    logger.info(
+        "Sidecar unavailable, using direct scene content generation",
+        extra=log_extra(
+            MAICPhase.GENERATE_SCENE_CONTENT,
+            metric="scene_content_direct_fallback",
+            outcome="sidecar_unavailable",
+            audience="teacher",
+        ),
+    )
     try:
         body = json.loads(request.body) if request.body else {}
     except (json.JSONDecodeError, UnicodeDecodeError):
         body = {}
 
+    ctx = _extract_generation_context(body, request)
     data = generate_scene_content(
         scene=body.get("scene", {}),
         agents=body.get("agents", []),
         language=body.get("language", "en"),
         config=config,
+        classroom_id=body.get("classroomId") or None,
+        **ctx,
     )
     if data:
-        # Post-process: fill empty image src fields with real URLs,
-        # respecting the tenant's image_provider setting.
-        _fill_image_urls(data, image_provider=config.image_provider)
+        # CG-P0-3: security-scrub + disabled-stamp synchronously; defer
+        # actual image fetching to the fill_classroom_images Celery task.
+        # SEC-P1-CROSS-TENANT-IMAGE-FILL: pass tenant so the deferred-fill
+        # update is scoped to the caller's tenant.
+        classroom_id = body.get("classroomId") or None
+        _defer_image_fill(
+            data,
+            image_provider=config.image_provider,
+            classroom_id=str(classroom_id) if classroom_id else None,
+            tenant=request.tenant,
+        )
         return Response(data)
     return Response(
         {"error": "Failed to generate scene content."},
@@ -433,7 +779,15 @@ def teacher_maic_generate_tts(request):
         return result
 
     # Sidecar unavailable — generate TTS directly
-    logger.info("Sidecar unavailable, using direct TTS generation")
+    logger.info(
+        "Sidecar unavailable, using direct TTS generation",
+        extra=log_extra(
+            MAICPhase.TTS,
+            metric="tts_direct_fallback",
+            outcome="sidecar_unavailable",
+            audience="teacher",
+        ),
+    )
     try:
         body = json.loads(request.body) if request.body else {}
     except (json.JSONDecodeError, UnicodeDecodeError):
@@ -604,7 +958,34 @@ def teacher_maic_classroom_detail(request, classroom_id):
     except MAICClassroom.DoesNotExist:
         return Response({"error": "Classroom not found."}, status=status.HTTP_404_NOT_FOUND)
 
+    # TEST-P1-10: per-poll Counter labelled by effective state. The FE polls
+    # this endpoint every 3-30s while not READY, so the rate is the cleanest
+    # signal of generation backlog + saturation.
+    maic_classroom_polls_total.labels(state=_polling_state_label(classroom)).inc()
+
     sections = classroom.assigned_sections.select_related("grade").all()
+
+    # PERF-P0-1 (2026-04-23): strip the full `content` payload during the
+    # DRAFT/GENERATING lifecycle. `content` can be 5-20 MB (slides + scenes
+    # + actions + audioManifest with embedded image URLs). MAICPlayerPage
+    # polls this endpoint every 3s while GENERATING (see PERF-P0-2 for the
+    # polling backoff), so shipping megabytes per poll × every open tab ×
+    # every concurrent teacher saturates Gunicorn + bandwidth.
+    #
+    # Mid-generation the UI reads live partial state from the Zustand store
+    # + IndexedDB; the `progress` block below is enough for the spinner.
+    # `content` is only meaningful once status=READY.
+    #
+    # Escape hatch: `?full=1` forces the full payload (used by admin tools
+    # or one-shot backfill scripts).
+    want_full = (
+        request.query_params.get("full") == "1"
+        or classroom.status in ("READY", "FAILED", "ARCHIVED")
+    )
+    # PERF-P0-4: use composed_content property which prefers shards over legacy field.
+    content_payload = classroom.composed_content if want_full else {}
+    audio_manifest = content_payload.get("audioManifest") if want_full else None
+
     return Response({
         "id": str(classroom.id),
         "title": classroom.title,
@@ -623,10 +1004,26 @@ def teacher_maic_classroom_detail(request, classroom_id):
         ],
         "config": classroom.config,
         # Full generated payload (agents, scenes, actions, slides, audioManifest).
-        # The player needs every nested field to render; a bare metadata
-        # response made existing READY classrooms look empty in the UI.
-        "content": classroom.content or {},
-        "audioManifest": (classroom.content or {}).get("audioManifest"),
+        # Populated only when status=READY/FAILED/ARCHIVED or ?full=1 is set —
+        # see PERF-P0-1 note above.
+        "content": content_payload,
+        "audioManifest": audio_manifest,
+        # Live generation progress — honest stats for the MAICPlayerPage
+        # progress UI. See MAICClassroom.GENERATION_PHASES for phase values.
+        "progress": {
+            "phase": classroom.generation_phase,
+            "phase_scene_index": classroom.phase_scene_index,
+            "scenes_ready": classroom.scenes_ready,
+            "expected_scenes": (classroom.config or {}).get("sceneCount"),
+            "started_at": classroom.started_at.isoformat() if classroom.started_at else None,
+            "last_progress_at": (
+                classroom.last_progress_at.isoformat() if classroom.last_progress_at else None
+            ),
+        },
+        # CG-P0-3: images_pending — True while the fill_classroom_images
+        # Celery task is in-flight. Frontend can show a loading indicator on
+        # image slots and re-fetch when this flips to False.
+        "images_pending": classroom.images_pending,
         "created_at": classroom.created_at.isoformat(),
         "updated_at": classroom.updated_at.isoformat(),
     })
@@ -646,18 +1043,59 @@ def teacher_maic_classroom_update(request, classroom_id):
     except MAICClassroom.DoesNotExist:
         return Response({"error": "Classroom not found."}, status=status.HTTP_404_NOT_FOUND)
 
+    # PERF-P0-4: exclude "content" from the simple setattr loop; we handle it
+    # separately by splitting into shards.
     updatable = ["title", "description", "topic", "language", "status",
-                  "is_public", "scene_count", "estimated_minutes", "config", "error_message",
-                  "content"]
+                  "is_public", "scene_count", "estimated_minutes", "config", "error_message"]
     updated_fields = []
     for field in updatable:
         if field in request.data:
             setattr(classroom, field, request.data[field])
             updated_fields.append(field)
 
+    # PERF-P0-4 cutover: when the frontend PATCHes a full "content" dict,
+    # split it into the three shards so subsequent partial saves only
+    # rewrite one shard. The legacy ``content`` mirror was removed —
+    # readers go through ``composed_content`` / shards. A non-dict
+    # payload is ignored (the FE never sends one in practice; we'd
+    # rather skip than write garbage to the legacy column).
+    if "content" in request.data:
+        raw_content = request.data["content"] or {}
+        if isinstance(raw_content, dict):
+            scenes = raw_content.get("scenes")
+            agents = raw_content.get("agents")
+            meta = {k: v for k, v in raw_content.items() if k not in ("scenes", "agents")}
+            classroom.content_scenes = scenes if isinstance(scenes, list) else []
+            classroom.content_agents = agents if isinstance(agents, list) else []
+            classroom.content_meta = meta
+            updated_fields.extend(["content_scenes", "content_agents", "content_meta"])
+
+    # Auto-heartbeat: if the frontend saves partial content during
+    # generation, infer progress from it so the MAICPlayerPage progress
+    # bar advances even if the wizard never calls the dedicated progress
+    # endpoint. Cheap and idempotent.
+    if "content" in request.data and classroom.status == "GENERATING":
+        now = timezone.now()
+        # PERF-P0-4: read scenes from the shard we just populated above.
+        scenes = classroom.content_scenes or []
+        # Count scenes that have BOTH slides (content) and actions arrays
+        ready = sum(
+            1 for s in scenes
+            if s.get("slides") and s.get("actions") is not None
+        )
+        if ready and ready != classroom.scenes_ready:
+            classroom.scenes_ready = ready
+            updated_fields.append("scenes_ready")
+        if classroom.started_at is None:
+            classroom.started_at = now
+            updated_fields.append("started_at")
+        classroom.last_progress_at = now
+        updated_fields.append("last_progress_at")
+
     if updated_fields:
-        updated_fields.append("updated_at")
-        classroom.save(update_fields=updated_fields)
+        # Deduplicate while preserving order (dict.fromkeys is O(n) and ordered).
+        unique_fields = list(dict.fromkeys(updated_fields + ["updated_at"]))
+        classroom.save(update_fields=unique_fields)
 
     # Handle M2M assigned_sections separately
     if "assigned_section_ids" in request.data:
@@ -670,6 +1108,71 @@ def teacher_maic_classroom_update(request, classroom_id):
             classroom.assigned_sections.set(sections)
 
     return Response({"id": str(classroom.id), "status": classroom.status})
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@teacher_or_admin
+@tenant_required
+@check_feature("feature_maic")
+def teacher_maic_classroom_progress(request, classroom_id):
+    """Stamp live generation progress on a classroom row.
+
+    Called by the wizard's useMAICGeneration hook at phase transitions
+    and after each scene completes. Cheap, idempotent, fire-and-forget.
+
+    Accepted JSON body (all optional):
+        phase:              one of MAICClassroom.GENERATION_PHASES values
+        phase_scene_index:  1-based index of scene in flight (0 = none)
+        scenes_ready:       count of fully-generated scenes
+
+    Always stamps ``last_progress_at=now()`` and, on first call,
+    ``started_at=now()``. Transitioning phase to ``complete`` does NOT
+    change status — the publish endpoint owns status transitions.
+    """
+    try:
+        classroom = MAICClassroom.objects.get(
+            pk=classroom_id, tenant=request.tenant, creator=request.user,
+        )
+    except MAICClassroom.DoesNotExist:
+        return Response({"error": "Classroom not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    body = request.data if isinstance(request.data, dict) else {}
+    valid_phases = {p[0] for p in MAICClassroom.GENERATION_PHASES}
+    updated_fields: list[str] = []
+
+    phase = body.get("phase")
+    if phase is not None and phase in valid_phases and phase != classroom.generation_phase:
+        classroom.generation_phase = phase
+        updated_fields.append("generation_phase")
+
+    scene_idx = body.get("phase_scene_index")
+    if isinstance(scene_idx, int) and scene_idx >= 0 and scene_idx != classroom.phase_scene_index:
+        classroom.phase_scene_index = scene_idx
+        updated_fields.append("phase_scene_index")
+
+    scenes_ready = body.get("scenes_ready")
+    if isinstance(scenes_ready, int) and scenes_ready >= 0 and scenes_ready != classroom.scenes_ready:
+        classroom.scenes_ready = scenes_ready
+        updated_fields.append("scenes_ready")
+
+    now = timezone.now()
+    if classroom.started_at is None:
+        classroom.started_at = now
+        updated_fields.append("started_at")
+    classroom.last_progress_at = now
+    updated_fields.append("last_progress_at")
+    updated_fields.append("updated_at")
+
+    classroom.save(update_fields=updated_fields)
+
+    return Response({
+        "phase": classroom.generation_phase,
+        "phase_scene_index": classroom.phase_scene_index,
+        "scenes_ready": classroom.scenes_ready,
+        "started_at": classroom.started_at.isoformat() if classroom.started_at else None,
+        "last_progress_at": classroom.last_progress_at.isoformat(),
+    })
 
 
 @api_view(["DELETE"])
@@ -703,9 +1206,9 @@ def teacher_maic_classroom_publish(request, classroom_id):
     Uses ``select_for_update`` to reject concurrent publish attempts with HTTP 409.
     Walks every speech action, stamps a deterministic ``audioId`` + resolved
     ``voiceId`` from the agent roster, writes an ``audioManifest`` onto
-    ``classroom.content`` and enqueues the Celery pre-gen task (idempotent:
-    if it runs again on a re-publish, actions that already carry ``audioUrl``
-    are skipped).
+    ``classroom.content_meta`` and enqueues the Celery pre-gen task
+    (idempotent: if it runs again on a re-publish, actions that already
+    carry ``audioUrl`` are skipped).
     """
     with transaction.atomic():
         try:
@@ -724,9 +1227,13 @@ def teacher_maic_classroom_publish(request, classroom_id):
                 status=status.HTTP_409_CONFLICT,
             )
 
-        content = classroom.content or {}
-        scenes = content.get("scenes", [])
-        agents_by_id = {a["id"]: a for a in content.get("agents", [])}
+        # PERF-P0-4 cutover: shard-only reads. The legacy ``content``
+        # JSONField is no longer written to (post-cutover) and migration
+        # 0043 backfilled every existing row, so the shards are the sole
+        # source of truth.
+        scenes = list(classroom.content_scenes or [])
+        agents_list = list(classroom.content_agents or [])
+        agents_by_id = {a["id"]: a for a in agents_list}
 
         # Walk speech actions, stamp audioId + voiceId.
         # If text or voice changed since the last publish, the new audioId
@@ -755,7 +1262,7 @@ def teacher_maic_classroom_publish(request, classroom_id):
                 action["audioId"] = new_audio_id
                 total += 1
 
-        content["audioManifest"] = {
+        audio_manifest = {
             "status": "generating",
             "progress": 0,
             "totalActions": total,
@@ -763,16 +1270,28 @@ def teacher_maic_classroom_publish(request, classroom_id):
             "failedAudioIds": [],
             "generatedAt": None,
         }
-        classroom.content = content
+        # PERF-P0-4 cutover: write scenes shard (audioId/voiceId stamps)
+        # + meta shard (audioManifest). The legacy ``content`` mirror was
+        # removed — every reader now goes through ``composed_content`` /
+        # shards. The AUDIT-2026-04-25-4 ``legacy_mirror`` precedence
+        # logic is obsolete because there is no legacy mirror to seed.
+        meta = dict(classroom.content_meta or {})
+        meta["audioManifest"] = audio_manifest
+        classroom.content_scenes = scenes
+        classroom.content_meta = meta
         classroom.status = "GENERATING"
-        classroom.save(update_fields=["content", "status", "updated_at"])
+        classroom.save(
+            update_fields=[
+                "content_scenes", "content_meta", "status", "updated_at"
+            ]
+        )
 
     # Enqueue after the transaction commits so the worker sees the new state
     from apps.courses.maic_tasks import pre_generate_classroom_tts
     pre_generate_classroom_tts.delay(str(classroom.id))
 
     return Response(
-        {"audioManifest": content["audioManifest"]},
+        {"audioManifest": audio_manifest},
         status=status.HTTP_202_ACCEPTED,
     )
 
@@ -796,7 +1315,15 @@ def teacher_maic_quiz_grade(request):
         return result
 
     # Sidecar unavailable — grade directly via LLM
-    logger.info("Sidecar unavailable, using direct LLM quiz grading")
+    logger.info(
+        "Sidecar unavailable, using direct LLM quiz grading",
+        extra=log_extra(
+            MAICPhase.LLM_CALL,
+            metric="quiz_grade_direct_fallback",
+            outcome="sidecar_unavailable",
+            audience="teacher",
+        ),
+    )
     try:
         body = json.loads(request.body) if request.body else {}
     except (json.JSONDecodeError, UnicodeDecodeError):
@@ -881,17 +1408,28 @@ def teacher_maic_generate_scene_actions(request):
         return result
 
     # Direct LLM fallback
-    logger.info("Sidecar unavailable, using direct scene actions generation")
+    logger.info(
+        "Sidecar unavailable, using direct scene actions generation",
+        extra=log_extra(
+            MAICPhase.GENERATE_SCENE_ACTIONS,
+            metric="scene_actions_direct_fallback",
+            outcome="sidecar_unavailable",
+            audience="teacher",
+        ),
+    )
     try:
         body = json.loads(request.body) if request.body else {}
     except (json.JSONDecodeError, UnicodeDecodeError):
         body = {}
 
+    ctx = _extract_generation_context(body, request)
     data = generate_scene_actions(
         scene=body.get("scene", {}),
         agents=body.get("agents", []),
         language=body.get("language", "en"),
         config=config,
+        classroom_id=body.get("classroomId") or None,
+        **ctx,
     )
     if data:
         return Response(data)
@@ -899,6 +1437,50 @@ def teacher_maic_generate_scene_actions(request):
         {"error": "Failed to generate scene actions."},
         status=status.HTTP_500_INTERNAL_SERVER_ERROR,
     )
+
+
+def _director_turn_impl(request):
+    """Shared director-turn implementation used by both teacher and
+    student variants. Input JSON: ``{agents, transcript, topic,
+    lastSpeakerId?, studentInput?}``. Returns ``{next_speaker_id,
+    reasoning}`` or 204 when the LLM declines / falls back.
+    """
+    config, err = _get_ai_config(request.tenant)
+    if err:
+        return err
+    try:
+        body = json.loads(request.body) if request.body else {}
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        body = {}
+    agents = body.get("agents", [])
+    transcript = body.get("transcript", [])
+    topic = body.get("topic", "")
+    last_speaker_id = body.get("lastSpeakerId")
+    student_input = body.get("studentInput")
+    result = director_next_turn(
+        agents=agents,
+        transcript=transcript,
+        topic=topic,
+        last_speaker_id=last_speaker_id,
+        student_input=student_input,
+        config=config,
+    )
+    if not result:
+        # Signal the client to fall back to round-robin — an empty body
+        # rather than a 500 so the director doesn't hard-stop the
+        # discussion on a transient LLM failure.
+        return Response(status=status.HTTP_204_NO_CONTENT)
+    return Response(result)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@teacher_or_admin
+@tenant_required
+@check_feature("feature_maic")
+def teacher_maic_director_turn(request):
+    """Multi-agent director: pick the next speaker. Porting P3.1."""
+    return _director_turn_impl(request)
 
 
 # Agent profiles generation — uses the direct LLM validator path.
@@ -937,9 +1519,12 @@ def student_maic_classroom_list(request):
     qs = MAICClassroom.objects.filter(
         tenant=request.tenant, status="READY",
     ).filter(
-        # Gate on audioManifest — classrooms mid-generation are hidden from students.
-        Q(content__audioManifest__status="ready") |
-        Q(content__audioManifest__status="partial")
+        # PERF-P0-4 cutover: gate on the ``content_meta`` shard rather
+        # than the legacy ``content`` blob. audioManifest lives in
+        # ``content_meta`` post-cutover; migration 0043 backfilled every
+        # existing row.
+        Q(content_meta__audioManifest__status="ready") |
+        Q(content_meta__audioManifest__status="partial")
     ).order_by("-updated_at")
 
     student_section = getattr(request.user, "section_fk", None)
@@ -976,33 +1561,83 @@ def student_maic_classroom_list(request):
     return Response(classrooms)
 
 
+# ─── Student visibility helper ────────────────────────────────────────────────
+
+
+def _student_can_view_classroom(user, classroom) -> bool:
+    """Return ``True`` iff the given student user may view this classroom.
+
+    This is the **single canonical visibility gate** for student-facing
+    classroom access.  Both ``student_maic_classroom_detail`` (GET detail) and
+    ``student_maic_chat`` (POST chat) delegate here so the rules stay in sync
+    and cannot diverge (BE-SEC-002 m1/m2 follow-up).
+
+    Evaluation order:
+
+    1. **Status gate** — classroom must be ``"READY"``.  In-generation drafts
+       and failed/archived classrooms are invisible to students.
+    2. **Audio manifest gate** — ``content.audioManifest.status`` must be
+       ``"ready"`` or ``"partial"``.  Classrooms still encoding audio are
+       hidden (consistent with the list endpoint queryset filter).
+    3. **Section/public gate** — if ``assigned_sections`` is non-empty the
+       student's ``section_fk`` must be among them; otherwise the classroom
+       must be ``is_public=True``.
+    """
+    # 1. Status check.
+    if classroom.status != "READY":
+        return False
+
+    # 2. Audio manifest check.
+    # PERF-P0-4 cutover: audioManifest lives in the ``content_meta``
+    # shard. The legacy-content fallback added by AUDIT-2026-04-25-9 was
+    # removed once the dual-write was retired — migration 0043 backfilled
+    # every existing row's ``content_meta`` from the legacy blob, so a
+    # shard-only read is sufficient. ``composed_content`` is used as a
+    # courtesy belt-and-suspenders so any unexpected pre-backfill row
+    # still resolves through the property's own legacy fallback.
+    composed = classroom.composed_content
+    manifest = composed.get("audioManifest") or {}
+    manifest_status = manifest.get("status") if isinstance(manifest, dict) else None
+    if manifest_status not in ("ready", "partial"):
+        return False
+
+    # 3. Section / public check.
+    assigned = classroom.assigned_sections.all()
+    student_section = getattr(user, "section_fk", None)
+    if assigned.exists():
+        return bool(student_section) and student_section in assigned
+    return classroom.is_public
+
+
+# ─── Student detail view ──────────────────────────────────────────────────────
+
+
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 @student_or_admin
 @tenant_required
 @check_feature("feature_maic")
 def student_maic_classroom_detail(request, classroom_id):
-    """Get a classroom's metadata (respects section assignment + visibility)."""
+    """Get a classroom's metadata (respects section assignment + visibility).
+
+    Access is granted only when ``_student_can_view_classroom`` returns True.
+    Fetching without the ``status="READY"`` ORM filter so the helper owns all
+    gate logic — the helper will return False (→ 404) for non-READY rows.
+    """
     try:
         classroom = MAICClassroom.objects.get(
-            pk=classroom_id, tenant=request.tenant, status="READY",
+            pk=classroom_id, tenant=request.tenant,
         )
     except MAICClassroom.DoesNotExist:
         return Response({"error": "Classroom not found."}, status=status.HTTP_404_NOT_FOUND)
 
-    # Hide classrooms still mid-generation — audio manifest must be usable.
-    manifest_status = (classroom.content or {}).get("audioManifest", {}).get("status")
-    if manifest_status not in ("ready", "partial"):
+    if not _student_can_view_classroom(request.user, classroom):
         return Response({"error": "Classroom not found."}, status=status.HTTP_404_NOT_FOUND)
 
-    # Check visibility: assigned sections grant access, otherwise must be public with no restrictions
-    assigned = classroom.assigned_sections.all()
-    student_section = getattr(request.user, "section_fk", None)
-    if assigned.exists():
-        if not student_section or student_section not in assigned:
-            return Response({"error": "Classroom not found."}, status=status.HTTP_404_NOT_FOUND)
-    elif not classroom.is_public:
-        return Response({"error": "Classroom not found."}, status=status.HTTP_404_NOT_FOUND)
+    # TEST-P1-10: same per-poll Counter as the teacher endpoint. Student
+    # polls have a different lifecycle (READY-only access path) but the
+    # state label disambiguates them on the dashboard.
+    maic_classroom_polls_total.labels(state=_polling_state_label(classroom)).inc()
 
     return Response({
         "id": str(classroom.id),
@@ -1015,7 +1650,11 @@ def student_maic_classroom_detail(request, classroom_id):
         "estimated_minutes": classroom.estimated_minutes,
         "course_id": str(classroom.course_id) if classroom.course_id else None,
         "config": classroom.config,
-        "content": classroom.content,
+        # PERF-P0-4: use composed_content property (prefers shards over legacy field).
+        "content": classroom.composed_content,
+        # CG-P0-3: images_pending — frontend polls this to know when images
+        # are ready (True = fill task still in-flight).
+        "images_pending": classroom.images_pending,
         "created_at": classroom.created_at.isoformat(),
     })
 
@@ -1036,7 +1675,15 @@ def student_maic_chat(request):
         return result
 
     # Sidecar unavailable — direct LLM fallback
-    logger.info("Sidecar unavailable, using direct chat generation (student)")
+    logger.info(
+        "Sidecar unavailable, using direct chat generation (student)",
+        extra=log_extra(
+            MAICPhase.CHAT,
+            metric="chat_direct_fallback",
+            outcome="sidecar_unavailable",
+            audience="student",
+        ),
+    )
     try:
         body = json.loads(request.body) if request.body else {}
     except (json.JSONDecodeError, UnicodeDecodeError):
@@ -1049,16 +1696,22 @@ def student_maic_chat(request):
     if classroom_id:
         try:
             classroom = MAICClassroom.objects.get(pk=classroom_id, tenant=request.tenant)
+        except MAICClassroom.DoesNotExist:
+            classroom = None
+        # SECURITY: a classroomId the student cannot see must not seed
+        # chat context (title / agents / scene titles).  Delegate to the
+        # canonical visibility gate so the rules stay in sync with
+        # ``student_maic_classroom_detail`` (BE-SEC-002 m1/m2 follow-up).
+        if classroom is not None and _student_can_view_classroom(request.user, classroom):
             classroom_title = classroom.title or classroom.topic
             agents = (classroom.config or {}).get("agents", [])
-            content = classroom.content or {}
-            for s in (content.get("scenes") or []):
+            # PERF-P0-4 cutover: shard-only read.
+            scenes = list(classroom.content_scenes or [])
+            for s in scenes:
                 if isinstance(s, dict):
                     title = s.get("title")
                     if isinstance(title, str) and title.strip():
                         scene_titles.append(title.strip())
-        except MAICClassroom.DoesNotExist:
-            pass
 
     response = StreamingHttpResponse(
         generate_chat_sse(
@@ -1133,7 +1786,15 @@ def student_maic_quiz_grade(request):
         return result
 
     # Sidecar unavailable — grade directly via LLM
-    logger.info("Sidecar unavailable, using direct LLM quiz grading (student)")
+    logger.info(
+        "Sidecar unavailable, using direct LLM quiz grading (student)",
+        extra=log_extra(
+            MAICPhase.LLM_CALL,
+            metric="quiz_grade_direct_fallback",
+            outcome="sidecar_unavailable",
+            audience="student",
+        ),
+    )
     try:
         body = json.loads(request.body) if request.body else {}
     except (json.JSONDecodeError, UnicodeDecodeError):
@@ -1362,7 +2023,16 @@ def student_maic_generate_outlines(request):
         )
 
     # Direct fallback
-    logger.info("Sidecar unavailable, using direct outline generation (student)")
+    logger.info(
+        "Sidecar unavailable, using direct outline generation (student)",
+        extra=log_extra(
+            MAICPhase.GENERATE_PROFILES,
+            metric="outline_direct_fallback",
+            outcome="sidecar_unavailable",
+            audience="student",
+        ),
+    )
+    ctx = _extract_generation_context(body, request)
     response = StreamingHttpResponse(
         generate_outline_sse(
             topic=topic,
@@ -1371,6 +2041,7 @@ def student_maic_generate_outlines(request):
             agents=agents_input,
             scene_count=min(int(body.get("sceneCount", 5)), 8),  # Cap at 8 for students
             config=config,
+            **ctx,
         ),
         content_type="text/event-stream",
     )
@@ -1395,7 +2066,15 @@ def student_maic_generate_scene_content(request):
         return result
 
     # Direct fallback
-    logger.info("Sidecar unavailable, using direct scene content generation (student)")
+    logger.info(
+        "Sidecar unavailable, using direct scene content generation (student)",
+        extra=log_extra(
+            MAICPhase.GENERATE_SCENE_CONTENT,
+            metric="scene_content_direct_fallback",
+            outcome="sidecar_unavailable",
+            audience="student",
+        ),
+    )
     try:
         body = json.loads(request.body) if request.body else {}
     except (json.JSONDecodeError, UnicodeDecodeError):
@@ -1405,8 +2084,23 @@ def student_maic_generate_scene_content(request):
     agents = body.get("agents", [])
     language = body.get("language", "en")
 
-    data = generate_scene_content(scene, agents, language, config)
-    _fill_image_urls(data, image_provider=config.image_provider)
+    ctx = _extract_generation_context(body, request)
+    data = generate_scene_content(
+        scene, agents, language, config,
+        classroom_id=body.get("classroomId") or None,
+        **ctx,
+    )
+    # CG-P0-3: security-scrub + disabled-stamp synchronously; defer
+    # actual image fetching to the fill_classroom_images Celery task.
+    # SEC-P1-CROSS-TENANT-IMAGE-FILL: pass tenant so the deferred-fill
+    # update is scoped to the caller's tenant.
+    student_classroom_id = body.get("classroomId") or None
+    _defer_image_fill(
+        data,
+        image_provider=config.image_provider,
+        classroom_id=str(student_classroom_id) if student_classroom_id else None,
+        tenant=request.tenant,
+    )
     return Response(data)
 
 
@@ -1426,7 +2120,15 @@ def student_maic_generate_scene_actions(request):
         return result
 
     # Direct fallback
-    logger.info("Sidecar unavailable, using direct scene actions generation (student)")
+    logger.info(
+        "Sidecar unavailable, using direct scene actions generation (student)",
+        extra=log_extra(
+            MAICPhase.GENERATE_SCENE_ACTIONS,
+            metric="scene_actions_direct_fallback",
+            outcome="sidecar_unavailable",
+            audience="student",
+        ),
+    )
     try:
         body = json.loads(request.body) if request.body else {}
     except (json.JSONDecodeError, UnicodeDecodeError):
@@ -1436,7 +2138,12 @@ def student_maic_generate_scene_actions(request):
     agents = body.get("agents", [])
     language = body.get("language", "en")
 
-    data = generate_scene_actions(scene, agents, language, config)
+    ctx = _extract_generation_context(body, request)
+    data = generate_scene_actions(
+        scene, agents, language, config,
+        classroom_id=body.get("classroomId") or None,
+        **ctx,
+    )
     return Response(data)
 
 
@@ -1444,6 +2151,8 @@ def student_maic_generate_scene_actions(request):
 # Public MAIC endpoints (authenticated, role-agnostic)
 # ======================================================================
 
+# No @tenant_required: returns a static platform-wide list of Azure TTS voice options;
+# no tenant-scoped data accessed.
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def maic_list_voices(request):
@@ -1537,6 +2246,16 @@ def student_maic_regenerate_one_agent(request):
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
+@student_or_admin
+@tenant_required
+@check_feature("feature_maic")
+def student_maic_director_turn(request):
+    """Multi-agent director: pick the next speaker. Porting P3.1."""
+    return _director_turn_impl(request)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
 @teacher_or_admin
 @tenant_required
 @check_feature("feature_maic")
@@ -1564,7 +2283,16 @@ def teacher_maic_tts_preview(request):
     try:
         audio_bytes = generate_tts_audio(text, config, voice_id=voice_id)
     except Exception as exc:  # noqa: BLE001 — defensive boundary
-        logger.warning("tts_preview unexpected error: %s", exc)
+        logger.warning(
+            "tts_preview unexpected error: %s",
+            exc,
+            extra=log_extra(
+                MAICPhase.TTS,
+                metric="tts_preview_error",
+                outcome="exception",
+                error_type=type(exc).__name__,
+            ),
+        )
         resp = HttpResponse(status=204)
         resp["X-TTS-Status"] = "error"
         return resp

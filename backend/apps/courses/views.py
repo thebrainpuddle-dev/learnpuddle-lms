@@ -2,7 +2,7 @@
 
 import logging
 from django.contrib.postgres.search import SearchQuery, SearchRank, SearchVector
-from django.db.models import Count, Prefetch, Q
+from django.db.models import Count, F, Prefetch, Q
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes, parser_classes
 from rest_framework.parsers import JSONParser, MultiPartParser, FormParser
@@ -135,7 +135,20 @@ def course_list_create(request):
             ),
             _content_count=Count(
                 'modules__contents',
-                filter=Q(modules__contents__is_active=True),
+                filter=Q(modules__is_active=True, modules__contents__is_active=True),
+                distinct=True,
+            ),
+            # Precompute completed-teacher count: TeacherProgress rows that are
+            # course-level (content__isnull=True) and COMPLETED.  Dividing by
+            # the assigned-teacher count gives the real completion_rate without
+            # any extra per-course queries.
+            _completed_teacher_count=Count(
+                'progress',
+                filter=Q(
+                    progress__content__isnull=True,
+                    progress__status='COMPLETED',
+                    progress__tenant=F('tenant'),
+                ),
                 distinct=True,
             ),
         )

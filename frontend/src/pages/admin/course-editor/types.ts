@@ -67,7 +67,7 @@ export interface Course {
 
 // ── Editor-specific types ──────────────────────────────────────────────
 
-export type EditorTab = 'details' | 'content' | 'ai' | 'audience';
+export type EditorTab = 'details' | 'content' | 'ai' | 'audience' | 'history';
 export type TextEditorMode = 'WYSIWYG' | 'MARKDOWN';
 export type LibraryMediaFilter = 'ALL' | MediaAsset['media_type'];
 export type AssignmentScopeFilter = 'ALL' | 'COURSE' | 'MODULE';

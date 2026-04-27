@@ -172,6 +172,11 @@ class CourseListSerializer(serializers.ModelSerializer):
         if not individual_ids and not groups:
             return 0
 
+        # Fast path: no groups — count is exactly the prefetched individual set.
+        # This avoids a per-course DB query when assignments are teacher-only.
+        if not groups:
+            return len(individual_ids)
+
         group_ids = [g.id for g in groups]
 
         return (
@@ -186,8 +191,28 @@ class CourseListSerializer(serializers.ModelSerializer):
         )
     
     def get_completion_rate(self, obj):
-        # TODO: Calculate from TeacherProgress model
-        return 0.0
+        """
+        Fraction (0–100.0) of assigned teachers who have completed the course.
+
+        Uses ``_completed_teacher_count`` annotation when available (set by the
+        course_list view queryset) so this never issues an extra query in the
+        list endpoint.  Falls back to a live DB count when the serializer is
+        called outside that view (e.g. direct API tests or admin tooling).
+        """
+        if hasattr(obj, '_completed_teacher_count'):
+            completed = obj._completed_teacher_count
+        else:
+            from apps.progress.models import TeacherProgress
+            completed = TeacherProgress.objects.filter(
+                course=obj,
+                content__isnull=True,
+                status='COMPLETED',
+            ).count()
+
+        total = self.get_assigned_teacher_count(obj)
+        if not total:
+            return 0.0
+        return round((completed / total) * 100, 1)
     
     def get_created_by_name(self, obj):
         if obj.created_by:

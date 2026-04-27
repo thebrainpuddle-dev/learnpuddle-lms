@@ -39,6 +39,30 @@ docker compose -f "${COMPOSE_FILE}" exec -T "${DB_CONTAINER}" \
 FILESIZE=$(du -h "${BACKUP_DIR}/${BACKUP_FILE}" | cut -f1)
 echo "[$(date)] Backup created: ${BACKUP_FILE} (${FILESIZE})"
 
+# ── Integrity verification ─────────────────────────────────────────────────
+# Fail-fast: a corrupt or empty backup is worse than no backup.
+# gunzip -t decompresses to /dev/null and reports any zlib/gzip errors.
+echo "[$(date)] Verifying backup integrity..."
+if ! gunzip -t "${BACKUP_DIR}/${BACKUP_FILE}" 2>&1; then
+    echo "[$(date)] ERROR: Backup integrity check FAILED — ${BACKUP_FILE} is corrupt or empty." >&2
+    rm -f "${BACKUP_DIR}/${BACKUP_FILE}"
+    exit 1
+fi
+
+# Sanity-check: a valid pg_dump always starts with "-- PostgreSQL database dump"
+# Temporarily disable pipefail: `head -1` closes the pipe early, which causes
+# gunzip to receive SIGPIPE and exit non-zero — that would fire set -o pipefail.
+set +o pipefail
+FIRST_LINE=$(gunzip -c "${BACKUP_DIR}/${BACKUP_FILE}" | head -1)
+set -o pipefail
+if [[ "${FIRST_LINE}" != "-- PostgreSQL database dump"* ]]; then
+    echo "[$(date)] ERROR: Backup content check FAILED — unexpected header: '${FIRST_LINE}'" >&2
+    rm -f "${BACKUP_DIR}/${BACKUP_FILE}"
+    exit 1
+fi
+
+echo "[$(date)] Integrity OK — backup is valid."
+
 # Upload to S3 if bucket is configured
 if [ -n "${BACKUP_S3_BUCKET}" ]; then
     echo "[$(date)] Uploading to s3://${BACKUP_S3_BUCKET}/db-backups/${BACKUP_FILE}..."

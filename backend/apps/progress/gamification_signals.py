@@ -85,6 +85,18 @@ def on_teacher_progress_save(sender, instance, created, **kwargs):
                         reference_type='course',
                         description=f'Completed course: {course}',
                     )
+                    # TASK-018: course-level mastery bonus when avg quiz
+                    # score meets the threshold.
+                    try:
+                        from .mastery_engine import award_course_mastery_bonus
+
+                        award_course_mastery_bonus(teacher, course)
+                    except Exception:  # noqa: BLE001
+                        logger.exception(
+                            "award_course_mastery_bonus failed for "
+                            "course %s, teacher %s",
+                            instance.course_id, teacher.id,
+                        )
 
 
 @receiver(post_save, sender='progress.AssignmentSubmission')
@@ -118,8 +130,28 @@ def on_assignment_submission(sender, instance, created, **kwargs):
 
 @receiver(post_save, sender='progress.QuizSubmission')
 def on_quiz_submission(sender, instance, created, **kwargs):
-    """Award XP when a teacher submits a quiz."""
-    if not created:
+    """Award XP when a teacher completes (submits) a quiz attempt.
+
+    With multiple-attempt support, a QuizSubmission row is created when the
+    teacher opens the quiz (score IS NULL, in-progress).  XP must only be
+    awarded once the teacher actually submits answers (score IS NOT NULL).
+
+    We guard against double-award using XPTransaction deduplication keyed on
+    instance.id, so re-saves (e.g. admin manual grade) do not earn extra XP.
+    """
+    # Skip in-progress attempts — score is set only when quiz is submitted.
+    if instance.score is None:
+        return
+
+    # Skip abandoned timed attempts.  quiz_helpers.start_quiz_attempt() closes
+    # out an expired in-progress row by setting time_expired=True, score=0.
+    # The teacher did not submit answers — do not award XP.  Guard runs BEFORE
+    # dedup lookup so we don't record a zero-XP transaction either.
+    if getattr(instance, 'time_expired', False) and instance.score in (None, 0):
+        logger.info(
+            "Skipping XP for abandoned timed quiz attempt id=%s",
+            instance.pk,
+        )
         return
 
     teacher = instance.teacher
@@ -131,6 +163,18 @@ def on_quiz_submission(sender, instance, created, **kwargs):
         )
         return
 
+    # Deduplicate: only award XP once per submission row (instance.id).
+    from .gamification_models import XPTransaction
+
+    already_awarded = XPTransaction.all_objects.filter(
+        teacher=teacher,
+        reason='quiz_submission',
+        reference_id=instance.id,
+        reference_type='quiz_submission',
+    ).exists()
+    if already_awarded:
+        return
+
     from .gamification_engine import award_xp, update_streak
 
     award_xp(
@@ -138,6 +182,40 @@ def on_quiz_submission(sender, instance, created, **kwargs):
         reason='quiz_submission',
         reference_id=instance.id,
         reference_type='quiz_submission',
-        description='Completed quiz',
+        description=f'Completed quiz (attempt {instance.attempt_number})',
     )
     update_streak(teacher, tenant)
+
+    # TASK-018: Mastery Points for quiz scores above the configured threshold.
+    # The engine is defensive (catches duplicate / opt-out / inactive) so we
+    # invoke it unconditionally here and never let an MP failure break XP.
+    try:
+        from .mastery_engine import award_quiz_mastery
+
+        award_quiz_mastery(instance)
+    except Exception:  # noqa: BLE001 — MP errors must not break XP path
+        logger.exception(
+            "award_quiz_mastery failed for QuizSubmission %s", instance.id,
+        )
+
+
+@receiver(post_save, sender='progress.AssignmentSubmission')
+def on_assignment_submission_mastery(sender, instance, created, **kwargs):
+    """
+    Award Mastery Points when an AssignmentSubmission transitions to
+    GRADED with a passing score. Separate from the XP signal because MP
+    fires on re-saves (grade changes) whereas XP fires once on creation.
+    """
+    if instance.status != 'GRADED' or instance.score is None:
+        return
+    try:
+        from .mastery_engine import award_assignment_mastery
+
+        award_assignment_mastery(instance)
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "award_assignment_mastery failed for AssignmentSubmission %s",
+            instance.id,
+        )
+
+

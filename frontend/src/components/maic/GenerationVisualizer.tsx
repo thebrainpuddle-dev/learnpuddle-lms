@@ -5,6 +5,7 @@
 // with scene-level progress tracking, elapsed time, and honest ETA.
 
 import React, { useEffect, useState } from 'react';
+import { motion } from 'motion/react';
 import type { GenerationPhase } from '../../hooks/useMAICGeneration';
 import { cn } from '../../lib/utils';
 
@@ -243,45 +244,188 @@ export const GenerationVisualizer: React.FC<GenerationVisualizerProps> = ({
 
 // ─── SVG Icons ───────────────────────────────────────────────────────────────
 
+// ─── Per-phase animated icons (Sprint 2 · A.1) ──────────────────────────────
+//
+// Each icon has a little motion that tells the story of the phase:
+//   - OutlineIcon (scribe): the four outline lines write themselves in
+//     sequence, like a pen drafting the agenda.
+//   - SlidesIcon (painter): a paint stroke sweeps across the front slide
+//     while content lines fade in behind it.
+//   - ActionsIcon (choreographer): the speech bubble pulses as though
+//     the agent is miming through takes.
+//   - SaveIcon: the check mark draws itself in.
+// Reduced-motion users get the end state with no movement (motion/react
+// respects the media query by default for most transitions).
+
 function OutlineIcon() {
+  // T5 — "rotated notepad that flattens on hover" with a cyan scan
+  // line sweeping top-to-bottom (the PDF laser from OpenMAIC). Parent
+  // handles rotation via the `group` hover trick so we can keep the
+  // SVG focused on the motion lines.
+  const LINES = [
+    { x2: 22, opacity: 1, delay: 0 },
+    { x2: 18, opacity: 0.6, delay: 0.3 },
+    { x2: 20, opacity: 0.4, delay: 0.6 },
+    { x2: 16, opacity: 0.25, delay: 0.9 },
+  ];
   return (
-    <svg className="h-8 w-8" fill="none" viewBox="0 0 32 32" strokeWidth={1.5} stroke="currentColor">
-      <rect x="6" y="4" width="20" height="24" rx="2" className="stroke-current" />
-      <line x1="10" y1="10" x2="22" y2="10" className="stroke-current" />
-      <line x1="10" y1="14" x2="18" y2="14" className="stroke-current opacity-60" />
-      <line x1="10" y1="18" x2="20" y2="18" className="stroke-current opacity-40" />
-      <line x1="10" y1="22" x2="16" y2="22" className="stroke-current opacity-20" />
-    </svg>
+    <div className="group relative" style={{ perspective: 500 }}>
+      <motion.svg
+        className="h-8 w-8"
+        fill="none"
+        viewBox="0 0 32 32"
+        strokeWidth={1.5}
+        stroke="currentColor"
+        initial={{ rotate: -2 }}
+        whileHover={{ rotate: 0 }}
+        transition={{ duration: 0.35, ease: [0.21, 1, 0.36, 1] }}
+      >
+        <rect x="6" y="4" width="20" height="24" rx="2" className="stroke-current" />
+        {LINES.map((l, i) => (
+          <motion.line
+            key={i}
+            x1={10}
+            y1={10 + i * 4}
+            x2={l.x2}
+            y2={10 + i * 4}
+            className="stroke-current"
+            strokeLinecap="round"
+            initial={{ pathLength: 0, opacity: 0 }}
+            animate={{ pathLength: 1, opacity: l.opacity }}
+            transition={{
+              duration: 0.45,
+              delay: l.delay,
+              repeat: Infinity,
+              repeatDelay: 1.2,
+              ease: 'easeInOut',
+            }}
+          />
+        ))}
+        {/* Cyan laser scan — sweeps the full notepad, leaves a soft
+            trailing glow via a 2-unit-tall gradient strip. */}
+        <motion.rect
+          x="7"
+          width="18"
+          height="2"
+          rx="1"
+          fill="#06B6D4"
+          initial={{ y: 4, opacity: 0 }}
+          animate={{ y: [4, 26, 26], opacity: [0, 0.75, 0] }}
+          transition={{
+            duration: 2.5,
+            times: [0, 0.85, 1],
+            repeat: Infinity,
+            ease: 'easeInOut',
+          }}
+          style={{ mixBlendMode: 'multiply' }}
+        />
+      </motion.svg>
+    </div>
   );
 }
 
 function SlidesIcon() {
+  // T5 — stacked slides with a glint sweep. Third slide wobbles slightly
+  // as if the next slide is landing on the stack.
   return (
-    <svg className="h-8 w-8" fill="none" viewBox="0 0 32 32" strokeWidth={1.5} stroke="currentColor">
-      {/* Back slide */}
-      <rect x="8" y="6" width="18" height="14" rx="1.5" className="stroke-current opacity-30" />
-      {/* Front slide */}
-      <rect x="5" y="9" width="18" height="14" rx="1.5" className="stroke-current" />
-      {/* Content lines */}
-      <line x1="9" y1="14" x2="15" y2="14" className="stroke-current opacity-60" />
-      <line x1="9" y1="17" x2="19" y2="17" className="stroke-current opacity-40" />
-      {/* Image placeholder */}
+    <svg className="h-8 w-8" fill="none" viewBox="0 0 32 32" strokeWidth={1.5} stroke="currentColor" overflow="visible">
+      <defs>
+        <linearGradient id="maic-gen-glint" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stopColor="rgba(255,255,255,0)" />
+          <stop offset="50%" stopColor="rgba(255,255,255,0.85)" />
+          <stop offset="100%" stopColor="rgba(255,255,255,0)" />
+        </linearGradient>
+        <clipPath id="maic-gen-slide-front">
+          <rect x="5" y="9" width="18" height="14" rx="1.5" />
+        </clipPath>
+      </defs>
+      {/* Back stack (dim) */}
+      <rect x="11" y="4" width="16" height="12" rx="1.5" className="stroke-current opacity-20" />
+      <rect x="8" y="6" width="18" height="14" rx="1.5" className="stroke-current opacity-40" />
+      {/* Wobble next-slide lift */}
+      <motion.rect
+        x="5" y="9" width="18" height="14" rx="1.5"
+        className="stroke-current"
+        initial={{ y: 9 }}
+        animate={{ y: [9, 8.5, 9] }}
+        transition={{ duration: 1.8, repeat: Infinity, ease: 'easeInOut' }}
+      />
+      {/* Content lines + thumbnail placeholder */}
+      <motion.line
+        x1="9" x2="15" y1="14" y2="14"
+        className="stroke-current opacity-60"
+        initial={{ pathLength: 0 }}
+        animate={{ pathLength: 1 }}
+        transition={{ duration: 0.6, delay: 0.2, repeat: Infinity, repeatDelay: 1 }}
+      />
+      <motion.line
+        x1="9" x2="19" y1="17" y2="17"
+        className="stroke-current opacity-40"
+        initial={{ pathLength: 0 }}
+        animate={{ pathLength: 1 }}
+        transition={{ duration: 0.6, delay: 0.5, repeat: Infinity, repeatDelay: 1 }}
+      />
       <rect x="16" y="12" width="4" height="3" rx="0.5" className="stroke-current opacity-50" />
+      {/* Diagonal glint sweep across the front slide */}
+      <g clipPath="url(#maic-gen-slide-front)">
+        <motion.rect
+          width="8"
+          height="28"
+          y="6"
+          fill="url(#maic-gen-glint)"
+          initial={{ x: -10 }}
+          animate={{ x: 32 }}
+          transition={{
+            duration: 2.2,
+            repeat: Infinity,
+            repeatDelay: 0.6,
+            ease: 'easeInOut',
+          }}
+          style={{ transform: 'skewX(-20deg)', transformOrigin: '0 0' }}
+        />
+      </g>
     </svg>
   );
 }
 
 function ActionsIcon() {
+  // T5 — two agents exchanging speech ripples. The ripple rings grow
+  // and fade, one from each agent, offset in time so they feel
+  // conversational rather than simultaneous.
   return (
     <svg className="h-8 w-8" fill="none" viewBox="0 0 32 32" strokeWidth={1.5} stroke="currentColor">
-      {/* Agent head */}
-      <circle cx="16" cy="11" r="4" className="stroke-current" />
-      {/* Body */}
-      <path d="M10 24c0-3.314 2.686-6 6-6s6 2.686 6 6" className="stroke-current" />
-      {/* Speech bubble */}
-      <path d="M22 8h6v4h-4l-2 2v-2" className="stroke-current opacity-60" fill="none" />
-      {/* Sparkle */}
-      <path d="M6 6l1 2 1-2 1 2-1-2-1-2-1 2z" className="stroke-current opacity-40" fill="currentColor" />
+      {/* Agent A (left) */}
+      <circle cx="9" cy="13" r="3" className="stroke-current" />
+      <path d="M5 24c0-2.2 1.8-4 4-4s4 1.8 4 4" className="stroke-current" />
+      {/* Agent B (right) */}
+      <circle cx="23" cy="13" r="3" className="stroke-current opacity-80" />
+      <path d="M19 24c0-2.2 1.8-4 4-4s4 1.8 4 4" className="stroke-current opacity-80" />
+      {/* Ripple from A */}
+      <motion.circle
+        cx="9" cy="13" r="3"
+        className="stroke-current"
+        initial={{ scale: 1, opacity: 0.6 }}
+        animate={{ scale: [1, 2.6, 2.6], opacity: [0.6, 0, 0] }}
+        transition={{ duration: 1.8, repeat: Infinity, ease: 'easeOut' }}
+        style={{ transformOrigin: '9px 13px' }}
+      />
+      {/* Ripple from B, offset */}
+      <motion.circle
+        cx="23" cy="13" r="3"
+        className="stroke-current"
+        initial={{ scale: 1, opacity: 0.6 }}
+        animate={{ scale: [1, 2.6, 2.6], opacity: [0.6, 0, 0] }}
+        transition={{ duration: 1.8, repeat: Infinity, ease: 'easeOut', delay: 0.9 }}
+        style={{ transformOrigin: '23px 13px' }}
+      />
+      {/* Tiny "spark" in the middle to signal handoff */}
+      <motion.circle
+        cx="16" cy="13" r="1"
+        className="fill-current"
+        initial={{ opacity: 0, scale: 0.5 }}
+        animate={{ opacity: [0, 0.8, 0], scale: [0.5, 1.4, 0.5] }}
+        transition={{ duration: 1.4, repeat: Infinity, ease: 'easeInOut', delay: 0.45 }}
+      />
     </svg>
   );
 }
@@ -291,7 +435,16 @@ function SaveIcon() {
     <svg className="h-8 w-8" fill="none" viewBox="0 0 32 32" strokeWidth={1.5} stroke="currentColor">
       <path d="M6 8a2 2 0 012-2h12l6 6v12a2 2 0 01-2 2H8a2 2 0 01-2-2V8z" className="stroke-current" />
       <path d="M20 6v6h6" className="stroke-current opacity-60" />
-      <circle cx="16" cy="18" r="3" className="stroke-current" />
+      {/* Self-drawing check mark */}
+      <motion.path
+        d="M12 18l3 3 5-6"
+        className="stroke-current"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        initial={{ pathLength: 0 }}
+        animate={{ pathLength: 1 }}
+        transition={{ duration: 0.7, repeat: Infinity, repeatDelay: 0.8, ease: 'easeOut' }}
+      />
     </svg>
   );
 }

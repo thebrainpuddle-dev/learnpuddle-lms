@@ -41,7 +41,7 @@ const LocationProbe: React.FC = () => {
 
 describe('CourseEditorPage tab URL stability', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
 
     mockedUseTenantStore.mockReturnValue({
       hasFeature: vi.fn(() => true),
@@ -177,5 +177,83 @@ describe('CourseEditorPage tab URL stability', () => {
         screen.queryByText(/Need reusable assets across courses/i),
       ).not.toBeInTheDocument();
     });
+  });
+});
+
+// ─── TASK-063 L3: Hash-scroll to #content-{id} / #module-{id} anchors ────────
+
+describe('CourseEditorPage hash-scroll (TASK-063 L3)', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+
+    mockedUseTenantStore.mockReturnValue({
+      hasFeature: vi.fn(() => true),
+    });
+
+    mockedApi.get.mockImplementation(async (url: string) => {
+      if (url === '/courses/abc/') {
+        return {
+          data: {
+            id: 'abc',
+            title: 'Demo Course',
+            slug: 'demo-course',
+            description: 'Demo',
+            thumbnail: null,
+            thumbnail_url: null,
+            is_mandatory: false,
+            deadline: null,
+            estimated_hours: 0,
+            assigned_to_all: true,
+            assigned_groups: [],
+            assigned_teachers: [],
+            is_published: false,
+            modules: [],
+          },
+        } as any;
+      }
+      if (url === '/courses/abc/assignments/') return { data: [] } as any;
+      if (url === '/teachers/') return { data: { results: [] } } as any;
+      if (url === '/teacher-groups/') return { data: { results: [] } } as any;
+      return { data: {} } as any;
+    });
+    mockedApi.post.mockResolvedValue({ data: {} } as any);
+    mockedApi.patch.mockResolvedValue({ data: {} } as any);
+    mockedApi.delete.mockResolvedValue({ data: {} } as any);
+  });
+
+  it('calls scrollIntoView on the element matching location.hash after mount', async () => {
+    const scrollIntoViewSpy = vi.fn();
+    // Plant a DOM element with the target id before rendering.
+    // document.getElementById searches the full document so this is visible
+    // to the hash-scroll useEffect even though React renders into a sibling div.
+    const el = document.createElement('div');
+    el.id = 'content-abc123';
+    el.scrollIntoView = scrollIntoViewSpy;
+    document.body.appendChild(el);
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/admin/courses/abc#content-abc123']}>
+          <Routes>
+            <Route path="/admin/courses/:courseId" element={<CourseEditorPage />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>
+    );
+
+    // The hash-scroll useEffect fires after 300 ms. wait up to 1 s for the spy
+    // to be called — the root cause of the previous failure was the tab-
+    // normalization effect in useCourseForm navigating to ?tab=details without
+    // preserving the hash fragment; that is now fixed to include location.hash.
+    await waitFor(
+      () => {
+        expect(scrollIntoViewSpy).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' });
+      },
+      { timeout: 1000 },
+    );
+
+    document.body.removeChild(el);
   });
 });

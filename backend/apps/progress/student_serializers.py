@@ -59,11 +59,18 @@ class StudentAssignmentListSerializer(serializers.ModelSerializer):
         ).first()
 
     def _quiz_submission(self, obj) -> QuizSubmission | None:
+        """Return the best (highest-scoring) completed attempt, or None if none exist."""
         user = self.context["request"].user
         quiz = getattr(obj, "quiz", None)
         if not quiz:
             return None
-        return QuizSubmission.objects.filter(quiz=quiz, teacher=user).first()
+        # Only look at completed submissions (score IS NOT NULL = graded/submitted).
+        return (
+            QuizSubmission.objects.filter(quiz=quiz, teacher=user)
+            .exclude(score__isnull=True)
+            .order_by("-score", "-attempt_number")
+            .first()
+        )
 
     def get_submission_status(self, obj):
         if getattr(obj, "quiz", None):

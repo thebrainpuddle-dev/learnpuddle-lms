@@ -538,16 +538,52 @@ def section_courses(request, section_id):
     section = get_object_or_404(Section, pk=section_id, tenant=request.tenant)
 
     from apps.courses.models import Course
-    courses = Course.objects.filter(
-        target_sections=section, course_type='ACADEMIC',
-    ).order_by('-created_at')
+    courses = (
+        Course.objects.filter(
+            target_sections=section, course_type='ACADEMIC',
+        )
+        .select_related('tenant', 'created_by')
+        .prefetch_related('assigned_teachers', 'assigned_groups')
+        .annotate(
+            # Eliminate N+1 queries in CourseListSerializer (same pattern as
+            # the main course_list view in apps/courses/views.py).
+            _module_count=Count(
+                'modules', filter=Q(modules__is_active=True), distinct=True
+            ),
+            _content_count=Count(
+                'modules__contents',
+                filter=Q(modules__contents__is_active=True),
+                distinct=True,
+            ),
+            _completed_teacher_count=Count(
+                'progress',
+                filter=Q(
+                    progress__content__isnull=True,
+                    progress__status='COMPLETED',
+                ),
+                distinct=True,
+            ),
+        )
+        .order_by('-created_at')
+    )
 
     from apps.courses.serializers import CourseListSerializer
+    from apps.users.models import User as UserModel
+
+    # Pre-compute tenant-wide teacher count once — avoids an extra per-course
+    # query when any course uses assigned_to_all=True.
+    tenant_teacher_count = UserModel.objects.filter(
+        tenant=request.tenant,
+        role='TEACHER',
+        is_active=True,
+    ).count()
+
     page, pagination = _paginate(request, courses)
     return Response({
         'section': SectionSerializer(section).data,
         'courses': CourseListSerializer(
-            page, many=True, context={'request': request},
+            page, many=True,
+            context={'request': request, 'tenant_teacher_count': tenant_teacher_count},
         ).data,
         **pagination,
     })

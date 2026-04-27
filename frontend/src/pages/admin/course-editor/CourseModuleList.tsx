@@ -84,6 +84,7 @@ export const CourseModuleList: React.FC<CourseModuleListProps> = ({
             return (
               <div
                 key={module.id}
+                id={`module-${module.id}`}
                 className="bg-white rounded-xl border border-gray-200 overflow-hidden"
               >
                 {/* Module Header */}

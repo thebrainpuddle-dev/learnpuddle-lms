@@ -1,6 +1,6 @@
 from django.urls import path
 
-from . import admin_views
+from . import admin_views, password_policy_views
 
 app_name = "admin_users"
 
@@ -15,5 +15,9 @@ urlpatterns = [
     # Teacher invitations (admin-managed)
     path("teachers/invitations/", admin_views.teacher_invitations_view, name="teacher_invitations"),
     path("teachers/bulk-invite/", admin_views.teacher_bulk_invite_view, name="teacher_bulk_invite"),
+
+    # SAML / password policy administration (admin-only, tenant-scoped)
+    path("admin/password-policy/", password_policy_views.password_policy_view, name="password_policy"),
+    path("admin/saml-config/", password_policy_views.saml_config_view, name="saml_config"),
 ]
 

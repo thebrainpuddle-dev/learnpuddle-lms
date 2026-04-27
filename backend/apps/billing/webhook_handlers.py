@@ -72,6 +72,14 @@ def handle_checkout_session_completed(event):
     # Apply plan preset
     apply_plan_preset(tenant, plan_code)
 
+    # Derive billing interval from session metadata (set by create_checkout_session).
+    # Falls back to 'month' for sessions created before TASK-022 was deployed, and is
+    # overwritten by subscription.created/updated regardless; this just prevents a
+    # wrong value from being visible during the brief window between the two events.
+    billing_interval = session.metadata.get('billing_interval', 'month')
+    if billing_interval not in ('month', 'year'):
+        billing_interval = 'month'  # Guard against unexpected values
+
     # Create/update subscription record
     stripe_sub_id = session.subscription
     if stripe_sub_id:
@@ -82,7 +90,7 @@ def handle_checkout_session_completed(event):
                 'stripe_customer_id': session.customer,
                 'stripe_subscription_id': stripe_sub_id,
                 'status': 'active',
-                'billing_interval': 'month',  # Will be updated by subscription.created/updated
+                'billing_interval': billing_interval,
             },
         )
 
@@ -207,7 +215,7 @@ def handle_invoice_payment_failed(event):
             if not failure_reason and charge.outcome:
                 failure_reason = getattr(charge.outcome, 'seller_message', '') or ''
         except Exception:
-            logger.debug("Could not retrieve charge %s for failure reason", invoice.charge)
+            logger.warning("Could not retrieve charge %s for failure reason", invoice.charge)
 
     PaymentHistory.objects.update_or_create(
         stripe_invoice_id=invoice.id,

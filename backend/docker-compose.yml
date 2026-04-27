@@ -2,6 +2,14 @@
 # Local development only — not for production use.
 # If recreating from scratch, remove the postgres_data volume first:
 #   docker compose down -v && docker compose up -d
+
+# Log rotation — prevents unbounded log growth on dev machines.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   db:
     image: pgvector/pgvector:pg15
@@ -18,11 +26,13 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    logging: *default-logging
 
   redis:
     image: redis:7-alpine
     ports:
       - "6379:6379"
+    logging: *default-logging
 
   minio:
     image: minio/minio:latest
@@ -35,6 +45,7 @@ services:
       - "9001:9001"
     volumes:
       - minio_data:/data
+    logging: *default-logging
 
   ollama:
     image: ollama/ollama:latest
@@ -42,6 +53,7 @@ services:
       - "11434:11434"
     volumes:
       - ollama_data:/root/.ollama
+    logging: *default-logging
 
 volumes:
   postgres_data:

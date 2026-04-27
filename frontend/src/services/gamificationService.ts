@@ -98,7 +98,21 @@ export interface TeacherXPSummary {
   last_xp_at: string | null;
   opted_out: boolean;
   badges: TeacherBadge[];
+  /**
+   * The **absolute total-XP threshold** at which the next level begins
+   * (not the band width). For example, if Level 2 starts at 500 XP,
+   * then a teacher at Level 1 with 300 XP will see `next_level_xp: 500`
+   * and `xp_to_next_level: 200`.
+   *
+   * `null` when the teacher is already at the maximum level.
+   *
+   * Invariant: `total_xp + xp_to_next_level === next_level_xp` (when non-null).
+   *
+   * To render overall progress toward the next level, use:
+   *   `(total_xp / next_level_xp) * 100`
+   */
   next_level_xp: number | null;
+  /** Remaining XP needed to reach `next_level_xp`. Zero when at max level. */
   xp_to_next_level: number;
 }
 
@@ -107,6 +121,105 @@ export interface TeacherBadge {
   badge: BadgeDefinition;
   awarded_at: string;
   awarded_reason: string;
+}
+
+// ── Streak Freeze (TASK-015) ─────────────────────────────────────────
+
+export interface StreakFreezeToken {
+  id: string;
+  source: string;
+  earned_at: string;
+  consumed_at: string | null;
+  expires_at: string | null;
+  reference_type: string;
+  reference_id: string | null;
+}
+
+export interface StreakFreezeInventory {
+  token_count: number;
+  max_inventory: number;
+  earn_every_n_days: number;
+  expires_days: number;
+  tokens: StreakFreezeToken[];
+  weekend_mode_enabled: boolean;
+  weekend_mode_available: boolean;
+  grace_period_hours: number;
+  in_grace_period: boolean;
+  grace_period_ends_at: string | null;
+  current_streak: number;
+  longest_streak: number;
+}
+
+export interface StreakFreezeUseResponse {
+  success: boolean;
+  tokens_remaining: number;
+  token_id?: string;
+}
+
+// ── Leagues (TASK-016) ───────────────────────────────────────────────
+
+export interface LeagueMember {
+  teacher_id: string;
+  teacher_name: string;
+  teacher_email: string;
+  weekly_xp: number;
+  final_rank: number | null;
+}
+
+export interface CurrentLeague {
+  tier_code: string | null;
+  tier_name: string | null;
+  tier_rank: number | null;
+  week_start_date: string;
+  members: LeagueMember[];
+  promote_count: number;
+  demote_count: number;
+  cohort_size: number;
+}
+
+export interface LeagueHistoryEntry {
+  week_start_date: string;
+  tier_code: string;
+  tier_name: string | null;
+  tier_rank: number;
+  final_rank: number | null;
+  weekly_xp: number;
+  outcome: 'promote' | 'hold' | 'demote' | '';
+}
+
+export interface LeagueHistoryResponse {
+  history: LeagueHistoryEntry[];
+}
+
+// ── Challenges (TASK-017) ────────────────────────────────────────────
+
+export type ChallengeType = 'daily' | 'weekly';
+export type ChallengeGoalType =
+  | 'complete_lessons'
+  | 'finish_course'
+  | 'submit_assignments'
+  | 'earn_xp'
+  | 'maintain_streak';
+
+export interface TeacherChallenge {
+  id: string;
+  title: string;
+  description: string;
+  challenge_type: ChallengeType | string;
+  goal_type: ChallengeGoalType | string;
+  goal_target: number;
+  goal_reference_id: string | null;
+  start_at: string;
+  end_at: string;
+  reward_xp: number;
+  reward_badge_id: string | null;
+  progress_value: number;
+  progress_percent: number;
+  completed_at: string | null;
+}
+
+export interface ChallengeListResponse {
+  results: TeacherChallenge[];
 }
 
 // ── API service ──────────────────────────────────────────────────────
@@ -196,5 +309,44 @@ export const gamificationService = {
   async useStreakFreeze(): Promise<{ success: boolean; freezes_remaining: number }> {
     const res = await api.post('/gamification/streak-freeze/');
     return res.data;
+  },
+
+  // ── Streak Freeze Inventory (TASK-015) ──────────────────────────────
+  async getStreakFreezeInventory(): Promise<StreakFreezeInventory> {
+    const res = await api.get('/gamification/streak-freeze/inventory/');
+    return res.data;
+  },
+
+  async spendStreakFreezeToken(): Promise<StreakFreezeUseResponse> {
+    const res = await api.post('/gamification/streak-freeze/use/');
+    return res.data;
+  },
+
+  // ── Leagues (TASK-016) ──────────────────────────────────────────────
+  async getCurrentLeague(): Promise<CurrentLeague> {
+    const res = await api.get('/gamification/league/');
+    return res.data;
+  },
+
+  async getLeagueHistory(): Promise<LeagueHistoryResponse> {
+    const res = await api.get('/gamification/league/history/');
+    return res.data;
+  },
+
+  // Alias used by LeaguesPage — returns the cohort members list.
+  async getLeagueStandings(): Promise<CurrentLeague> {
+    const res = await api.get('/gamification/league/');
+    return res.data;
+  },
+
+  // ── Challenges (TASK-017) ───────────────────────────────────────────
+  async getActiveChallenges(): Promise<TeacherChallenge[]> {
+    const res = await api.get<ChallengeListResponse>('/gamification/challenges/');
+    return res.data.results ?? [];
+  },
+
+  async getCompletedChallenges(): Promise<TeacherChallenge[]> {
+    const res = await api.get<ChallengeListResponse>('/gamification/challenges/completed/');
+    return res.data.results ?? [];
   },
 };

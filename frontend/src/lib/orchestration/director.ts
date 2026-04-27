@@ -11,7 +11,7 @@
 import { streamMAIC } from '../maicSSE';
 import { getAccessToken } from '../../utils/authSession';
 import { buildAgentSystemPrompt } from './prompt-builder';
-import { maicChatUrl, type MAICRole } from '../maic/endpoints';
+import { maicChatUrl, maicDirectorTurnUrl, type MAICRole } from '../maic/endpoints';
 import type {
   AgentConfig,
   DirectorDecision,
@@ -126,7 +126,7 @@ export class DirectorGraph {
       return;
     }
 
-    const decision = this.decide();
+    const decision = await this.decideAsync();
 
     if (decision.shouldEnd || !decision.nextAgentId) {
       this.state.shouldEnd = true;
@@ -165,6 +165,8 @@ export class DirectorGraph {
 
   // ─── Decision Logic ───────────────────────────────────────────────
 
+  /** Synchronous round-robin decision — used as the fallback when the
+   *  LLM director endpoint is unavailable or returns an invalid id. */
   private decide(): DirectorDecision {
     const agentCount = this.agents.length;
 
@@ -173,11 +175,10 @@ export class DirectorGraph {
       if (this.state.turnCount === 0) {
         return { nextAgentId: this.agents[0].id, shouldEnd: false };
       }
-      // After the single agent has spoken, cue the user
       return { nextAgentId: null, shouldEnd: true, reason: 'Agent has responded' };
     }
 
-    // Multi-agent mode: round-robin through all agents, then end
+    // Multi-agent fallback: round-robin
     if (this.turnOrderIndex < this.turnOrder.length) {
       const nextId = this.turnOrder[this.turnOrderIndex];
       return {
@@ -187,12 +188,71 @@ export class DirectorGraph {
       };
     }
 
-    // All agents have spoken — cue user for input
-    return {
-      nextAgentId: null,
-      shouldEnd: true,
-      reason: 'All agents have contributed',
-    };
+    return { nextAgentId: null, shouldEnd: true, reason: 'All agents have contributed' };
+  }
+
+  /**
+   * Porting P3.1 — LLM-decided next speaker. Calls the backend director
+   * endpoint with the roster + transcript and returns its pick. On 204
+   * (LLM declined), malformed output, network error, or timeout, falls
+   * back to `this.decide()` (round-robin).
+   */
+  private async decideAsync(): Promise<DirectorDecision> {
+    if (this.agents.length < 2) return this.decide();
+
+    // Special-case the very first turn: prefer the user's trigger agent
+    // so the conversation opens with the named inviter, not the LLM's
+    // guess. Everything after that is LLM-picked.
+    if (this.state.turnCount === 0 && this.triggerAgentId) {
+      return {
+        nextAgentId: this.triggerAgentId,
+        shouldEnd: false,
+        reason: 'Trigger agent opens the discussion',
+      };
+    }
+
+    const token = getAccessToken();
+    if (!token) return this.decide();
+
+    try {
+      const body = {
+        agents: this.agents.map((a) => ({
+          id: a.id,
+          name: a.name,
+          role: a.role,
+          persona: a.persona,
+          speakingStyle: (a as AgentConfig & { speakingStyle?: string }).speakingStyle,
+        })),
+        transcript: this.state.agentResponses,
+        topic: this.state.discussionContext?.topic || '',
+        lastSpeakerId: this.state.currentAgentId,
+      };
+      const res = await fetch(maicDirectorTurnUrl(this.role), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(body),
+        // Abort quickly if the director endpoint is slow — we'd rather
+        // round-robin than stall the discussion.
+        signal: AbortSignal.timeout(8000),
+      });
+      if (res.status === 204 || !res.ok) return this.decide();
+      const data = (await res.json()) as { next_speaker_id?: string; reasoning?: string };
+      const nextId = (data.next_speaker_id || '').trim();
+      if (!nextId) {
+        // Empty id = director says end the discussion.
+        return { nextAgentId: null, shouldEnd: true, reason: data.reasoning || 'Director ended discussion' };
+      }
+      if (!this.agents.some((a) => a.id === nextId)) return this.decide();
+      // Advance our turnOrderIndex so round-robin fallback stays sensible
+      // if the LLM dies mid-way.
+      this.turnOrderIndex = Math.min(this.turnOrderIndex + 1, this.turnOrder.length);
+      return { nextAgentId: nextId, shouldEnd: false, reason: data.reasoning };
+    } catch {
+      return this.decide();
+    }
   }
 
   // ─── Agent Generation ─────────────────────────────────────────────
@@ -205,11 +265,25 @@ export class DirectorGraph {
 
     const messageId = `orch-${agent.id}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 
+    // Porting P3.3 — thread the running discussion transcript into the
+    // agent's system prompt so they can reference prior turns ("as Alice
+    // noted earlier…"). We fold `agentResponses` into `previousMessages`
+    // on top of any slideContext history the caller already supplied.
+    const transcriptAsMessages = this.state.agentResponses.map((r) => ({
+      role: 'assistant',
+      content: r.contentPreview,
+      agentId: r.agentId,
+    }));
+    const priorMessages = [
+      ...(this.slideContext?.previousMessages ?? []),
+      ...transcriptAsMessages,
+    ];
+
     // Build system prompt for this agent
     const systemPrompt = buildAgentSystemPrompt(agent, {
       currentSceneTitle: this.slideContext?.currentSceneTitle,
       slideContent: this.slideContext?.slideContent,
-      previousMessages: this.slideContext?.previousMessages,
+      previousMessages: priorMessages,
       discussionContext: this.state.discussionContext,
     });
 

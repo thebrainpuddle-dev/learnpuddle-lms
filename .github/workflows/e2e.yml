@@ -1,0 +1,204 @@
+# .github/workflows/e2e.yml
+#
+# First-pass e2e CI; expect tuning iterations before this is fully stable.
+#
+# Spins up Postgres + Redis as service containers, starts Django + Vite dev
+# server in the background, seeds the demo tenant, then runs the full MAIC
+# Playwright e2e suite against the live local stack.
+#
+# Triggered on pull_request and workflow_dispatch (manual).
+# Push is intentionally excluded to avoid double-runs when a PR is already open.
+#
+# Secrets used:
+#   E2E_TEACHER_EMAIL    — falls back to seed-script default teacher@demo.learnpuddle.com
+#   E2E_TEACHER_PASSWORD — falls back to seed-script default Teacher@123
+#                          (WARNING: if create_demo_tenant default password changes,
+#                          update this fallback AND the spec default in
+#                          frontend/e2e/maic-full-playback.spec.js)
+
+name: E2E (MAIC Playwright)
+
+on:
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: lms_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # ── Django / backend ────────────────────────────────────────────────────
+      SECRET_KEY: e2e-ci-secret-key-not-used-in-production
+      DEBUG: "True"
+      DB_NAME: lms_test
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_HOST: 127.0.0.1
+      DB_PORT: "5432"
+      REDIS_URL: redis://127.0.0.1:6379/0
+      PLATFORM_DOMAIN: localhost
+      # Disable email sending in CI
+      EMAIL_BACKEND: django.core.mail.backends.console.EmailBackend
+      # LLM_PROVIDER=auto with no API keys set → OpenRouter fails (401) → Ollama
+      # fails (not running) → falls through to the deterministic quiz generator.
+      # "none" is not a recognised sentinel in utils/llm_service.py (recognised
+      # values: "auto", "openrouter", "ollama"); "auto" + no keys is the correct
+      # way to force the deterministic fallback per CLAUDE.md fallback chain.
+      LLM_PROVIDER: "auto"
+
+    steps:
+      # ── Checkout ────────────────────────────────────────────────────────────
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ── Python (backend) ────────────────────────────────────────────────────
+      # Version matches backend/Dockerfile: python:3.11-slim
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: pip install -r backend/requirements.txt
+        # requirements-dev.txt adds pytest/coverage tools not needed for e2e
+        # Use requirements.txt (runtime only) to keep the install lean.
+
+      # ── Node (frontend) ─────────────────────────────────────────────────────
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci --legacy-peer-deps
+        working-directory: frontend
+
+      # ── Database bootstrap ──────────────────────────────────────────────────
+      - name: Run Django migrations
+        run: python manage.py migrate --noinput
+        working-directory: backend
+
+      - name: Seed demo tenant + teacher account
+        # Creates: demo subdomain, teacher@demo.learnpuddle.com / Teacher@123,
+        # admin@demo.learnpuddle.com / Admin@123, and enables all MAIC features.
+        # See backend/apps/tenants/management/commands/create_demo_tenant.py.
+        run: python manage.py create_demo_tenant
+        working-directory: backend
+
+      # ── Start backend server (background) ──────────────────────────────────
+      - name: Start Django dev server (background)
+        run: |
+          python manage.py runserver 0.0.0.0:8000 \
+            --settings=config.settings \
+            > /tmp/django.log 2>&1 &
+          echo "Django PID: $!"
+        working-directory: backend
+
+      - name: Wait for Django to be ready
+        run: |
+          # Health endpoint is mounted at the project root, NOT under /api/.
+          # backend/config/urls.py: path('health/', health_view)  (line ~129)
+          # /api/health/ returns 404 in all Django configurations.
+          for i in $(seq 1 20); do
+            if curl -sf http://127.0.0.1:8000/health/ > /dev/null 2>&1; then
+              echo "Django is up after ${i}s"
+              break
+            fi
+            echo "Waiting for Django... attempt ${i}/20"
+            sleep 2
+          done
+          # Final check — fail fast if still not up
+          curl -sf http://127.0.0.1:8000/health/ || \
+            (echo "Django failed to start:" && cat /tmp/django.log && exit 1)
+
+      # ── Build / start frontend (background) ─────────────────────────────────
+      # Using `npm run dev` so the Vite HMR server matches what e2e expects.
+      # A static build (`npm run build` + `npx serve dist`) is an alternative
+      # if dev-server startup time becomes a bottleneck; switch when needed.
+      - name: Start Vite dev server (background)
+        run: |
+          VITE_API_BASE_URL=http://127.0.0.1:8000 \
+            npm run dev -- --host 0.0.0.0 --port 3000 \
+            > /tmp/vite.log 2>&1 &
+          echo "Vite PID: $!"
+        working-directory: frontend
+
+      - name: Wait for Vite dev server to be ready
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:3000/ > /dev/null 2>&1; then
+              echo "Vite dev server is up after ${i}s"
+              break
+            fi
+            echo "Waiting for Vite... attempt ${i}/30"
+            sleep 3
+          done
+          curl -sf http://127.0.0.1:3000/ || \
+            (echo "Vite dev server failed to start:" && cat /tmp/vite.log && exit 1)
+
+      # ── Playwright ──────────────────────────────────────────────────────────
+      - name: Install Playwright Chromium + system deps
+        run: npx playwright install --with-deps chromium
+        working-directory: frontend
+
+      - name: Run e2e suite
+        run: npm run e2e
+        working-directory: frontend
+        env:
+          E2E_LIVE: "1"
+          E2E_BASE_URL: http://127.0.0.1:3000
+          # Resolve teacher credentials: use repo secrets if set, else fall back
+          # to the deterministic defaults produced by create_demo_tenant.
+          # Default: teacher@demo.learnpuddle.com / Teacher@123
+          E2E_TEACHER_EMAIL: ${{ secrets.E2E_TEACHER_EMAIL || 'teacher@demo.learnpuddle.com' }}
+          E2E_TEACHER_PASSWORD: ${{ secrets.E2E_TEACHER_PASSWORD || 'Teacher@123' }}
+
+      # ── Artefacts on failure ─────────────────────────────────────────────────
+      - name: Upload Playwright report (on failure)
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report-e2e
+          path: |
+            frontend/e2e-report/
+            frontend/e2e-results/
+          retention-days: 7
+
+      - name: Upload server logs (on failure)
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: server-logs-e2e
+          path: |
+            /tmp/django.log
+            /tmp/vite.log
+          retention-days: 3

@@ -49,6 +49,9 @@ def create_checkout_session(tenant, plan, interval, success_url, cancel_url) -> 
         metadata={
             'tenant_id': str(tenant.id),
             'plan_code': plan.plan_code,
+            # billing_interval is passed through so the checkout.session.completed
+            # webhook handler can set it correctly without an extra Stripe API call.
+            'billing_interval': interval,
         },
         subscription_data={
             'metadata': {

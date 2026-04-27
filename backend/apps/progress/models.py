@@ -28,7 +28,9 @@ class TeacherProgress(models.Model):
 
     # Relationships
     teacher = models.ForeignKey('users.User', on_delete=models.CASCADE, related_name='progress')
+    # course-level progress row: content=None (one row per teacher+course).
     course = models.ForeignKey('courses.Course', on_delete=models.CASCADE, related_name='progress')
+    # content=None → course-level aggregate row; content≠None → per-content progress row.
     content = models.ForeignKey('courses.Content', on_delete=models.CASCADE, related_name='progress', null=True, blank=True)
 
     # Progress tracking
@@ -116,7 +118,18 @@ class Assignment(SoftDeleteMixin, models.Model):
         default="MANUAL",
     )
     generation_metadata = models.JSONField(blank=True, default=dict)
-    
+
+    # Optional rubric for structured grading (TASK-044). Kept tenant-scoped via
+    # serializer/view validation — SET_NULL preserves historical submissions if
+    # the rubric is removed.
+    rubric = models.ForeignKey(
+        'progress.Rubric',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='assignments',
+    )
+
     is_mandatory = models.BooleanField(default=True)
     is_active = models.BooleanField(default=True)
 
@@ -159,6 +172,18 @@ class Quiz(models.Model):
     schema_version = models.PositiveSmallIntegerField(default=1)
     is_auto_generated = models.BooleanField(default=False)
     generation_model = models.CharField(max_length=100, blank=True, default="")
+
+    # Multiple attempts configuration
+    max_attempts = models.PositiveIntegerField(
+        default=1,
+        help_text="Maximum number of attempts allowed. 0 = unlimited.",
+    )
+    # Timed quiz configuration
+    time_limit_minutes = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Time limit per attempt in minutes. NULL = no time limit.",
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -233,6 +258,9 @@ class QuizQuestion(models.Model):
 class QuizSubmission(models.Model):
     """
     Teacher submissions for a quiz assignment.
+
+    Each row represents one attempt. attempt_number is 1-based and increments
+    per (quiz, teacher) pair. Existing rows (migrated) default to attempt_number=1.
     """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -245,6 +273,23 @@ class QuizSubmission(models.Model):
 
     quiz = models.ForeignKey(Quiz, on_delete=models.CASCADE, related_name="submissions")
     teacher = models.ForeignKey('users.User', on_delete=models.CASCADE, related_name="quiz_submissions")
+
+    # Attempt tracking — 1-based; unique per (quiz, teacher, attempt_number).
+    attempt_number = models.PositiveIntegerField(
+        default=1,
+        help_text="Which attempt this is (1-based).",
+    )
+    # When this attempt was started (set when first fetching questions).
+    # Used to enforce time_limit_minutes on timed quizzes.
+    started_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text="Timestamp when the teacher began this attempt.",
+    )
+    # Set True when the quiz is auto-submitted because time expired.
+    time_expired = models.BooleanField(
+        default=False,
+        help_text="True if this submission was auto-submitted due to timeout.",
+    )
 
     # Answers keyed by question id: {"<question_uuid>": {...}}
     answers = models.JSONField(blank=True, default=dict)
@@ -259,15 +304,18 @@ class QuizSubmission(models.Model):
 
     class Meta:
         db_table = "quiz_submissions"
-        unique_together = [("quiz", "teacher")]
-        ordering = ["-submitted_at"]
+        # One row per attempt — prevents duplicate attempts.
+        unique_together = [("quiz", "teacher", "attempt_number")]
+        ordering = ["-attempt_number", "-submitted_at"]
         indexes = [
             models.Index(fields=["tenant", "teacher", "submitted_at"]),
             models.Index(fields=["tenant", "quiz"]),
+            # Fast lookup of all attempts for a (quiz, teacher) pair.
+            models.Index(fields=["quiz", "teacher", "attempt_number"]),
         ]
 
     def __str__(self):
-        return f"QuizSubmission({self.teacher_id}, {self.quiz_id})"
+        return f"QuizSubmission({self.teacher_id}, {self.quiz_id}, attempt={self.attempt_number})"
 
 
 class AssignmentSubmission(models.Model):
@@ -364,4 +412,14 @@ from .certification_models import CertificationType, TeacherCertification  # noq
 from .gamification_models import (  # noqa: E402,F401
     GamificationConfig, XPTransaction, TeacherXPSummary,
     BadgeDefinition, TeacherBadge, TeacherStreak, LeaderboardSnapshot,
+    MasteryPointTransaction, TeacherMasterySummary,
+)
+from .assessment_models import (  # noqa: E402,F401
+    QuestionBank, Question, QuestionChoice, QuizConfig, QuizAttempt,
+)
+from .rubric_models import (  # noqa: E402,F401
+    Rubric, RubricCriterion, RubricLevel, RubricEvaluation,
+)
+from .challenge_models import (  # noqa: E402,F401
+    Challenge, ChallengeParticipation,
 )

@@ -6,6 +6,7 @@
 // Row 3: Student performance snapshot
 // Row 4: Recent activity + top performers
 // Row 5: Courses table
+// Row 6: Deadlines calendar
 
 import React, { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -31,7 +32,10 @@ import type { TenantStats, TenantAnalytics } from '../../services/adminService';
 import { useTenantStore } from '../../stores/tenantStore';
 import { useAuthStore } from '../../stores/authStore';
 import { usePageTitle } from '../../hooks/usePageTitle';
+import { useModeLabels } from '../../hooks/useModeLabels';
 import { PlanBadge } from '../../components/dashboard/PlanBadge';
+import { DeadlinesCalendar } from '../../components/dashboard/DeadlinesCalendar';
+import type { DeadlineEvent } from '../../components/dashboard/DeadlinesCalendar';
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -326,6 +330,7 @@ export const DashboardPage: React.FC = () => {
   const navigate = useNavigate();
   const { theme } = useTenantStore();
   const { user } = useAuthStore();
+  const { label } = useModeLabels();
 
   const { data: stats, isLoading: statsLoading } = useQuery<TenantStats>({
     queryKey: ['adminDashboardStats'],
@@ -388,6 +393,18 @@ export const DashboardPage: React.FC = () => {
   // Course breakdown
   const courses = analytics?.course_breakdown ?? [];
 
+  // Deadline calendar events: map upcoming assignment deadlines from stats
+  const calendarDeadlines: DeadlineEvent[] | undefined = stats?.upcoming_deadlines
+    ? stats.upcoming_deadlines.map((d) => ({
+        id: d.id,
+        title: d.title,
+        type: 'assignment' as const,
+        // Extract YYYY-MM-DD from the ISO timestamp (due_date may be "2026-04-25" or "2026-04-25T00:00:00Z")
+        date: d.due_date.substring(0, 10),
+        courseName: d.course_title,
+      }))
+    : undefined;
+
   if (isLoading) return <DashboardSkeleton />;
 
   return (
@@ -406,7 +423,7 @@ export const DashboardPage: React.FC = () => {
             onClick={() => navigate('/admin/courses/new')}
             className="inline-flex items-center gap-2 px-4 py-2.5 bg-gray-900 text-white text-sm font-medium rounded-xl hover:bg-gray-800 transition-colors shadow-sm"
           >
-            <Plus className="h-4 w-4" /> New Course
+            <Plus className="h-4 w-4" /> New {label('course')}
           </button>
         </div>
       </div>
@@ -415,14 +432,14 @@ export const DashboardPage: React.FC = () => {
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
         <div className="lg:col-span-6 grid grid-cols-2 gap-4">
           <StatCard
-            label="Total Teachers" value={teacherCount} icon={Users}
+            label={`Total ${label('learner_plural')}`} value={teacherCount} icon={Users}
             iconBg="bg-rose-100" iconColor="text-rose-600"
             trend={stats?.active_teachers ? `${stats.active_teachers} active` : undefined}
             trendUp={true}
             onClick={() => navigate(analyticsLink({ view: 'charts', focus: 'teachers' }))}
           />
           <StatCard
-            label="Active Courses" value={courseCount} icon={BookOpen}
+            label={`Active ${label('course_plural')}`} value={courseCount} icon={BookOpen}
             iconBg="bg-blue-100" iconColor="text-blue-600"
             trend={`${stats?.courses_in_progress ?? 0} in progress`}
             trendUp={true}
@@ -508,10 +525,10 @@ export const DashboardPage: React.FC = () => {
           className="lg:col-span-3 bg-white rounded-2xl border border-gray-200 p-5 cursor-pointer hover:shadow-md transition-shadow"
           onClick={() => navigate(analyticsLink({ view: 'charts', focus: 'teachers' }))}
         >
-          <h3 className="text-sm font-semibold text-gray-900 mb-1">Teacher Engagement</h3>
+          <h3 className="text-sm font-semibold text-gray-900 mb-1">{label('learner')} Engagement</h3>
           <p className="text-[11px] text-gray-500 mb-3">Activity distribution</p>
           {teacherDonut.length > 0 ? (
-            <DonutChart segments={teacherDonut} size={140} label="Teachers" />
+            <DonutChart segments={teacherDonut} size={140} label={label('learner_plural')} />
           ) : (
             <div className="h-40 flex items-center justify-center text-sm text-gray-400">No data</div>
           )}
@@ -546,7 +563,7 @@ export const DashboardPage: React.FC = () => {
           </div>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             <MetricPill
-              icon={BookOpen} label="Course Completion" color="bg-emerald-500"
+              icon={BookOpen} label={`${label('course')} Completion`} color="bg-emerald-500"
               value={`${sp?.avg_completion_pct ?? 0}%`}
               sub={`${sp?.completed ?? 0} of ${sp?.total_enrollments ?? 0} completed`}
               onClick={() => navigate(analyticsLink({ view: 'reports', tab: 'COURSE', role: 'students' }))}
@@ -631,7 +648,7 @@ export const DashboardPage: React.FC = () => {
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-gray-800 truncate">{t.name}</p>
-                      <p className="text-xs text-gray-500">{t.completed_courses} courses completed</p>
+                      <p className="text-xs text-gray-500">{t.completed_courses} {label('course_plural').toLowerCase()} completed</p>
                     </div>
                     <div className="flex-shrink-0 w-20">
                       <ProgressBar value={Math.min(pct, 100)} />
@@ -648,7 +665,7 @@ export const DashboardPage: React.FC = () => {
       {courses.length > 0 && (
         <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
           <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
-            <h3 className="text-base font-semibold text-gray-900">Courses Overview</h3>
+            <h3 className="text-base font-semibold text-gray-900">{label('course_plural')} Overview</h3>
             <button
               onClick={() => navigate(analyticsLink({ view: 'reports', tab: 'COURSE' }))}
               className="text-xs font-medium text-indigo-600 hover:text-indigo-800 flex items-center gap-1"
@@ -660,7 +677,7 @@ export const DashboardPage: React.FC = () => {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-100">
-                  <th className="text-left text-xs font-medium text-gray-500 uppercase tracking-wider px-6 py-3">Course</th>
+                  <th className="text-left text-xs font-medium text-gray-500 uppercase tracking-wider px-6 py-3">{label('course')}</th>
                   <th className="text-left text-xs font-medium text-gray-500 uppercase tracking-wider px-4 py-3">Enrolled</th>
                   <th className="text-left text-xs font-medium text-gray-500 uppercase tracking-wider px-4 py-3 w-44">Completion</th>
                   <th className="text-center text-xs font-medium text-gray-500 uppercase tracking-wider px-4 py-3">Status</th>
@@ -724,6 +741,9 @@ export const DashboardPage: React.FC = () => {
           )}
         </div>
       )}
+
+      {/* ─── Row 6: Deadlines Calendar ─────────────────────────── */}
+      <DeadlinesCalendar deadlines={calendarDeadlines} />
     </div>
   );
 };

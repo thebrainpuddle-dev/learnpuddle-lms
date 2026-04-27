@@ -1,5 +1,6 @@
 from datetime import timedelta
 
+from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 
@@ -106,7 +107,8 @@ def reminder_send(request):
     import traceback
     logger = logging.getLogger(__name__)
     
-    logger.info(f"[REMINDER_SEND] Started - user={request.user.email}, tenant={request.tenant.subdomain}")
+    # Redact user.email from INFO logs (PII); use user.id for correlation only.
+    logger.info("[REMINDER_SEND] Started - user_id=%s tenant=%s", request.user.id, request.tenant.subdomain)
     
     try:
         # Validate request data
@@ -126,7 +128,8 @@ def reminder_send(request):
                 },
                 status=status.HTTP_403_FORBIDDEN,
             )
-        logger.info(f"[REMINDER_SEND] Type={reminder_type}, data={data}")
+        # DEBUG only — `data` may include `teacher_ids` (PII); keep out of INFO logs.
+        logger.debug(f"[REMINDER_SEND] Type={reminder_type}, data={data}")
         
         course = None
         assignment = None
@@ -170,7 +173,8 @@ def reminder_send(request):
         if teacher_ids:
             # Defense-in-depth: explicitly scope to current tenant
             recipients = recipients.filter(id__in=teacher_ids, tenant=request.tenant)
-            logger.info(f"[REMINDER_SEND] Filtered to teacher_ids: {teacher_ids}")
+            # Log count only — individual IDs are PII.
+            logger.info("[REMINDER_SEND] Filtered to %d explicit teacher IDs", len(teacher_ids))
 
         recipients = recipients.order_by("last_name", "first_name")
         recipient_list = list(recipients)
@@ -212,8 +216,13 @@ def reminder_send(request):
             "campaign": ReminderCampaignSerializer(campaign).data,
             "sent": sent,
             "failed": failed,
+            "in_app_sent": dispatch.in_app_sent,
+            "in_app_failed": dispatch.in_app_failed,
         }
-        logger.info(f"[REMINDER_SEND] Complete - sent={sent}, failed={failed}")
+        logger.info(
+            "[REMINDER_SEND] Complete - sent=%d, failed=%d, in_app_sent=%d, in_app_failed=%d",
+            sent, failed, dispatch.in_app_sent, dispatch.in_app_failed,
+        )
         return Response(response_data, status=status.HTTP_200_OK)
         
     except Exception as e:
@@ -226,7 +235,16 @@ def reminder_send(request):
 @admin_only
 @tenant_required
 def reminder_history(request):
-    qs = ReminderCampaign.objects.filter(tenant=request.tenant).order_by("-created_at")[:50]
+    # Annotate sent/failed counts in a single query to eliminate 2 × N extra
+    # queries from ReminderCampaignSerializer.get_sent_count / get_failed_count.
+    qs = (
+        ReminderCampaign.objects.filter(tenant=request.tenant)
+        .annotate(
+            _sent_count=Count("deliveries", filter=Q(deliveries__status="SENT")),
+            _failed_count=Count("deliveries", filter=Q(deliveries__status="FAILED")),
+        )
+        .order_by("-created_at")[:50]
+    )
     return Response({"results": ReminderCampaignSerializer(qs, many=True).data}, status=status.HTTP_200_OK)
 
 

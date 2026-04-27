@@ -35,7 +35,7 @@ const mockedNotificationService = notificationService as unknown as { [K in keyo
 
 describe('DashboardPage essentials layout', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
 
     mockedUseAuthStore.mockReturnValue({
       user: { first_name: 'Rakesh' },

@@ -18,6 +18,7 @@ teacher_urlpatterns = [
     path("export/html/", maic_views.teacher_maic_export_html, name="teacher_maic_export_html"),
     path("generate/scene-actions/", maic_views.teacher_maic_generate_scene_actions, name="teacher_maic_generate_scene_actions"),
     path("generate/agent-profiles/", maic_views.teacher_maic_generate_agent_profiles, name="teacher_maic_generate_agent_profiles"),
+    path("director/turn/", maic_views.teacher_maic_director_turn, name="teacher_maic_director_turn"),
     path("web-search/", maic_views.teacher_maic_web_search, name="teacher_maic_web_search"),
 
     # Classroom CRUD
@@ -27,6 +28,7 @@ teacher_urlpatterns = [
     path("classrooms/<uuid:classroom_id>/update/", maic_views.teacher_maic_classroom_update, name="teacher_maic_classroom_update"),
     path("classrooms/<uuid:classroom_id>/delete/", maic_views.teacher_maic_classroom_delete, name="teacher_maic_classroom_delete"),
     path("classrooms/<uuid:classroom_id>/publish/", maic_views.teacher_maic_classroom_publish, name="teacher_maic_classroom_publish"),
+    path("classrooms/<uuid:classroom_id>/progress/", maic_views.teacher_maic_classroom_progress, name="teacher_maic_classroom_progress"),
 
     # Agent roster + per-agent regeneration + TTS preview
     path("agents/regenerate-one/", maic_views.teacher_maic_regenerate_one_agent, name="teacher_maic_regenerate_one_agent"),
@@ -59,4 +61,7 @@ student_urlpatterns = [
     path("chat/", maic_views.student_maic_chat, name="student_maic_chat"),
     path("generate/tts/", maic_views.student_maic_generate_tts, name="student_maic_generate_tts"),
     path("quiz-grade/", maic_views.student_maic_quiz_grade, name="student_maic_quiz_grade"),
+
+    # Director (multi-agent turn-taking) — Porting P3.1
+    path("director/turn/", maic_views.student_maic_director_turn, name="student_maic_director_turn"),
 ]

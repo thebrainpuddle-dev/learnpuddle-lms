@@ -16,16 +16,17 @@ import { Card, Badge, cn } from '../../design-system';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-interface DeadlineEvent {
+export interface DeadlineEvent {
   id: string;
   title: string;
   type: 'course' | 'assignment';
-  date: string; // ISO date string (YYYY-MM-DD)
+  /** ISO date string in YYYY-MM-DD format */
+  date: string;
   courseName?: string;
 }
 
 // ─── Mock Data ───────────────────────────────────────────────────────────────
-// TODO: Replace with actual API call — e.g. adminService.getUpcomingDeadlines()
+// Used as a fallback when no deadlines are passed as props (dev / skeleton state)
 
 function getMockDeadlines(): DeadlineEvent[] {
   const now = new Date();
@@ -66,13 +67,25 @@ function toDateKey(year: number, month: number, day: number): string {
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
-export const DeadlinesCalendar: React.FC = () => {
+interface DeadlinesCalendarProps {
+  /**
+   * Real deadline events from the API.
+   * Falls back to mock data when undefined (e.g., while loading or in dev).
+   */
+  deadlines?: DeadlineEvent[];
+}
+
+export const DeadlinesCalendar: React.FC<DeadlinesCalendarProps> = ({ deadlines: deadlinesProp }) => {
   const today = new Date();
   const [currentYear, setCurrentYear] = useState(today.getFullYear());
   const [currentMonth, setCurrentMonth] = useState(today.getMonth());
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
 
-  const deadlines = useMemo(() => getMockDeadlines(), []);
+  // Use real data when available; fall back to illustrative mock data
+  const deadlines = useMemo(
+    () => deadlinesProp ?? getMockDeadlines(),
+    [deadlinesProp],
+  );
 
   // Group deadlines by date key
   const deadlinesByDate = useMemo(() => {

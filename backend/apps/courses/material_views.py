@@ -102,17 +102,17 @@ def _parse_pdf(file_obj) -> dict[str, Any]:
     Returns: { text, metadata: { pages, ... } }
     """
     try:
-        import PyPDF2
+        from pypdf import PdfReader  # pypdf>=4.0 (successor to PyPDF2)
     except ImportError:
-        logger.error("PyPDF2 is not installed. Install with: pip install PyPDF2")
+        logger.error("pypdf is not installed. Install with: pip install 'pypdf>=4.0,<5.0'")
         return {
             "text": "",
             "metadata": {"pages": 0},
-            "error": "PDF parsing library not available. Please install PyPDF2.",
+            "error": "PDF parsing library not available. Please install pypdf>=4.0.",
         }
 
     try:
-        reader = PyPDF2.PdfReader(file_obj)
+        reader = PdfReader(file_obj)
         num_pages = len(reader.pages)
         text_parts: list[str] = []
         total_len = 0

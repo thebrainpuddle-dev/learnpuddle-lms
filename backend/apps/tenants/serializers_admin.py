@@ -6,6 +6,9 @@ from utils.s3_utils import sign_file_field
 
 class TenantSettingsSerializer(serializers.ModelSerializer):
     logo_url = serializers.SerializerMethodField()
+    # TASK-020 — computed, read-only merged label map.  Writes are made
+    # via `mode` + `mode_label_overrides`, not this field.
+    mode_labels = serializers.SerializerMethodField()
 
     class Meta:
         model = Tenant
@@ -24,8 +27,12 @@ class TenantSettingsSerializer(serializers.ModelSerializer):
             "is_active",
             "is_trial",
             "trial_end_date",
+            # TASK-020 — Education vs Corporate mode
+            "mode",
+            "mode_label_overrides",
+            "mode_labels",
         ]
-        read_only_fields = ["id", "subdomain", "logo_url"]
+        read_only_fields = ["id", "subdomain", "logo_url", "mode_labels"]
 
     def validate_notification_from_name(self, value: str) -> str:
         return (value or "").strip()
@@ -38,6 +45,35 @@ class TenantSettingsSerializer(serializers.ModelSerializer):
         if normalized and not normalized.replace("-", "").replace("_", "").isalnum():
             raise serializers.ValidationError("Use only letters, numbers, hyphens, or underscores.")
         return normalized
+
+    def validate_mode_label_overrides(self, value) -> dict:
+        """
+        Overrides must be a JSON object mapping label keys to non-empty
+        strings.  Drop any non-string values silently — we don't want a
+        malformed payload to poison the label map, but we also don't want
+        to 400 on frontend-sent extras.
+
+        Contract: non-string values (e.g. ``{"course": 42}``) are silently
+        dropped and the key is absent from the stored overrides.  The admin
+        UI is expected to validate types client-side before calling this
+        endpoint.  A 200 response with an empty or reduced override map is
+        therefore valid and expected behaviour when the payload contains
+        non-string values.
+        """
+        if value in (None, "", []):
+            return {}
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("Must be a JSON object.")
+        cleaned = {}
+        for key, raw in value.items():
+            if not isinstance(key, str) or not key.strip():
+                continue
+            if isinstance(raw, str) and raw.strip():
+                cleaned[key.strip()] = raw.strip()
+        return cleaned
+
+    def get_mode_labels(self, obj: Tenant) -> dict:
+        return obj.get_mode_labels()
 
     def get_logo_url(self, obj: Tenant):
         if not obj.logo:

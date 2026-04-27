@@ -16,6 +16,7 @@ import {
 } from 'recharts';
 import type { MAICSlide, MAICSlideElement, MAICSlideTransition } from '../../types/maic';
 import { useMAICSettingsStore } from '../../stores/maicSettingsStore';
+import { Shimmer } from './Shimmer';
 import { cn } from '../../lib/utils';
 
 // Design space the LLM generates coordinates for
@@ -28,6 +29,13 @@ interface SlideRendererProps {
   slideNumber?: number;
   /** Total number of slides for the counter indicator */
   totalSlides?: number;
+  /**
+   * CG-P0-3: When true the Celery image-fill task is still running.
+   * Image elements with an empty src should show a "fetching image…"
+   * skeleton rather than immediately falling back to a random Unsplash
+   * photo (which would be replaced anyway once the task completes).
+   */
+  imagesPending?: boolean;
 }
 
 // ─── Element renderers ──────────────────────────────────────────────────────
@@ -38,6 +46,12 @@ function renderTextElement(el: MAICSlideElement): React.ReactNode {
     .replace(/\\n/g, '<br>')
     .replace(/\n/g, '<br>');
 
+  // textShadow gives a subtle white halo so text remains readable when the
+  // LLM's generated layout accidentally puts an image rect underneath it.
+  // Cheap defense — combined with the z-index layering above, text always
+  // sits on top and stays legible.
+  const hasExplicitBg = !!(el.style?.background || el.style?.backgroundColor);
+
   return (
     <div
       className="overflow-auto text-gray-900"
@@ -47,13 +61,16 @@ function renderTextElement(el: MAICSlideElement): React.ReactNode {
         fontWeight: (el.style?.fontWeight as string) || undefined,
         textAlign: (el.style?.textAlign as string) as React.CSSProperties['textAlign'] || undefined,
         lineHeight: 1.5,
+        textShadow: hasExplicitBg
+          ? undefined
+          : '0 0 6px rgba(255,255,255,0.9), 0 0 12px rgba(255,255,255,0.7)',
       }}
       dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(html) }}
     />
   );
 }
 
-function ImageElement({ el }: { el: MAICSlideElement }) {
+function ImageElement({ el, imagesPending }: { el: MAICSlideElement; imagesPending?: boolean }) {
   const alt = el.content || 'Slide image';
   const [loaded, setLoaded] = React.useState(false);
   const [error, setError] = React.useState(false);
@@ -63,15 +80,32 @@ function ImageElement({ el }: { el: MAICSlideElement }) {
   // Resolve image src — use el.src if valid; otherwise fall back only when
   // the tenant has image generation enabled. Random Unsplash photos behind
   // the user's back is bad UX for schools that deliberately opt out.
+  //
+  // SEC-P0-4 (2026-04-23): `data:` URLs are NOT accepted. An LLM-controlled
+  // `data:text/html;base64,...` or `data:image/svg+xml;base64,...<script>`
+  // would execute in the slide renderer. Only allow:
+  //   - http(s) URLs to the image providers we fetch from
+  //   - site-relative paths starting with `/` (our own backend/static)
+  //
+  // CG-P0-3: When el.src is empty AND imagesPending is true, the Celery
+  // image-fill task hasn't yet run. Return '' to render the "fetching
+  // image…" skeleton rather than a random Unsplash fallback (which would
+  // be replaced anyway once the task completes).
   const resolvedSrc = React.useMemo(() => {
-    const raw = el.src || '';
-    if (raw && (raw.startsWith('http') || raw.startsWith('/') || raw.startsWith('data:'))) {
-      return raw;
+    const raw = (el.src || '').trim();
+    if (raw) {
+      if (raw.startsWith('https://') || raw.startsWith('http://') || raw.startsWith('/')) {
+        return raw;
+      }
+      // Anything else (data:, javascript:, vbscript:, file:, blob: from
+      // an external origin, etc.) is rejected. Fall through to placeholder.
     }
     if (providerDisabled) return '';  // render placeholder instead
+    // CG-P0-3: images still filling — hold off on Unsplash fallback.
+    if (imagesPending) return '';
     const keyword = encodeURIComponent((el.content || 'education').slice(0, 80));
     return `https://source.unsplash.com/800x450/?${keyword}`;
-  }, [el.src, el.content, providerDisabled]);
+  }, [el.src, el.content, providerDisabled, imagesPending]);
 
   // "Provider disabled" placeholder — honest about why there's no image.
   if (providerDisabled && !resolvedSrc) {
@@ -92,14 +126,50 @@ function ImageElement({ el }: { el: MAICSlideElement }) {
     );
   }
 
+  // CG-P0-3: "Fetching image…" skeleton — shown when el.src is empty and
+  // the Celery fill task is still in progress. Uses the existing Shimmer
+  // component so it visually matches the normal image-loading skeleton,
+  // but adds a small caption so the teacher/student knows it's transient.
+  if (!resolvedSrc && imagesPending) {
+    return (
+      <div className="relative h-full w-full" data-testid="image-fetching-skeleton">
+        <Shimmer
+          className="absolute inset-0 rounded-lg"
+          baseClassName="bg-gray-100"
+        />
+        <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+          <svg
+            className="h-7 w-7 text-gray-300 mb-1.5 animate-pulse"
+            fill="none"
+            viewBox="0 0 24 24"
+            strokeWidth={1}
+            stroke="currentColor"
+            aria-hidden="true"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909M3.75 21h16.5a2.25 2.25 0 0 0 2.25-2.25V6.75a2.25 2.25 0 0 0-2.25-2.25H3.75A2.25 2.25 0 0 0 1.5 6.75v13.5A2.25 2.25 0 0 0 3.75 21Z" />
+          </svg>
+          <span className="text-[9px] text-gray-400 font-medium select-none">
+            Fetching image…
+          </span>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="relative h-full w-full">
       {!loaded && !error && (
-        <div className="absolute inset-0 flex items-center justify-center bg-gray-100 rounded-lg animate-pulse">
-          <svg className="h-8 w-8 text-gray-300" fill="none" viewBox="0 0 24 24" strokeWidth={1} stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909M3.75 21h16.5a2.25 2.25 0 0 0 2.25-2.25V6.75a2.25 2.25 0 0 0-2.25-2.25H3.75A2.25 2.25 0 0 0 1.5 6.75v13.5A2.25 2.25 0 0 0 3.75 21Z" />
-          </svg>
-        </div>
+        <>
+          <Shimmer
+            className="absolute inset-0 rounded-lg"
+            baseClassName="bg-gray-100"
+          />
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <svg className="h-8 w-8 text-gray-300" fill="none" viewBox="0 0 24 24" strokeWidth={1} stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909M3.75 21h16.5a2.25 2.25 0 0 0 2.25-2.25V6.75a2.25 2.25 0 0 0-2.25-2.25H3.75A2.25 2.25 0 0 0 1.5 6.75v13.5A2.25 2.25 0 0 0 3.75 21Z" />
+            </svg>
+          </div>
+        </>
       )}
       <img
         src={resolvedSrc}
@@ -316,15 +386,36 @@ function renderChart(type: string, data: Record<string, unknown>[], dataKeys: st
   }
 }
 
+// Escape user/LLM input for safe interpolation into an HTML string.
+// Used by the LaTeX fallback path to avoid interpolating raw content
+// (which the LLM controls) directly into the DOM.
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function renderLatexElement(el: MAICSlideElement): React.ReactNode {
   let html: string;
   try {
+    // KaTeX with trust:false (default) blocks javascript: URIs, but we still
+    // pass output through DOMPurify below for defense-in-depth — LLM-supplied
+    // LaTeX source + any future KaTeX regression should never reach the DOM
+    // unsanitized.
     html = katex.renderToString(el.content, {
       throwOnError: false,
       displayMode: true,
+      trust: false,
+      strict: 'ignore',
     });
   } catch {
-    html = `<code>${el.content}</code>`;
+    // Fallback: the raw LLM content is interpolated into an HTML string. We
+    // MUST escape it — without the escape, any `</code><img src=x onerror=...>`
+    // in el.content would execute. (SEC-P0-2 from 2026-04-23 ultrareview.)
+    html = `<code>${escapeHtml(el.content)}</code>`;
   }
 
   return (
@@ -334,7 +425,16 @@ function renderLatexElement(el: MAICSlideElement): React.ReactNode {
         fontSize: (el.style?.fontSize as string) || '18px',
         color: (el.style?.color as string) || undefined,
       }}
-      dangerouslySetInnerHTML={{ __html: html }}
+      dangerouslySetInnerHTML={{
+        __html: DOMPurify.sanitize(html, {
+          // KaTeX emits MathML + annotated spans — allow its footprint.
+          ADD_TAGS: ['math', 'mrow', 'mi', 'mo', 'mn', 'msup', 'msub', 'mfrac',
+                     'msqrt', 'mroot', 'munderover', 'munder', 'mover',
+                     'annotation', 'semantics', 'mspace', 'mtext'],
+          ADD_ATTR: ['mathvariant', 'mathsize', 'xmlns', 'encoding'],
+          FORBID_ATTR: ['onerror', 'onload', 'onclick', 'onmouseover'],
+        }),
+      }}
     />
   );
 }
@@ -489,6 +589,7 @@ export const SlideRenderer = React.memo<SlideRendererProps>(function SlideRender
   slide,
   slideNumber,
   totalSlides,
+  imagesPending,
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
@@ -561,7 +662,22 @@ export const SlideRenderer = React.memo<SlideRendererProps>(function SlideRender
             }}
           >
             {slide.elements.map((el) => {
-              const renderer = elementRenderers[el.type];
+              // Layer order: images & shapes behind; charts/videos middle;
+              // text/latex/code/table on top. Prevents the common LLM-
+              // output failure where an image rect overlaps the title rect
+              // and occludes the text. Text also gets a subtle white
+              // backdrop shadow for legibility if it does overlap an image.
+              const zIndex =
+                el.type === 'image' || el.type === 'shape' ? 1 :
+                el.type === 'chart' || el.type === 'video' ? 5 :
+                10;
+
+              // For image elements, pass imagesPending so the renderer can
+              // show the "fetching image…" skeleton (CG-P0-3) rather than
+              // immediately falling back to a random Unsplash photo.
+              const renderer = el.type === 'image'
+                ? () => <ImageElement el={el} imagesPending={imagesPending} />
+                : elementRenderers[el.type];
               if (!renderer) return null;
 
               return (
@@ -574,6 +690,7 @@ export const SlideRenderer = React.memo<SlideRendererProps>(function SlideRender
                     top: el.y,
                     width: el.width,
                     height: el.height,
+                    zIndex,
                   }}
                 >
                   {renderer(el)}

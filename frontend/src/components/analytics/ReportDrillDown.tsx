@@ -10,8 +10,8 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { Button } from '../../components/common/Button';
 import { Input } from '../../components/common/Input';
 import { useToast } from '../../components/common';
-import { adminReportsService } from '../../services/adminReportsService';
-import { adminRemindersService } from '../../services/adminRemindersService';
+import { adminReportsService, type CourseProgressRow, type AssignmentStatusRow } from '../../services/adminReportsService';
+import { adminRemindersService, type ReminderPayload } from '../../services/adminRemindersService';
 import {
   PaperAirplaneIcon,
   FunnelIcon,
@@ -103,7 +103,7 @@ export const ReportDrillDown: React.FC<ReportDrillDownProps> = ({
   const assignmentRows = assignmentReport?.results ?? [];
 
   const sendReminderMutation = useMutation({
-    mutationFn: (payload: any) => adminRemindersService.send(payload),
+    mutationFn: (payload: ReminderPayload) => adminRemindersService.send(payload),
     onSuccess: (data) => {
       toast.success(
         'Reminders sent!',
@@ -112,14 +112,15 @@ export const ReportDrillDown: React.FC<ReportDrillDownProps> = ({
       setSelectedTeacherIds([]);
       setSelectedAssignmentTeacherIds([]);
     },
-    onError: (error: any) => {
+    onError: (error: unknown) => {
       let message = 'Could not send reminders. Please try again.';
-      if (error?.response?.data?.error) {
-        message = error.response.data.error;
-      } else if (error?.response?.data?.detail) {
-        message = error.response.data.detail;
-      } else if (error?.message) {
-        message = error.message;
+      const err = error as { response?: { data?: { error?: string; detail?: string } }; message?: string };
+      if (err?.response?.data?.error) {
+        message = err.response.data.error as string;
+      } else if (err?.response?.data?.detail) {
+        message = err.response.data.detail as string;
+      } else if (err?.message) {
+        message = err.message;
       }
       toast.error('Send failed', message);
     },
@@ -144,7 +145,7 @@ export const ReportDrillDown: React.FC<ReportDrillDownProps> = ({
 
   // CSV export helper
   const handleExportCSV = () => {
-    const rows = tab === 'COURSE' ? courseRows : assignmentRows;
+    const rows: (CourseProgressRow | AssignmentStatusRow)[] = tab === 'COURSE' ? courseRows : assignmentRows;
     if (rows.length === 0) return;
 
     const headers =
@@ -158,7 +159,7 @@ export const ReportDrillDown: React.FC<ReportDrillDownProps> = ({
 
     const csvContent = [
       headers.join(','),
-      ...rows.map((r: any) => {
+      ...rows.map((r) => {
         const base = [
           `"${r.teacher_name}"`,
           `"${r.teacher_email}"`,
@@ -166,7 +167,8 @@ export const ReportDrillDown: React.FC<ReportDrillDownProps> = ({
         if (isStudents) {
           base.push(`"${r.grade_level || ''}"`, `"${r.section || ''}"`);
         }
-        base.push(r.status, r.completed_at || r.submitted_at || '');
+        const completedOrSubmitted = 'completed_at' in r ? r.completed_at : r.submitted_at;
+        base.push(r.status, completedOrSubmitted || '');
         return base.join(',');
       }),
     ].join('\n');

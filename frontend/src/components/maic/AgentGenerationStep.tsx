@@ -6,10 +6,38 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { RotateCcw, Sparkles, Loader2, AlertCircle } from 'lucide-react';
+import { motion } from 'motion/react';
 import { maicApi, maicStudentApi, type MAICVoice } from '../../services/openmaicService';
 import { AgentCard } from './AgentCard';
 import { AgentEditModal } from './AgentEditModal';
+import { AgentRevealModal } from './AgentRevealModal';
+import { ConfirmDialog } from '../common';
 import type { MAICAgent } from '../../types/maic';
+
+// Sprint 2 · A.3 — staggered 3D card-flip reveal. Parent orchestrates
+// the cadence; each child rotates from -90° around the Y axis into
+// place so the roster feels like it's being dealt onto the table.
+const AGENT_REVEAL_STAGGER_MS = 120; // feels better than the spec's 500ms at 4-up
+
+const AGENT_GRID_VARIANTS = {
+  hidden: {},
+  visible: {
+    transition: {
+      staggerChildren: AGENT_REVEAL_STAGGER_MS / 1000,
+      delayChildren: 0.05,
+    },
+  },
+};
+
+const AGENT_CARD_VARIANTS = {
+  hidden: { opacity: 0, rotateY: -90, y: 8 },
+  visible: {
+    opacity: 1,
+    rotateY: 0,
+    y: 0,
+    transition: { duration: 0.5, ease: [0.34, 1.3, 0.64, 1] as [number, number, number, number] },
+  },
+};
 
 /**
  * Default role split per the spec §8.3: 1 prof, 1 TA, 2 students = 4 agents.
@@ -58,6 +86,13 @@ export function AgentGenerationStep({
   const [loading, setLoading] = useState(!(initialAgents && initialAgents.length));
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<MAICAgent | null>(null);
+
+  // T1.2 — open the blocking reveal modal once, the first time a full
+  // roster lands. We do NOT re-open on regenerate-all; the reveal is a
+  // one-shot "meet your cast" moment. Re-hydration from initialAgents
+  // (user hit Back) also skips the modal — they've seen the cast.
+  const [revealOpen, setRevealOpen] = useState(false);
+  const revealSeenRef = useRef<boolean>(!!(initialAgents && initialAgents.length));
   const [regenIds, setRegenIds] = useState<Set<string>>(() => new Set());
   const [previewingVoice, setPreviewingVoice] = useState<string | null>(null);
   // Preview banner split into two channels:
@@ -69,6 +104,7 @@ export function AgentGenerationStep({
   //                                alert for a non-error.
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [previewInfo, setPreviewInfo] = useState<string | null>(null);
+  const [confirmRegenOpen, setConfirmRegenOpen] = useState(false);
 
   // Shared audio element — only one preview plays at a time.
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -115,6 +151,12 @@ export function AgentGenerationStep({
         // back on. No setAgents([]) here.
       } else {
         setAgents(next);
+        // T1.2 — first-time roster → blocking reveal. Regenerate-all
+        // hits the same setter but revealSeenRef gates it to once.
+        if (!revealSeenRef.current) {
+          revealSeenRef.current = true;
+          setRevealOpen(true);
+        }
       }
     } catch {
       setError("We couldn't generate agents. Please try again.");
@@ -284,13 +326,8 @@ export function AgentGenerationStep({
   );
 
   const handleRegenerateAll = useCallback(() => {
-    const ok = window.confirm(
-      'Regenerate all agents? Any edits you made will be discarded.',
-    );
-    if (ok) {
-      void generateAll();
-    }
-  }, [generateAll]);
+    setConfirmRegenOpen(true);
+  }, []);
 
   const agentCount = useMemo(() => agents.length, [agents.length]);
 
@@ -343,6 +380,14 @@ export function AgentGenerationStep({
 
   return (
     <div>
+      {/* T1.2 — blocking reveal. Renders over the wizard chrome with a
+          full backdrop blur. User MUST click Continue to dismiss; only
+          then do the inline editable cards become the focus. */}
+      <AgentRevealModal
+        agents={agents}
+        open={revealOpen}
+        onContinue={() => setRevealOpen(false)}
+      />
       {/* Header */}
       <div className="mb-5">
         <h2 className="text-xl font-semibold text-slate-900">Meet your classroom</h2>
@@ -384,19 +429,34 @@ export function AgentGenerationStep({
           below the width where "Dr. Priya Verma" and "Teaching
           Assistant" fit on a single line, producing the mid-word
           wraps that students complained looked broken. */}
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <motion.div
+        className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"
+        style={{ perspective: 1200 }}
+        variants={AGENT_GRID_VARIANTS}
+        initial="hidden"
+        animate="visible"
+        // Re-keying on roster-length lets a regenerate-all cycle replay
+        // the flip, which makes the "fresh cast" moment feel earned.
+        key={`roster-${agents.length}`}
+        data-testid="agent-inline-grid"
+      >
         {agents.map((agent) => (
-          <AgentCard
+          <motion.div
             key={agent.id}
-            agent={agent}
-            onEdit={setEditing}
-            onRegenerate={handleRegenerate}
-            onPreviewVoice={handlePreviewVoice}
-            isPreviewing={previewingVoice !== null && previewingVoice === agent.voiceId}
-            isRegenerating={regenIds.has(agent.id)}
-          />
+            variants={AGENT_CARD_VARIANTS}
+            style={{ transformStyle: 'preserve-3d', transformOrigin: '50% 50%' }}
+          >
+            <AgentCard
+              agent={agent}
+              onEdit={setEditing}
+              onRegenerate={handleRegenerate}
+              onPreviewVoice={handlePreviewVoice}
+              isPreviewing={previewingVoice !== null && previewingVoice === agent.voiceId}
+              isRegenerating={regenIds.has(agent.id)}
+            />
+          </motion.div>
         ))}
-      </div>
+      </motion.div>
 
       {/* Footer */}
       <div className="mt-6 flex flex-col-reverse items-stretch justify-between gap-3 sm:flex-row sm:items-center">
@@ -441,6 +501,18 @@ export function AgentGenerationStep({
           </button>
         </div>
       </div>
+
+      {/* Regenerate-all confirmation dialog */}
+      <ConfirmDialog
+        isOpen={confirmRegenOpen}
+        onClose={() => setConfirmRegenOpen(false)}
+        onConfirm={() => { void generateAll(); }}
+        title="Regenerate all agents?"
+        message="Any edits you made to individual agents will be discarded and a fresh set will be generated."
+        confirmLabel="Regenerate"
+        cancelLabel="Keep current"
+        variant="warning"
+      />
 
       {/* Edit modal */}
       {editing && (

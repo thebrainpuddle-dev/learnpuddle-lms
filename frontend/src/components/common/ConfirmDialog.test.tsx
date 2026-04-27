@@ -14,7 +14,7 @@ describe('ConfirmDialog', () => {
   };
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
   });
 
   it('renders title and message when open', () => {

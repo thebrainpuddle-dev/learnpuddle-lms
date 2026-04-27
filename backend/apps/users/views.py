@@ -124,6 +124,7 @@ def login_view(request):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+# No @tenant_required: operates only on the authenticated user's token; no tenant data accessed.
 def logout_view(request):
     """
     User logout endpoint.
@@ -160,7 +161,11 @@ def logout_view(request):
 def refresh_token_view(request):
     """
     Refresh access token using refresh token.
-    Validates that the token is not blacklisted (e.g. after logout).
+
+    Validates that the token is not blacklisted (logout) and that it was
+    issued *after* the tenant's password policy was last rotated and
+    *after* the owning user last changed their password.  Either event
+    implicitly invalidates all older refresh tokens.
     """
     try:
         refresh_token = request.data.get('refresh_token')
@@ -169,12 +174,22 @@ def refresh_token_view(request):
                 {'error': 'Refresh token required'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
         refresh = RefreshToken(refresh_token)
         # Check blacklist — rejects tokens that were invalidated on logout
         if hasattr(refresh, 'check_blacklist'):
             refresh.check_blacklist()
-        
+
+        # Reject tokens issued before a policy change or password change.
+        from apps.users.token_policy import enforce_token_freshness
+        try:
+            enforce_token_freshness(refresh)
+        except ValueError as exc:
+            return Response(
+                {'error': str(exc) or 'Refresh token invalidated by policy change'},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
         return Response({
             'access': str(refresh.access_token),
         }, status=status.HTTP_200_OK)
@@ -187,6 +202,7 @@ def refresh_token_view(request):
 
 @api_view(['GET', 'PATCH'])
 @permission_classes([IsAuthenticated])
+# No @tenant_required: returns/updates request.user's own profile only; no foreign-tenant data accessed.
 def me_view(request):
     """
     GET: Get current user profile.
@@ -314,6 +330,7 @@ def _send_verification_email(user, request=None):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+# No @tenant_required: operates only on request.user's password; no tenant data accessed.
 def change_password_view(request):
     """
     Change user password.
@@ -329,7 +346,17 @@ def change_password_view(request):
     user = request.user
     user.set_password(serializer.validated_data['new_password'])
     user.must_change_password = False
-    user.save(update_fields=['password', 'must_change_password'])
+    from django.utils import timezone as _tz
+    user.password_changed_at = _tz.now()
+    user.save(update_fields=['password', 'must_change_password', 'password_changed_at'])
+
+    # Persist prior password hash so TenantPasswordValidator can enforce
+    # prevent_reuse_last_n on future changes.
+    try:
+        from apps.users.password_validators import record_password_history
+        record_password_history(user)
+    except Exception:
+        pass
 
     # Update session to keep user logged in
     update_session_auth_hash(request, user)
@@ -446,7 +473,16 @@ def confirm_password_reset_view(request):
     user.set_password(new_password)
     # Mark last_login to hard-expire this token immediately after first successful use.
     user.last_login = timezone.now()
-    user.save(update_fields=['password', 'last_login'])
+    # Invalidate any outstanding refresh tokens by bumping password_changed_at.
+    user.password_changed_at = timezone.now()
+    user.save(update_fields=['password', 'last_login', 'password_changed_at'])
+
+    # Record password in history for reuse-prevention.
+    try:
+        from apps.users.password_validators import record_password_history
+        record_password_history(user)
+    except Exception:
+        pass
 
     log_audit('PASSWORD_RESET', 'User', target_id=str(user.id), target_repr=str(user), request=request, actor=user)
 
@@ -495,6 +531,7 @@ def verify_email_view(request):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+# No @tenant_required: sends verification to request.user's own email; no tenant data accessed.
 @throttle_classes([ResendVerifyThrottle])
 def resend_verification_view(request):
     """Resend verification email to the current user."""
@@ -507,6 +544,7 @@ def resend_verification_view(request):
 
 @api_view(['GET', 'PATCH'])
 @permission_classes([IsAuthenticated])
+# No @tenant_required: reads/writes request.user's own notification preferences only; no tenant data accessed.
 def preferences_view(request):
     """
     GET: Return notification preferences.

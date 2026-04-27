@@ -7,10 +7,12 @@ MAICClassroom   — Classroom metadata (content lives in client-side IndexedDB).
 
 import uuid
 
+from django.core.exceptions import PermissionDenied
 from django.db import models
 
 from utils.encryption import encrypt_value, decrypt_value
 from utils.tenant_manager import TenantManager
+from utils.tenant_middleware import get_current_tenant
 
 
 class TenantAIConfig(models.Model):
@@ -199,17 +201,98 @@ class MAICClassroom(models.Model):
         help_text="Sections that can access this classroom. If empty + is_public, all students see it.",
     )
 
-    # Full classroom content (slides, scenes, sceneSlideBounds).
-    # Pushed by the teacher's browser after generation so students can
-    # retrieve it via the API without needing the teacher's IndexedDB.
+    # ─── Legacy monolithic content field ─────────────────────────────────────
+    # PERF-P0-4 (cutover 2026-04-26): This single JSONField was the original
+    # storage for ALL classroom content. PostgreSQL TOASTs blobs >8 KB, so any
+    # partial save (one slide's image src, one audioId) rewrote the entire
+    # ~56 MB TOAST blob.
+    #
+    # The dual-write that kept this field in lock-step with the shards has
+    # been retired — every read path now goes through ``composed_content``
+    # (which still falls back to this field for any pre-backfill row) and
+    # every write path uses ``update_content_section`` or the shard fields
+    # directly. The column is intentionally left in place for one full
+    # release as a safety net; a follow-up migration will drop it once
+    # shard-only reads are confirmed in production.
+    #
+    # Reads:  use ``composed_content`` (shards + fallback).
+    # Writes: forbidden — every shard has its own targeted save path.
     content = models.JSONField(
         default=dict, blank=True,
-        help_text="Full classroom content — slides, scenes, sceneSlideBounds",
+        help_text=(
+            "Legacy monolithic content field (PERF-P0-4). "
+            "Read-only post-cutover — composed_content / content_scenes / "
+            "content_agents / content_meta are the source of truth."
+        ),
+    )
+
+    # ─── Sharded content fields (PERF-P0-4) ──────────────────────────────────
+    # Split from the monolithic `content` JSONField to enable partial saves
+    # that only rewrite the changed TOAST segment instead of the whole blob.
+    #
+    # content_scenes  — scenes array (largest: slides, actions, image srcs,
+    #                   TTS audioUrls). Updated per-scene during generation and
+    #                   by fill_classroom_images. ~95% of write volume lands here.
+    #
+    # content_agents  — agent profile list (name, voiceId, avatar, color).
+    #                   Written once at generation time; stable thereafter.
+    #
+    # content_meta    — small metadata: audioManifest status machine,
+    #                   any top-level keys that are neither scenes nor agents.
+    #                   Written on publish and at TTS progress checkpoints.
+    content_scenes = models.JSONField(
+        default=list, blank=True,
+        help_text="PERF-P0-4 shard: scenes array (slides, actions, image srcs, audio URLs)",
+    )
+    content_agents = models.JSONField(
+        default=list, blank=True,
+        help_text="PERF-P0-4 shard: agent profile list",
+    )
+    content_meta = models.JSONField(
+        default=dict, blank=True,
+        help_text="PERF-P0-4 shard: audioManifest + miscellaneous top-level keys",
     )
 
     # Scene/slide count (cached from client for listing)
     scene_count = models.PositiveIntegerField(default=0)
     estimated_minutes = models.PositiveIntegerField(default=0)
+
+    # CG-P0-3: deferred image-fill state.
+    # Flipped to True by the per-scene content endpoint when image fetching is
+    # deferred to the fill_classroom_images Celery task. Flipped back to False
+    # once that task completes. Default False so existing rows need no backfill.
+    images_pending = models.BooleanField(
+        default=False,
+        help_text=(
+            "True while the fill_classroom_images Celery task is in-flight. "
+            "Frontend polls this to know whether slide images are still loading."
+        ),
+    )
+
+    # Live generation progress. Updated as the wizard posts progress pings
+    # or saves partial content. MAICPlayerPage reads these to render an
+    # honest progress bar + detect stalled generations.
+    GENERATION_PHASES = [
+        ("", "None"),
+        ("queued", "Queued"),
+        ("outline", "Generating outline"),
+        ("content", "Generating scene content"),
+        ("actions", "Generating scene actions"),
+        ("saving", "Saving"),
+        ("complete", "Complete"),
+    ]
+    generation_phase = models.CharField(
+        max_length=16, choices=GENERATION_PHASES, default="", blank=True,
+    )
+    # 1-based index of the scene currently being worked on (0 = not started)
+    phase_scene_index = models.PositiveIntegerField(default=0)
+    # Count of scenes with fully materialized content + actions
+    scenes_ready = models.PositiveIntegerField(default=0)
+    # First time a generation step reported progress (distinct from
+    # created_at, which is row-creation). Elapsed UI derives from this.
+    started_at = models.DateTimeField(null=True, blank=True)
+    # Most recent heartbeat. Frontend flags as stalled if older than ~3 min.
+    last_progress_at = models.DateTimeField(null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -229,3 +312,125 @@ class MAICClassroom(models.Model):
 
     def __str__(self):
         return f"MAICClassroom({self.id}) — {self.title}"
+
+    # ─── PERF-P0-4 shard helpers ──────────────────────────────────────────────
+
+    @property
+    def composed_content(self) -> dict:
+        """Compose the full content dict from shards (preferred) or legacy field.
+
+        Priority order:
+        1. If any shard is non-empty → build from shards.
+        2. Otherwise fall back to the legacy ``content`` field.
+
+        This property is used wherever a full content payload is needed for
+        the API response (teacher/student detail endpoints). Callers that only
+        need one section (e.g. scenes) should read the shard directly.
+
+        Partial-shard contract (SPRINT-2-BATCH-6-F6):
+        Returns the composed view of sharded content. When ANY shard is
+        non-empty, ONLY shard data is returned — partial shards (e.g.
+        ``content_scenes`` populated but ``content_agents`` empty) yield a
+        dict with the present keys ONLY. Consumers MUST treat every key as
+        optional (use ``.get('agents', [])`` not ``composed_content['agents']``).
+        Falls back to legacy ``content`` JSON only when ALL shards are empty
+        (pre-backfill rows).
+        """
+        # Prefer shards when at least one is populated.
+        if self.content_scenes or self.content_agents or self.content_meta:
+            composed: dict = {}
+            if self.content_agents:
+                composed["agents"] = self.content_agents
+            if self.content_scenes:
+                composed["scenes"] = self.content_scenes
+            # Merge all other top-level keys from meta (e.g. audioManifest).
+            if self.content_meta:
+                composed.update(self.content_meta)
+            return composed
+        # Fall back to legacy monolithic field.
+        return self.content or {}
+
+    def update_content_section(
+        self,
+        section: str,
+        data,
+        *,
+        save: bool = True,
+    ) -> list[str]:
+        """Write a single content section to its shard and optionally save.
+
+        Args:
+            section:  One of ``"scenes"``, ``"agents"``, or ``"meta"``.
+                      For ``"meta"`` the *data* dict is merged (not replaced)
+                      into ``content_meta`` so individual keys can be updated
+                      without clobbering sibling keys.
+            data:     The value to store (list for scenes/agents, dict for meta).
+            save:     When True (default) immediately saves with update_fields
+                      targeting only the changed shard + ``updated_at``.
+
+        Returns:
+            List of field names that were changed (useful when the caller
+            wants to accumulate changes and do a single save).
+
+        Raises:
+            ValueError: If ``section`` is not one of the three supported values.
+            django.core.exceptions.PermissionDenied: If the thread-local
+                current tenant is set and does not match ``self.tenant_id``
+                (cross-tenant write guard, SPRINT-2-BATCH-6-F7).
+
+        Meta merge semantics (SPRINT-2-BATCH-6-F6):
+            The ``"meta"`` section uses a single-level ``dict.update()`` merge,
+            NOT a deep/recursive merge.  This means nested dicts (e.g.
+            ``audioManifest``) must be passed in full if any of their internal
+            keys need to change.  Passing ``{"audioManifest": {"status": "ready"}}``
+            will REPLACE the entire ``audioManifest`` value, not patch a single key.
+
+        Tenant guard (SPRINT-2-BATCH-6-F7):
+            If a tenant is set in the thread-local context (via
+            ``set_current_tenant``), this method enforces that the classroom
+            belongs to that tenant before writing.  If no tenant is set (the
+            normal state inside a Celery task that hasn't called
+            ``set_current_tenant``), the check is skipped — that is intentional.
+
+        Note on ``updated_at``:
+            ``updated_at`` uses ``auto_now=True`` but must still be listed
+            explicitly in ``update_fields`` when ``save()`` is called with that
+            parameter — Django's ``auto_now`` only fires if the field appears in
+            ``update_fields``.
+        """
+        # SPRINT-2-BATCH-6-F7: defensive tenant guard.
+        # If a tenant is active in the thread-local context (i.e. we are
+        # running inside a request or a task that explicitly called
+        # set_current_tenant), verify the classroom belongs to that tenant.
+        # If no tenant is set (the normal state inside a Celery task that
+        # hasn't called set_current_tenant), skip the check — that is an
+        # intentional, trusted state for background jobs.
+        _current_tenant = get_current_tenant()
+        if _current_tenant is not None and self.tenant_id != _current_tenant.id:
+            raise PermissionDenied(
+                f"update_content_section called on classroom belonging to tenant "
+                f"{self.tenant_id!r} but current tenant is {_current_tenant.id!r}."
+            )
+
+        if section == "scenes":
+            self.content_scenes = data
+            changed = ["content_scenes"]
+        elif section == "agents":
+            self.content_agents = data
+            changed = ["content_agents"]
+        elif section == "meta":
+            if not isinstance(data, dict):
+                raise ValueError("update_content_section('meta', ...) requires a dict")
+            meta = dict(self.content_meta or {})
+            meta.update(data)
+            self.content_meta = meta
+            changed = ["content_meta"]
+        else:
+            raise ValueError(
+                f"Unknown content section {section!r}. "
+                "Must be one of: 'scenes', 'agents', 'meta'."
+            )
+
+        if save:
+            self.save(update_fields=changed + ["updated_at"])
+        return changed

@@ -8,6 +8,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { cn } from '../../design-system/theme/cn';
 import { usePageTitle } from '../../hooks/usePageTitle';
 import { useAuthStore } from '../../stores/authStore';
+import { ConfirmDialog } from '../../components/common/ConfirmDialog';
 import api from '../../config/api';
 
 // ---------------------------------------------------------------------------
@@ -287,6 +288,7 @@ export const StudentDiscussionThreadPage: React.FC = () => {
   const [replyBody, setReplyBody] = useState('');
   const [replyingTo, setReplyingTo] = useState<{ id: string; name: string } | null>(null);
   const [likingIds, setLikingIds] = useState<Set<string>>(new Set());
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
 
   const { data: thread, isLoading } = useQuery<ThreadDetail>({
     queryKey: ['student-discussion-thread', threadId],
@@ -359,8 +361,8 @@ export const StudentDiscussionThreadPage: React.FC = () => {
   }, [editReplyMutation]);
 
   const handleDelete = useCallback((replyId: string) => {
-    if (window.confirm('Delete this reply?')) deleteReplyMutation.mutate(replyId);
-  }, [deleteReplyMutation]);
+    setDeleteTarget(replyId);
+  }, []);
 
   const handleSubmitReply = useCallback((e: React.FormEvent) => {
     e.preventDefault();
@@ -399,6 +401,19 @@ export const StudentDiscussionThreadPage: React.FC = () => {
 
   return (
     <div className="space-y-4">
+      <ConfirmDialog
+        isOpen={deleteTarget !== null}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={() => {
+          if (deleteTarget) deleteReplyMutation.mutate(deleteTarget);
+          setDeleteTarget(null);
+        }}
+        title="Delete Reply"
+        message="Delete this reply? This action cannot be undone."
+        confirmLabel="Delete"
+        variant="danger"
+      />
+
       <button onClick={() => navigate('/student/discussions')} className="inline-flex items-center gap-1.5 text-[13px] text-gray-500 hover:text-tp-text transition-colors">
         <ArrowLeftIcon /> Back to Discussions
       </button>

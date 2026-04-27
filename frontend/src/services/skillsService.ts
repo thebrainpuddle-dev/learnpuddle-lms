@@ -103,6 +103,44 @@ export interface GapAnalysisItem {
   recommended_courses: RecommendedCourse[];
 }
 
+/**
+ * Aggregated per-skill snapshot returned by the manager/admin
+ * skills-overview report. One entry per skill: average current vs.
+ * average target level across the team, plus at/above-target and
+ * below-target counts.
+ */
+export interface SkillOverviewTeacherDetail {
+  teacher_id: string;
+  teacher_name: string;
+  current_level: number;
+  target_level: number;
+  has_gap: boolean;
+}
+
+export interface SkillOverviewItem {
+  skill_id: string;
+  skill_name: string;
+  skill_category: string;
+  level_required: number;
+  teachers_assessed: number;
+  at_or_above_target: number;
+  below_target: number;
+  avg_current_level: number;
+  avg_target_level: number;
+  teacher_details: SkillOverviewTeacherDetail[];
+}
+
+export interface SkillsOverviewSummary {
+  total_skills_tracked: number;
+  total_teacher_skill_gaps: number;
+  total_teachers: number;
+}
+
+export interface SkillsOverviewResponse {
+  results: SkillOverviewItem[];
+  summary: SkillsOverviewSummary;
+}
+
 /** Raw row returned by the backend gap-analysis endpoint. */
 interface GapAnalysisRaw {
   teacher_id: string;
@@ -339,5 +377,32 @@ export const skillsService = {
     const res = await api.get('/skills/gap-analysis/', { params });
     const rawResults: GapAnalysisRaw[] = res.data?.results ?? [];
     return { data: { results: aggregateGaps(rawResults) } };
+  },
+
+  // ── Admin / Manager Skills Overview ─────────────────────────────────
+
+  /**
+   * Team-wide skills overview — averaged current vs target level per
+   * skill, plus at/above-target and below-target counts. Powers the
+   * Admin Skill Radar page.
+   *
+   * Endpoint: GET /api/reports/manager/skills-overview/
+   */
+  async overview(params?: {
+    department?: string;
+    category?: string;
+  }): Promise<SkillsOverviewResponse> {
+    const res = await api.get<SkillsOverviewResponse>(
+      '/reports/manager/skills-overview/',
+      { params },
+    );
+    return {
+      results: res.data?.results ?? [],
+      summary: res.data?.summary ?? {
+        total_skills_tracked: 0,
+        total_teacher_skill_gaps: 0,
+        total_teachers: 0,
+      },
+    };
   },
 };

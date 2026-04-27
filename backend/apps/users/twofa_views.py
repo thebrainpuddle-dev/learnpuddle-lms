@@ -87,10 +87,11 @@ def generate_backup_codes(user, count: int = 10) -> list[str]:
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
+# No @tenant_required: reads request.user's own OTP devices; no cross-tenant data exposed.
 def twofa_status(request):
     """
     Get 2FA status for the current user.
-    
+
     Returns whether 2FA is enabled and configuration options.
     """
     user = request.user
@@ -119,6 +120,7 @@ def twofa_status(request):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+# No @tenant_required: creates OTP device for request.user only; no cross-tenant data exposed.
 def twofa_setup_start(request):
     """
     Start 2FA setup - generates TOTP secret and QR code.
@@ -163,6 +165,7 @@ def twofa_setup_start(request):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+# No @tenant_required: confirms OTP device for request.user only; no cross-tenant data exposed.
 def twofa_setup_confirm(request):
     """
     Confirm 2FA setup by verifying a TOTP code.
@@ -217,6 +220,7 @@ def twofa_setup_confirm(request):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+# No @tenant_required: disables 2FA for request.user only; no cross-tenant data exposed.
 def twofa_disable(request):
     """
     Disable 2FA for the current user.
@@ -278,6 +282,7 @@ def twofa_disable(request):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+# No @tenant_required: regenerates backup codes for request.user only; no cross-tenant data exposed.
 def twofa_regenerate_backup_codes(request):
     """
     Regenerate backup codes (invalidates old codes).

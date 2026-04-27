@@ -794,7 +794,7 @@ class TenantService:
         student_quiz_subs = QuizSubmission.objects.filter(
             quiz__assignment__course__tenant=tenant,
             teacher__role='STUDENT',
-        )
+        ).exclude(score__isnull=True)  # exclude in-progress attempts
         total_subs = student_assignment_subs.count() + student_quiz_subs.count()
         graded_assignment = student_assignment_subs.filter(status='GRADED')
         graded_quiz = student_quiz_subs.filter(graded_at__isnull=False)

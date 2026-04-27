@@ -10,11 +10,22 @@ import { useMAICStageStore } from '../../stores/maicStageStore';
 import { ProactiveCard } from './ProactiveCard';
 import type { ProactiveCardType } from './ProactiveCard';
 import type { MAICEngineMode } from '../../types/maic-scenes';
+import { useSprintFlag, SPRINT1_FLAGS } from '../../lib/sprintFlags';
+
+// Sprint 1 · B.5 constants
+const BREATH_MS = 3000; // pause after speech before card appears
+const COUNTDOWN_MS = 5000; // Join/Skip window
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 interface ProactiveCardManagerProps {
   enabled: boolean;
+  /** V.1-fix — called when the user accepts the proactive suggestion.
+   *  Stage wires this to `engine.enterDiscussionFromUI()` so the engine
+   *  pauses and saves a checkpoint BEFORE the discussion panel opens.
+   *  Without this, opening the panel from a natural-break suggestion
+   *  left the engine playing audio underneath the panel. */
+  onBeforeDiscussion?: () => void;
 }
 
 interface Suggestion {
@@ -63,15 +74,17 @@ const SUGGESTION_TEMPLATES: { type: ProactiveCardType; template: (title: string)
 
 // ─── Component ──────────────────────────────────────────────────────────────
 
-export const ProactiveCardManager: React.FC<ProactiveCardManagerProps> = ({ enabled }) => {
+export const ProactiveCardManager: React.FC<ProactiveCardManagerProps> = ({ enabled, onBeforeDiscussion }) => {
   const scenes = useMAICStageStore((s) => s.scenes);
   const currentSceneIndex = useMAICStageStore((s) => s.currentSceneIndex);
   const engineMode = useMAICStageStore((s) => s.engineMode);
   const agents = useMAICStageStore((s) => s.agents);
   const setDiscussionMode = useMAICStageStore((s) => s.setDiscussionMode);
+  const gateOn = useSprintFlag(SPRINT1_FLAGS.discussionGate);
 
   const [activeSuggestion, setActiveSuggestion] = useState<Suggestion | null>(null);
   const [cardVisible, setCardVisible] = useState(false);
+  const breathTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Track which scenes have already shown a card (by scene index)
   const shownScenesRef = useRef<Set<number>>(new Set());
@@ -117,7 +130,11 @@ export const ProactiveCardManager: React.FC<ProactiveCardManagerProps> = ({ enab
     [scenes, agents],
   );
 
-  // Show a new proactive card for the current scene
+  // Show a new proactive card for the current scene. When the discussion
+  // gate flag is on, the card appears after a BREATH_MS pause so the
+  // student has a beat to absorb what the agent just said before the
+  // "Join / Skip" prompt slides in. The gate also tightens the auto-
+  // dismiss to COUNTDOWN_MS (visible progress bar lives in ProactiveCard).
   const showCard = useCallback(
     (sceneIndex: number) => {
       if (!enabled) return;
@@ -127,11 +144,37 @@ export const ProactiveCardManager: React.FC<ProactiveCardManagerProps> = ({ enab
       if (!suggestion) return;
 
       shownScenesRef.current.add(sceneIndex);
-      setActiveSuggestion(suggestion);
-      setCardVisible(true);
+
+      const reveal = () => {
+        setActiveSuggestion(suggestion);
+        setCardVisible(true);
+      };
+      if (gateOn) {
+        if (breathTimerRef.current) clearTimeout(breathTimerRef.current);
+        breathTimerRef.current = setTimeout(reveal, BREATH_MS);
+      } else {
+        reveal();
+      }
     },
-    [enabled, generateSuggestion],
+    [enabled, generateSuggestion, gateOn],
   );
+
+  // Cancel any pending breath on disable / unmount so the card doesn't
+  // appear seconds after the discussion panel or class has closed.
+  useEffect(() => {
+    return () => {
+      if (breathTimerRef.current) {
+        clearTimeout(breathTimerRef.current);
+        breathTimerRef.current = null;
+      }
+    };
+  }, []);
+  useEffect(() => {
+    if (!enabled && breathTimerRef.current) {
+      clearTimeout(breathTimerRef.current);
+      breathTimerRef.current = null;
+    }
+  }, [enabled]);
 
   // ─── Trigger: Engine mode transitions (playing -> paused/idle) ─────────
   useEffect(() => {
@@ -182,9 +225,13 @@ export const ProactiveCardManager: React.FC<ProactiveCardManagerProps> = ({ enab
     setCardVisible(false);
     setActiveSuggestion(null);
     speechCountRef.current = 0;
-    // Trigger discussion mode
+    // V.1-fix — pause the engine + save a checkpoint BEFORE opening the
+    // panel. Without this the scripted action loop keeps running audio
+    // under the discussion overlay and the close-handler's
+    // resumeAfterDiscussion() has no checkpoint to restore to.
+    onBeforeDiscussion?.();
     setDiscussionMode('qa');
-  }, [setDiscussionMode]);
+  }, [setDiscussionMode, onBeforeDiscussion]);
 
   const handleDismiss = useCallback(() => {
     setCardVisible(false);
@@ -214,6 +261,8 @@ export const ProactiveCardManager: React.FC<ProactiveCardManagerProps> = ({ enab
       onAccept={handleAccept}
       onDismiss={handleDismiss}
       visible={cardVisible}
+      countdownMs={gateOn ? COUNTDOWN_MS : undefined}
+      joinSkipMode={gateOn}
     />
   );
 };

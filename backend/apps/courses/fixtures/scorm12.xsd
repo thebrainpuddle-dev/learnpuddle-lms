@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Simplified SCORM 1.2 IMS Content Packaging schema for use in test validation.
+
+  This is a structurally faithful representation of the IMS CP Root v1.1.2 schema
+  (imscp_rootv1p1p2) used by SCORM 1.2 packages.  It validates the required
+  elements: manifest, metadata, organizations, resources, and schemaversion.
+
+  Namespace: http://www.imsproject.org/xsd/imscp_rootv1p1p2
+  Standard:  IMS Content Packaging 1.1.2 (SCORM 1.2 base)
+-->
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           targetNamespace="http://www.imsproject.org/xsd/imscp_rootv1p1p2"
+           xmlns:imscp="http://www.imsproject.org/xsd/imscp_rootv1p1p2"
+           elementFormDefault="qualified">
+
+  <!-- Root element -->
+  <xs:element name="manifest" type="imscp:manifestType"/>
+
+  <xs:complexType name="manifestType">
+    <xs:sequence>
+      <xs:element name="metadata" type="imscp:metadataType" minOccurs="0"/>
+      <xs:element name="organizations" type="imscp:organizationsType"/>
+      <xs:element name="resources" type="imscp:resourcesType"/>
+    </xs:sequence>
+    <xs:attribute name="identifier" type="xs:string" use="required"/>
+    <xs:attribute name="version" type="xs:string"/>
+    <xs:anyAttribute namespace="##other" processContents="lax"/>
+  </xs:complexType>
+
+  <xs:complexType name="metadataType">
+    <xs:sequence>
+      <xs:element name="schema" type="xs:string" minOccurs="0"/>
+      <xs:element name="schemaversion" type="xs:string" minOccurs="0"/>
+      <xs:any namespace="##other" processContents="lax" minOccurs="0" maxOccurs="unbounded"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="organizationsType">
+    <xs:sequence>
+      <xs:element name="organization" type="imscp:organizationType"
+                  minOccurs="0" maxOccurs="unbounded"/>
+    </xs:sequence>
+    <xs:attribute name="default" type="xs:string"/>
+  </xs:complexType>
+
+  <xs:complexType name="organizationType">
+    <xs:sequence>
+      <xs:element name="title" type="xs:string" minOccurs="0"/>
+      <xs:element name="item" type="imscp:itemType"
+                  minOccurs="0" maxOccurs="unbounded"/>
+    </xs:sequence>
+    <xs:attribute name="identifier" type="xs:string" use="required"/>
+    <xs:attribute name="structure" type="xs:string"/>
+  </xs:complexType>
+
+  <xs:complexType name="itemType">
+    <xs:sequence>
+      <xs:element name="title" type="xs:string" minOccurs="0"/>
+      <xs:element name="item" type="imscp:itemType"
+                  minOccurs="0" maxOccurs="unbounded"/>
+    </xs:sequence>
+    <xs:attribute name="identifier" type="xs:string" use="required"/>
+    <xs:attribute name="identifierref" type="xs:string"/>
+    <xs:attribute name="isvisible" type="xs:boolean"/>
+    <xs:attribute name="parameters" type="xs:string"/>
+  </xs:complexType>
+
+  <xs:complexType name="resourcesType">
+    <xs:sequence>
+      <xs:element name="resource" type="imscp:resourceType"
+                  minOccurs="0" maxOccurs="unbounded"/>
+    </xs:sequence>
+    <xs:attribute name="base" type="xs:anyURI"/>
+  </xs:complexType>
+
+  <xs:complexType name="resourceType">
+    <xs:sequence>
+      <xs:element name="metadata" type="imscp:metadataType" minOccurs="0"/>
+      <xs:element name="file" type="imscp:fileType"
+                  minOccurs="0" maxOccurs="unbounded"/>
+      <xs:element name="dependency" type="imscp:dependencyType"
+                  minOccurs="0" maxOccurs="unbounded"/>
+    </xs:sequence>
+    <xs:attribute name="identifier" type="xs:string" use="required"/>
+    <xs:attribute name="type" type="xs:string" use="required"/>
+    <xs:attribute name="href" type="xs:anyURI"/>
+    <xs:attribute name="base" type="xs:anyURI"/>
+    <xs:anyAttribute namespace="##other" processContents="lax"/>
+  </xs:complexType>
+
+  <xs:complexType name="fileType">
+    <xs:sequence>
+      <xs:element name="metadata" type="imscp:metadataType" minOccurs="0"/>
+    </xs:sequence>
+    <xs:attribute name="href" type="xs:anyURI" use="required"/>
+  </xs:complexType>
+
+  <xs:complexType name="dependencyType">
+    <xs:attribute name="identifierref" type="xs:string" use="required"/>
+  </xs:complexType>
+
+</xs:schema>

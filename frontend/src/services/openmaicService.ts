@@ -113,6 +113,25 @@ export const maicApi = {
   publishClassroom: (id: string) =>
     api.post<{ audioManifest: AudioManifest }>(`/v1/teacher/maic/classrooms/${id}/publish/`, {}),
 
+  /** Fire-and-forget progress ping. Server stamps last_progress_at +
+   *  optional phase/phase_scene_index/scenes_ready. Callers should
+   *  .catch(() => {}) so a failed ping doesn't break generation. */
+  pingClassroomProgress: (
+    id: string,
+    patch: {
+      phase?: 'outline' | 'content' | 'actions' | 'saving' | 'complete';
+      phase_scene_index?: number;
+      scenes_ready?: number;
+    },
+  ) =>
+    api.post<{
+      phase: string;
+      phase_scene_index: number;
+      scenes_ready: number;
+      started_at: string | null;
+      last_progress_at: string;
+    }>(`/v1/teacher/maic/classrooms/${id}/progress/`, patch),
+
   /** Push full classroom content to backend for student access */
   syncContent: (classroomId: string, content: {
     slides: MAICSlide[];

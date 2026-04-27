@@ -212,16 +212,23 @@ class Command(BaseCommand):
                     points=random.choice([1, 2]),
                 )
 
-            # Priya has submitted 2 of 3 quizzes
+            # Priya has submitted 2 of 3 quizzes.
+            # Idempotent via get_or_create so re-running the seed command
+            # does not collide with the unique_together
+            # (quiz, teacher, attempt_number) constraint introduced in
+            # migration 0013_quiz_attempts_and_time_limit.
             if qd["course_idx"] != 4:
                 score = Decimal(str(random.randint(70, 95)))
-                QuizSubmission.objects.create(
-                    tenant=tenant,
+                QuizSubmission.objects.get_or_create(
                     quiz=quiz,
                     teacher=priya,
-                    answers={"submitted": True},
-                    score=score,
-                    graded_at=now - timedelta(days=random.randint(1, 5)),
+                    attempt_number=1,
+                    defaults={
+                        "tenant": tenant,
+                        "answers": {"submitted": True},
+                        "score": score,
+                        "graded_at": now - timedelta(days=random.randint(1, 5)),
+                    },
                 )
 
         # One text assignment (no quiz)

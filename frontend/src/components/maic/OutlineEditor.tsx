@@ -20,6 +20,7 @@ const typeColors: Record<MAICOutlineScene['type'], string> = {
   discussion: 'bg-purple-100 text-purple-700',
   quiz: 'bg-amber-100 text-amber-700',
   activity: 'bg-green-100 text-green-700',
+  interactive: 'bg-teal-100 text-teal-700',
   summary: 'bg-gray-100 text-gray-600',
 };
 

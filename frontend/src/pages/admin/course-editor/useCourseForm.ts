@@ -76,15 +76,19 @@ export function useCourseForm() {
     [activeTab, canManageAssignments, isEditing, location.search, setSearchParams],
   );
 
-  // Normalize tab param on mount
+  // Normalize tab param on mount.
+  // Use navigate() directly (not setSearchParams) so that any hash fragment
+  // present in the URL (e.g. #content-{id} from SearchPage hash-scroll
+  // navigation) is preserved in the resulting URL.  setSearchParams strips
+  // the hash because it navigates to "?" + newParams without including it.
   React.useEffect(() => {
     const rawTab = new URLSearchParams(location.search).get('tab');
     const normalizedTab = resolveTab(rawTab);
     if (rawTab === normalizedTab) return;
     const params = new URLSearchParams(location.search);
     params.set('tab', normalizedTab);
-    setSearchParams(params, { replace: true });
-  }, [location.search, resolveTab, setSearchParams]);
+    navigate(`?${params.toString()}${location.hash}`, { replace: true });
+  }, [location.search, location.hash, navigate, resolveTab]);
 
   // ── Editor mode ─────────────────────────────────────────────────────
   const [editorMode, setEditorMode] = useState<TextEditorMode>('WYSIWYG');

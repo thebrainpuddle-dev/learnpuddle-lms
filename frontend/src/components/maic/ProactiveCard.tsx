@@ -4,7 +4,7 @@
 // students to engage with content. Slides up from the bottom with spring
 // animation and auto-dismisses after 15 seconds if not interacted with.
 
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { HelpCircle, MessagesSquare, Zap, Lightbulb, X } from 'lucide-react';
 import { cn } from '../../lib/utils';
@@ -26,6 +26,16 @@ export interface ProactiveCardProps {
   onDismiss: () => void;
   /** Whether the card is visible */
   visible: boolean;
+  /** Optional countdown override (ms). When provided:
+   *  - a visible progress bar counts down from 100% → 0%
+   *  - the card auto-dismisses when the bar reaches 0
+   *  - the accept button label is replaced with "Join"
+   *  Used by Sprint 1 · B.5 (discussion gate) to give the student a
+   *  short, explicit window to opt into a discussion. */
+  countdownMs?: number;
+  /** When true, render Join/Skip labels instead of the default
+   *  "Let's discuss" / X combo. Implied when countdownMs is set. */
+  joinSkipMode?: boolean;
 }
 
 // ─── Config Maps ────────────────────────────────────────────────────────────
@@ -70,15 +80,25 @@ export const ProactiveCard: React.FC<ProactiveCardProps> = ({
   onAccept,
   onDismiss,
   visible,
+  countdownMs,
+  joinSkipMode,
 }) => {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hasCountdown = typeof countdownMs === 'number' && countdownMs > 0;
+  const dismissMs = hasCountdown ? (countdownMs as number) : AUTO_DISMISS_MS;
+  const useJoinSkip = joinSkipMode || hasCountdown;
+  // Forces the countdown bar to re-mount on each fresh `visible` cycle
+  // so the CSS transition restarts cleanly (the bar is driven by
+  // transitioning `width` from 100% → 0% over dismissMs).
+  const [mountId, setMountId] = useState(0);
 
-  // Auto-dismiss after 15 seconds
+  // Auto-dismiss after the configured window (5s in gate mode, 15s default)
   useEffect(() => {
     if (visible) {
+      setMountId((n) => n + 1);
       timerRef.current = setTimeout(() => {
         onDismiss();
-      }, AUTO_DISMISS_MS);
+      }, dismissMs);
     }
     return () => {
       if (timerRef.current) {
@@ -86,7 +106,7 @@ export const ProactiveCard: React.FC<ProactiveCardProps> = ({
         timerRef.current = null;
       }
     };
-  }, [visible, onDismiss]);
+  }, [visible, onDismiss, dismissMs]);
 
   const Icon = TYPE_ICONS[type];
   const accentColor = TYPE_COLORS[type];
@@ -137,19 +157,29 @@ export const ProactiveCard: React.FC<ProactiveCardProps> = ({
                 {suggestion}
               </p>
 
-              {/* Accept button */}
-              <button
-                onClick={onAccept}
-                className="mt-2.5 px-4 py-1.5 text-xs font-semibold text-white rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-offset-1"
-                style={{
-                  backgroundColor: accentColor,
-                  // Focus ring color matches accent
-                  // @ts-expect-error -- CSS custom property
-                  '--tw-ring-color': accentColor,
-                }}
-              >
-                Let&apos;s discuss
-              </button>
+              {/* Action row */}
+              <div className="mt-2.5 flex items-center gap-2">
+                <button
+                  onClick={onAccept}
+                  className="px-4 py-1.5 text-xs font-semibold text-white rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-offset-1"
+                  style={{
+                    backgroundColor: accentColor,
+                    // Focus ring color matches accent
+                    // @ts-expect-error -- CSS custom property
+                    '--tw-ring-color': accentColor,
+                  }}
+                >
+                  {useJoinSkip ? 'Join' : "Let's discuss"}
+                </button>
+                {useJoinSkip && (
+                  <button
+                    onClick={onDismiss}
+                    className="px-3 py-1.5 text-xs font-medium text-gray-600 rounded-lg hover:bg-gray-100 transition-colors focus:outline-none"
+                  >
+                    Skip
+                  </button>
+                )}
+              </div>
             </div>
 
             {/* Dismiss X button (top-right) */}
@@ -160,6 +190,25 @@ export const ProactiveCard: React.FC<ProactiveCardProps> = ({
             >
               <X className="h-3.5 w-3.5" />
             </button>
+
+            {/* Countdown bar — only in gate mode. A motion bar animates
+                from 100% → 0% width over `dismissMs`. Keyed on
+                `mountId` so reopening the card restarts the bar. */}
+            {hasCountdown && (
+              <div
+                className="absolute bottom-0 left-0 right-0 h-1 bg-gray-100 overflow-hidden"
+                aria-hidden="true"
+              >
+                <motion.div
+                  key={mountId}
+                  className="h-full"
+                  style={{ backgroundColor: accentColor }}
+                  initial={{ width: '100%' }}
+                  animate={{ width: '0%' }}
+                  transition={{ duration: dismissMs / 1000, ease: 'linear' }}
+                />
+              </div>
+            )}
           </div>
         </motion.div>
       )}

@@ -4,6 +4,8 @@ Text-to-Speech service with multi-provider support and automatic fallback.
 Providers (in priority order):
     1. ElevenLabs  — Highest quality, requires API key (ELEVENLABS_API_KEY)
     2. Edge TTS    — Free Microsoft TTS via edge-tts package, good quality
+                     (requires edge-tts>=7.2.8 — pre-7.x trusted client tokens
+                      were rotated by Microsoft and now return 403)
     3. gTTS        — Google Translate TTS, always available fallback
 
 Usage:

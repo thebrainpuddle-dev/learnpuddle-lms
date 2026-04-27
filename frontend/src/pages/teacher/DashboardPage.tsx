@@ -36,6 +36,7 @@ import {
 } from '../../services/teacherService';
 import { notificationService } from '../../services/notificationService';
 import { usePageTitle } from '../../hooks/usePageTitle';
+import { useModeLabels } from '../../hooks/useModeLabels';
 import {
   format,
   startOfMonth,
@@ -272,6 +273,7 @@ export const DashboardPage: React.FC = () => {
   usePageTitle('Overview');
   const navigate = useNavigate();
   const { user } = useAuthStore();
+  const { label } = useModeLabels();
   const [calMonth, setCalMonth] = useState(new Date());
   const [chartView, setChartView] = useState<'week' | 'month'>('week');
 
@@ -564,7 +566,7 @@ export const DashboardPage: React.FC = () => {
             ) : (
               <>
                 <div className="hidden sm:grid grid-cols-12 gap-4 px-5 py-2.5 bg-gray-50/80 text-[10px] uppercase tracking-wider font-semibold text-gray-400 border-b border-gray-50">
-                  <div className="col-span-5">Course</div>
+                  <div className="col-span-5">{label('course')}</div>
                   <div className="col-span-3">Progress</div>
                   <div className="col-span-2">Status</div>
                   <div className="col-span-2 text-right">Action</div>

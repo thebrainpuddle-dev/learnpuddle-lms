@@ -1,25 +1,61 @@
 # utils/exception_handler.py
 """
-Custom DRF exception handler that normalises DRF's auto-generated error responses
-to the LearnPuddle standard format:
+Custom DRF exception handler that normalises all DRF exception responses to the
+LearnPuddle canonical error shape:
 
-    {"error": "<human-readable message>"}
+    {
+        "error": "<human-readable summary>",          # canonical key (new)
+        "detail": "<same value>",                     # legacy key (emitted during transition)
+        "details": [                                  # optional, present when there are
+            {"field": "email", "message": "Enter a valid email address."},
+            {"field": null,    "message": "Non-field error message."}
+        ],
+        "code": "optional_snake_case_code"            # only when DRF provides one
+    }
 
-DRF's default handler produces:
+Transition note
+---------------
+Both ``error`` (canonical) and ``detail`` (legacy) are emitted simultaneously
+until TASK-012 completes the frontend cleanup pass.  Any frontend code that
+reads ``data.detail`` will keep working; new code should read ``data.error``.
+After TASK-012 ships, remove the ``"detail"`` line from each case below and
+drop it from the TypeScript response types.
 
-    {"detail": "Authentication credentials were not provided."}  # 401
-    {"detail": "Not found."}                                      # 404
-    {"detail": "Method \"DELETE\" not allowed."}                  # 405
+Error sources and their handling
+---------------------------------
+1. **DRF system errors** (``AuthenticationFailed``, ``NotAuthenticated``,
+   ``PermissionDenied``, ``NotFound``, ``MethodNotAllowed``, ``Throttled``, etc.)
+   These produce ``{"detail": ErrorDetail("...", code="...")}`` from DRF's default
+   handler.  We rename ``detail`` → ``error``, promote the code, and leave
+   ``details`` absent (no per-field breakdown).
 
-These are converted to:
+   Result::
 
-    {"error": "Authentication credentials were not provided."}
+       {"error": "Authentication credentials were not provided.", "code": "not_authenticated"}
 
-Field-level validation errors produced by serializers (e.g.
-``{"email": ["Enter a valid email address."]}``) are left unchanged because
-the frontend uses them to display per-field feedback in forms.
+2. **Serializer ``ValidationError``** (field-level)
+   DRF produces ``{"email": ["Enter a valid email."], "password": ["Too short."]}``
+   (no top-level ``detail`` key).  We flatten this into the canonical shape:
 
-Usage (settings.py):
+   Result::
+
+       {
+           "error": "Validation failed.",
+           "details": [
+               {"field": "email",    "message": "Enter a valid email."},
+               {"field": "password", "message": "Too short."}
+           ]
+       }
+
+3. **Serializer ``ValidationError``** (non-field / list form)
+   DRF sometimes produces ``["error1", "error2"]`` or ``{"non_field_errors": [...]}``
+   at the top level.  We normalise these into ``details`` with ``field: null``.
+
+4. **Non-dict / non-list ``response.data``**
+   Rare but possible.  Converted to ``{"error": str(response.data)}``.
+
+Usage (settings.py)::
+
     REST_FRAMEWORK = {
         ...
         'EXCEPTION_HANDLER': 'utils.exception_handler.custom_exception_handler',
@@ -29,28 +65,128 @@ Usage (settings.py):
 from rest_framework.views import exception_handler as drf_default_exception_handler
 
 
+def _flatten_drf_errors(data) -> list[dict]:
+    """Recursively flatten a DRF validation error dict/list into ``details`` entries.
+
+    Parameters
+    ----------
+    data:
+        The ``response.data`` produced by DRF for a ``ValidationError``.
+        May be a dict (field → list[str]) or a list of strings.
+
+    Returns
+    -------
+    list[dict]
+        Each entry has keys ``field`` (str or None) and ``message`` (str).
+    """
+    details = []
+
+    if isinstance(data, list):
+        for item in data:
+            details.append({"field": None, "message": str(item)})
+        return details
+
+    if isinstance(data, dict):
+        for field, messages in data.items():
+            # DRF occasionally nests dicts (nested serializer errors).
+            if isinstance(messages, dict):
+                for sub_field, sub_messages in messages.items():
+                    if isinstance(sub_messages, list):
+                        for msg in sub_messages:
+                            details.append({
+                                "field": f"{field}.{sub_field}",
+                                "message": str(msg),
+                            })
+                    else:
+                        details.append({
+                            "field": f"{field}.{sub_field}",
+                            "message": str(sub_messages),
+                        })
+            elif isinstance(messages, list):
+                for msg in messages:
+                    if field == "non_field_errors":
+                        details.append({"field": None, "message": str(msg)})
+                    else:
+                        details.append({"field": field, "message": str(msg)})
+            else:
+                # Scalar value (rare)
+                details.append({"field": field, "message": str(messages)})
+        return details
+
+    # Fallback: wrap the whole thing as a non-field message
+    return [{"field": None, "message": str(data)}]
+
+
 def custom_exception_handler(exc, context):
-    """Normalise DRF ``detail`` error key to ``error`` for consistent API responses.
+    """Normalise DRF exceptions to the LearnPuddle canonical error shape.
 
-    Passes the exception to DRF's default handler first so that all the standard
-    Django/DRF exception types (AuthenticationFailed, NotFound, PermissionDenied,
-    MethodNotAllowed, etc.) are correctly converted to Response objects with the
-    right HTTP status codes.
+    All error responses produced by this handler will have the shape::
 
-    Post-processing:
-    - If the response body is a dict containing only a ``"detail"`` key, rename
-      it to ``"error"`` so the frontend always sees ``{"error": "..."}``.
-    - If the response body contains both ``"detail"`` and other keys (rare), only
-      the rename is performed — no other keys are modified.
-    - Serializer validation errors (format: ``{"field": ["msg"]}``) are NOT
-      altered because they do not have a top-level ``"detail"`` key.
+        {"error": "...", "details": [...], "code": "..."}
+
+    where ``details`` and ``code`` are present only when applicable.
     """
     response = drf_default_exception_handler(exc, context)
 
-    if response is not None and isinstance(response.data, dict):
-        if "detail" in response.data:
-            # Convert ErrorDetail (or plain string) to a clean string
-            detail_value = response.data.pop("detail")
-            response.data["error"] = str(detail_value)
+    if response is None:
+        # Non-DRF exception — let Django's 500 handler deal with it.
+        return None
 
+    data = response.data
+
+    # ── Case 1: DRF system error — top-level "detail" key ────────────────────
+    if isinstance(data, dict) and "detail" in data and len(data) == 1:
+        detail_value = data["detail"]
+        error_str = str(detail_value)
+        new_data: dict = {
+            "error": error_str,
+            "detail": error_str,  # TASK-012 transition: drop once frontend cleanup is done
+        }
+        # Preserve error code when DRF provides one (e.g. "not_authenticated")
+        code = getattr(detail_value, "code", None)
+        if code and code not in ("invalid", "error"):
+            new_data["code"] = str(code)
+        response.data = new_data
+        return response
+
+    # ── Case 1b: DRF system error — "detail" alongside other keys (rare) ─────
+    if isinstance(data, dict) and "detail" in data:
+        detail_value = data.pop("detail")
+        error_str = str(detail_value)
+        data["error"] = error_str
+        data["detail"] = error_str  # TASK-012 transition: drop once frontend cleanup is done
+        code = getattr(detail_value, "code", None)
+        if code and code not in ("invalid", "error"):
+            data["code"] = str(code)
+        response.data = data
+        return response
+
+    # ── Case 2: Serializer ValidationError — dict without "detail" ───────────
+    if isinstance(data, dict):
+        # This is a field-level validation error from a serializer.
+        # Flatten into canonical shape.
+        details = _flatten_drf_errors(data)
+        response.data = {
+            "error": "Validation failed.",
+            "detail": "Validation failed.",  # TASK-012 transition: drop once frontend cleanup is done
+            "details": details,
+        }
+        return response
+
+    # ── Case 3: Serializer ValidationError — list form ───────────────────────
+    if isinstance(data, list):
+        details = _flatten_drf_errors(data)
+        response.data = {
+            "error": "Validation failed.",
+            "detail": "Validation failed.",  # TASK-012 transition: drop once frontend cleanup is done
+            "details": details,
+        }
+        return response
+
+    # ── Case 4: Any other shape — wrap as flat string ─────────────────────────
+    error_str = str(data)
+    response.data = {
+        "error": error_str,
+        "detail": error_str,  # TASK-012 transition: drop once frontend cleanup is done
+    }
     return response

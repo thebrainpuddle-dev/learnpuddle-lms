@@ -4,6 +4,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { usePageTitle } from '../../hooks/usePageTitle';
+import { useModeLabels } from '../../hooks/useModeLabels';
 import { Button, Loading, useToast, BulkActionsBar, BulkAction } from '../../components/common';
 import api from '../../config/api';
 import { useAuthStore } from '../../stores/authStore';
@@ -170,6 +171,7 @@ export const CoursesPage: React.FC = () => {
   const location = useLocation();
   const { user } = useAuthStore();
   const queryClient = useQueryClient();
+  const { label } = useModeLabels();
   const isTeacherAuthoring = location.pathname.startsWith('/teacher/authoring');
   const routeBase = isTeacherAuthoring ? '/teacher/authoring' : '/admin/courses';
   const canPublish = !isTeacherAuthoring && user?.role === 'SCHOOL_ADMIN';
@@ -526,9 +528,9 @@ export const CoursesPage: React.FC = () => {
                       className="rounded border-gray-300 text-emerald-600 focus:ring-emerald-500"
                     />
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Course</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{label('course')}</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Assignment</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{label('assignment')}</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Content</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Deadline</th>
                   <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>

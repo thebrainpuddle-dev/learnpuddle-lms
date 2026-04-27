@@ -18,6 +18,8 @@ import {
   BookOpen,
   Brain,
   MessageSquare,
+  Mic,
+  MicOff,
   Sparkles,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
@@ -73,6 +75,12 @@ export interface PromptInputProps {
   onRemoveAttachment?: (index: number) => void;
   onAttach?: () => void;
   onStop?: () => void;
+  /** Optional mic-input props. When `onMicToggle` is provided a mic
+   *  button is rendered next to the send button; `micListening`
+   *  controls its pressed state. Absent = no mic button at all
+   *  (Firefox / unsupported browsers). */
+  onMicToggle?: () => void;
+  micListening?: boolean;
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
@@ -93,6 +101,8 @@ export const PromptInput = React.memo<PromptInputProps>(function PromptInput({
   onRemoveAttachment,
   onAttach,
   onStop,
+  onMicToggle,
+  micListening = false,
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const commandListRef = useRef<HTMLDivElement>(null);
@@ -362,7 +372,7 @@ export const PromptInput = React.memo<PromptInputProps>(function PromptInput({
               onClick={onAttach}
               disabled={disabled || loading}
               className={cn(
-                'flex items-center justify-center h-7 w-7 rounded-md',
+                'flex items-center justify-center min-h-[44px] min-w-[44px] md:min-h-[1.75rem] md:min-w-[1.75rem] md:h-7 md:w-7 rounded-md',
                 'text-gray-400 hover:text-gray-600 hover:bg-gray-100',
                 'disabled:opacity-50 disabled:cursor-not-allowed',
                 'transition-colors',
@@ -391,13 +401,35 @@ export const PromptInput = React.memo<PromptInputProps>(function PromptInput({
             </span>
           )}
 
+          {/* Mic toggle — only rendered when the caller supports ASR
+              (Web Speech API detected upstream). Pressed state shows a
+              subtle red pulse so the user knows the mic is live. */}
+          {onMicToggle && (
+            <button
+              type="button"
+              onClick={onMicToggle}
+              disabled={disabled}
+              className={cn(
+                'flex items-center justify-center min-h-[44px] min-w-[44px] md:min-h-[1.75rem] md:min-w-[1.75rem] md:h-7 md:w-7 rounded-md transition-colors',
+                micListening
+                  ? 'bg-red-50 text-red-600 ring-1 ring-red-200 animate-pulse'
+                  : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100',
+                'disabled:opacity-50 disabled:cursor-not-allowed',
+              )}
+              aria-label={micListening ? 'Stop voice input' : 'Start voice input'}
+              aria-pressed={micListening}
+            >
+              {micListening ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+            </button>
+          )}
+
           {/* Send / Stop button */}
           <button
             type="button"
             onClick={handleSendClick}
             disabled={!loading && (!value.trim() || disabled)}
             className={cn(
-              'flex items-center justify-center h-7 w-7 rounded-lg transition-colors',
+              'flex items-center justify-center min-h-[44px] min-w-[44px] md:min-h-[1.75rem] md:min-w-[1.75rem] md:h-7 md:w-7 rounded-lg transition-colors',
               loading
                 ? 'bg-red-500 text-white hover:bg-red-600'
                 : 'bg-primary-600 text-white hover:bg-primary-700',

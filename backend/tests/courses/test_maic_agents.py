@@ -702,3 +702,869 @@ def test_fallback_actions_carries_persona_hints():
     agent2_lines = [t for a in result["actions"] if a["type"] == "speech" and a.get("agentId") == "agent-2" for t in [a["text"]]]
     assert any("warm" in t.lower() for t in agent1_lines), f"agent-1 lines lack persona hint: {agent1_lines}"
     assert any("crisp" in t.lower() or "bilkul" in t.lower() for t in agent2_lines), f"agent-2 lines lack persona hint: {agent2_lines}"
+
+
+# ---------------------------------------------------------------------------
+# CG-P0-1: JSON-repair retry loop in _call_llm  (also covers TEST-P0-3)
+# ---------------------------------------------------------------------------
+#
+# These tests exercise the retry wrapper `_call_llm_with_json_retry` directly
+# and the public scene-content / scene-actions paths that wire it in.
+#
+# Note on fixtures: `json_repair` is aggressive — it "fixes" trailing commas
+# and truncated outputs into valid-but-lossy JSON. So the fixtures we reach
+# for here are the classes of LLM failure that defeat even json_repair:
+#
+#   - Non-JSON prose ("Sorry, I can't...", rate-limit HTML pages, stack
+#     traces) — these collapse to None after repair.
+#   - Structurally-valid JSON that's missing the required key (covered
+#     via the validator arg). This is the common "LLM returned a dict
+#     but the schema drifted" case — retry with a lowered temperature
+#     usually recovers the right shape.
+#
+# Assertions:
+#   (a) retry WAS invoked (mock called N>1 times on failure-then-success)
+#   (b) successful re-parse returns the parsed dict
+#   (c) total failure after 3 attempts returns None + caller falls through
+#       to its fallback without raising.
+
+_GOOD_SCENE_CONTENT = json.dumps({
+    "slides": [
+        {"id": "slide-1", "title": "Intro", "elements": [],
+         "background": "#fff", "speakerScript": "Welcome."},
+    ],
+})
+
+# Shapes that json_repair CAN'T salvage into valid JSON (returns None on parse):
+_RATE_LIMIT_HTML = (
+    "<!DOCTYPE html><html><head><title>429</title></head>"
+    "<body>Too Many Requests — retry after 60s</body></html>"
+)
+_NON_JSON_APOLOGY = "I'm sorry, I can't generate that right now."
+_BINARY_GARBAGE = "\x00\x01\x02\xff\xfe"
+
+# Shapes that parse but fail validator (schema drift — common LLM failure):
+_MISSING_SLIDES_KEY = json.dumps({"summary": "Hello world", "notes": []})
+_MISSING_ACTIONS_KEY = json.dumps({"dialogue": "agent speaks"})
+
+
+@patch("apps.courses.maic_generation_service._call_llm")
+def test_json_retry_succeeds_on_second_attempt(mock_llm, ai_config):
+    """Non-JSON first response + valid second response → parsed dict returned
+    and LLM was invoked twice (the retry path kicked in)."""
+    from apps.courses.maic_generation_service import _call_llm_with_json_retry
+
+    mock_llm.side_effect = [_RATE_LIMIT_HTML, _GOOD_SCENE_CONTENT]
+
+    parsed, raw = _call_llm_with_json_retry(
+        ai_config, "system", "user",
+        temperature=0.6, max_tokens=1024,
+        validator=lambda p: isinstance(p, dict) and "slides" in p,
+        context_label="test-scene-content",
+        classroom_id="cr-abc",
+        caller="test_json_retry_succeeds_on_second_attempt",
+    )
+
+    assert parsed is not None
+    assert "slides" in parsed
+    assert parsed["slides"][0]["id"] == "slide-1"
+    assert mock_llm.call_count == 2  # first attempt broken, second succeeded
+
+
+@patch("apps.courses.maic_generation_service._call_llm")
+def test_json_retry_lowers_temperature_and_injects_tail(mock_llm, ai_config):
+    """Second call must use temperature=0.2 and echo the broken tail in the prompt."""
+    from apps.courses.maic_generation_service import _call_llm_with_json_retry
+
+    mock_llm.side_effect = [_NON_JSON_APOLOGY, _GOOD_SCENE_CONTENT]
+    _call_llm_with_json_retry(
+        ai_config, "system", "original user prompt",
+        temperature=0.7,
+        validator=lambda p: isinstance(p, dict) and "slides" in p,
+        caller="test_json_retry_lowers_temperature_and_injects_tail",
+    )
+
+    # Second call — temperature kwarg dropped to 0.2, user prompt contains
+    # the continuation instruction + a slice of the broken tail.
+    second_call = mock_llm.call_args_list[1]
+    assert second_call.kwargs.get("temperature") == 0.2
+    second_user_prompt = second_call.args[2]
+    assert "original user prompt" in second_user_prompt
+    assert "not valid JSON" in second_user_prompt
+    assert "only valid json" in second_user_prompt.lower()
+    # Tail of the broken response was injected so the LLM sees what it sent
+    assert "sorry" in second_user_prompt.lower() or "can't generate" in second_user_prompt.lower()
+
+
+@patch("apps.courses.maic_generation_service._call_llm")
+def test_json_retry_returns_none_after_three_attempts(mock_llm, ai_config):
+    """Three broken responses in a row → parsed is None, caller can fall back."""
+    from apps.courses.maic_generation_service import _call_llm_with_json_retry
+
+    mock_llm.side_effect = [_RATE_LIMIT_HTML, _NON_JSON_APOLOGY, _BINARY_GARBAGE]
+    parsed, raw = _call_llm_with_json_retry(
+        ai_config, "system", "user",
+        validator=lambda p: isinstance(p, dict) and "slides" in p,
+        caller="test_json_retry_returns_none_after_three_attempts",
+    )
+    assert parsed is None
+    assert mock_llm.call_count == 3
+    # raw is the last raw text — useful for logging
+    assert raw is not None
+
+
+@patch("apps.courses.maic_generation_service._call_llm")
+def test_json_retry_stops_immediately_on_empty_response(mock_llm, ai_config):
+    """Empty LLM response has no tail to retry against — skip the retry loop."""
+    from apps.courses.maic_generation_service import _call_llm_with_json_retry
+
+    mock_llm.return_value = None
+    parsed, raw = _call_llm_with_json_retry(
+        ai_config, "system", "user",
+        validator=lambda p: isinstance(p, dict),
+        caller="test_json_retry_stops_immediately_on_empty_response",
+    )
+    assert parsed is None
+    assert raw is None
+    assert mock_llm.call_count == 1  # did NOT burn extra attempts
+
+
+@patch("apps.courses.maic_generation_service._call_llm")
+def test_json_retry_validator_rejects_missing_key(mock_llm, ai_config):
+    """Parseable JSON that's missing a required key should trigger a retry."""
+    from apps.courses.maic_generation_service import _call_llm_with_json_retry
+
+    # First response parses fine but is missing "actions"; second is valid.
+    mock_llm.side_effect = [
+        json.dumps({"notes": "hi"}),
+        json.dumps({"actions": [{"type": "speech", "text": "ok"}]}),
+    ]
+    parsed, _raw = _call_llm_with_json_retry(
+        ai_config, "system", "user",
+        validator=lambda p: isinstance(p, dict) and "actions" in p,
+        context_label="scene-actions",
+        caller="test_json_retry_validator_rejects_missing_key",
+    )
+    assert parsed is not None
+    assert "actions" in parsed
+    assert mock_llm.call_count == 2
+
+
+# --- Integration: public paths wire the retry helper -----------------------
+
+@patch("apps.courses.maic_generation_service._call_llm")
+def test_generate_scene_content_retries_on_schema_drift(mock_llm, ai_config):
+    """generate_scene_content should re-ask the LLM if the first response
+    is structurally-valid JSON but missing the `slides` key (schema drift),
+    then return the parsed content once the retry recovers."""
+    from apps.courses.maic_generation_service import generate_scene_content
+
+    good_payload = json.dumps({
+        "slides": [
+            {"id": "slide-s1-1", "title": "Intro",
+             "elements": [{"id": "el-1", "type": "image",
+                           "content": "photosynthesis diagram"}],
+             "background": "#fff", "speakerScript": "Welcome.", "duration": 40},
+        ],
+    })
+    # Post CG-P0-1-F2: lecture validator now requires "slides" / "slide",
+    # so schema-drift triggers a retry even if the bad response parses as
+    # JSON. Use the hard-fail fixture — both paths exercise the retry.
+    mock_llm.side_effect = [_RATE_LIMIT_HTML, good_payload]
+
+    scene = {
+        "id": "scene-1", "title": "Intro to photosynthesis",
+        "type": "lecture", "slideCount": 1, "agentIds": ["agent-1"],
+    }
+    agents = [{"id": "agent-1", "name": "Dr. Aarav Sharma", "role": "professor"}]
+    result = generate_scene_content(scene, agents, "en", ai_config)
+
+    assert result is not None
+    assert "slides" in result
+    # The retry path was taken (two LLM calls, not one fallback)
+    assert mock_llm.call_count == 2
+
+
+@patch("apps.courses.maic_generation_service._call_llm")
+def test_generate_scene_content_lecture_retries_on_missing_slides_key(
+    mock_llm, ai_config,
+):
+    """CG-P0-1-F2: lecture scene-content validator now rejects parseable JSON
+    that's missing the ``slides`` key (schema drift), not just unparseable
+    responses. Confirms the helper's retry is engaged on the common path.
+    """
+    from apps.courses.maic_generation_service import generate_scene_content
+
+    good_payload = json.dumps({
+        "slides": [
+            {"id": "slide-s1-1", "title": "Intro", "elements": [],
+             "background": "#fff", "speakerScript": "Hi.", "duration": 30},
+        ],
+    })
+    # Attempt 1 parses fine but has no "slides" → validator fails → retry.
+    # Attempt 2 returns a valid payload.
+    mock_llm.side_effect = [_MISSING_SLIDES_KEY, good_payload]
+
+    scene = {
+        "id": "scene-1", "title": "Intro", "type": "lecture",
+        "slideCount": 1, "agentIds": ["agent-1"],
+    }
+    agents = [{"id": "agent-1", "name": "Dr. Aarav Sharma", "role": "professor"}]
+    result = generate_scene_content(scene, agents, "en", ai_config)
+
+    assert result is not None
+    assert "slides" in result
+    assert mock_llm.call_count == 2
+
+
+@patch("apps.courses.maic_generation_service._fallback_scene_content")
+@patch("apps.courses.maic_generation_service._call_llm")
+def test_generate_scene_content_falls_back_after_three_bad_responses(
+    mock_llm, mock_fallback, ai_config,
+):
+    """Three unparseable responses → generate_scene_content calls its
+    fallback and doesn't raise."""
+    from apps.courses.maic_generation_service import generate_scene_content
+
+    mock_llm.side_effect = [_RATE_LIMIT_HTML, _NON_JSON_APOLOGY, _BINARY_GARBAGE]
+    mock_fallback.return_value = {"slides": [], "_fallback": True}
+
+    scene = {"id": "scene-1", "title": "X", "type": "lecture",
+             "slideCount": 1, "agentIds": []}
+    agents = []
+    result = generate_scene_content(scene, agents, "en", ai_config)
+
+    assert result == {"slides": [], "_fallback": True}
+    assert mock_llm.call_count == 3  # all 3 attempts exhausted
+    assert mock_fallback.called
+
+
+@patch("apps.courses.maic_generation_service._call_llm")
+def test_generate_scene_actions_retries_on_schema_drift(mock_llm, ai_config):
+    """generate_scene_actions validator rejects missing `actions` key →
+    triggers the retry path, then succeeds on attempt 2."""
+    from apps.courses.maic_generation_service import generate_scene_actions
+
+    good_payload = json.dumps({
+        "actions": [
+            {"type": "speech", "agentId": "agent-1", "text": "Hello."},
+            {"type": "speech", "agentId": "agent-2", "text": "Hi there."},
+        ],
+    })
+    # First response is valid JSON but missing the required "actions" key —
+    # exactly the schema-drift case the validator guards against.
+    mock_llm.side_effect = [_MISSING_ACTIONS_KEY, good_payload]
+
+    scene = {
+        "id": "scene-1", "title": "Lecture", "type": "lecture",
+        "agentIds": ["agent-1", "agent-2"],
+        "content": {"slides": [{"elements": [], "speakerScript": "s"}]},
+    }
+    agents = [
+        {"id": "agent-1", "name": "Dr. Aarav Sharma", "role": "professor"},
+        {"id": "agent-2", "name": "Ms. Priya Iyer", "role": "teaching_assistant"},
+    ]
+    result = generate_scene_actions(scene, agents, "en", ai_config)
+
+    assert result is not None
+    assert "actions" in result
+    assert mock_llm.call_count == 2
+
+
+@patch("apps.courses.maic_generation_service._fallback_actions")
+@patch("apps.courses.maic_generation_service._call_llm")
+def test_generate_scene_actions_falls_back_after_three_bad_responses(
+    mock_llm, mock_fallback, ai_config,
+):
+    """generate_scene_actions → three unparseable responses → fallback path used."""
+    from apps.courses.maic_generation_service import generate_scene_actions
+
+    mock_llm.side_effect = [_RATE_LIMIT_HTML, _NON_JSON_APOLOGY, _BINARY_GARBAGE]
+    mock_fallback.return_value = {"actions": [
+        {"type": "speech", "agentId": "agent-1", "text": "fallback"},
+    ]}
+
+    scene = {
+        "id": "scene-1", "title": "X", "type": "lecture",
+        "agentIds": ["agent-1"],
+        "content": {"slides": [{"elements": [], "speakerScript": ""}]},
+    }
+    agents = [{"id": "agent-1", "name": "Dr. Aarav Sharma", "role": "professor"}]
+    result = generate_scene_actions(scene, agents, "en", ai_config)
+
+    assert result is not None
+    assert "actions" in result
+    assert mock_llm.call_count == 3
+    assert mock_fallback.called
+
+
+# ---------------------------------------------------------------------------
+# CG-P0-1-F5: Structured WARN/ERROR log observability for retry loop
+# ---------------------------------------------------------------------------
+
+@patch("apps.courses.maic_generation_service._call_llm")
+def test_json_retry_emits_warn_with_structured_fields_on_retry(
+    mock_llm, ai_config, caplog,
+):
+    """Attempt 1 fails (non-JSON), attempt 2 succeeds → one structured WARN
+    emitted for attempt 1 with stable fields: metric, attempt, path,
+    classroom_id."""
+    import logging
+    from apps.courses.maic_generation_service import _call_llm_with_json_retry
+
+    mock_llm.side_effect = [_RATE_LIMIT_HTML, _GOOD_SCENE_CONTENT]
+
+    with caplog.at_level(logging.WARNING,
+                         logger="apps.courses.maic_generation_service"):
+        parsed, _raw = _call_llm_with_json_retry(
+            ai_config, "system", "user",
+            validator=lambda p: isinstance(p, dict) and "slides" in p,
+            caller="generate_scene_content:lecture",
+            classroom_id="cr-test-001",
+        )
+
+    assert parsed is not None
+
+    warn_records = [
+        r for r in caplog.records
+        if r.levelno == logging.WARNING
+        and getattr(r, "metric", None) == "llm_json_retry"
+    ]
+    assert len(warn_records) == 1, (
+        f"Expected exactly 1 structured WARN; got: {[r.message for r in warn_records]}"
+    )
+    rec = warn_records[0]
+    assert rec.attempt == 1
+    assert rec.path == "generate_scene_content:lecture"
+    assert rec.classroom_id == "cr-test-001"
+
+
+@patch("apps.courses.maic_generation_service._call_llm")
+def test_json_retry_emits_error_with_outcome_fallback_on_exhaustion(
+    mock_llm, ai_config, caplog,
+):
+    """All 3 attempts fail → one ERROR with metric=llm_json_retry,
+    attempts=3, outcome=fallback, path and classroom_id fields set."""
+    import logging
+    from apps.courses.maic_generation_service import _call_llm_with_json_retry
+
+    mock_llm.side_effect = [_RATE_LIMIT_HTML, _NON_JSON_APOLOGY, _BINARY_GARBAGE]
+
+    with caplog.at_level(logging.ERROR,
+                         logger="apps.courses.maic_generation_service"):
+        parsed, _raw = _call_llm_with_json_retry(
+            ai_config, "system", "user",
+            validator=lambda p: isinstance(p, dict) and "slides" in p,
+            caller="generate_scene_actions",
+            classroom_id="cr-test-002",
+        )
+
+    assert parsed is None
+
+    error_records = [
+        r for r in caplog.records
+        if r.levelno == logging.ERROR
+        and getattr(r, "metric", None) == "llm_json_retry"
+    ]
+    assert len(error_records) == 1, (
+        f"Expected exactly 1 structured ERROR; got: {[r.message for r in error_records]}"
+    )
+    rec = error_records[0]
+    assert rec.attempts == 3
+    assert rec.outcome == "fallback"
+    assert rec.path == "generate_scene_actions"
+    assert rec.classroom_id == "cr-test-002"
+
+
+# ---------------------------------------------------------------------------
+# CG-P0-2: Server-side length-budget enforcement
+# ---------------------------------------------------------------------------
+
+def test_budget_truncates_slide_title_over_limit(caplog):
+    """A slide title at 121 chars must be truncated to ≤120 chars with a WARN log."""
+    import logging
+    from apps.courses.maic_generation_service import _enforce_length_budgets, SLIDE_TITLE_MAX_CHARS
+
+    long_title = "A" * 119 + " overflow word here"  # 119 + 19 = 138 chars, splits at word boundary
+    parsed = {"slides": [{"title": long_title, "elements": []}]}
+
+    with caplog.at_level(logging.WARNING, logger="apps.courses.maic_generation_service"):
+        result = _enforce_length_budgets(parsed, "lecture")
+
+    assert len(result["slides"][0]["title"]) <= SLIDE_TITLE_MAX_CHARS
+    # Must have logged a structured WARN
+    warn_records = [
+        r for r in caplog.records
+        if getattr(r, "metric", None) == "length_budget_truncate"
+        and getattr(r, "field", None) == "slide.title"
+    ]
+    assert len(warn_records) == 1
+    rec = warn_records[0]
+    assert rec.original_chars == len(long_title)
+    assert rec.truncated_chars <= SLIDE_TITLE_MAX_CHARS
+    assert rec.path == "lecture"
+
+
+def test_budget_truncates_bullets_list_over_count(caplog):
+    """A slide with 8 bullet elements must be trimmed to 7 with a WARN log."""
+    import logging
+    from apps.courses.maic_generation_service import _enforce_length_budgets, SLIDE_BULLETS_MAX_COUNT
+
+    elements = [
+        {"id": f"el-{i}", "type": "bullet", "content": f"Point {i}"}
+        for i in range(8)
+    ]
+    parsed = {"slides": [{"title": "Slide", "elements": elements}]}
+
+    with caplog.at_level(logging.WARNING, logger="apps.courses.maic_generation_service"):
+        result = _enforce_length_budgets(parsed, "lecture")
+
+    remaining_bullets = [
+        el for el in result["slides"][0]["elements"]
+        if el.get("type") == "bullet"
+    ]
+    assert len(remaining_bullets) == SLIDE_BULLETS_MAX_COUNT
+
+    warn_records = [
+        r for r in caplog.records
+        if getattr(r, "metric", None) == "length_budget_truncate"
+        and getattr(r, "field", None) == "slide.bullets_count"
+    ]
+    assert len(warn_records) == 1
+    assert warn_records[0].original_chars == 8
+    assert warn_records[0].truncated_chars == SLIDE_BULLETS_MAX_COUNT
+
+
+def test_budget_truncates_speaker_notes_over_limit(caplog):
+    """Speaker notes at 2000 chars must be truncated to ≤1500 with a WARN."""
+    import logging
+    from apps.courses.maic_generation_service import _enforce_length_budgets, SPEAKER_NOTES_MAX_CHARS
+
+    # 1499 chars of text + space + "overflow" = 1508 chars total, clearly over budget
+    long_notes = "x" * 1499 + " overflow"
+    parsed = {"slides": [{"title": "T", "speakerScript": long_notes, "elements": []}]}
+
+    with caplog.at_level(logging.WARNING, logger="apps.courses.maic_generation_service"):
+        result = _enforce_length_budgets(parsed, "lecture")
+
+    assert len(result["slides"][0]["speakerScript"]) <= SPEAKER_NOTES_MAX_CHARS
+
+    warn_records = [
+        r for r in caplog.records
+        if getattr(r, "metric", None) == "length_budget_truncate"
+        and getattr(r, "field", None) == "slide.speakerScript"
+    ]
+    assert len(warn_records) == 1
+    assert warn_records[0].original_chars == len(long_notes)
+    assert warn_records[0].truncated_chars <= SPEAKER_NOTES_MAX_CHARS
+
+
+def test_budget_truncates_quiz_option_over_limit(caplog):
+    """A quiz option at 250 chars must be truncated to ≤200 chars with a WARN."""
+    import logging
+    from apps.courses.maic_generation_service import _enforce_length_budgets, QUIZ_OPTION_MAX_CHARS
+
+    long_option = "B" * 198 + " extra word here"  # 198 + 16 = 214 chars
+    parsed = {
+        "questions": [
+            {
+                "text": "Which is correct?",
+                "options": [
+                    {"text": "Short option"},
+                    {"text": long_option},
+                ],
+            }
+        ]
+    }
+
+    with caplog.at_level(logging.WARNING, logger="apps.courses.maic_generation_service"):
+        result = _enforce_length_budgets(parsed, "quiz")
+
+    truncated_opt = result["questions"][0]["options"][1]["text"]
+    assert len(truncated_opt) <= QUIZ_OPTION_MAX_CHARS
+    # Short option untouched
+    assert result["questions"][0]["options"][0]["text"] == "Short option"
+
+    warn_records = [
+        r for r in caplog.records
+        if getattr(r, "metric", None) == "length_budget_truncate"
+        and getattr(r, "field", None) == "quiz.option_text"
+    ]
+    assert len(warn_records) == 1
+    assert warn_records[0].original_chars == len(long_option)
+    assert warn_records[0].truncated_chars <= QUIZ_OPTION_MAX_CHARS
+
+
+def test_budget_no_mutation_when_all_within_limits(caplog):
+    """When all fields are within budget, no mutation occurs and no WARN is emitted."""
+    import logging
+    from apps.courses.maic_generation_service import _enforce_length_budgets
+
+    parsed = {
+        "slides": [
+            {
+                "title": "Short title",
+                "speakerScript": "Brief notes.",
+                "elements": [
+                    {"id": "el-1", "type": "bullet", "content": "Short bullet"},
+                ],
+            }
+        ],
+        "actions": [
+            {"type": "speech", "agentId": "agent-1", "text": "Hello."},
+        ],
+    }
+    import copy
+    original = copy.deepcopy(parsed)
+
+    with caplog.at_level(logging.WARNING, logger="apps.courses.maic_generation_service"):
+        result = _enforce_length_budgets(parsed, "lecture")
+
+    # No WARN about length_budget_truncate
+    budget_warns = [
+        r for r in caplog.records
+        if getattr(r, "metric", None) == "length_budget_truncate"
+    ]
+    assert budget_warns == []
+    # Content unchanged
+    assert result["slides"][0]["title"] == original["slides"][0]["title"]
+    assert result["slides"][0]["speakerScript"] == original["slides"][0]["speakerScript"]
+    assert result["actions"][0]["text"] == original["actions"][0]["text"]
+
+
+def test_budget_idempotent_no_second_log(caplog):
+    """Running _enforce_length_budgets twice on already-truncated output must not
+    emit a second WARN and must not further mutate the content."""
+    import logging
+    from apps.courses.maic_generation_service import _enforce_length_budgets, SLIDE_TITLE_MAX_CHARS
+
+    long_title = "Z" * 119 + " over"  # 124 chars — over budget
+    parsed = {"slides": [{"title": long_title, "elements": []}]}
+
+    with caplog.at_level(logging.WARNING, logger="apps.courses.maic_generation_service"):
+        # First pass — truncates and logs once
+        _enforce_length_budgets(parsed, "lecture")
+
+    first_pass_warns = [
+        r for r in caplog.records
+        if getattr(r, "metric", None) == "length_budget_truncate"
+    ]
+    assert len(first_pass_warns) == 1
+    title_after_first = parsed["slides"][0]["title"]
+    assert len(title_after_first) <= SLIDE_TITLE_MAX_CHARS
+
+    caplog.clear()
+
+    with caplog.at_level(logging.WARNING, logger="apps.courses.maic_generation_service"):
+        # Second pass — already within budget, must be a no-op
+        _enforce_length_budgets(parsed, "lecture")
+
+    second_pass_warns = [
+        r for r in caplog.records
+        if getattr(r, "metric", None) == "length_budget_truncate"
+    ]
+    assert second_pass_warns == [], "second pass must not emit additional WARN"
+    assert parsed["slides"][0]["title"] == title_after_first  # no further mutation
+
+
+# ---------------------------------------------------------------------------
+# SPRINT-2-BATCH-2-F8: parametrized caller f-string for lecture vs quiz
+# ---------------------------------------------------------------------------
+
+_GOOD_QUIZ_CONTENT = json.dumps({
+    "questions": [
+        {
+            "id": "q1",
+            "text": "What is photosynthesis?",
+            "options": [
+                {"id": "o1", "text": "Option A", "isCorrect": False},
+                {"id": "o2", "text": "Option B", "isCorrect": True},
+            ],
+            "explanation": "Because.",
+            "type": "multiple_choice",
+        }
+    ],
+})
+
+_GOOD_LECTURE_CONTENT = json.dumps({
+    "slides": [
+        {
+            "id": "slide-s1-1",
+            "title": "Intro",
+            "elements": [
+                {"id": "el-1", "type": "image", "content": "photosynthesis diagram"},
+            ],
+            "background": "#fff",
+            "speakerScript": "Welcome.",
+            "duration": 40,
+        },
+    ],
+})
+
+
+@pytest.mark.parametrize("scene_type,good_payload,caller_suffix", [
+    ("lecture", _GOOD_LECTURE_CONTENT, "lecture"),
+    ("quiz", _GOOD_QUIZ_CONTENT, "quiz"),
+])
+@patch("apps.courses.maic_generation_service._call_llm")
+def test_generate_scene_content_caller_value_per_scene_type(
+    mock_llm,
+    ai_config,
+    caplog,
+    scene_type,
+    good_payload,
+    caller_suffix,
+):
+    """generate_scene_content passes caller=f'generate_scene_content:{scene_type}'
+    to _call_llm_with_json_retry.  When the first response is broken (forces a
+    retry WARN), the WARN record's ``path`` field must reflect the scene_type —
+    so ops can filter retry rates by lecture vs. quiz without free-text grep.
+
+    SPRINT-2-BATCH-2-F8: exercises both 'lecture' and 'quiz' variants via
+    pytest.mark.parametrize over caller_suffix.
+    """
+    import logging
+    from apps.courses.maic_generation_service import generate_scene_content
+
+    # Attempt 1: break the response so the retry WARN fires.
+    # Attempt 2: valid payload matching the scene_type shape.
+    mock_llm.side_effect = [
+        "<!DOCTYPE html>rate limit",  # parse failure → retry
+        good_payload,
+    ]
+
+    scene = {
+        "id": "scene-1",
+        "title": "Photosynthesis overview",
+        "type": scene_type,
+        "slideCount": 1,
+        "questionCount": 1,
+        "agentIds": ["agent-1"],
+    }
+    agents = [{"id": "agent-1", "name": "Dr. Aarav Sharma", "role": "professor"}]
+
+    with caplog.at_level(logging.WARNING, logger="apps.courses.maic_generation_service"):
+        result = generate_scene_content(scene, agents, "en", ai_config)
+
+    assert result is not None
+    assert mock_llm.call_count == 2
+
+    # The retry WARN's ``path`` field must equal the f-string value
+    warn_records = [
+        r for r in caplog.records
+        if r.levelno == logging.WARNING
+        and getattr(r, "metric", None) == "llm_json_retry"
+    ]
+    assert len(warn_records) == 1, (
+        f"Expected exactly 1 retry WARN for scene_type={scene_type!r}; "
+        f"got {[r.message for r in warn_records]}"
+    )
+    rec = warn_records[0]
+    expected_caller = f"generate_scene_content:{caller_suffix}"
+    assert rec.path == expected_caller, (
+        f"path={rec.path!r} — expected {expected_caller!r} for scene_type={scene_type!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# SPRINT-2-BATCH-3-F7: actions[].text (speech) truncation coverage
+# ---------------------------------------------------------------------------
+
+def test_budget_truncates_speech_action_text_over_limit(caplog):
+    """A speech action text at 2100 chars must be truncated to ≤2000 chars
+    with a structured WARN (field=action.speech.text).
+
+    SPRINT-2-BATCH-3-F7 — covers the `actions[*].type == "speech"` path in
+    `_enforce_length_budgets` at maic_generation_service.py:221-231.
+    """
+    import logging
+    from apps.courses.maic_generation_service import (
+        _enforce_length_budgets,
+        SCENE_SPEECH_MAX_CHARS,
+    )
+
+    # 1999 chars of text + space + "overflow" = 2008 chars total (over limit)
+    long_speech = "w" * 1999 + " overflow"
+    assert len(long_speech) > SCENE_SPEECH_MAX_CHARS
+
+    parsed = {
+        "actions": [
+            {"type": "speech", "agentId": "agent-1", "text": long_speech},
+            {"type": "spotlight", "elementId": "el-1"},           # non-speech, untouched
+            {"type": "speech", "agentId": "agent-2", "text": "Short enough text."},
+        ]
+    }
+
+    with caplog.at_level(logging.WARNING, logger="apps.courses.maic_generation_service"):
+        result = _enforce_length_budgets(parsed, "scene_actions")
+
+    # Truncated to within budget
+    truncated = result["actions"][0]["text"]
+    assert len(truncated) <= SCENE_SPEECH_MAX_CHARS
+
+    # Non-speech action untouched (no src field)
+    assert result["actions"][1].get("text") is None
+
+    # Short speech untouched
+    assert result["actions"][2]["text"] == "Short enough text."
+
+    # Structured WARN emitted exactly once with correct fields
+    warn_records = [
+        r for r in caplog.records
+        if getattr(r, "metric", None) == "length_budget_truncate"
+        and getattr(r, "field", None) == "action.speech.text"
+    ]
+    assert len(warn_records) == 1, (
+        f"Expected exactly 1 budget WARN; got: {[r.message for r in warn_records]}"
+    )
+    rec = warn_records[0]
+    assert rec.original_chars == len(long_speech)
+    assert rec.truncated_chars <= SCENE_SPEECH_MAX_CHARS
+    assert rec.path == "scene_actions"
+
+
+def test_budget_no_truncation_speech_at_exact_limit():
+    """A speech action text at exactly SCENE_SPEECH_MAX_CHARS must NOT be
+    truncated or warned about.  Confirms the `<= max_chars` short-circuit
+    in `_truncate_to_word_boundary`.
+    """
+    from apps.courses.maic_generation_service import (
+        _enforce_length_budgets,
+        SCENE_SPEECH_MAX_CHARS,
+    )
+
+    at_limit = "x" * SCENE_SPEECH_MAX_CHARS
+    parsed = {"actions": [{"type": "speech", "agentId": "agent-1", "text": at_limit}]}
+    result = _enforce_length_budgets(parsed, "scene_actions")
+    assert result["actions"][0]["text"] == at_limit  # unchanged
+
+
+# ---------------------------------------------------------------------------
+# SPRINT-2-BATCH-3-F8: string-form quiz options truncation coverage
+# ---------------------------------------------------------------------------
+
+def test_budget_truncates_string_form_quiz_options(caplog):
+    """When quiz options are a list of plain strings (e.g. ['A', 'B', ...]),
+    each over-budget string must be truncated and the list replaced in-place.
+
+    SPRINT-2-BATCH-3-F8 — covers the string-list option path in
+    `_enforce_length_budgets` at maic_generation_service.py:259-273.
+    """
+    import logging
+    from apps.courses.maic_generation_service import (
+        _enforce_length_budgets,
+        QUIZ_OPTION_MAX_CHARS,
+    )
+
+    # Two over-limit strings, two within-limit strings
+    over_a = "A" * 198 + " too long"       # 207 chars
+    over_b = "B" * 199 + " also too long"  # 213 chars
+    short_c = "C short"
+    short_d = "D also short"
+
+    assert len(over_a) > QUIZ_OPTION_MAX_CHARS
+    assert len(over_b) > QUIZ_OPTION_MAX_CHARS
+    assert len(short_c) <= QUIZ_OPTION_MAX_CHARS
+    assert len(short_d) <= QUIZ_OPTION_MAX_CHARS
+
+    parsed = {
+        "questions": [
+            {
+                "text": "Pick the right answer",
+                "options": [over_a, over_b, short_c, short_d],
+            }
+        ]
+    }
+
+    with caplog.at_level(logging.WARNING, logger="apps.courses.maic_generation_service"):
+        result = _enforce_length_budgets(parsed, "quiz")
+
+    options_out = result["questions"][0]["options"]
+
+    # All 4 strings preserved in order
+    assert len(options_out) == 4
+
+    # Over-limit options are now within budget
+    assert len(options_out[0]) <= QUIZ_OPTION_MAX_CHARS
+    assert len(options_out[1]) <= QUIZ_OPTION_MAX_CHARS
+
+    # Short options unchanged
+    assert options_out[2] == short_c
+    assert options_out[3] == short_d
+
+    # All output elements are still strings (type not changed)
+    assert all(isinstance(o, str) for o in options_out)
+
+    # Two structured WARN records (one per truncated option)
+    warn_records = [
+        r for r in caplog.records
+        if getattr(r, "metric", None) == "length_budget_truncate"
+        and getattr(r, "field", None) == "quiz.option_text"
+    ]
+    assert len(warn_records) == 2, (
+        f"Expected 2 budget WARNs (one per over-limit option); "
+        f"got {len(warn_records)}: {[r.message for r in warn_records]}"
+    )
+    for rec in warn_records:
+        assert rec.truncated_chars <= QUIZ_OPTION_MAX_CHARS
+        assert rec.path == "quiz"
+
+
+def test_budget_string_quiz_options_within_limit_no_warn():
+    """String-form options all within budget: no mutation, no WARN."""
+    from apps.courses.maic_generation_service import _enforce_length_budgets, QUIZ_OPTION_MAX_CHARS
+
+    options = ["Alpha", "Beta", "Gamma", "Delta"]
+    assert all(len(o) <= QUIZ_OPTION_MAX_CHARS for o in options)
+
+    parsed = {"questions": [{"text": "Q?", "options": options}]}
+    result = _enforce_length_budgets(parsed, "quiz")
+
+    assert result["questions"][0]["options"] == options  # unchanged reference-equal
+
+
+# ---------------------------------------------------------------------------
+# SPRINT-2-BATCH-3-F3: _truncate_to_word_boundary defensive whitespace fallback
+# ---------------------------------------------------------------------------
+
+def test_truncate_to_word_boundary_pure_whitespace_fallback():
+    """Pure-whitespace input longer than max_chars returns "" after lstrip fallback.
+
+    SPRINT-2-BATCH-5-F5 update: the fallback now tries lstrip() first.  For
+    truly all-whitespace input lstrip() yields "" — the function returns ""
+    and lets upstream callers decide whether to substitute a placeholder.
+    This avoids shipping max_chars whitespace characters as "content".
+    """
+    from apps.courses.maic_generation_service import _truncate_to_word_boundary
+
+    # 50 repetitions of 3 spaces = 150 chars of whitespace, well over max_chars=120
+    whitespace_input = "   " * 50
+    assert len(whitespace_input) == 150
+
+    result = _truncate_to_word_boundary(whitespace_input, max_chars=120)
+
+    # For all-whitespace input, lstrip() → "" → function returns "".
+    assert result == "", (
+        f"pure-whitespace input should return '' after lstrip fallback, got {result!r}"
+    )
+    assert len(result) <= 120, f"result length {len(result)} exceeds max_chars=120"
+
+
+def test_truncate_to_word_boundary_leading_whitespace_lstrip_fallback():
+    """Leading whitespace + real content: lstrip fallback returns non-empty hard-slice.
+
+    SPRINT-2-BATCH-5-F5 — covers the `text.lstrip()[:max_chars]` path when
+    rstrip after word-boundary snap yields empty but the input has real content
+    after leading whitespace.
+    """
+    from apps.courses.maic_generation_service import _truncate_to_word_boundary
+
+    # 30 leading spaces + real word at position 30; max_chars=10 forces the
+    # truncated slice [:10] to be all-whitespace → rstrip → "" → lstrip fallback.
+    leading_ws_input = " " * 30 + "hello world this is content"
+
+    result = _truncate_to_word_boundary(leading_ws_input, max_chars=10)
+
+    # lstrip removes the 30 spaces, then [:10] hard-slices to "hello worl"
+    assert result == "hello worl", f"expected lstrip hard-slice fallback, got {result!r}"
+    assert len(result) <= 10

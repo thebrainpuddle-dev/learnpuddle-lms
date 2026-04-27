@@ -3,11 +3,20 @@
 import logging
 
 from django.db.models.signals import post_delete
-from django.dispatch import receiver
+from django.dispatch import Signal, receiver
 
 from .models import Content
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# soft_deleted — fired by SoftDeleteMixin.soft_delete() after save().
+# Receivers in apps/semantic_search/ listen to this signal to purge stale
+# embedding rows without creating an import cycle (courses → semantic_search).
+# ---------------------------------------------------------------------------
+
+soft_deleted = Signal()  # kwargs: instance, user
 
 
 @receiver(post_delete, sender=Content)

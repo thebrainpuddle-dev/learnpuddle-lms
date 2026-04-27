@@ -3,6 +3,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
+import { Controller } from 'react-hook-form';
 import { useAuthStore } from '../../stores/authStore';
 import { Button } from '../../components/common/Button';
 import { Input } from '../../components/common/Input';
@@ -27,6 +28,20 @@ import {
   SparklesIcon,
 } from '@heroicons/react/24/outline';
 import { usePageTitle } from '../../hooks/usePageTitle';
+
+// ─── Profile schema ───────────────────────────────────────────────────────────
+
+const ProfileSchema = z.object({
+  first_name: z.string().min(1, 'First name is required'),
+  last_name: z.string().optional().or(z.literal('')),
+  designation: z.string().optional().or(z.literal('')),
+  department: z.string().optional().or(z.literal('')),
+  bio: z.string().max(1000, 'Bio must be 1000 characters or fewer').optional().or(z.literal('')),
+  subjects: z.array(z.string()).default([]),
+  grades: z.array(z.string()).default([]),
+});
+
+type ProfileData = z.infer<typeof ProfileSchema>;
 
 // ─── Password change schema ───────────────────────────────────────────────────
 
@@ -79,25 +94,30 @@ export const ProfilePage: React.FC = () => {
   const { startTour } = useGuidedTour();
   const { user, setUser } = useAuthStore();
   const [activeSection, setActiveSection] = useState<ProfileSection>('profile');
-  const [isSaving, setIsSaving] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const [profileForm, setProfileForm] = useState({
-    first_name: user?.first_name || '',
-    last_name: user?.last_name || '',
-    email: user?.email || '',
-    department: user?.department || '',
-    employee_id: user?.employee_id || '',
-    designation: user?.designation || '',
-    bio: user?.bio || '',
-    subjects: user?.subjects || [],
-    grades: user?.grades || [],
-  });
 
   const [profilePicPreview, setProfilePicPreview] = useState<string | null>(
     user?.profile_picture_url || user?.profile_picture || null,
   );
   const [profilePicFile, setProfilePicFile] = useState<File | null>(null);
+
+  // ─── Profile form — RHF + Zod ────────────────────────────────────────────
+  const profileForm = useZodForm({
+    schema: ProfileSchema,
+    defaultValues: {
+      first_name:  user?.first_name  || '',
+      last_name:   user?.last_name   || '',
+      designation: user?.designation || '',
+      department:  user?.department  || '',
+      bio:         user?.bio         || '',
+      subjects:    user?.subjects    || [],
+      grades:      user?.grades      || [],
+    },
+  });
+
+  const watchedSubjects     = profileForm.watch('subjects')     as string[];
+  const watchedGrades       = profileForm.watch('grades')       as string[];
+  const watchedDesignation  = profileForm.watch('designation')  as string;
 
   // Password change form — uses RHF + Zod for strict validation
   const passwordForm = useZodForm({
@@ -156,35 +176,37 @@ export const ProfilePage: React.FC = () => {
   };
 
   const toggleSubject = (subject: string) => {
-    setProfileForm((prev) => ({
-      ...prev,
-      subjects: prev.subjects.includes(subject)
-        ? prev.subjects.filter((value: string) => value !== subject)
-        : [...prev.subjects, subject],
-    }));
+    const current = profileForm.getValues('subjects') as string[];
+    profileForm.setValue(
+      'subjects',
+      current.includes(subject)
+        ? current.filter((s) => s !== subject)
+        : [...current, subject],
+      { shouldDirty: true },
+    );
   };
 
   const toggleGrade = (grade: string) => {
-    setProfileForm((prev) => ({
-      ...prev,
-      grades: prev.grades.includes(grade)
-        ? prev.grades.filter((value: string) => value !== grade)
-        : [...prev.grades, grade],
-    }));
+    const current = profileForm.getValues('grades') as string[];
+    profileForm.setValue(
+      'grades',
+      current.includes(grade)
+        ? current.filter((g) => g !== grade)
+        : [...current, grade],
+      { shouldDirty: true },
+    );
   };
 
-  const handleProfileSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsSaving(true);
+  const handleProfileSubmit = profileForm.handleSubmit(async (data: ProfileData) => {
     try {
       const fd = new FormData();
-      fd.append('first_name', profileForm.first_name);
-      fd.append('last_name', profileForm.last_name);
-      fd.append('department', profileForm.department);
-      fd.append('designation', profileForm.designation);
-      fd.append('bio', profileForm.bio);
-      fd.append('subjects', JSON.stringify(profileForm.subjects));
-      fd.append('grades', JSON.stringify(profileForm.grades));
+      fd.append('first_name',  data.first_name);
+      fd.append('last_name',   data.last_name   || '');
+      fd.append('department',  data.department  || '');
+      fd.append('designation', data.designation || '');
+      fd.append('bio',         data.bio         || '');
+      fd.append('subjects',    JSON.stringify(data.subjects));
+      fd.append('grades',      JSON.stringify(data.grades));
       if (profilePicFile) {
         fd.append('profile_picture', profilePicFile);
       }
@@ -193,14 +215,11 @@ export const ProfilePage: React.FC = () => {
       toast.success('Profile updated', 'Your profile has been saved successfully.');
     } catch {
       toast.error('Failed', 'Could not save profile.');
-    } finally {
-      setIsSaving(false);
     }
-  };
+  });
 
   const handlePasswordSubmit = passwordForm.handleSubmit(
     async (data: ChangePasswordData) => {
-      setIsSaving(true);
       try {
         const { authService } = await import('../../services/authService');
         await authService.changePassword(data.current_password, data.new_password);
@@ -212,21 +231,21 @@ export const ProfilePage: React.FC = () => {
           type: 'server',
           message: 'Current password is incorrect',
         });
-      } finally {
-        setIsSaving(false);
       }
     },
   );
 
+  const [notifSaving, setNotifSaving] = useState(false);
+
   const handleNotificationsSave = async () => {
-    setIsSaving(true);
+    setNotifSaving(true);
     try {
       await api.patch('/users/auth/preferences/', notifications);
       toast.success('Preferences saved', 'Your notification preferences have been updated.');
     } catch {
       toast.error('Failed', 'Could not save preferences.');
     } finally {
-      setIsSaving(false);
+      setNotifSaving(false);
     }
   };
 
@@ -289,9 +308,9 @@ export const ProfilePage: React.FC = () => {
                 <input ref={fileInputRef} type="file" accept="image/*" onChange={handlePicChange} className="hidden" />
               </div>
               <h3 className="font-semibold text-slate-900 mt-3">{user?.first_name} {user?.last_name}</h3>
-              <p className="text-[13px] text-tp-accent font-medium">{profileForm.designation || user?.role?.replace('_', ' ')}</p>
-              {profileForm.employee_id && (
-                <p className="text-xs text-slate-400 mt-1">ID: {profileForm.employee_id}</p>
+              <p className="text-[13px] text-tp-accent font-medium">{watchedDesignation || user?.role?.replace('_', ' ')}</p>
+              {user?.employee_id && (
+                <p className="text-xs text-slate-400 mt-1">ID: {user.employee_id}</p>
               )}
             </div>
 
@@ -321,67 +340,88 @@ export const ProfilePage: React.FC = () => {
                 <h2 className="text-[15px] font-semibold text-slate-900 mb-6">Profile Information</h2>
 
                 <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
-                  <Input
+                  {/* ── RHF-controlled text fields ── */}
+                  <FormField
+                    control={profileForm.control}
+                    name="first_name"
                     label="First Name"
-                    value={profileForm.first_name}
-                    onChange={(e) => setProfileForm({ ...profileForm, first_name: e.target.value })}
                     leftIcon={<UserCircleIcon className="h-5 w-5" />}
                   />
-                  <Input
+                  <FormField
+                    control={profileForm.control}
+                    name="last_name"
                     label="Last Name"
-                    value={profileForm.last_name}
-                    onChange={(e) => setProfileForm({ ...profileForm, last_name: e.target.value })}
                     leftIcon={<UserCircleIcon className="h-5 w-5" />}
                   />
+
+                  {/* ── Read-only fields (not in schema) ── */}
                   <Input
                     label="Email"
                     type="email"
-                    value={profileForm.email}
+                    value={user?.email ?? ''}
                     leftIcon={<EnvelopeIcon className="h-5 w-5" />}
                     disabled
                     helperText="Contact admin to change email"
+                    onChange={() => {}}
                   />
                   <Input
                     label="Teacher ID"
-                    value={profileForm.employee_id}
+                    value={user?.employee_id ?? ''}
                     leftIcon={<IdentificationIcon className="h-5 w-5" />}
                     disabled
                     helperText="Assigned by school administration"
+                    onChange={() => {}}
                   />
 
-                  <div>
-                    <label className="block text-[13px] font-medium text-slate-700 mb-1">Designation</label>
-                    <select
-                      value={profileForm.designation}
-                      onChange={(e) => setProfileForm({ ...profileForm, designation: e.target.value })}
-                      className="w-full px-3 py-2 border border-slate-200/80 rounded-xl focus:ring-2 focus:ring-orange-500/20 focus:border-orange-400"
-                    >
-                      <option value="">Select designation...</option>
-                      {DESIGNATIONS.map((designation) => <option key={designation} value={designation}>{designation}</option>)}
-                      <option value="Other">Other</option>
-                    </select>
-                  </div>
+                  {/* ── Designation — Controller-based select ── */}
+                  <Controller
+                    control={profileForm.control}
+                    name="designation"
+                    render={({ field }) => (
+                      <div>
+                        <label className="block text-[13px] font-medium text-slate-700 mb-1">Designation</label>
+                        <select
+                          {...field}
+                          className="w-full cursor-pointer px-3 py-2 border border-slate-200/80 rounded-xl focus:ring-2 focus:ring-orange-500/20 focus:border-orange-400"
+                        >
+                          <option value="">Select designation...</option>
+                          {DESIGNATIONS.map((d) => <option key={d} value={d}>{d}</option>)}
+                          <option value="Other">Other</option>
+                        </select>
+                      </div>
+                    )}
+                  />
 
-                  <Input
+                  <FormField
+                    control={profileForm.control}
+                    name="department"
                     label="Department"
-                    value={profileForm.department}
-                    onChange={(e) => setProfileForm({ ...profileForm, department: e.target.value })}
                     leftIcon={<BriefcaseIcon className="h-5 w-5" />}
                     placeholder="e.g. Science, Languages"
                   />
 
-                  <div className="sm:col-span-2">
-                    <label className="block text-[13px] font-medium text-slate-700 mb-1">About Me</label>
-                    <textarea
-                      value={profileForm.bio}
-                      onChange={(e) => setProfileForm({ ...profileForm, bio: e.target.value })}
-                      rows={3}
-                      className="w-full px-3 py-2 border border-slate-200/80 rounded-xl focus:ring-2 focus:ring-orange-500/20 focus:border-orange-400"
-                      placeholder="Tell us about yourself, your teaching philosophy, experience..."
-                    />
-                  </div>
+                  {/* ── Bio — Controller-based textarea ── */}
+                  <Controller
+                    control={profileForm.control}
+                    name="bio"
+                    render={({ field, fieldState }) => (
+                      <div className="sm:col-span-2">
+                        <label className="block text-[13px] font-medium text-slate-700 mb-1">About Me</label>
+                        <textarea
+                          {...field}
+                          rows={3}
+                          className="w-full px-3 py-2 border border-slate-200/80 rounded-xl focus:ring-2 focus:ring-orange-500/20 focus:border-orange-400"
+                          placeholder="Tell us about yourself, your teaching philosophy, experience..."
+                        />
+                        {fieldState.error && (
+                          <p className="mt-1 text-xs text-red-500">{fieldState.error.message}</p>
+                        )}
+                      </div>
+                    )}
+                  />
                 </div>
 
+                {/* ── Subjects toggle ── */}
                 <div className="mt-6">
                   <label className="flex items-center gap-2 text-[13px] font-medium text-slate-700 mb-2">
                     <BookOpenIcon className="h-4 w-4" /> Subjects I Teach
@@ -392,8 +432,8 @@ export const ProfilePage: React.FC = () => {
                         key={subject}
                         type="button"
                         onClick={() => toggleSubject(subject)}
-                        className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
-                          profileForm.subjects.includes(subject)
+                        className={`cursor-pointer px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
+                          watchedSubjects.includes(subject)
                             ? 'bg-orange-100 border-orange-300 text-orange-800'
                             : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
                         }`}
@@ -404,6 +444,7 @@ export const ProfilePage: React.FC = () => {
                   </div>
                 </div>
 
+                {/* ── Grades toggle ── */}
                 <div className="mt-5">
                   <label className="flex items-center gap-2 text-[13px] font-medium text-slate-700 mb-2">
                     <AcademicCapIcon className="h-4 w-4" /> Classes / Grades
@@ -414,8 +455,8 @@ export const ProfilePage: React.FC = () => {
                         key={grade}
                         type="button"
                         onClick={() => toggleGrade(grade)}
-                        className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
-                          profileForm.grades.includes(grade)
+                        className={`cursor-pointer px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
+                          watchedGrades.includes(grade)
                             ? 'bg-blue-100 border-blue-300 text-blue-800'
                             : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
                         }`}
@@ -427,7 +468,11 @@ export const ProfilePage: React.FC = () => {
                 </div>
 
                 <div className="mt-6 flex justify-end">
-                  <Button type="submit" loading={isSaving} className="w-full bg-tp-accent hover:bg-orange-600 sm:w-auto">
+                  <Button
+                    type="submit"
+                    loading={profileForm.formState.isSubmitting}
+                    className="w-full bg-tp-accent hover:bg-orange-600 sm:w-auto"
+                  >
                     Save Changes
                   </Button>
                 </div>
@@ -467,7 +512,7 @@ export const ProfilePage: React.FC = () => {
                 <div className="mt-6 flex justify-end">
                   <Button
                     type="submit"
-                    loading={isSaving || passwordForm.formState.isSubmitting}
+                    loading={passwordForm.formState.isSubmitting}
                     className="w-full bg-tp-accent hover:bg-orange-600 sm:w-auto"
                   >
                     Update Password
@@ -504,7 +549,7 @@ export const ProfilePage: React.FC = () => {
                   ))}
                 </div>
                 <div className="mt-6 flex justify-end">
-                  <Button onClick={handleNotificationsSave} loading={isSaving} className="w-full bg-tp-accent hover:bg-orange-600 sm:w-auto">
+                  <Button onClick={handleNotificationsSave} loading={notifSaving} className="w-full bg-tp-accent hover:bg-orange-600 sm:w-auto">
                     Save Preferences
                   </Button>
                 </div>

@@ -7,6 +7,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { usePageTitle } from '../../hooks/usePageTitle';
+import { ConfirmDialog } from '../../components/common/ConfirmDialog';
 import { maicApi, chatbotApi } from '../../services/openmaicService';
 import type { MAICClassroomMeta, MAICAssignedSection } from '../../types/maic';
 import type { TeacherSection } from '../../types/chatbot';
@@ -249,6 +250,7 @@ export const MAICLibraryPage: React.FC = () => {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [assigningClassroom, setAssigningClassroom] = useState<MAICClassroomMeta | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<MAICClassroomMeta | null>(null);
 
   const { data: classrooms = [], isLoading } = useQuery({
     queryKey: ['maic-classrooms', statusFilter, search],
@@ -280,9 +282,7 @@ export const MAICLibraryPage: React.FC = () => {
 
   const handleDelete = (e: React.MouseEvent, classroom: MAICClassroomMeta) => {
     e.stopPropagation();
-    if (window.confirm(`Delete "${classroom.title}"? This cannot be undone.`)) {
-      deleteMutation.mutate(classroom.id);
-    }
+    setDeleteTarget(classroom);
   };
 
   const assignMutation = useMutation({
@@ -296,6 +296,19 @@ export const MAICLibraryPage: React.FC = () => {
 
   return (
     <div className="space-y-6">
+      <ConfirmDialog
+        isOpen={deleteTarget !== null}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={() => {
+          if (deleteTarget) deleteMutation.mutate(deleteTarget.id);
+          setDeleteTarget(null);
+        }}
+        title="Delete Classroom"
+        message={`Delete "${deleteTarget?.title ?? 'this classroom'}"? This action cannot be undone.`}
+        confirmLabel="Delete"
+        variant="danger"
+      />
+
       {/* Header */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>

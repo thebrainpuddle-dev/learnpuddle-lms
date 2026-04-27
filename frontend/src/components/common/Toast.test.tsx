@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach } from 'vitest';
 import { ToastProvider, useToast } from './Toast';
 
 // Test consumer that exposes toast methods
@@ -24,6 +25,12 @@ const ToastTrigger: React.FC = () => {
     </div>
   );
 };
+
+// Ensure fake timers are always restored, even if a test throws before
+// calling vi.useRealTimers() itself.
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe('ToastProvider', () => {
   it('renders children', () => {
@@ -130,7 +137,11 @@ describe('ToastProvider', () => {
   });
 
   it('auto-dismisses toast after timeout', async () => {
-    vi.useFakeTimers();
+    // Scope faking to setTimeout/clearTimeout only.
+    // Faking MessageChannel (React 18 scheduler) or Date without scoping causes
+    // cross-file timer pollution that makes other test files flaky in the same
+    // worker thread.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
 
     render(
       <ToastProvider>

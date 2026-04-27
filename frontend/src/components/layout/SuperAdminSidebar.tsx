@@ -9,6 +9,7 @@ import {
   CalendarDaysIcon,
   ArrowRightOnRectangleIcon,
   QuestionMarkCircleIcon,
+  Squares2X2Icon,
 } from '@heroicons/react/24/outline';
 import { useAuthStore } from '../../stores/authStore';
 import { broadcastLogout } from '../../utils/authSession';
@@ -19,6 +20,7 @@ const navItems = [
   { to: '/super-admin/operations', label: 'Operations', icon: SignalIcon, tourId: 'superadmin-nav-operations' },
   { to: '/super-admin/schools', label: 'Schools', icon: BuildingOffice2Icon, tourId: 'superadmin-nav-schools' },
   { to: '/super-admin/demo-bookings', label: 'Demo Bookings', icon: CalendarDaysIcon, tourId: 'superadmin-nav-demo-bookings' },
+  { to: '/super-admin/course-templates', label: 'Template Library', icon: Squares2X2Icon, tourId: 'superadmin-nav-course-templates' },
 ];
 
 interface SuperAdminSidebarProps {

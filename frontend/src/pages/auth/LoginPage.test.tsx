@@ -64,7 +64,7 @@ describe('LoginPage', () => {
   const mockSetLoading = vi.fn();
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
 
     mockedUseAuthStore.mockReturnValue({
       setAuth: mockSetAuth,

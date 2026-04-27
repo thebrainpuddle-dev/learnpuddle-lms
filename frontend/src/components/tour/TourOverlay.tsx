@@ -128,7 +128,7 @@ export const TourOverlay: React.FC<TourOverlayProps> = ({
 
       <section
         data-tour-overlay="true"
-        className="absolute max-h-[calc(100vh-2rem)] overflow-y-auto rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl sm:p-5"
+        className="absolute max-h-[calc(100dvh-2rem)] overflow-y-auto rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl sm:p-5"
         style={{ left: tooltipPosition.left, top: tooltipPosition.top, width: tooltipPosition.width }}
       >
         <div className="mb-3 flex items-center justify-between">

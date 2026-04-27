@@ -38,7 +38,7 @@ const mockedTeacherService = teacherService as unknown as { [K in keyof typeof t
 
 describe('ProfilePage achievements tab', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     Object.defineProperty(window, 'matchMedia', {
       writable: true,
       value: vi.fn().mockImplementation((query: string) => ({

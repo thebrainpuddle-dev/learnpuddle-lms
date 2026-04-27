@@ -22,6 +22,7 @@ import type { MAICSSEEvent, MAICAgent } from '../../types/maic';
 import { AgentAvatar } from './AgentAvatar';
 import { VoiceWaveIndicator } from './VoiceWaveIndicator';
 import { Reasoning } from './Reasoning';
+import { TypewriterText } from './TypewriterText';
 import { useAudioRecorder } from '../../hooks/useAudioRecorder';
 import { cn } from '../../lib/utils';
 import { maicChatUrl, type MAICRole } from '../../lib/maic/endpoints';
@@ -256,6 +257,24 @@ export const RoundtablePanel = React.memo<RoundtablePanelProps>(
     useEffect(() => {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [messages.length]);
+
+    // Porting P3.2 — when the panel opens via an engine-driven
+    // discussion action (roundtable mode + >1 agent + no prior
+    // messages), auto-kick the LLM director so the agents start
+    // discussing immediately. Without this the user would land on
+    // "Start Roundtable (All Agents)" and have to click yet another
+    // button after the Join gate. QA mode stays user-driven — the
+    // student asks, agents reply.
+    const autoStartedRef = useRef(false);
+    useEffect(() => {
+      if (autoStartedRef.current) return;
+      if (sessionType !== 'roundtable') return;
+      if (discussionAgents.length < 2) return;
+      if (messages.length > 0) return;
+      if (isOrchestrating || isSending) return;
+      autoStartedRef.current = true;
+      handleStartOrchestration(topic);
+    }, [sessionType, discussionAgents.length, messages.length, isOrchestrating, isSending, topic, handleStartOrchestration]);
 
     // Cleanup
     useEffect(() => {
@@ -522,12 +541,22 @@ export const RoundtablePanel = React.memo<RoundtablePanelProps>(
                 </div>
               )}
 
-              {messages.map((msg) => {
+              {messages.map((msg, i) => {
                 const agent = getAgent(msg.agentId);
                 const isUser = msg.role === 'user';
                 const bubbleColor = msg.agentId
                   ? agentColorMap.get(msg.agentId) || 'bg-gray-50 border-gray-200 text-gray-800'
                   : '';
+                // T2 — the MOST-RECENT agent message is "live": while
+                // orchestration or a send is in-flight, its content is
+                // still growing from SSE deltas. Run a typewriter over
+                // it to smooth out chunk arrivals into a steady char
+                // stream. Prior messages and user messages render
+                // directly (they're immutable by the time they scroll
+                // off the live edge).
+                const isLastMsg = i === messages.length - 1;
+                const isLiveAgentMsg =
+                  !isUser && isLastMsg && (isOrchestrating || isSending);
 
                 return (
                   <div
@@ -557,7 +586,19 @@ export const RoundtablePanel = React.memo<RoundtablePanelProps>(
                             : cn(bubbleColor || 'bg-gray-100 text-gray-800 border-gray-200', 'rounded-bl-md'),
                         )}
                       >
-                        {msg.content}
+                        {isLiveAgentMsg ? (
+                          <TypewriterText
+                            // Keying on msg.id keeps the typewriter
+                            // anchored to this message; content updates
+                            // re-run the reveal from the new end.
+                            key={msg.id}
+                            text={msg.content}
+                            speedMs={22}
+                            as="span"
+                          />
+                        ) : (
+                          msg.content
+                        )}
                       </div>
                       {isUser && (
                         <p className="text-[10px] text-gray-300 text-right mt-0.5 px-1">You</p>

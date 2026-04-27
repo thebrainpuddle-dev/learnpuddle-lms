@@ -22,7 +22,7 @@ import { PageShell } from './design-system/layout';
 import api from './config/api';
 import { useSessionLifecycle } from './hooks/useSessionLifecycle';
 import { useAuthStore } from './stores/authStore';
-import { useTenantStore } from './stores/tenantStore';
+import { useTenantStore, EDUCATION_DEFAULTS, type ModeLabels, type TenantMode } from './stores/tenantStore';
 import { TourProvider } from './components/tour';
 import { isPlatformRequest } from './utils/hostRouting';
 import './assets/styles/index.css';
@@ -118,6 +118,54 @@ const DirectoryPage = React.lazy(() =>
 const AdminAttendancePage = React.lazy(() =>
   import('./pages/admin/AttendancePage').then((m) => ({ default: m.AdminAttendancePage }))
 );
+const GradebookPage = React.lazy(() =>
+  import('./pages/admin/GradebookPage').then((m) => ({ default: m.GradebookPage }))
+);
+const QuestionBankPage = React.lazy(() =>
+  import('./pages/admin/QuestionBankPage').then((m) => ({ default: m.QuestionBankPage }))
+);
+const AssessmentGradebookPage = React.lazy(() =>
+  import('./pages/admin/AssessmentGradebookPage').then((m) => ({ default: m.AssessmentGradebookPage }))
+);
+const AdminGamificationPage = React.lazy(() =>
+  import('./pages/admin/GamificationPage').then((m) => ({ default: m.AdminGamificationPage }))
+);
+const SkillRadarPage = React.lazy(() =>
+  import('./pages/admin/SkillRadarPage').then((m) => ({ default: m.SkillRadarPage }))
+);
+const EngagementHeatmapPage = React.lazy(() =>
+  import('./pages/admin/EngagementHeatmapPage').then((m) => ({ default: m.EngagementHeatmapPage }))
+);
+const RubricPage = React.lazy(() =>
+  import('./pages/admin/RubricPage').then((m) => ({ default: m.RubricPage }))
+);
+const CourseTemplateGalleryPage = React.lazy(() =>
+  import('./pages/admin/CourseTemplateGalleryPage').then((m) => ({ default: m.CourseTemplateGalleryPage }))
+);
+const ReportBuilderListPage = React.lazy(() =>
+  import('./pages/admin/ReportBuilderListPage').then((m) => ({ default: m.ReportBuilderListPage }))
+);
+const ReportBuilderEditorPage = React.lazy(() =>
+  import('./pages/admin/ReportBuilderEditorPage').then((m) => ({ default: m.ReportBuilderEditorPage }))
+);
+const ReportBuilderDetailPage = React.lazy(() =>
+  import('./pages/admin/ReportBuilderDetailPage').then((m) => ({ default: m.ReportBuilderDetailPage }))
+);
+const AIGeneratorHomePage = React.lazy(() =>
+  import('./pages/admin/ai-course-generator').then((m) => ({ default: m.AIGeneratorHome }))
+);
+const AIGeneratorJobDetailPage = React.lazy(() =>
+  import('./pages/admin/ai-course-generator').then((m) => ({ default: m.AIGeneratorJobDetail }))
+);
+const AIGeneratorJobsListPage = React.lazy(() =>
+  import('./pages/admin/ai-course-generator').then((m) => ({ default: m.AIGeneratorJobsList }))
+);
+const AdminSearchPage = React.lazy(() =>
+  import('./pages/admin/SearchPage').then((m) => ({ default: m.SearchPage }))
+);
+const TranslatePage = React.lazy(() =>
+  import('./pages/admin/translation/TranslatePage').then((m) => ({ default: m.TranslatePage }))
+);
 
 // Teacher pages
 const TeacherDashboardPage = React.lazy(() =>
@@ -138,6 +186,9 @@ const TeacherRemindersPage = React.lazy(() =>
 const QuizPage = React.lazy(() =>
   import('./pages/teacher/QuizPage').then((m) => ({ default: m.QuizPage }))
 );
+const QuizPlayerPage = React.lazy(() =>
+  import('./pages/teacher/QuizPlayerPage').then((m) => ({ default: m.QuizPlayerPage }))
+);
 const ProfilePage = React.lazy(() =>
   import('./pages/teacher/ProfilePage').then((m) => ({ default: m.ProfilePage }))
 );
@@ -155,6 +206,12 @@ const MyClassesPage = React.lazy(() =>
 );
 const TeacherSectionDashboardPage = React.lazy(() =>
   import('./pages/teacher/SectionDashboardPage').then((m) => ({ default: m.SectionDashboardPage }))
+);
+const TeacherAchievementsPage = React.lazy(() =>
+  import('./pages/teacher/AchievementsPage').then((m) => ({ default: m.AchievementsPage }))
+);
+const TeacherMasteryHistoryPage = React.lazy(() =>
+  import('./pages/teacher/MasteryHistoryPage').then((m) => ({ default: m.MasteryHistoryPage }))
 );
 
 // OpenMAIC Features
@@ -252,6 +309,9 @@ const SuperAdminSchoolDetailPage = React.lazy(() =>
 const SuperAdminDemoBookingsPage = React.lazy(() =>
   import('./pages/superadmin/DemoBookingsPage').then((m) => ({ default: m.DemoBookingsPage }))
 );
+const SuperAdminTemplateManagerPage = React.lazy(() =>
+  import('./pages/superadmin/SuperAdminTemplateManagerPage').then((m) => ({ default: m.SuperAdminTemplateManagerPage }))
+);
 
 // ─── QueryClient ─────────────────────────────────────────────────────────────
 const queryClient = new QueryClient({
@@ -295,7 +355,7 @@ function RoutePage({ children }: { children: React.ReactNode }) {
 
 function AppContent() {
   const { isAuthenticated, user, setUser, clearAuth } = useAuthStore();
-  const { setConfig } = useTenantStore();
+  const { setConfig, setModeLabels } = useTenantStore();
   const [authValidated, setAuthValidated] = React.useState(!isAuthenticated);
   useSessionLifecycle();
   const dashboardPath = getDashboardPathForRole(user?.role);
@@ -328,6 +388,24 @@ function AppContent() {
       .then((res) => setConfig(res.data))
       .catch(() => {});
   }, [isAuthenticated, user?.role, setConfig]);
+
+  // Fetch tenant mode labels from /tenants/me/ after login (FE-015 / TASK-020).
+  // Available to all roles except SUPER_ADMIN (who operates cross-tenant).
+  // Falls back silently to EDUCATION_DEFAULTS if the endpoint is unreachable.
+  React.useEffect(() => {
+    if (!isAuthenticated || user?.role === 'SUPER_ADMIN') return;
+    api.get('/tenants/me/')
+      .then((res) => {
+        const mode: TenantMode = res.data.mode ?? 'education';
+        // Merge server labels with local defaults so missing keys never produce empty strings
+        const labels: ModeLabels = { ...EDUCATION_DEFAULTS, ...(res.data.mode_labels ?? {}) };
+        setModeLabels(mode, labels);
+      })
+      .catch(() => {
+        // Backend may not yet expose mode_labels (pre-migration tenant) — ignore silently
+      });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthenticated, user?.role]); // setModeLabels is stable (Zustand)
 
   if (!authValidated) {
     return (
@@ -402,6 +480,7 @@ function AppContent() {
         <Route path="schools" element={<RoutePage><SuperAdminSchoolsPage /></RoutePage>} />
         <Route path="schools/:tenantId" element={<RoutePage><SuperAdminSchoolDetailPage /></RoutePage>} />
         <Route path="demo-bookings" element={<RoutePage><SuperAdminDemoBookingsPage /></RoutePage>} />
+        <Route path="course-templates" element={<RoutePage><SuperAdminTemplateManagerPage /></RoutePage>} />
         <Route index element={<Navigate to="/super-admin/dashboard" replace />} />
         <Route path="*" element={<Navigate to="/super-admin/dashboard" replace />} />
       </Route>
@@ -430,10 +509,30 @@ function AppContent() {
         <Route path="school/grade/:gradeId" element={<RoutePage><GradeDetailPage /></RoutePage>} />
         <Route path="school/section/:sectionId" element={<RoutePage><AdminSectionDetailPage /></RoutePage>} />
         <Route path="attendance" element={<RoutePage><AdminAttendancePage /></RoutePage>} />
+        <Route path="gradebook" element={<RoutePage><GradebookPage /></RoutePage>} />
+        <Route path="question-banks" element={<RoutePage><QuestionBankPage /></RoutePage>} />
+        <Route path="rubrics" element={<RoutePage><RubricPage /></RoutePage>} />
+        <Route path="gradebook/assessments" element={<RoutePage><AssessmentGradebookPage /></RoutePage>} />
+        <Route path="gamification" element={<RoutePage><AdminGamificationPage /></RoutePage>} />
+        <Route path="course-templates" element={<RoutePage><CourseTemplateGalleryPage /></RoutePage>} />
         <Route path="analytics" element={<RoutePage><AnalyticsPage /></RoutePage>} />
+        <Route path="analytics/skills" element={<RoutePage><SkillRadarPage /></RoutePage>} />
+        <Route path="analytics/engagement" element={<RoutePage><EngagementHeatmapPage /></RoutePage>} />
+        <Route path="reports/builder" element={<RoutePage><ReportBuilderListPage /></RoutePage>} />
+        <Route path="reports/builder/new" element={<RoutePage><ReportBuilderEditorPage /></RoutePage>} />
+        <Route path="reports/builder/:id" element={<RoutePage><ReportBuilderDetailPage /></RoutePage>} />
+        <Route path="reports/builder/:id/edit" element={<RoutePage><ReportBuilderEditorPage /></RoutePage>} />
         <Route path="billing" element={<RoutePage><BillingPage /></RoutePage>} />
         <Route path="settings" element={<RoutePage><SettingsPage /></RoutePage>} />
         <Route path="settings/security" element={<RoutePage><SecuritySettings /></RoutePage>} />
+        {/* AI Course Generator */}
+        <Route path="ai-course-generator" element={<RoutePage><AIGeneratorJobsListPage /></RoutePage>} />
+        <Route path="ai-course-generator/new" element={<RoutePage><AIGeneratorHomePage /></RoutePage>} />
+        <Route path="ai-course-generator/jobs/:jobId" element={<RoutePage><AIGeneratorJobDetailPage /></RoutePage>} />
+        {/* Semantic Search */}
+        <Route path="search" element={<RoutePage><AdminSearchPage /></RoutePage>} />
+        {/* Translation */}
+        <Route path="courses/:courseId/translate" element={<RoutePage><TranslatePage /></RoutePage>} />
         <Route index element={<Navigate to="/admin/dashboard" replace />} />
         <Route path="*" element={<Navigate to="/admin/dashboard" replace />} />
       </Route>
@@ -456,8 +555,11 @@ function AppContent() {
         <Route path="assignments" element={<RoutePage><AssignmentsPage /></RoutePage>} />
         <Route path="reminders" element={<RoutePage><TeacherRemindersPage /></RoutePage>} />
         <Route path="quizzes/:assignmentId" element={<RoutePage><QuizPage /></RoutePage>} />
+        <Route path="quizzes/:contentId/attempt" element={<RoutePage><QuizPlayerPage /></RoutePage>} />
         <Route path="profile" element={<RoutePage><ProfilePage /></RoutePage>} />
         <Route path="growth" element={<RoutePage><ProfessionalGrowthPage /></RoutePage>} />
+        <Route path="achievements" element={<RoutePage><TeacherAchievementsPage /></RoutePage>} />
+        <Route path="mastery" element={<RoutePage><TeacherMasteryHistoryPage /></RoutePage>} />
         <Route path="certifications" element={<RoutePage><MyCertificationsPage /></RoutePage>} />
         <Route path="study-notes" element={<RoutePage><TeacherStudyNotesPage /></RoutePage>} />
         {/* OpenMAIC Features */}
@@ -629,6 +731,28 @@ function App() {
         setLoading(false);
       });
   }, [setTheme]);
+
+  // Sprint 4 · C.3 — ask the browser to treat our storage as persistent
+  // so IndexedDB-cached classrooms + localStorage drafts survive
+  // aggressive eviction. Browsers silently grant this for installed
+  // PWAs or high-engagement origins; rejection is fine, we just log it.
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !('storage' in navigator)) return;
+    const storage = navigator.storage as StorageManager & {
+      persist?: () => Promise<boolean>;
+      persisted?: () => Promise<boolean>;
+    };
+    if (!storage.persist) return;
+    (async () => {
+      try {
+        const already = storage.persisted ? await storage.persisted() : false;
+        if (already) return;
+        await storage.persist();
+      } catch {
+        /* denied / unsupported — silent */
+      }
+    })();
+  }, []);
 
   if (loading) {
     return (

@@ -9,6 +9,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { cn } from '../../design-system/theme/cn';
 import { usePageTitle } from '../../hooks/usePageTitle';
 import { useAuthStore } from '../../stores/authStore';
+import { ConfirmDialog } from '../../components/common/ConfirmDialog';
 import api from '../../config/api';
 
 // ---------------------------------------------------------------------------
@@ -302,6 +303,7 @@ export const DiscussionThreadPage: React.FC = () => {
   const [replyBody, setReplyBody] = useState('');
   const [replyingTo, setReplyingTo] = useState<{ id: string; name: string } | null>(null);
   const [likingIds, setLikingIds] = useState<Set<string>>(new Set());
+  const [hideTarget, setHideTarget] = useState<string | null>(null);
 
   // Fetch thread
   const { data: thread, isLoading } = useQuery<ThreadDetail>({
@@ -386,10 +388,8 @@ export const DiscussionThreadPage: React.FC = () => {
   }, []);
 
   const handleHide = useCallback((replyId: string) => {
-    if (window.confirm('Hide this reply? It will no longer be visible to students.')) {
-      hideReplyMutation.mutate(replyId);
-    }
-  }, [hideReplyMutation]);
+    setHideTarget(replyId);
+  }, []);
 
   const handleSubmitReply = useCallback((e: React.FormEvent) => {
     e.preventDefault();
@@ -435,6 +435,19 @@ export const DiscussionThreadPage: React.FC = () => {
 
   return (
     <div className="space-y-4">
+      <ConfirmDialog
+        isOpen={hideTarget !== null}
+        onClose={() => setHideTarget(null)}
+        onConfirm={() => {
+          if (hideTarget) hideReplyMutation.mutate(hideTarget);
+          setHideTarget(null);
+        }}
+        title="Hide Reply"
+        message="Hide this reply? It will no longer be visible to students."
+        confirmLabel="Hide"
+        variant="warning"
+      />
+
       {/* Back */}
       <button
         onClick={() => navigate('/teacher/discussions')}

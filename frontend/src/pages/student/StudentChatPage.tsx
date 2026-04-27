@@ -86,7 +86,7 @@ export function StudentChatPage() {
   if (!chatbotId) return null;
 
   return (
-    <div className="flex h-[calc(100vh-4rem)] overflow-hidden rounded-xl border border-gray-200/80 bg-white shadow-sm">
+    <div className="flex h-[calc(100dvh-4rem)] overflow-hidden rounded-xl border border-gray-200/80 bg-white shadow-sm">
       {/* ── Conversation History Sidebar ────────────────────────────── */}
       {sidebarOpen && (
         <div className="w-64 flex-shrink-0 flex flex-col border-r border-gray-100 bg-gray-50/50">

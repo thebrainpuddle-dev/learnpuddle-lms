@@ -24,6 +24,12 @@ RUN GIT_DIR=/tmp/.git npm run build
 FROM nginx:1.25-alpine
 COPY --from=frontend-build /app/build /usr/share/nginx/html
 COPY nginx/nginx.conf /etc/nginx/conf.d/default.conf
+# Bake in supporting config files so the image is self-contained.
+# Production/staging override default.conf at runtime via volume mount, but
+# having these files in the image means the container can also start cleanly
+# without any volume mounts (e.g. smoke tests, standalone runs).
+COPY nginx/includes/ /etc/nginx/includes/
+COPY nginx/proxy_params /etc/nginx/proxy_params
 # Fix ownership so nginx user can write to cache, logs, and pid file.
 # NET_BIND_SERVICE capability (granted by Docker by default) allows
 # the non-root nginx process to bind to privileged ports 80 and 443.

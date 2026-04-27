@@ -18,8 +18,31 @@ interface UseKeyboardShortcutsOptions {
   onToggleSceneSidebar?: () => void;
   onToggleDiscussion?: () => void;
   onToggleNotes?: () => void;
+  /** Sprint 4 · B.13 — show the keyboard shortcut help overlay (bound to ?). */
+  onShowHelp?: () => void;
+  /** Toggle Document Picture-in-Picture (bound to 'P'). */
+  onTogglePiP?: () => void;
   enabled?: boolean;
 }
+
+/** Display list of shortcuts, shared between the hook and the help
+ *  overlay. Keeping the key/label pairs in one place means the help
+ *  modal can't drift out of sync with the handler. */
+export const KEYBOARD_SHORTCUTS: { keys: string; label: string }[] = [
+  { keys: 'Space', label: 'Play / Pause' },
+  { keys: '→', label: 'Next scene' },
+  { keys: '←', label: 'Previous scene' },
+  { keys: '↑ / ↓', label: 'Volume up / down' },
+  { keys: 'M', label: 'Mute / unmute' },
+  { keys: 'C', label: 'Toggle chat panel' },
+  { keys: 'W', label: 'Toggle whiteboard' },
+  { keys: 'S', label: 'Toggle scene sidebar' },
+  { keys: 'T', label: 'Toggle discussion' },
+  { keys: 'N', label: 'Toggle notes' },
+  { keys: 'F11 / Esc', label: 'Toggle fullscreen' },
+  { keys: 'P', label: 'Toggle floating player (PiP)' },
+  { keys: '?', label: 'Show this help' },
+];
 
 function isInputFocused(): boolean {
   const el = document.activeElement;
@@ -44,6 +67,8 @@ export function useKeyboardShortcuts(opts: UseKeyboardShortcutsOptions): void {
     onToggleSceneSidebar,
     onToggleDiscussion,
     onToggleNotes,
+    onShowHelp,
+    onTogglePiP,
     enabled = true,
   } = opts;
 
@@ -54,6 +79,15 @@ export function useKeyboardShortcuts(opts: UseKeyboardShortcutsOptions): void {
 
       // Avoid conflicts with browser default behaviors when modifiers are held
       if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+      // Sprint 4 · B.13 — shift+/ (? on US layouts) opens the shortcut
+      // help overlay. Handled before the switch so a layout that reports
+      // key="?" vs code="Slash" still works.
+      if (e.key === '?' && onShowHelp) {
+        e.preventDefault();
+        onShowHelp();
+        return;
+      }
 
       switch (e.key) {
         case ' ':
@@ -132,6 +166,14 @@ export function useKeyboardShortcuts(opts: UseKeyboardShortcutsOptions): void {
           onToggleNotes?.();
           break;
 
+        case 'p':
+        case 'P':
+          if (onTogglePiP) {
+            e.preventDefault();
+            onTogglePiP();
+          }
+          break;
+
         default:
           break;
       }
@@ -150,6 +192,8 @@ export function useKeyboardShortcuts(opts: UseKeyboardShortcutsOptions): void {
       onToggleSceneSidebar,
       onToggleDiscussion,
       onToggleNotes,
+      onShowHelp,
+      onTogglePiP,
     ],
   );
 

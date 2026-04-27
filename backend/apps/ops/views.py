@@ -44,6 +44,11 @@ from .services import (
 )
 
 
+# NOTE: All views in this module use @super_admin_only, which restricts access to
+# platform-level SUPER_ADMIN users only.  These views operate across ALL tenants by
+# design (ops dashboards, health monitoring, replay tooling).  @tenant_required is
+# intentionally absent — it would prevent cross-tenant visibility required here.
+
 class OpsTenantPagination(PageNumberPagination):
     page_size = 25
     page_size_query_param = "page_size"

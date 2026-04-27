@@ -31,7 +31,235 @@ from apps.courses.maic_voices import (
 )
 from apps.courses.prompts.loader import load_prompt
 
+# TEST-P1-9: MAICPhase + log_extra live in apps.courses._log_helpers so
+# tasks/views/services can import them without dragging in the full LLM
+# generation module.  Re-exported here so legacy callers that imported
+# these names from ``maic_generation_service`` keep working without
+# churn (SPRINT-2-BATCH-8-F2: ``_log_extra`` alias deleted).
+from apps.courses._log_helpers import MAICPhase, log_extra  # noqa: F401
+
+# TEST-P1-10: Prometheus instruments for the MAIC pipeline. Only the
+# call-site decorations live in this module; the global Counter/Histogram
+# objects are defined in utils.metrics so tests can read REGISTRY samples
+# without importing the heavy generation surface.
+from utils.metrics import (
+    maic_scene_generation_total,
+    time_llm_call,
+)
+
 logger = logging.getLogger(__name__)
+
+# ─── Scene Content Length Budgets ────────────────────────────────────────────
+#
+# Server-side caps for LLM-generated scene content. These match what the
+# frontend SlideRenderer / action-engine can comfortably display and are the
+# source of truth. Frontend caps (where they exist) are advisory; these enforce.
+# Truncation preserves word boundaries so rendered text doesn't end mid-word.
+
+SLIDE_TITLE_MAX_CHARS = 120
+SLIDE_BULLET_MAX_CHARS = 280
+SLIDE_BULLETS_MAX_COUNT = 7
+SPEAKER_NOTES_MAX_CHARS = 1500
+SCENE_SPEECH_MAX_CHARS = 2000
+QUIZ_QUESTION_MAX_CHARS = 400
+QUIZ_OPTION_MAX_CHARS = 200
+
+
+def _truncate_to_word_boundary(text: str, max_chars: int) -> str:
+    """Truncate *text* to *max_chars*, snapping back to the last word boundary.
+
+    If the text is already within budget the original string is returned
+    unchanged (no copy). The result always has ``len(result) <= max_chars``.
+
+    Defensive fallback: if snapping to a word boundary would produce an empty
+    string (e.g. input is pure whitespace longer than *max_chars*), the
+    function falls back to a hard character slice so the caller always gets
+    a non-empty result when the original text is non-empty.
+    """
+    if len(text) <= max_chars:
+        return text
+    truncated = text[:max_chars]
+    # Walk backwards to the last whitespace so we don't cut mid-word.
+    last_space = truncated.rfind(" ")
+    if last_space > 0:
+        truncated = truncated[:last_space]
+    result = truncated.rstrip()
+    # F3 / SPRINT-2-BATCH-5-F5 defensive fallback: pure-whitespace input after
+    # rstrip produces an empty string.  Trim leading whitespace first and
+    # hard-slice — this returns meaningful content when the input starts with
+    # spaces but has real words after.  If the ENTIRE input is whitespace,
+    # lstrip() yields "" and we return "" so the upstream caller can decide
+    # whether to substitute a placeholder.
+    if not result:
+        lstripped = text.lstrip()
+        return lstripped[:max_chars]
+    return result
+
+
+def _enforce_length_budgets(
+    parsed: dict,
+    scene_type: str,
+    classroom_id: str | None = None,
+) -> dict:
+    """Truncate over-budget LLM-generated fields in *parsed* in place.
+
+    Covers:
+    - slides[*].title              → SLIDE_TITLE_MAX_CHARS
+    - slides[*].elements[*] bullet text → SLIDE_BULLET_MAX_CHARS (body elements)
+    - slides[*].elements[] bullet count → SLIDE_BULLETS_MAX_COUNT
+    - slides[*].speakerScript / speakerNotes → SPEAKER_NOTES_MAX_CHARS
+    - actions[*].text (speech)     → SCENE_SPEECH_MAX_CHARS
+    - questions[*].text            → QUIZ_QUESTION_MAX_CHARS
+    - questions[*].options[*].text / options[*] string → QUIZ_OPTION_MAX_CHARS
+
+    Logs a structured WARN for each field that required truncation so the ops
+    team can track budget-hit rates per generation path.
+
+    The helper is idempotent — running it twice on already-truncated output
+    produces no further mutation and no second log emission.
+
+    Parameters
+    ----------
+    parsed :
+        The parsed LLM output dict (mutated in place).
+    scene_type :
+        Caller label (e.g. ``"lecture"``, ``"quiz"``, ``"scene_actions"``)
+        forwarded into the structured log ``path`` field.
+    classroom_id :
+        Optional classroom UUID for log correlation. Forwarded into the
+        structured WARN so ops can filter budget hits by classroom.
+
+    Returns
+    -------
+    dict
+        The (possibly mutated) *parsed* dict.
+    """
+
+    def _warn(field: str, original: int, truncated: int) -> None:
+        logger.warning(
+            "length_budget_truncate: %s.%s %d→%d chars",
+            scene_type, field, original, truncated,
+            extra=log_extra(
+                MAICPhase.ENFORCE_BUDGETS,
+                classroom_id,
+                metric="length_budget_truncate",
+                path=scene_type,
+                field=field,
+                original_chars=original,
+                truncated_chars=truncated,
+            ),
+        )
+
+    # ── slides ──────────────────────────────────────────────────────────────
+    for slide in parsed.get("slides") or []:
+        if not isinstance(slide, dict):
+            continue
+
+        # title
+        title = slide.get("title")
+        if isinstance(title, str):
+            capped = _truncate_to_word_boundary(title, SLIDE_TITLE_MAX_CHARS)
+            if len(capped) < len(title):
+                _warn("slide.title", len(title), len(capped))
+                slide["title"] = capped
+
+        # speakerScript / speakerNotes
+        for notes_key in ("speakerScript", "speakerNotes"):
+            notes = slide.get(notes_key)
+            if isinstance(notes, str):
+                capped = _truncate_to_word_boundary(notes, SPEAKER_NOTES_MAX_CHARS)
+                if len(capped) < len(notes):
+                    _warn(f"slide.{notes_key}", len(notes), len(capped))
+                    slide[notes_key] = capped
+
+        # elements — bullet text + bullet count
+        elements = slide.get("elements")
+        if isinstance(elements, list):
+            # Count-cap first (drop tail items)
+            body_indices = [
+                i for i, el in enumerate(elements)
+                if isinstance(el, dict) and el.get("type") in ("text", "bullet", "bullets", "list")
+            ]
+            if len(body_indices) > SLIDE_BULLETS_MAX_COUNT:
+                # Keep only the first N body elements; preserve non-bullet elements
+                body_indices_set = set(body_indices)  # F5: hoisted out of comprehension
+                keep_body = set(body_indices[:SLIDE_BULLETS_MAX_COUNT])
+                new_elements = [
+                    el for i, el in enumerate(elements)
+                    if i not in body_indices_set or i in keep_body
+                ]
+                _warn("slide.bullets_count", len(body_indices), SLIDE_BULLETS_MAX_COUNT)
+                slide["elements"] = new_elements
+                elements = slide["elements"]
+
+            # Per-bullet text cap
+            for el in elements:
+                if not isinstance(el, dict):
+                    continue
+                if el.get("type") in ("text", "bullet", "bullets", "list"):
+                    content = el.get("content")
+                    if isinstance(content, str):
+                        capped = _truncate_to_word_boundary(content, SLIDE_BULLET_MAX_CHARS)
+                        if len(capped) < len(content):
+                            _warn("slide.bullet_text", len(content), len(capped))
+                            el["content"] = capped
+
+    # ── actions (scene_actions path) ─────────────────────────────────────────
+    for action in parsed.get("actions") or []:
+        if not isinstance(action, dict):
+            continue
+        if action.get("type") == "speech":
+            text = action.get("text")
+            if isinstance(text, str):
+                capped = _truncate_to_word_boundary(text, SCENE_SPEECH_MAX_CHARS)
+                if len(capped) < len(text):
+                    _warn("action.speech.text", len(text), len(capped))
+                    action["text"] = capped
+
+    # ── quiz questions ────────────────────────────────────────────────────────
+    for question in parsed.get("questions") or []:
+        if not isinstance(question, dict):
+            continue
+        q_text = question.get("text") or question.get("question")
+        q_key = "text" if "text" in question else "question"
+        if isinstance(q_text, str):
+            capped = _truncate_to_word_boundary(q_text, QUIZ_QUESTION_MAX_CHARS)
+            if len(capped) < len(q_text):
+                _warn("quiz.question_text", len(q_text), len(capped))
+                question[q_key] = capped
+
+        # options — may be list of strings or list of dicts with "text"
+        for opt in question.get("options") or []:
+            if isinstance(opt, str):
+                # Can't mutate a list element directly without index — handled below
+                pass
+            elif isinstance(opt, dict):
+                opt_text = opt.get("text")
+                if isinstance(opt_text, str):
+                    capped = _truncate_to_word_boundary(opt_text, QUIZ_OPTION_MAX_CHARS)
+                    if len(capped) < len(opt_text):
+                        _warn("quiz.option_text", len(opt_text), len(capped))
+                        opt["text"] = capped
+
+        # Handle string-list options (replace in list)
+        options = question.get("options")
+        if isinstance(options, list):
+            new_opts = []
+            changed = False
+            for opt in options:
+                if isinstance(opt, str):
+                    capped = _truncate_to_word_boundary(opt, QUIZ_OPTION_MAX_CHARS)
+                    if len(capped) < len(opt):
+                        _warn("quiz.option_text", len(opt), len(capped))
+                        changed = True
+                    new_opts.append(capped)
+                else:
+                    new_opts.append(opt)
+            if changed:
+                question["options"] = new_opts
+
+    return parsed
+
 
 # ─── Agent Voice Mapping ─────────────────────────────────────────────────────
 #
@@ -153,22 +381,43 @@ def _build_llm_headers(config: TenantAIConfig) -> dict:
 
 
 def _get_llm_url(config: TenantAIConfig) -> str:
-    """Get the chat completions URL for the configured provider."""
-    if config.llm_base_url:
-        base = config.llm_base_url.rstrip("/")
-        return f"{base}/chat/completions"
+    """Get the chat completions URL for the configured provider.
+
+    SSRF guard (SEC-P0-3, 2026-04-23): ``config.llm_base_url`` is user-editable
+    by SCHOOL_ADMIN. Without validation a malicious admin can point the proxy
+    at AWS IMDS (169.254.169.254), local Redis, internal RFC1918 addresses, or
+    custom hostnames that resolve to those. ``safe_outbound_url_or_fallback``
+    runs scheme + DNS-resolution checks and silently falls back to the
+    provider default on rejection (logged).
+    """
+    from utils.url_safety import safe_outbound_url_or_fallback
     provider_urls = {
         "openai": "https://api.openai.com/v1/chat/completions",
         "openrouter": "https://openrouter.ai/api/v1/chat/completions",
         "anthropic": "https://api.anthropic.com/v1/messages",
         "google": "https://generativelanguage.googleapis.com/v1beta/chat/completions",
     }
-    return provider_urls.get(config.llm_provider, "https://openrouter.ai/api/v1/chat/completions")
+    default_url = provider_urls.get(
+        config.llm_provider,
+        "https://openrouter.ai/api/v1/chat/completions",
+    )
+    if config.llm_base_url:
+        candidate = f"{config.llm_base_url.rstrip('/')}/chat/completions"
+        return safe_outbound_url_or_fallback(candidate, default_url)
+    return default_url
 
 
 def _call_llm(config: TenantAIConfig, system_prompt: str, user_prompt: str,
-              temperature: float = 0.7, max_tokens: int = 4096) -> str | None:
-    """Call the tenant's LLM provider and return text response."""
+              temperature: float = 0.7, max_tokens: int = 4096,
+              caller: str = "unknown") -> str | None:
+    """Call the tenant's LLM provider and return text response.
+
+    ``caller`` is a free-form path tag piped into the
+    ``maic_llm_call_duration_seconds`` Prometheus histogram so dashboards can
+    slice latency by generation phase (e.g. ``"generate_scene_content:lecture"``).
+    Defaults to ``"unknown"`` so existing call sites compile, but the
+    JSON-retry wrapper threads its own ``caller`` through.
+    """
     url = _get_llm_url(config)
     headers = _build_llm_headers(config)
 
@@ -182,21 +431,60 @@ def _call_llm(config: TenantAIConfig, system_prompt: str, user_prompt: str,
         "max_tokens": max_tokens,
     }
 
-    try:
-        resp = http_requests.post(url, headers=headers, json=payload, timeout=120)
-        resp.raise_for_status()
-        data = resp.json()
-        choices = data.get("choices") or []
-        if choices:
-            text = choices[0].get("message", {}).get("content", "").strip()
-            if text:
-                return text
-        logger.warning("LLM returned empty response from %s", config.llm_model)
-    except http_requests.HTTPError as e:
-        logger.error("LLM HTTP error: %s — %s", e.response.status_code if e.response else "?",
-                      e.response.text[:500] if e.response else str(e))
-    except Exception as e:
-        logger.error("LLM call failed: %s", e)
+    provider = (getattr(config, "llm_provider", None) or "unknown")
+
+    # TEST-P1-10: Wrap the entire HTTP round-trip + parse so timeouts and
+    # HTTPErrors still record into the long-tail bucket — that's exactly the
+    # signal we want to alert on.
+    with time_llm_call(provider=provider, path=caller):
+        try:
+            resp = http_requests.post(url, headers=headers, json=payload, timeout=120)
+            resp.raise_for_status()
+            data = resp.json()
+            choices = data.get("choices") or []
+            if choices:
+                text = choices[0].get("message", {}).get("content", "").strip()
+                if text:
+                    return text
+            logger.warning(
+                "LLM returned empty response from %s",
+                config.llm_model,
+                extra=log_extra(
+                    MAICPhase.LLM_CALL,
+                    metric="llm_empty_response",
+                    outcome="empty",
+                    provider=config.llm_provider,
+                    model=config.llm_model,
+                ),
+            )
+        except http_requests.HTTPError as e:
+            logger.error(
+                "LLM HTTP error: %s — %s",
+                e.response.status_code if e.response else "?",
+                e.response.text[:500] if e.response else str(e),
+                extra=log_extra(
+                    MAICPhase.LLM_CALL,
+                    metric="llm_http_error",
+                    outcome="http_error",
+                    provider=config.llm_provider,
+                    model=config.llm_model,
+                    status_code=(e.response.status_code if e.response else None),
+                    error_type=type(e).__name__,
+                ),
+            )
+        except Exception as e:
+            logger.error(
+                "LLM call failed: %s",
+                e,
+                extra=log_extra(
+                    MAICPhase.LLM_CALL,
+                    metric="llm_call_failed",
+                    outcome="exception",
+                    provider=config.llm_provider,
+                    model=config.llm_model,
+                    error_type=type(e).__name__,
+                ),
+            )
     return None
 
 
@@ -215,9 +503,181 @@ def _parse_json_from_llm(text: str) -> dict | list | None:
         cleaned = "\n".join(lines)
     try:
         return json.loads(repair_json(cleaned))
-    except Exception:
-        logger.warning("Failed to parse LLM JSON output: %s...", cleaned[:200])
+    except Exception as exc:
+        logger.warning(
+            "Failed to parse LLM JSON output: %s...",
+            cleaned[:200],
+            extra=log_extra(
+                MAICPhase.LLM_CALL,
+                metric="llm_json_parse_failed",
+                outcome="parse_failed",
+                error_type=type(exc).__name__,
+            ),
+        )
         return None
+
+
+def _call_llm_with_json_retry(
+    config: TenantAIConfig,
+    system_prompt: str,
+    user_prompt: str,
+    *,
+    temperature: float = 0.7,
+    max_tokens: int = 4096,
+    max_attempts: int = 3,
+    validator=None,
+    post_process=None,
+    context_label: str = "",
+    classroom_id: str | None = None,
+    caller: str,
+) -> tuple[dict | list | None, str | None]:
+    """Call the LLM and parse JSON, re-asking on parse failure.
+
+    On JSON-parse failure we re-prompt at a lower temperature (0.2) with a
+    continuation prompt that shows the LLM the last ~200 chars of its
+    previous broken output and asks it to return ONLY valid JSON with the
+    same schema. This covers almost-valid outputs (trailing commas,
+    truncation, prose-before-JSON, etc.) that `json_repair` alone cannot
+    salvage.
+
+    Parameters
+    ----------
+    validator : callable, optional
+        If provided, called as ``validator(parsed)`` and must return True
+        for the attempt to be considered successful. Lets callers reject
+        structurally-valid JSON that's missing a required key (e.g.
+        ``"slides"`` or ``"actions"``).
+
+        Contract details:
+        - The validator receives ONLY the parsed Python object (``dict``,
+          ``list``, or a primitive — never ``None``, which is short-circuited
+          before this call, and never the raw LLM string).
+        - Any exception raised by the validator is caught and treated as a
+          failed attempt (same as returning ``False``). This keeps a buggy
+          validator from crashing the generation pipeline mid-retry.
+    post_process : callable, optional
+        If provided, called as ``post_process(parsed)`` **after** successful
+        parse and **before** the validator runs. Intended for idempotent
+        in-place mutations (e.g. length-budget enforcement via
+        ``_enforce_length_budgets``). Any exception raised is swallowed and
+        the unprocessed ``parsed`` is passed to the validator instead. The
+        callable may mutate ``parsed`` in place and/or return it; the return
+        value is used if truthy, otherwise the original ``parsed`` is kept.
+    context_label : str
+        Short tag used in log messages (e.g. "scene-content"). Helps grep
+        retry rates per path in production logs.
+    classroom_id : str, optional
+        Included in retry log lines when provided, per CG-P0-1 spec, so
+        we can correlate retries with a specific classroom generation.
+    caller : str
+        Stable identifier for the code path that invoked this helper
+        (e.g. ``"generate_scene_content:lecture"``). Used as the
+        ``path`` field in structured WARN/ERROR log records so ops can
+        aggregate retry rates per generation path without grep-ing free
+        text. Defaults to ``"unknown"``.
+
+    Returns
+    -------
+    (parsed, raw_text)
+        ``parsed`` is the validated JSON (dict/list) on success, ``None``
+        if every attempt failed. ``raw_text`` is the last raw string the
+        LLM produced (useful for callers that want to log final failure).
+        Both are ``None`` when the LLM itself returned empty on the first
+        call (no text to retry against).
+    """
+    current_temp = temperature
+    current_prompt = user_prompt
+    last_raw: str | None = None
+
+    for attempt in range(1, max_attempts + 1):
+        raw = _call_llm(
+            config,
+            system_prompt,
+            current_prompt,
+            temperature=current_temp,
+            max_tokens=max_tokens,
+            caller=caller,
+        )
+        if not raw:
+            # Empty LLM response — no tail to retry against, and the
+            # caller's fallback is the right landing spot. Don't burn
+            # more attempts chasing a silent provider.
+            if attempt == 1:
+                return None, None
+            # Subsequent empty: also bail.
+            return None, last_raw
+
+        last_raw = raw
+        parsed = _parse_json_from_llm(raw)
+        # Apply optional post-processing (e.g. length-budget enforcement)
+        # BEFORE the validator so schema constraints run on the cleaned output.
+        if parsed is not None and post_process is not None:
+            try:
+                result = post_process(parsed)
+                if result is not None:
+                    parsed = result
+            except Exception:
+                pass  # post_process failure is non-fatal; validator decides fate
+        validator_ok = True
+        if parsed is not None and validator is not None:
+            try:
+                validator_ok = bool(validator(parsed))
+            except Exception:
+                validator_ok = False
+
+        if parsed is not None and validator_ok:
+            if attempt > 1:
+                logger.info(
+                    "LLM JSON recovered on attempt %d [%s]%s",
+                    attempt,
+                    context_label or "llm",
+                    f" classroom={classroom_id}" if classroom_id else "",
+                )
+            return parsed, raw
+
+        # Parse/validation failed — prepare retry.
+        if attempt >= max_attempts:
+            logger.error(
+                "LLM JSON failed after %d attempts — falling back",
+                attempt,
+                extra=log_extra(
+                    MAICPhase.JSON_RETRY,
+                    classroom_id,
+                    metric="llm_json_retry",
+                    path=caller,
+                    attempts=attempt,
+                    outcome="fallback",
+                ),
+            )
+            return None, raw
+
+        tail = raw[-200:] if raw else ""
+        logger.warning(
+            "LLM JSON parse failed on attempt %d/%d — retrying at temp=0.2",
+            attempt,
+            max_attempts,
+            extra=log_extra(
+                MAICPhase.JSON_RETRY,
+                classroom_id,
+                metric="llm_json_retry",
+                attempt=attempt,
+                path=caller,
+            ),
+        )
+        # Lower temperature + explicit continuation prompt biases the LLM
+        # toward deterministic, schema-faithful output on the retry. We
+        # keep the original system prompt intact so the JSON schema
+        # remains the single source of truth for shape.
+        current_temp = 0.2
+        current_prompt = (
+            f"{user_prompt}\n\n"
+            "Your previous response was not valid JSON. "
+            f"Here are the last 200 characters of what you returned: {tail!r}\n"
+            "Please return ONLY valid JSON with the same schema, nothing else. "
+            "No prose, no markdown fences, no commentary."
+        )
+
+    return None, last_raw
 
 
 # ─── Agent Profile Generation ────────────────────────────────────────────────
@@ -329,6 +789,11 @@ def generate_agent_profiles_json(
     base_user_prompt = f'Generate the agents for the topic "{topic}" in {language}.'
 
     last_error = None
+    # NOTE: Intentionally retains its own retry loop — the voice-gender
+    # auto-fix below (_auto_fix_voice_gender_mismatches) is a mid-attempt
+    # repair not modeled by _call_llm_with_json_retry(). Unifying would
+    # lose that auto-fix branch. See SPRINT-2-BATCH-1 review 2026-04-24
+    # (CG-P0-1-F4).
     for attempt in range(3):
         # On retry, inject the prior error so the LLM has explicit
         # guidance instead of blindly repeating the same pick.
@@ -453,9 +918,290 @@ def _sse_done() -> str:
     return "data: [DONE]\n\n"
 
 
+# ─── Audience / Context Guidance ─────────────────────────────────────────────
+#
+# The wizard passes optional grade_level / subject / syllabus_board /
+# audience_role fields. We translate those into concrete prose guidance that
+# gets injected into every system prompt so the LLM produces materially
+# different content for (say) a Grade 4 reader vs. a Grade 12 reader, and so
+# that CBSE/ICSE/IB board conventions nudge vocabulary and scope. Keep each
+# helper cheap and deterministic — no LLM calls, no I/O.
+
+_GRADE_BAND_ELEMENTARY = "elementary"
+_GRADE_BAND_MIDDLE = "middle"
+_GRADE_BAND_HIGH = "high"
+_GRADE_BAND_TEACHER = "teacher_cpd"
+_GRADE_BAND_GENERIC = "generic"
+
+
+def _grade_band(grade_level: str) -> str:
+    """Map a free-form grade label to one of the coarse bands we tune for.
+
+    Accepts inputs like "Grade 8", "8", "Class VIII", "Teacher CPD", etc.
+    Falls back to "generic" when nothing parses — callers rely on this to
+    keep existing flows working.
+    """
+    if not grade_level:
+        return _GRADE_BAND_GENERIC
+    raw = str(grade_level).strip().lower()
+    if not raw:
+        return _GRADE_BAND_GENERIC
+    if "teacher" in raw or "cpd" in raw or "professional" in raw:
+        return _GRADE_BAND_TEACHER
+    # Pick the first integer we see, if any.
+    digits = ""
+    for ch in raw:
+        if ch.isdigit():
+            digits += ch
+        elif digits:
+            break
+    if digits:
+        try:
+            n = int(digits)
+        except ValueError:
+            return _GRADE_BAND_GENERIC
+        if 1 <= n <= 5:
+            return _GRADE_BAND_ELEMENTARY
+        if 6 <= n <= 8:
+            return _GRADE_BAND_MIDDLE
+        if 9 <= n <= 12:
+            return _GRADE_BAND_HIGH
+    return _GRADE_BAND_GENERIC
+
+
+# Guidance text, anchor examples, and register words per band. Kept short so
+# the three prompts stay well under the ~2000-token budget.
+_BAND_GUIDANCE: dict[str, dict[str, str]] = {
+    _GRADE_BAND_ELEMENTARY: {
+        "label": "Elementary (Grades 1–5)",
+        "register": (
+            "Use short, concrete sentences (max ~12 words). Prefer "
+            "one- or two-syllable words. Introduce no more than one "
+            "equation per concept, and only when unavoidable. Use "
+            "concrete analogies grounded in daily life (toys, food, "
+            "weather). Avoid domain jargon entirely; if a technical "
+            "word appears, give a plain-language definition in the same "
+            "sentence. Keep paragraph length to 1–2 sentences."
+        ),
+        "anchor": (
+            "Anchor example (target reading level):\n"
+            "  Topic 'Gravity' — write like: 'Gravity is the pull that "
+            "keeps us on the ground. It is why a ball falls when you let "
+            "it go.'"
+        ),
+    },
+    _GRADE_BAND_MIDDLE: {
+        "label": "Middle (Grades 6–8)",
+        "register": (
+            "Use plain-language explanations with concrete, real-world "
+            "examples. Basic algebra and simple equations are OK. Limit "
+            "domain vocabulary and always define a term the first time "
+            "it appears. Sentences can be moderately complex (15–20 "
+            "words); paragraphs 2–4 sentences."
+        ),
+        "anchor": (
+            "Anchor example (target reading level):\n"
+            "  Topic 'Gravity' — write like: 'Gravity is the force that "
+            "pulls objects toward Earth. Heavier planets pull harder, "
+            "which is why you weigh more on Jupiter than on the Moon.'"
+        ),
+    },
+    _GRADE_BAND_HIGH: {
+        "label": "High (Grades 9–12)",
+        "register": (
+            "Use rigorous, age-appropriate formal language and the "
+            "standard domain vocabulary. Include precise definitions, "
+            "mathematical formulations where they clarify, and common "
+            "exam-style reasoning (derivations, cause-and-effect "
+            "chains, labelled diagrams). Paragraphs can be 3–5 "
+            "sentences; assume the learner can follow multi-step logic."
+        ),
+        "anchor": (
+            "Anchor example (target reading level):\n"
+            "  Topic 'Gravity' — write like: 'Gravitational force is "
+            "given by F = G·m₁·m₂ / r², where G is the universal "
+            "gravitational constant. The inverse-square dependence "
+            "explains why orbital period grows with semi-major axis per "
+            "Kepler's third law.'"
+        ),
+    },
+    _GRADE_BAND_TEACHER: {
+        "label": "Teacher CPD (professional development)",
+        "register": (
+            "Assume the audience is a practising teacher with domain "
+            "expertise. Prioritise pedagogy over re-teaching facts: "
+            "assessment strategies, common misconceptions, scaffolding "
+            "moves, curriculum alignment, differentiation, and "
+            "classroom examples. Technical vocabulary is welcome; skip "
+            "basic definitions. Reference formative-assessment "
+            "techniques and Bloom-style cognitive demand where useful."
+        ),
+        "anchor": (
+            "Anchor example (target register):\n"
+            "  Topic 'Gravity' — write like: 'Learners commonly "
+            "conflate mass and weight; surface the distinction with a "
+            "weigh-anywhere thought experiment before formalising "
+            "F = mg. Pair with an exit-ticket that requires students "
+            "to predict weight on the Moon given Earth-weight.'"
+        ),
+    },
+    _GRADE_BAND_GENERIC: {
+        "label": "General audience (no grade specified)",
+        "register": (
+            "Default to a clear, neutral register suitable for a "
+            "motivated general learner. Define technical terms the "
+            "first time they appear. Prefer concrete examples over "
+            "abstractions when introducing a new idea."
+        ),
+        "anchor": "",
+    },
+}
+
+
+_BOARD_GUIDANCE: dict[str, str] = {
+    "CBSE": (
+        "Follow NCERT scope and sequence. Prefer SI units, NCERT-style "
+        "worked examples, and the terminology used in NCERT textbooks."
+    ),
+    "ICSE": (
+        "Follow CISCE / ICSE syllabus conventions. Favour structured "
+        "definitions, stepwise derivations, and the ICSE exam answer "
+        "pattern (state · explain · illustrate)."
+    ),
+    "IB": (
+        "Align with IB DP / MYP command terms (define, describe, "
+        "explain, evaluate, justify). Use TOK-aware framing where "
+        "natural, and prefer IB-style data-response examples."
+    ),
+    "CambridgeIGCSE": (
+        "Align with Cambridge IGCSE syllabus and command terms. Prefer "
+        "SI units and Cambridge-style mark-scheme phrasing ('state', "
+        "'describe', 'explain')."
+    ),
+    "State": (
+        "Follow a generic Indian State Board convention: keep examples "
+        "locally relevant and vocabulary accessible; avoid assuming "
+        "board-specific advanced topics."
+    ),
+    "Generic": (
+        "No specific board — use widely-accepted conventions and SI "
+        "units; avoid board-specific jargon."
+    ),
+}
+
+
+def _normalize_board(syllabus_board: str) -> str:
+    """Return a canonical board key or 'Generic' when unrecognized."""
+    if not syllabus_board:
+        return "Generic"
+    raw = str(syllabus_board).strip()
+    # Case-insensitive match against known keys.
+    for key in _BOARD_GUIDANCE:
+        if raw.lower() == key.lower():
+            return key
+    # A few common aliases.
+    low = raw.lower().replace(" ", "")
+    if low in {"igcse", "cambridge", "cambridgeigcse"}:
+        return "CambridgeIGCSE"
+    if low in {"stateboard", "state"}:
+        return "State"
+    return "Generic"
+
+
+def _subject_guidance(subject: str) -> str:
+    """Subject-specific guardrails. Free-form subject; we pattern-match a few
+    common ones and fall back to a generic line that still mentions the
+    subject name so it shows up in the prompt."""
+    if not subject:
+        return ""
+    s = str(subject).strip()
+    if not s:
+        return ""
+    low = s.lower()
+    if "phys" in low:
+        return (
+            f"In {s}, use SI units; state assumptions (ideal gas, "
+            "frictionless, point mass, etc.) before deriving equations; "
+            "draw free-body diagrams when forces are discussed."
+        )
+    if "chem" in low:
+        return (
+            f"In {s}, balance all equations; include state symbols "
+            "(s, l, g, aq); use IUPAC names on first mention."
+        )
+    if "bio" in low:
+        return (
+            f"In {s}, use italics for scientific names (Genus species), "
+            "label diagrams clearly, and distinguish structure from "
+            "function in every explanation."
+        )
+    if "math" in low or "algebra" in low or "geom" in low or "calc" in low:
+        return (
+            f"In {s}, show every non-trivial step; state the theorem or "
+            "identity being applied; keep variables and constants "
+            "consistently typeset."
+        )
+    if "english" in low or "literature" in low or "language" in low:
+        return (
+            f"In {s}, quote the text exactly, cite line/paragraph "
+            "references when possible, and distinguish literal meaning "
+            "from interpretation."
+        )
+    if "history" in low or "civic" in low or "social" in low:
+        return (
+            f"In {s}, anchor claims to dates and places; separate primary "
+            "evidence from interpretation; name sources when asserting "
+            "causation."
+        )
+    if "computer" in low or "cs" in low or "program" in low:
+        return (
+            f"In {s}, include runnable code snippets with consistent "
+            "indentation; state time/space complexity where relevant; "
+            "prefer pseudocode when teaching an algorithm before the "
+            "language-specific implementation."
+        )
+    return f"Subject is {s}: use vocabulary and examples appropriate to this subject."
+
+
+def _audience_preamble(audience_role: str) -> str:
+    """One-line opening that flips content from learner-facing to teacher-CPD
+    when the authenticated user is a teacher generating PD material."""
+    if (audience_role or "").strip().lower() == "teacher":
+        return (
+            "AUDIENCE: practising teachers (professional development). "
+            "Centre pedagogy, assessment design, and classroom moves — "
+            "not remedial instruction."
+        )
+    return "AUDIENCE: students in the indicated grade band."
+
+
+def _context_block(grade_level: str, subject: str, syllabus_board: str,
+                   audience_role: str) -> str:
+    """Compose the CONTEXT preamble injected at the top of every system
+    prompt. Ordering matters: audience → grade band → subject → board → anchor
+    example. Keep the label lines terse; LLMs pattern-match on them."""
+    band = _grade_band(grade_level)
+    band_info = _BAND_GUIDANCE[band]
+    board = _normalize_board(syllabus_board)
+    lines = [
+        "=== AUDIENCE & CONTEXT ===",
+        _audience_preamble(audience_role),
+        f"Grade level: {grade_level or '(unspecified)'} — band: {band_info['label']}.",
+        f"Register guidance: {band_info['register']}",
+    ]
+    subj_line = _subject_guidance(subject)
+    if subj_line:
+        lines.append(f"Subject guidance: {subj_line}")
+    lines.append(f"Syllabus board: {board} — {_BOARD_GUIDANCE[board]}")
+    if band_info["anchor"]:
+        lines.append(band_info["anchor"])
+    lines.append("=== END CONTEXT ===")
+    return "\n".join(lines)
+
+
 # ─── Outline Generation ──────────────────────────────────────────────────────
 
-OUTLINE_SYSTEM_PROMPT = """You are an expert educational content designer creating a multi-agent interactive classroom.
+_OUTLINE_BODY = """You are an expert educational content designer creating a multi-agent interactive classroom.
 
 You will receive a pre-configured agent roster. Do NOT invent new agents. Use the exact `id`s from the roster when assigning agents to scenes.
 
@@ -466,7 +1212,7 @@ Return a valid JSON object:
       "id": "scene-1",
       "title": "Scene title",
       "description": "Brief description of what this scene covers",
-      "type": "introduction|lecture|discussion|quiz|activity|pbl|case_study|summary",
+      "type": "introduction|lecture|discussion|quiz|activity|pbl|case_study|interactive|summary",
       "estimatedMinutes": 3,
       "agentIds": ["agent-1", "agent-2"],
       "slideCount": 6,
@@ -477,6 +1223,7 @@ Return a valid JSON object:
 }
 
 Rules:
+- Scene titles, descriptions, and the overall pacing MUST match the AUDIENCE & CONTEXT block above — vocabulary, depth, and examples should shift with the grade band and subject.
 - The FIRST scene MUST be type "introduction" — all agents introduce themselves and preview the class
 - The LAST scene MUST be type "summary" — wrap up key takeaways and next steps
 - Automatically insert a "quiz" scene after every 2-3 lecture/discussion scenes to reinforce learning
@@ -491,12 +1238,32 @@ Rules:
 - For "activity" scenes: set "slideCount" to 3-5
 - For "pbl" scenes: set "slideCount" to 4-6
 - For "case_study" scenes: set "slideCount" to 4-6
+- For "interactive" scenes: set "slideCount" to 1 (the interactive HTML widget IS the scene — no flat slides). Use sparingly: at most ONE per classroom, and only when the topic benefits from hands-on exploration (e.g., a physics simulation, a flowchart the student can step through, a calculator / visualizer).
 - Use agentIds ONLY from the provided roster — never invent new ids."""
+
+
+def build_outline_system_prompt(grade_level: str = "", subject: str = "",
+                                syllabus_board: str = "Generic",
+                                audience_role: str = "student") -> str:
+    """Compose the outline system prompt, with a context preamble tailored
+    to the grade band, subject, board, and audience. Defaults mean callers
+    that don't pass any context get near-identical behavior to the pre-
+    refactor prompt."""
+    return f"{_context_block(grade_level, subject, syllabus_board, audience_role)}\n\n{_OUTLINE_BODY}"
+
+
+# Back-compat: some call sites / tests may still import this constant.
+# Kept as the generic-audience rendering so legacy behavior is preserved.
+OUTLINE_SYSTEM_PROMPT = build_outline_system_prompt()
 
 
 def generate_outline_sse(topic: str, language: str, agents: list[dict],
                          scene_count: int, pdf_text: str | None,
-                         config: TenantAIConfig):
+                         config: TenantAIConfig,
+                         grade_level: str = "",
+                         subject: str = "",
+                         syllabus_board: str = "Generic",
+                         audience_role: str = "student"):
     """
     Generator that yields SSE-formatted strings for outline streaming.
     Used as the body of a StreamingHttpResponse.
@@ -504,6 +1271,12 @@ def generate_outline_sse(topic: str, language: str, agents: list[dict],
     ``agents`` is the authoritative roster produced by ``generate_agent_profiles_json``
     (or a teacher-edited variant). The outline prompt no longer invents agents;
     it assigns the supplied agent ids to scenes only.
+
+    The ``grade_level`` / ``subject`` / ``syllabus_board`` / ``audience_role``
+    args are threaded through to the system-prompt builder so the same topic
+    asked by an 8th grader vs. a 12th grader produces visibly different
+    content. All four default to values that reproduce the pre-refactor
+    (generic-audience) behavior so existing wizard flows keep working.
     """
     agent_roster_for_prompt = [{
         "id": a["id"],
@@ -517,6 +1290,19 @@ def generate_outline_sse(topic: str, language: str, agents: list[dict],
         f"\nTopic: {topic}"
         f"\nLanguage: {language}"
         f"\nNumber of scenes: {scene_count}"
+    )
+    # Echo the structured context into the user prompt too — belt-and-braces
+    # so the LLM doesn't drift past the system preamble when the outline
+    # body is long. Cheap to include; big win for adherence.
+    if grade_level:
+        user_prompt += f"\nGrade level: {grade_level}"
+    if subject:
+        user_prompt += f"\nSubject: {subject}"
+    if syllabus_board and syllabus_board != "Generic":
+        user_prompt += f"\nSyllabus board: {syllabus_board}"
+    if audience_role:
+        user_prompt += f"\nAudience: {audience_role}"
+    user_prompt += (
         "\n\nAgent roster (use these ids when assigning agents to scenes):\n"
         f"{json.dumps(agent_roster_for_prompt, indent=2)}\n"
     )
@@ -527,8 +1313,15 @@ def generate_outline_sse(topic: str, language: str, agents: list[dict],
     # Send a progress event first
     yield _sse_event("generation_progress", {"progress": 10})
 
+    system_prompt = build_outline_system_prompt(
+        grade_level=grade_level,
+        subject=subject,
+        syllabus_board=syllabus_board,
+        audience_role=audience_role,
+    )
+
     # Call LLM
-    raw = _call_llm(config, OUTLINE_SYSTEM_PROMPT, user_prompt, temperature=0.7, max_tokens=4096)
+    raw = _call_llm(config, system_prompt, user_prompt, temperature=0.7, max_tokens=4096)
 
     if not raw:
         yield _sse_event("error", {"message": "Failed to generate outline. Please try again."})
@@ -574,7 +1367,7 @@ def generate_outline_sse(topic: str, language: str, agents: list[dict],
 
 # ─── Scene Content Generation ────────────────────────────────────────────────
 
-SCENE_CONTENT_SYSTEM_PROMPT = """You are an expert educational content designer creating rich, visually appealing multi-slide presentations for an interactive AI classroom.
+_SCENE_CONTENT_BODY = """You are an expert educational content designer creating rich, visually appealing multi-slide presentations for an interactive AI classroom.
 
 Given a scene from a classroom outline, generate an ARRAY of 5-8 slides with diverse layouts and content types.
 
@@ -680,6 +1473,26 @@ Rules:
 - For introduction scenes: the speaker script should introduce the agent and preview the lesson
 - Duration should be 30-60 seconds per slide
 - Vary the background colors subtly: #FFFFFF, #F8FAFC, #F1F5F9, #FFFBEB for visual interest
+- Slide bullet text, speaker script vocabulary, and worked-example depth MUST reflect the AUDIENCE & CONTEXT block above. A Grade 4 slide on the same topic should read visibly different from a Grade 12 slide: shorter sentences, simpler vocabulary, fewer/ no equations.
+- Quiz question difficulty and distractor plausibility MUST also track the grade band — elementary quizzes stay factual and concrete; high-school quizzes can require multi-step reasoning and computation.
+
+HARD LENGTH BUDGETS (reject-if-exceeded — the renderer overflows otherwise):
+- Title text: ≤ 60 characters (single line at 28-36px).
+- Subtitle text: ≤ 90 characters (single line at 16-18px).
+- Bullet item: ≤ 90 characters each. Max 4 bullets per text block.
+- Key-takeaway text: ≤ 100 characters.
+- speakerScript: 2-4 sentences, ≤ 280 characters total.
+
+STRICT NO-OVERLAP LAYOUT (this is what was breaking the player: images and text rectangles were sharing pixels and occluding each other):
+- Before emitting a slide, verify every element's bounding box (x, y, x+width, y+height) does NOT overlap any other element's bounding box. They may touch edges but must not overlap interior pixels.
+- Reserve a 20-pixel gutter between any image and any text rectangle on the same slide.
+- Use the following SAFE ZONES for multi-element slides on the 800x450 canvas:
+  * Title region: x=40, y=20, width=720, height=60 (single-line heading only).
+  * Left text column: x=40, y=100, width=360, height=300.
+  * Right image column: x=420, y=100, width=340, height=240.
+  * Footer takeaway: x=40, y=400, width=720, height=40.
+- For single-focus slides (title slide, diagram-only slide), center one element with 40px margins.
+- NEVER place any text rectangle where the image rectangle sits; NEVER place the image rectangle on top of the title.
 
 For quiz scenes, return:
 {
@@ -698,6 +1511,20 @@ For quiz scenes, return:
     }
   ]
 }"""
+
+
+def build_scene_content_system_prompt(grade_level: str = "",
+                                      subject: str = "",
+                                      syllabus_board: str = "Generic",
+                                      audience_role: str = "student") -> str:
+    """Compose the scene-content system prompt with an audience/grade/board
+    preamble. Defaults preserve pre-refactor behavior for callers that don't
+    thread the new params through."""
+    return f"{_context_block(grade_level, subject, syllabus_board, audience_role)}\n\n{_SCENE_CONTENT_BODY}"
+
+
+# Back-compat constant.
+SCENE_CONTENT_SYSTEM_PROMPT = build_scene_content_system_prompt()
 
 
 def _fill_image_urls(parsed: dict, scene_id: str, *,
@@ -740,13 +1567,95 @@ def _fill_image_urls(parsed: dict, scene_id: str, *,
     return parsed
 
 
+SCENE_INTERACTIVE_SYSTEM_PROMPT = """You are an expert educational content designer creating a self-contained HTML simulation for a classroom scene.
+
+Return a valid JSON object of shape:
+{
+  "html": "<!doctype html>...full standalone HTML document..."
+}
+
+Rules for the HTML:
+- MUST be a single, self-contained HTML document — inline <style> and <script> only, no external URLs, no <script src>, no <link rel>, no @import, no network fetch() calls.
+- MUST work in a sandboxed iframe with `sandbox="allow-scripts"` (so NO access to localStorage, cookies, same-origin APIs, top.location, etc.).
+- Keep total size under 12 KB.
+- Centered, responsive layout; works inside a 16:9 container at any width. No fixed pixel dimensions that break under 640px wide.
+- Educational: an interactive widget the student can actually manipulate — a slider-driven visualization, a clickable diagram, a simple calculator, a step-through flowchart, etc. — directly related to the scene topic.
+- Include a visible title and a one-line instruction at the top.
+- Accessible: use semantic elements, label controls, keyboard-reachable.
+- No tracking, no analytics, no remote resources of any kind."""
+
+
 def generate_scene_content(scene: dict, agents: list, language: str,
-                           config: TenantAIConfig) -> dict | None:
-    """Generate multi-slide content for a single scene. Returns parsed dict with 'slides' array."""
+                           config: TenantAIConfig,
+                           grade_level: str = "",
+                           subject: str = "",
+                           syllabus_board: str = "Generic",
+                           audience_role: str = "student",
+                           classroom_id: str | None = None) -> dict | None:
+    """Generate multi-slide content for a single scene. Returns parsed dict with 'slides' array.
+
+    ``grade_level`` / ``subject`` / ``syllabus_board`` / ``audience_role``
+    tune the system prompt so the same scene title produces different prose
+    for different audiences. Defaults preserve existing behavior.
+
+    ``classroom_id`` is the UUID of the parent MAICClassroom (when available
+    from the caller). It is only used in the retry-log field so ops can
+    grep retries back to a specific classroom. Optional — pass ``None`` if
+    the caller is an ad-hoc generation path with no stable classroom id.
+    """
     scene_type = scene.get("type", "lecture")
     scene_id = scene.get("id", "scene-1")
     slide_count = max(3, min(12, scene.get("slideCount", 6)))
     question_count = max(2, min(8, scene.get("questionCount", 4)))
+
+    if scene_type == "interactive":
+        assigned_names = json.dumps(
+            [a["name"] for a in agents if a["id"] in scene.get("agentIds", [])]
+        )
+        user_prompt = (
+            f"Generate an interactive HTML simulation for this classroom scene:\n\n"
+            f"Scene title: {scene['title']}\n"
+            f"Scene description: {scene.get('description', '')}\n"
+            f"Language: {language}\n"
+            f"Assigned agents: {assigned_names}\n\n"
+            "Produce a single JSON object with an `html` field containing a "
+            "complete self-contained HTML document that teaches the topic "
+            "through direct manipulation (slider, clickable elements, "
+            "step-through, etc.). No external resources."
+        )
+        parsed, _raw = _call_llm_with_json_retry(
+            config, SCENE_INTERACTIVE_SYSTEM_PROMPT, user_prompt,
+            temperature=0.5, max_tokens=6144,
+            validator=lambda p: isinstance(p, dict) and bool(p.get("html")),
+            post_process=lambda p: _enforce_length_budgets(p, "interactive"),
+            context_label="scene-interactive",
+            classroom_id=classroom_id,
+            # SPRINT-2-BATCH-8-F9: pinned LLMCallPath value.
+            caller="scene_content_interactive",
+        )
+        if not parsed or not isinstance(parsed, dict) or not parsed.get("html"):
+            # TEST-P1-10: interactive LLM bailed → deterministic fallback.
+            maic_scene_generation_total.labels(
+                scene_type="interactive", outcome="fallback"
+            ).inc()
+            return _fallback_interactive_scene(scene)
+        html = str(parsed["html"])
+        # Trivial containment: strip any <script src= / <link rel= / fetch(
+        # smells that would bypass the iframe sandbox or phone home. This is
+        # belt-and-suspenders — the sandbox already blocks network, but
+        # dropping the strings keeps the markup honest.
+        for bad in ("<script src=", "<link rel=\"stylesheet\"",
+                    "<link rel='stylesheet'"):
+            if bad.lower() in html.lower():
+                # Sandbox-violating tag detected → also a fallback exit.
+                maic_scene_generation_total.labels(
+                    scene_type="interactive", outcome="fallback"
+                ).inc()
+                return _fallback_interactive_scene(scene)
+        maic_scene_generation_total.labels(
+            scene_type="interactive", outcome="ok"
+        ).inc()
+        return {"type": "interactive", "html": html, "slides": []}
 
     if scene_type == "quiz":
         user_prompt = f"""Generate content for this classroom quiz scene:
@@ -773,14 +1682,63 @@ Assigned agents: {json.dumps([a["name"] for a in agents if a["id"] in scene.get(
 Generate exactly {slide_count} slides following the layout guidelines (title slide, content slides with images, diagram slide, deep dive, key concepts, transition). EVERY slide MUST have exactly one image element with a concrete topic-relevant keyword in its `content` field. Each slide must have a unique speakerScript.
 """
 
-    raw = _call_llm(config, SCENE_CONTENT_SYSTEM_PROMPT, user_prompt,
-                    temperature=0.6, max_tokens=8192)
-    image_provider = getattr(config, "image_provider", "disabled") or "disabled"
-    if not raw:
-        return _fallback_scene_content(scene, image_provider=image_provider)
+    # Echo the grade/subject/board/audience into the user prompt so the
+    # LLM can't ignore the system preamble when the scene body is long.
+    ctx_lines = []
+    if grade_level:
+        ctx_lines.append(f"Grade level: {grade_level}")
+    if subject:
+        ctx_lines.append(f"Subject: {subject}")
+    if syllabus_board and syllabus_board != "Generic":
+        ctx_lines.append(f"Syllabus board: {syllabus_board}")
+    if audience_role:
+        ctx_lines.append(f"Audience: {audience_role}")
+    if ctx_lines:
+        user_prompt += "\nContext:\n" + "\n".join(f"  - {line}" for line in ctx_lines) + "\n"
 
-    parsed = _parse_json_from_llm(raw)
+    scene_system_prompt = build_scene_content_system_prompt(
+        grade_level=grade_level,
+        subject=subject,
+        syllabus_board=syllabus_board,
+        audience_role=audience_role,
+    )
+    # Pick the validator for the shape the current branch actually needs:
+    # quiz scenes must contain "questions"; lecture/other scenes must
+    # contain "slides" (or the legacy "slide" single-slide form). Both
+    # accept dicts with the right key so genuine schema drift (e.g. the
+    # LLM returning `{"text": "..."}` with no keys we use) now triggers
+    # a retry rather than being silently accepted.
+    if scene_type == "quiz":
+        def _scene_content_validator(p):
+            return isinstance(p, dict) and "questions" in p
+    else:
+        def _scene_content_validator(p):
+            return isinstance(p, dict) and ("slides" in p or "slide" in p)
+
+    parsed, _raw = _call_llm_with_json_retry(
+        config, scene_system_prompt, user_prompt,
+        temperature=0.6, max_tokens=8192,
+        validator=_scene_content_validator,
+        post_process=lambda p: _enforce_length_budgets(p, scene_type),
+        context_label="scene-content",
+        classroom_id=classroom_id,
+        # SPRINT-2-BATCH-8-F9: pin the path label to the LLMCallPath
+        # Literal — clamp scene_type to {lecture,quiz} for the JSON-content
+        # branch (the interactive branch uses its own caller above).
+        # Anything else is silently bucketed as `scene_content_lecture`
+        # to keep Prometheus label cardinality bounded.
+        caller=(
+            "scene_content_quiz" if scene_type == "quiz"
+            else "scene_content_lecture"
+        ),
+    )
+    image_provider = getattr(config, "image_provider", "disabled") or "disabled"
     if not parsed or not isinstance(parsed, dict):
+        # TEST-P1-10: LLM exhausted retries / returned junk → deterministic
+        # fallback content. Counter helps spot a regression in retry success.
+        maic_scene_generation_total.labels(
+            scene_type=scene_type, outcome="fallback"
+        ).inc()
         return _fallback_scene_content(scene, image_provider=image_provider)
 
     # Handle multi-slide response
@@ -823,7 +1781,68 @@ Generate exactly {slide_count} slides following the layout guidelines (title sli
         parsed["slides"] = [slide]
 
     _fill_image_urls(parsed, scene_id, image_provider=image_provider)
+    # Post-gen layout fix: auto-resolve overlapping element rectangles that
+    # the LLM still produces despite the STRICT NO-OVERLAP guidance in the
+    # prompt. Mutates slides in place so the renderer receives a clean set.
+    _fix_overlapping_elements(parsed.get("slides", []))
+    # TEST-P1-10: clean LLM output → success.
+    maic_scene_generation_total.labels(
+        scene_type=scene_type, outcome="ok"
+    ).inc()
     return parsed
+
+
+def _fix_overlapping_elements(slides: list) -> None:
+    """Detect and repair element rectangles that overlap on a slide.
+
+    The renderer positions every element absolutely on an 800x450 canvas,
+    so any two rects sharing pixels produces the "image on top of title"
+    bug seen in the AI Classroom. Strategy:
+      1. Sort elements by a "lock priority" — title text and body text
+         keep their original bounds; images and shapes get moved.
+      2. For each movable element whose rect overlaps a locked rect,
+         push it down into the next free horizontal band, or shrink
+         its height if no free band exists.
+    Idempotent; safe to run multiple times on the same slide.
+    """
+    CANVAS_W, CANVAS_H = 800, 450
+    GUTTER = 12  # pixels between any two rects
+
+    def rects_overlap(a: dict, b: dict) -> bool:
+        ax, ay = a.get("x", 0), a.get("y", 0)
+        aw, ah = a.get("width", 0), a.get("height", 0)
+        bx, by = b.get("x", 0), b.get("y", 0)
+        bw, bh = b.get("width", 0), b.get("height", 0)
+        return not (
+            ax + aw <= bx or bx + bw <= ax or ay + ah <= by or by + bh <= ay
+        )
+
+    for slide in slides:
+        elements = slide.get("elements") or []
+        if len(elements) < 2:
+            continue
+        # Text and latex elements hold their position (readability wins);
+        # images, shapes, charts, videos, and code blocks are movable.
+        def is_locked(el: dict) -> bool:
+            return el.get("type") in ("text", "latex")
+        locked = [el for el in elements if is_locked(el)]
+        movable = [el for el in elements if not is_locked(el)]
+        for el in movable:
+            # If this element overlaps any locked element, push it below
+            # the lowest overlapping locked rect, clamped to canvas.
+            for loc in locked:
+                if not rects_overlap(el, loc):
+                    continue
+                new_y = loc.get("y", 0) + loc.get("height", 0) + GUTTER
+                if new_y + el.get("height", 0) > CANVAS_H:
+                    # Shrink to fit bottom region with min 60px height
+                    new_y = max(0, CANVAS_H - el.get("height", 60) - 10)
+                el["y"] = new_y
+            # Clamp to canvas
+            if el.get("x", 0) + el.get("width", 0) > CANVAS_W:
+                el["x"] = max(0, CANVAS_W - el.get("width", 0))
+            if el.get("y", 0) + el.get("height", 0) > CANVAS_H:
+                el["height"] = max(60, CANVAS_H - el.get("y", 0) - 10)
 
 
 def _ensure_slide_has_image(slide: dict, *, scene_title: str, slide_idx: int) -> None:
@@ -862,6 +1881,34 @@ def _ensure_slide_has_image(slide: dict, *, scene_title: str, slide_idx: int) ->
     }
     elements.append(synthesized)
     slide["elements"] = elements
+
+
+def _fallback_interactive_scene(scene: dict) -> dict:
+    """Deterministic fallback when the LLM can't produce a safe interactive
+    HTML payload. Returns a minimal self-contained widget that at least
+    reflects the scene title so the student sees something coherent
+    rather than a blank iframe.
+    """
+    title = str(scene.get("title") or "Interactive activity")
+    description = str(scene.get("description") or "")
+    # Keep this tiny and static — no scripts needed.
+    safe_title = title.replace("<", "&lt;").replace(">", "&gt;")
+    safe_desc = description.replace("<", "&lt;").replace(">", "&gt;")
+    html = (
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<style>"
+        "html,body{margin:0;height:100%;font-family:system-ui,sans-serif;"
+        "background:#f8fafc;color:#0f172a;display:flex;align-items:center;"
+        "justify-content:center;padding:24px}"
+        ".card{max-width:560px;text-align:center}"
+        "h1{font-size:20px;margin:0 0 8px}p{margin:0;color:#475569;line-height:1.5}"
+        "</style></head><body>"
+        f"<div class='card'><h1>{safe_title}</h1><p>{safe_desc}</p>"
+        "<p style='margin-top:12px;font-size:12px;color:#94a3b8'>"
+        "Interactive content is being prepared.</p></div></body></html>"
+    )
+    return {"type": "interactive", "html": html, "slides": []}
 
 
 def _fallback_scene_content(scene: dict, *, image_provider: str = "disabled") -> dict:
@@ -968,7 +2015,7 @@ def _fallback_scene_content(scene: dict, *, image_provider: str = "disabled") ->
 
 # ─── Scene Actions Generation ────────────────────────────────────────────────
 
-ACTIONS_SYSTEM_PROMPT = """You are an expert director choreographing a multi-agent interactive classroom. Your job is to create a dynamic, engaging sequence where MULTIPLE agents teach together across MULTIPLE SLIDES — like a real classroom with a professor and teaching assistants.
+_ACTIONS_BODY = """You are an expert director choreographing a multi-agent interactive classroom. Your job is to create a dynamic, engaging sequence where MULTIPLE agents teach together across MULTIPLE SLIDES — like a real classroom with a professor and teaching assistants.
 
 HARD LANGUAGE RULE (read before anything else):
 - Output ONLY English. No Hindi words, no transliterated slang ("theek hai", "bilkul", "achha", "haan", "samjhe", "arre", "yaar", etc.), no code-switching, no mixed-script text.
@@ -1002,7 +2049,7 @@ Return a valid JSON object:
   ]
 }
 
-ACTION TYPES (12 types — use all of these for maximum engagement):
+ACTION TYPES (15 types — use all of these for maximum engagement):
 
 1. speech       — Agent speaks (requires: agentId, text). 1-3 sentences each.
 2. spotlight    — Highlight element glow (requires: elementId, duration in ms)
@@ -1013,9 +2060,12 @@ ACTION TYPES (12 types — use all of these for maximum engagement):
 7. wb_draw_text — Draw text on whiteboard (requires: text, x, y, fontSize, color)
 8. wb_draw_shape— Draw shape on whiteboard (requires: shape ["circle"|"rect"|"arrow"], x, y, width, height, color)
 9. wb_draw_line — Draw line on whiteboard (requires: x1, y1, x2, y2, color, strokeWidth)
-10. wb_close    — Close whiteboard overlay (no params)
-11. wb_clear    — Clear whiteboard content (no params)
-12. discussion  — Start discussion segment (requires: sessionType ["qa"|"roundtable"], topic, agentIds)
+10. wb_draw_latex — Draw a LaTeX equation on the whiteboard (requires: id, latex, left, top, width, fontSize). Use for formulas, derivations.
+11. wb_draw_code  — Seed a code block on the whiteboard (requires: id, lines, left, top, width; optional: language, fontSize). Lines can be empty to seed a block the agent then fills via wb_edit_code.
+12. wb_edit_code  — Mutate an existing code block (requires: targetId matching a prior wb_draw_code id, operation ["insert_after"|"replace_lines"|"delete_lines"], lineStart, optional lineEnd, optional content[]). Use to make code appear a few lines at a time, interleaved with speech, so the agent is "typing" the code live.
+13. wb_close    — Close whiteboard overlay (no params)
+14. wb_clear    — Clear whiteboard content (no params)
+15. discussion  — Start discussion segment (requires: sessionType ["qa"|"roundtable"], topic, agentIds)
 
 CRITICAL RULES:
 - VOICE DISCIPLINE: You MUST write speech text that reflects each agent's `speakingStyle` through ENGLISH register only — warm vs crisp, Socratic vs supportive, formal vs informal. Each agent's lines should be identifiable as that agent's voice without relying on non-English words.
@@ -1036,22 +2086,55 @@ CRITICAL RULES:
   - Agent A explains -> Agent B adds perspective -> Agent A builds on it
   - Agent B asks "What about...?" -> Agent A answers
   - Agent A says fact -> Agent B gives analogy -> Agent A summarizes
-- Use WHITEBOARD (wb_open/wb_draw_text/wb_draw_shape/wb_close) at least once per scene for formulas, diagrams, or key concepts
+- Use WHITEBOARD at least once per scene for formulas, diagrams, or key concepts.
+  NARRATED DRAWING: decompose a whiteboard explanation into SHORT alternating steps — one draw action, then one speech action referencing what just appeared, then the next draw. Do NOT emit one large draw followed by one large speech. Example rhythm for a formula:
+    wb_open
+    wb_draw_latex (the left-hand side)
+    speech ("Start from the left-hand side — mass times acceleration…")
+    wb_draw_latex (the right-hand side)
+    speech ("…equals the net force acting on the body.")
+    wb_close
+  For code walkthroughs, prefer wb_draw_code (seed) + a sequence of wb_edit_code inserts so the code appears a few lines at a time, each chunk narrated by a brief speech action. That produces the "typing code live" feel.
 - Discussion segments: if you include a "discussion" action, set `"triggerMode": "manual"` so the panel only opens when the teacher clicks the Roundtable button. Never rely on discussions auto-popping mid-scene.
 - Speech text should feel like a real conversation, not reading from notes
 - Each speech should be 1-3 sentences (short, punchy, conversational)
 - Use the speaker's role style: professors explain authoritatively, assistants ask clarifying questions, student reps voice common confusions
 - Spotlight the heading element first, then key content elements on each slide
-- Keep pauses between speakers SHORT (150-250ms) — the audio engine renders real silences, so large pauses stack into noticeable dead air. Rely on natural TTS cadence, not extra pause actions.
+- Speaker handoff: insert ONE `{"type":"pause","duration": 200}` action every time the speaker changes. Keeps long dead air out while still giving the listener a beat to register the handoff — the playback engine renders real silences, so large pauses stack into noticeable dead time. Do NOT add pauses between same-speaker turns; rely on natural TTS cadence there.
 - For introduction scenes: each agent introduces themselves personally
 - Use element IDs from the slide content for spotlight/highlight actions
 - End with a strong summary or transition statement
-- The action flow should follow the slide order: discuss slide 0, transition to 1, discuss 1, transition to 2, etc."""
+- The action flow should follow the slide order: discuss slide 0, transition to 1, discuss 1, transition to 2, etc.
+- SPEECH REGISTER MUST TRACK AUDIENCE: the AUDIENCE & CONTEXT block above dictates vocabulary, sentence length, and analogy complexity for every speech line. Dialogue for Grade 4 should use short, concrete sentences and familiar analogies; dialogue for Grade 12 can use formal domain vocabulary, definitions, and multi-clause reasoning. Teacher-CPD dialogue should foreground pedagogy (misconceptions, formative checks, scaffolding) rather than re-teaching the topic."""
+
+
+def build_actions_system_prompt(grade_level: str = "", subject: str = "",
+                                syllabus_board: str = "Generic",
+                                audience_role: str = "student") -> str:
+    """Compose the actions/director system prompt with a context preamble.
+    Defaults preserve the pre-refactor (generic-audience) behavior."""
+    return f"{_context_block(grade_level, subject, syllabus_board, audience_role)}\n\n{_ACTIONS_BODY}"
+
+
+# Back-compat constant.
+ACTIONS_SYSTEM_PROMPT = build_actions_system_prompt()
 
 
 def generate_scene_actions(scene: dict, agents: list, language: str,
-                           config: TenantAIConfig) -> dict | None:
-    """Generate rich playback actions for a multi-slide scene. Returns parsed dict."""
+                           config: TenantAIConfig,
+                           grade_level: str = "",
+                           subject: str = "",
+                           syllabus_board: str = "Generic",
+                           audience_role: str = "student",
+                           classroom_id: str | None = None) -> dict | None:
+    """Generate rich playback actions for a multi-slide scene. Returns parsed dict.
+
+    Context params tune register/vocabulary of generated dialogue. Defaults
+    preserve pre-refactor behavior.
+
+    ``classroom_id`` is threaded into the retry log field so ops can
+    correlate retry rates with a specific MAICClassroom. Optional.
+    """
     content = scene.get("content", {})
 
     # Build per-slide element descriptions for the prompt
@@ -1128,20 +2211,46 @@ IMPORTANT:
 - Reference element IDs from the slides for spotlight and highlight actions
 """
 
-    raw = _call_llm(config, ACTIONS_SYSTEM_PROMPT, user_prompt,
-                    temperature=0.5, max_tokens=4096)
-    if not raw:
-        fallback = _fallback_actions(scene, assigned_agents)
-        _stamp_action_durations(fallback.get("actions", []))
-        return fallback
+    ctx_lines = []
+    if grade_level:
+        ctx_lines.append(f"Grade level: {grade_level}")
+    if subject:
+        ctx_lines.append(f"Subject: {subject}")
+    if syllabus_board and syllabus_board != "Generic":
+        ctx_lines.append(f"Syllabus board: {syllabus_board}")
+    if audience_role:
+        ctx_lines.append(f"Audience: {audience_role}")
+    if ctx_lines:
+        user_prompt += "\nContext:\n" + "\n".join(f"  - {line}" for line in ctx_lines) + "\n"
 
-    parsed = _parse_json_from_llm(raw)
+    actions_system_prompt = build_actions_system_prompt(
+        grade_level=grade_level,
+        subject=subject,
+        syllabus_board=syllabus_board,
+        audience_role=audience_role,
+    )
+    parsed, _raw = _call_llm_with_json_retry(
+        config, actions_system_prompt, user_prompt,
+        temperature=0.5, max_tokens=4096,
+        validator=lambda p: isinstance(p, dict) and "actions" in p,
+        post_process=lambda p: _enforce_length_budgets(p, "scene_actions"),
+        context_label="scene-actions",
+        classroom_id=classroom_id,
+        caller="generate_scene_actions",
+    )
     if not parsed or not isinstance(parsed, dict) or "actions" not in parsed:
+        # TEST-P1-10: LLM bailed on actions → deterministic fallback.
+        maic_scene_generation_total.labels(
+            scene_type="scene_actions", outcome="fallback"
+        ).inc()
         fallback = _fallback_actions(scene, assigned_agents)
         _stamp_action_durations(fallback.get("actions", []))
         return fallback
 
     _stamp_action_durations(parsed["actions"])
+    maic_scene_generation_total.labels(
+        scene_type="scene_actions", outcome="ok"
+    ).inc()
     return parsed
 
 
@@ -1316,6 +2425,95 @@ def _fallback_actions(scene: dict, agents: list) -> dict:
 
 # ─── Chat Generation ────────────────────────────────────────────────────────
 
+# ─── Multi-agent Director (Porting P3.1) ─────────────────────────────────────
+#
+# Round-robin turn order feels mechanical — every agent speaks once, in
+# roster order, regardless of whether they have anything useful to say.
+# This director picks the next speaker given the conversation so far:
+# whoever would most naturally take the turn (the one being addressed,
+# the domain expert for the current sub-topic, the Socratic voice when
+# the group has agreed too quickly, etc.).
+#
+# Returns JSON: {"next_speaker_id": "...", "reasoning": "one short sentence"}
+# Front-end falls back to round-robin on empty / malformed output.
+
+DIRECTOR_TURN_SYSTEM_PROMPT = """You are a silent classroom director deciding which agent should speak next in a multi-agent discussion. You do NOT speak yourself — you only pick the next turn.
+
+Rules:
+- Return a valid JSON object with exactly two fields: `next_speaker_id` (one of the agent ids in the provided roster) and `reasoning` (one short sentence, <= 140 chars, explaining the pick).
+- Pick the agent who would most naturally speak next given the conversation state:
+  * If a prior turn directly addressed or named someone, pick them.
+  * If the group has agreed too quickly, pick someone whose persona adds friction (a Socratic questioner, a skeptic, the professor asking for evidence).
+  * If a sub-topic surfaced that matches an agent's domain or speakingStyle, pick them.
+  * Avoid picking the agent who JUST spoke unless the student explicitly asked them something.
+  * End the discussion (`next_speaker_id` = "" ) only if the conversation has reached a clear resolution.
+- Do NOT invent speaker ids outside the roster.
+- Do NOT include extra fields or prose outside the JSON object."""
+
+
+def director_next_turn(agents: list[dict], transcript: list[dict], topic: str,
+                        last_speaker_id: str | None, student_input: str | None,
+                        config: TenantAIConfig) -> dict | None:
+    """Decide which agent speaks next in a discussion. Returns
+    ``{"next_speaker_id": str, "reasoning": str}`` or ``None`` when the
+    LLM can't produce a useful answer — caller should fall back to
+    round-robin.
+
+    ``transcript`` is the prior AgentTurnSummary list (agentId, agentName,
+    contentPreview). Keeping it as a list of dicts avoids coupling to the
+    TS types; the caller passes them through unchanged.
+    """
+    roster = [{
+        "id": a.get("id"),
+        "name": a.get("name"),
+        "role": a.get("role", "professor"),
+        "persona": a.get("persona") or a.get("personality", ""),
+        "speakingStyle": a.get("speakingStyle", ""),
+    } for a in agents if a.get("id")]
+    if len(roster) < 2:
+        return None
+
+    # Cap transcript to the last ~8 turns so the prompt stays cheap even
+    # on long discussions; the rolling summary (P3.3) carries the rest.
+    tail = transcript[-8:] if len(transcript) > 8 else transcript
+    compact = [{
+        "agentId": t.get("agentId"),
+        "agentName": t.get("agentName"),
+        "preview": (t.get("contentPreview") or "")[:320],
+    } for t in tail]
+
+    user_prompt = (
+        f"Topic: {topic or '(no topic)'}\n"
+        f"Last speaker: {last_speaker_id or '(none yet)'}\n"
+        + (f"Student just said: {student_input[:500]}\n" if student_input else "")
+        + "\nAgent roster:\n"
+        + json.dumps(roster, indent=2)
+        + "\n\nTranscript so far (most recent last):\n"
+        + json.dumps(compact, indent=2)
+        + "\n\nReturn ONLY the JSON object. Empty next_speaker_id ends the discussion."
+    )
+
+    raw = _call_llm(config, DIRECTOR_TURN_SYSTEM_PROMPT, user_prompt,
+                    temperature=0.4, max_tokens=256)
+    if not raw:
+        return None
+    parsed = _parse_json_from_llm(raw)
+    if not parsed or not isinstance(parsed, dict):
+        return None
+    next_id = parsed.get("next_speaker_id")
+    if next_id is None:
+        return None
+    # Coerce and validate against the roster. Empty string is a valid
+    # "end discussion" signal; anything else must match a real id.
+    next_id = str(next_id).strip()
+    if next_id and next_id not in {a["id"] for a in roster}:
+        return None
+    return {
+        "next_speaker_id": next_id,
+        "reasoning": str(parsed.get("reasoning") or "")[:200],
+    }
+
+
 CHAT_SYSTEM_PROMPT = """You are a panel of AI teaching agents in an interactive classroom. Multiple agents should respond to the student's question, each bringing their unique perspective and their own voice.
 
 HARD LANGUAGE RULE: Output ONLY English. No Hindi words, no transliterated slang ("theek hai", "bilkul", "achha"), no code-switching. Persona flavor comes from English register (warm/precise/crisp/informal), not from non-English interjections.
@@ -1468,7 +2666,16 @@ def generate_chat_sse(message: str, classroom_title: str, agents: list,
         raw = _call_llm(config, CHAT_SYSTEM_PROMPT, user_prompt,
                         temperature=0.7, max_tokens=2048)
     except Exception as exc:  # noqa: BLE001 — defensive boundary for SSE
-        logger.warning("chat LLM call failed: %s", exc)
+        logger.warning(
+            "chat LLM call failed: %s",
+            exc,
+            extra=log_extra(
+                MAICPhase.CHAT,
+                metric="chat_llm_failed",
+                outcome="exception",
+                error_type=type(exc).__name__,
+            ),
+        )
         raw = None
 
     if not raw:
@@ -1483,7 +2690,16 @@ def generate_chat_sse(message: str, classroom_title: str, agents: list,
     try:
         parsed = _parse_json_from_llm(raw)
     except Exception as exc:  # noqa: BLE001 — defensive
-        logger.warning("chat LLM parse failed err=%s raw=%s", exc, str(raw)[:500])
+        logger.warning(
+            "chat LLM parse failed err=%s raw=%s",
+            exc, str(raw)[:500],
+            extra=log_extra(
+                MAICPhase.CHAT,
+                metric="chat_parse_failed",
+                outcome="parse_failed",
+                error_type=type(exc).__name__,
+            ),
+        )
         parsed = None
 
     if isinstance(parsed, list):
@@ -1498,7 +2714,15 @@ def generate_chat_sse(message: str, classroom_title: str, agents: list,
                 emitted += 1
         if emitted == 0:
             # Parsed list but every item was malformed — fall back to raw.
-            logger.warning("chat LLM returned list with no valid entries; raw=%s", str(raw)[:500])
+            logger.warning(
+                "chat LLM returned list with no valid entries; raw=%s",
+                str(raw)[:500],
+                extra=log_extra(
+                    MAICPhase.CHAT,
+                    metric="chat_no_valid_entries",
+                    outcome="empty_entries",
+                ),
+            )
             yield _sse_event("chat_message", {
                 "content": str(raw),
                 "agentId": agents[0].get("id", "agent-1"),
@@ -1557,6 +2781,13 @@ def generate_tts_audio(text: str, config: TenantAIConfig,
         logger.warning(
             "Edge TTS failed for %r, falling back to tenant provider %r with default voice",
             effective_voice, config.tts_provider,
+            extra=log_extra(
+                MAICPhase.TTS,
+                metric="tts_edge_fallback",
+                outcome="edge_failed",
+                voice_id=effective_voice,
+                provider=config.tts_provider,
+            ),
         )
         if config.tts_voice_id and not _is_azure_neural_voice(config.tts_voice_id):
             effective_voice = config.tts_voice_id
@@ -1576,7 +2807,16 @@ def generate_tts_audio(text: str, config: TenantAIConfig,
     tts_key = config.get_tts_api_key()
     if not tts_key:
         # No API key configured — fall back to Edge TTS as a free alternative
-        logger.info("No TTS API key for %s, falling back to Edge TTS", tts_provider)
+        logger.info(
+            "No TTS API key for %s, falling back to Edge TTS",
+            tts_provider,
+            extra=log_extra(
+                MAICPhase.TTS,
+                metric="tts_no_api_key",
+                outcome="edge_fallback",
+                provider=tts_provider,
+            ),
+        )
         return _tts_edge(text, effective_voice)
 
     try:
@@ -1588,10 +2828,29 @@ def generate_tts_audio(text: str, config: TenantAIConfig,
             # Azure TTS direct API not yet implemented — fall back to Edge TTS
             return _tts_edge(text, effective_voice)
         else:
-            logger.warning("Unsupported TTS provider: %s, falling back to Edge TTS", tts_provider)
+            logger.warning(
+                "Unsupported TTS provider: %s, falling back to Edge TTS",
+                tts_provider,
+                extra=log_extra(
+                    MAICPhase.TTS,
+                    metric="tts_unsupported_provider",
+                    outcome="edge_fallback",
+                    provider=tts_provider,
+                ),
+            )
             return _tts_edge(text, effective_voice)
     except Exception as e:
-        logger.error("TTS generation failed (%s): %s — falling back to Edge TTS", tts_provider, e)
+        logger.error(
+            "TTS generation failed (%s): %s — falling back to Edge TTS",
+            tts_provider, e,
+            extra=log_extra(
+                MAICPhase.TTS,
+                metric="tts_generation_failed",
+                outcome="edge_fallback",
+                provider=tts_provider,
+                error_type=type(e).__name__,
+            ),
+        )
         return _tts_edge(text, effective_voice)
 
 
@@ -1674,7 +2933,17 @@ def _tts_edge(text: str, voice_id: str | None) -> bytes | None:
             except OSError:
                 pass
     except Exception as e:
-        logger.error("Edge TTS generation failed: %s", e)
+        logger.error(
+            "Edge TTS generation failed: %s",
+            e,
+            extra=log_extra(
+                MAICPhase.TTS,
+                metric="tts_edge_failed",
+                outcome="edge_failed",
+                provider="edge_tts",
+                error_type=type(e).__name__,
+            ),
+        )
         return None
 
 

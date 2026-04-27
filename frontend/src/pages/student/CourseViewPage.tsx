@@ -229,7 +229,7 @@ export const CourseViewPage: React.FC = () => {
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
-    <div className="flex h-[calc(100dvh-6.5rem)] flex-col lg:h-[calc(100vh-8rem)]">
+    <div className="flex h-[calc(100dvh-6.5rem)] flex-col lg:h-[calc(100dvh-8rem)]">
       {/* ── Top bar ────────────────────────────────────────────────────────── */}
       <div className="flex flex-col gap-3 border-b border-slate-200 pb-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex min-w-0 items-center">

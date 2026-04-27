@@ -14,13 +14,25 @@ import type { MAICAction } from '../types/maic-actions';
 import type { MAICScene } from '../types/maic-scenes';
 import { maicTtsUrl, type MAICRole } from '../lib/maic/endpoints';
 
-const SCENE_TRANSITION_DELAY_MS = 1200;
+// Brief beat between scenes. Was 1200 ms — felt like a dead pause between
+// speakers. Dropped to 400 ms: enough for the slide transition animation
+// (~300 ms fade/slide) to breathe without producing an audible silence.
+// Speech prefetch (scene-wide on loadScene) + audio-unlock keep the next
+// scene's first audio starting cleanly right at the end of the beat.
+const SCENE_TRANSITION_DELAY_MS = 400;
 
 export function usePlaybackEngine(role: MAICRole = 'teacher') {
   const [playbackState, setPlaybackState] = useState<PlaybackState>('idle');
   const [currentActionIndex, setCurrentActionIndex] = useState(0);
   const [actionCount, setActionCount] = useState(0);
   const [isClassPlaying, setIsClassPlaying] = useState(false);
+  // SPRINT-2-BATCH-9-F10 — terminal "classroom complete" flag. Flips true
+  // ONLY when the engine fires `onSceneComplete` for the LAST scene while
+  // autoplay was driving the chain (i.e. the user reached the natural end
+  // of the classroom, not a manual stop). Cleared by every entry point
+  // that re-starts or rewinds playback so the e2e/screen-reader testid
+  // disappears before it can stick across runs.
+  const [classroomComplete, setClassroomComplete] = useState(false);
 
   const engineRef = useRef<MAICPlaybackEngine | null>(null);
   const actionEngineRef = useRef<MAICActionEngine | null>(null);
@@ -36,6 +48,11 @@ export function usePlaybackEngine(role: MAICRole = 'teacher') {
   const accessToken = useAuthStore((s) => s.accessToken);
   const setEngineMode = useMAICStageStore((s) => s.setEngineMode);
   const autoPlay = useMAICSettingsStore((s) => s.autoPlay);
+  // Offline-audio-durability re-wire (2026-04-26): thread the classroom id
+  // into the action engine so prefetched TTS buffers persist to IDB and the
+  // live-TTS fetch fallback can read them back. Subscribed to the store so
+  // the engine is rebuilt when navigating between classrooms.
+  const classroomId = useMAICStageStore((s) => s.classroomId);
 
   // Initialize engines when token is available
   useEffect(() => {
@@ -45,18 +62,34 @@ export function usePlaybackEngine(role: MAICRole = 'teacher') {
     const actionEngine = new MAICActionEngine({
       ttsEndpoint,
       token: accessToken,
+      classroomId: classroomId ?? undefined,
       onSpeechStart: (agentId: string, text: string) => {
-        useMAICStageStore.getState().setSpeakingAgent(agentId);
-        useMAICStageStore.getState().setSpeechText(text);
+        const s = useMAICStageStore.getState();
+        s.setSpeakingAgent(agentId);
+        s.setSpeechText(text);
+        s.setIsSpeaking(true);
       },
       onSpeechEnd: () => {
-        useMAICStageStore.getState().setSpeakingAgent(null);
-        useMAICStageStore.getState().setSpeechText(null);
+        // T0.2 — flip off the "actively speaking" flag (voice wave stops)
+        // but leave `speakingAgent` + `speechText` intact so the bubble
+        // holds the last spoken line until the next onSpeechStart
+        // overwrites them. Matches OpenMAIC: "last sentence stays on
+        // screen between speakers". Scene change / stop() resets below.
+        useMAICStageStore.getState().setIsSpeaking(false);
       },
-      onDiscussionTrigger: (sessionType: string) => {
-        useMAICStageStore
-          .getState()
-          .setDiscussionMode(sessionType as 'qa' | 'roundtable' | 'classroom');
+      // NOTE: we no longer wire `onDiscussionTrigger` to `setDiscussionMode`.
+      // That was the "discussion suddenly opens" seam — it flipped the
+      // panel on the same tick the engine hit the discussion action,
+      // before the user got a breath. The playback engine's separate
+      // `onDiscussionPending` path now owns the transition through the
+      // breath + Join/Skip gate in DiscussionGateCard.
+      onTtsUnavailable: () => {
+        // Fire a single info toast per engine lifetime. We can't call
+        // `useToast()` here (not a React context), so the host surfaces
+        // it via a window event the Stage listens for.
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new Event('maic:tts-unavailable'));
+        }
       },
       // Flip the engine-driven flag BEFORE the slide index changes so
       // Stage.tsx's auto-pause effect treats this as playback-driven
@@ -81,11 +114,18 @@ export function usePlaybackEngine(role: MAICRole = 'teacher') {
         setCurrentActionIndex(index);
       },
       onDiscussionPending: (topic: string, agentIds: string[], sessionType: string) => {
-        // Discussion triggered — the engine has soft-paused itself.
-        // The RoundtablePanel will show and call resumeAfterDiscussion() when done.
-        useMAICStageStore
-          .getState()
-          .setDiscussionMode(sessionType as 'qa' | 'roundtable' | 'classroom');
+        // Engine soft-paused itself and emitted a pending discussion.
+        // We park the metadata in `discussionPending` rather than flipping
+        // `discussionMode` directly so `DiscussionGateCard` can render a
+        // 3 s breath + Join/Skip countdown first. If the user clicks Join,
+        // `DiscussionGateCard` promotes pending → discussionMode, opening
+        // RoundtablePanel. If they Skip, it calls resumeAfterDiscussion()
+        // which un-pauses the engine to the next action.
+        useMAICStageStore.getState().setDiscussionPending({
+          topic,
+          agentIds,
+          sessionType: sessionType as 'qa' | 'roundtable' | 'classroom',
+        });
       },
       onSceneComplete: () => {
         setCurrentActionIndex(0);
@@ -107,6 +147,11 @@ export function usePlaybackEngine(role: MAICRole = 'teacher') {
             autoAdvanceRef.current = false;
             setIsClassPlaying(false);
             useMAICStageStore.getState().setPlaying(false);
+            // SPRINT-2-BATCH-9-F10 — engine reached the terminal state:
+            // we just finished the LAST scene's actions and there is no
+            // next scene to advance into. This is the e2e/SR-stable
+            // "classroom complete" signal.
+            setClassroomComplete(true);
           }
         }
       },
@@ -140,7 +185,7 @@ export function usePlaybackEngine(role: MAICRole = 'teacher') {
         delete (window as any).__maicEngine;
       }
     };
-  }, [accessToken, setEngineMode, role]);
+  }, [accessToken, setEngineMode, role, classroomId]);
 
   // ─── Controls ───────────────────────────────────────────────────────
 
@@ -207,6 +252,21 @@ export function usePlaybackEngine(role: MAICRole = 'teacher') {
     engineRef.current?.resumeAfterDiscussion();
   }, []);
 
+  // Porting P4.1 — student interrupt path exposed to chat/voice senders.
+  const handleUserInterrupt = useCallback((text: string) => {
+    engineRef.current?.handleUserInterrupt(text);
+  }, []);
+  const resumeAfterInterrupt = useCallback(() => {
+    engineRef.current?.resumeAfterInterrupt();
+  }, []);
+
+  // V.1-fix — UI-initiated discussion entry (ProactiveCard, manual
+  // Roundtable button). Pauses engine + saves checkpoint so
+  // resumeAfterDiscussion() replays cleanly when the panel closes.
+  const enterDiscussionFromUI = useCallback(() => {
+    engineRef.current?.enterDiscussionFromUI();
+  }, []);
+
   const loadScene = useCallback((scene: MAICScene) => {
     // loadScene() calls stop() internally, which bumps the action engine's
     // generationToken and tears down any in-flight audio synchronously.
@@ -216,6 +276,9 @@ export function usePlaybackEngine(role: MAICRole = 'teacher') {
     setActionCount(scene.actions?.length ?? 0);
     setCurrentActionIndex(0);
     setPlaybackState('idle');
+    // SPRINT-2-BATCH-9-F10 — any new scene load (manual nav, scene-chip
+    // click, resume after the user backs up) clears the terminal flag.
+    setClassroomComplete(false);
 
     if (autoAdvanceRef.current && !classStoppedRef.current) {
       engineRef.current?.play();
@@ -233,6 +296,16 @@ export function usePlaybackEngine(role: MAICRole = 'teacher') {
     autoAdvanceRef.current = true;
     setIsClassPlaying(true);
     store.setPlaying(true);
+    // SPRINT-2-BATCH-9-F10 — re-starting the class from the top clears
+    // the terminal flag so the testid disappears before the new run.
+    setClassroomComplete(false);
+
+    // Audio pipeline unlock: startClass runs inside the click handler that
+    // the user pressed to begin the class, so a silent-buffer play() here
+    // satisfies the browser's user-gesture requirement. Without this,
+    // subsequent auto-advanced audio.play() calls get rejected with
+    // NotAllowedError and the entire class plays silently.
+    actionEngineRef.current?.unlockAudio();
 
     // Go to scene 0 and start
     store.goToScene(0);
@@ -247,6 +320,12 @@ export function usePlaybackEngine(role: MAICRole = 'teacher') {
     autoAdvanceRef.current = true;
     setIsClassPlaying(true);
     useMAICStageStore.getState().setPlaying(true);
+    // SPRINT-2-BATCH-9-F10 — resuming from a non-terminal scene clears
+    // the flag (the user has navigated back into the body of the class).
+    setClassroomComplete(false);
+    // User gesture: unlock audio on every play press so paused-and-resumed
+    // classrooms don't revert to blocked state after a long idle.
+    actionEngineRef.current?.unlockAudio();
     engineRef.current?.play();
   }, []);
 
@@ -277,6 +356,7 @@ export function usePlaybackEngine(role: MAICRole = 'teacher') {
     currentActionIndex,
     actionCount,
     isClassPlaying,
+    classroomComplete,
     play,
     pause,
     resume,
@@ -286,6 +366,9 @@ export function usePlaybackEngine(role: MAICRole = 'teacher') {
     seekToScene,
     loadScene,
     resumeAfterDiscussion,
+    enterDiscussionFromUI,
+    handleUserInterrupt,
+    resumeAfterInterrupt,
     startClass,
     playFromCurrent,
     stopClass,

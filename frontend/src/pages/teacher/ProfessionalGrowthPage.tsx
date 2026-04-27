@@ -25,7 +25,14 @@ import type {
   CompetencyDashboard,
   CompetencySkill,
 } from '../../services/teacherService';
-import type { BadgeDefinition, TeacherBadge } from '../../services/gamificationService';
+import type {
+  BadgeDefinition,
+  TeacherBadge,
+  XPTransaction,
+  TeacherXPSummary,
+  LeaderboardResponse,
+} from '../../services/gamificationService';
+import { ActivityHeatmap, type HeatmapDay } from '../../components/analytics/ActivityHeatmap';
 import { usePageTitle } from '../../hooks/usePageTitle';
 import { cn } from '../../design-system/theme/cn';
 
@@ -542,6 +549,38 @@ export const ProfessionalGrowthPage: React.FC = () => {
     queryFn: () => gamificationService.getMyBadges(),
   });
 
+  const { data: xpHistory } = useQuery<XPTransaction[]>({
+    queryKey: ['myXPHistory'],
+    queryFn: () => gamificationService.getXPHistory(),
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const { data: xpSummary } = useQuery<TeacherXPSummary>({
+    queryKey: ['myXPSummary'],
+    queryFn: () => gamificationService.getSummary(),
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const { data: leaderboard } = useQuery<LeaderboardResponse>({
+    queryKey: ['teacherLeaderboard', 'all_time'],
+    queryFn: () => gamificationService.getLeaderboard('all_time'),
+    staleTime: 5 * 60 * 1000,
+    // Don't block page on leaderboard
+    retry: false,
+  });
+
+  // Aggregate XP by day for the heatmap
+  const heatmapData: HeatmapDay[] = React.useMemo(() => {
+    if (!xpHistory?.length) return [];
+    const byDate = new Map<string, number>();
+    for (const tx of xpHistory) {
+      if (!tx.created_at) continue;
+      const dateStr = tx.created_at.slice(0, 10); // 'YYYY-MM-DD'
+      byDate.set(dateStr, (byDate.get(dateStr) ?? 0) + Math.max(0, tx.xp_amount));
+    }
+    return Array.from(byDate.entries()).map(([date, value]) => ({ date, value }));
+  }, [xpHistory]);
+
   const isLoading = competencyLoading || badgeDefsLoading || earnedLoading;
 
   // ── Loading ────────────────────────────────────────────────────────────
@@ -642,6 +681,115 @@ export const ProfessionalGrowthPage: React.FC = () => {
           accent="bg-indigo-500"
         />
       </div>
+
+      {/* ── Activity Heatmap ─────────────────────────────────────────────── */}
+      {heatmapData.length > 0 && (
+        <ActivityHeatmap
+          data={heatmapData}
+          title="XP Activity"
+          metricLabel="XP"
+          colorScale={['#f0fdf4', '#bbf7d0', '#4ade80', '#16a34a', '#14532d']}
+        />
+      )}
+
+      {/* ── XP & Leaderboard ─────────────────────────────────────────────── */}
+      {xpSummary && !xpSummary.opted_out && (
+        <>
+          <SectionDivider title="XP & Ranking" icon={Sparkles} />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {/* XP card */}
+            <div className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm">
+              <div className="flex items-start justify-between">
+                <div>
+                  <p className="text-xs font-medium uppercase tracking-wider text-slate-400 mb-1">
+                    {xpSummary.level_name}
+                  </p>
+                  <p className="text-3xl font-bold text-slate-900 tabular-nums">
+                    {xpSummary.total_xp.toLocaleString()}
+                    <span className="text-sm font-normal text-slate-400 ml-1">XP</span>
+                  </p>
+                </div>
+                <div className="h-12 w-12 rounded-2xl bg-amber-50 flex items-center justify-center">
+                  <Sparkles className="h-6 w-6 text-amber-500" />
+                </div>
+              </div>
+
+              {/* XP progress bar to next level */}
+              {xpSummary.next_level_xp !== null && xpSummary.xp_to_next_level > 0 && (
+                <div className="mt-4">
+                  <div className="flex justify-between text-xs text-slate-400 mb-1">
+                    <span>Level {xpSummary.level}</span>
+                    <span>{xpSummary.xp_to_next_level.toLocaleString()} XP to Level {xpSummary.level + 1}</span>
+                  </div>
+                  <div className="h-2 w-full rounded-full bg-slate-100">
+                    <div
+                      className="h-2 rounded-full bg-gradient-to-r from-amber-400 to-amber-500 transition-all duration-500"
+                      style={{
+                        // next_level_xp is the absolute total-XP threshold for
+                        // the next level (not the band width). See JSDoc on
+                        // TeacherXPSummary.next_level_xp. Overall progress to
+                        // the next level = total_xp / next_level_xp.
+                        width: `${Math.max(2, Math.min(100, (xpSummary.total_xp / xpSummary.next_level_xp) * 100))}%`,
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Streak */}
+              <div className="mt-3 flex items-center gap-3">
+                <div className="flex items-center gap-1 text-sm">
+                  <Flame className="h-4 w-4 text-orange-400" />
+                  <span className="font-semibold text-slate-800">{xpSummary.current_streak}</span>
+                  <span className="text-slate-400">day streak</span>
+                </div>
+                {xpSummary.longest_streak > 0 && (
+                  <span className="text-xs text-slate-400">
+                    · Best: {xpSummary.longest_streak} days
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Leaderboard card */}
+            {leaderboard?.entries?.length ? (
+              <div className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm">
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-sm font-semibold text-slate-900">Leaderboard</p>
+                  <span className="text-[11px] text-slate-400 uppercase tracking-wide">All time</span>
+                </div>
+                <div className="space-y-2">
+                  {leaderboard.entries.slice(0, 5).map((entry) => (
+                    <div
+                      key={entry.teacher_id}
+                      className={cn(
+                        'flex items-center gap-2 rounded-lg px-3 py-2 text-sm',
+                        entry.rank <= 3 ? 'bg-amber-50' : 'bg-slate-50',
+                      )}
+                    >
+                      <span className="w-5 text-center font-bold text-xs text-slate-400 tabular-nums">
+                        {entry.rank <= 3 ? ['🥇', '🥈', '🥉'][entry.rank - 1] : `#${entry.rank}`}
+                      </span>
+                      <span className="flex-1 truncate font-medium text-slate-800">
+                        {entry.teacher_name}
+                      </span>
+                      <span className="text-xs tabular-nums text-slate-500">
+                        {entry.xp_period.toLocaleString()} XP
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50/50 p-5 flex items-center justify-center">
+                <p className="text-sm text-slate-400 text-center">
+                  Leaderboard not yet available.
+                </p>
+              </div>
+            )}
+          </div>
+        </>
+      )}
 
       {/* ── Section 1: Skills Overview ──────────────────────────────────── */}
       <SectionDivider title="Skills" icon={Target} />

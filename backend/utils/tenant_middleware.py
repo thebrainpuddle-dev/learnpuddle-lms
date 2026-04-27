@@ -64,6 +64,9 @@ class TenantMiddleware:
             '/api/users/auth/verify-email/',
             '/api/tenants/theme/',
             '/api/super-admin/',  # Super admin endpoints (no tenant context needed)
+            # SAML flow: tenant identifier is in the URL path, not the
+            # Host header, so skip membership enforcement here.
+            '/api/auth/saml/',
             '/health/',
         ]
         

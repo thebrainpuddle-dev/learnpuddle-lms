@@ -109,19 +109,38 @@ def student_or_admin(view_func):
 def check_feature(feature_name):
     """
     Decorator that checks a tenant feature flag before allowing access.
-    Usage: @check_feature('feature_video_upload')
+
+    Supports three name forms:
+      * ``'feature_video_upload'`` — direct BooleanField attribute (legacy).
+      * ``'video_upload'`` — looked up via the ``tenant.features`` dict.
+      * ``'features.video_upload'`` / ``'features[\"saml\"]'`` — explicit
+        features-dict key (used where the task spec mandates the dict form).
+
     Returns 403 with upgrade_required flag if feature is disabled.
     """
     def decorator(view_func):
         @wraps(view_func)
         def wrapper(request, *args, **kwargs):
             tenant = getattr(request, 'tenant', None) or get_current_tenant()
-            if tenant and not getattr(tenant, feature_name, False):
-                from rest_framework.response import Response
-                return Response(
-                    {"error": "This feature is not available on your plan.", "upgrade_required": True, "feature": feature_name},
-                    status=403,
-                )
+            if tenant:
+                key = feature_name
+                if key.startswith('features.'):
+                    key = key.split('.', 1)[1]
+                elif key.startswith('features[') and key.endswith(']'):
+                    key = key[len('features['):-1].strip('\'"')
+                # Try BooleanField attribute first, then the features dict.
+                if hasattr(tenant, key):
+                    enabled = bool(getattr(tenant, key, False))
+                else:
+                    features = getattr(tenant, 'features', {}) or {}
+                    short_key = key[len('feature_'):] if key.startswith('feature_') else key
+                    enabled = bool(features.get(short_key, False))
+                if not enabled:
+                    from rest_framework.response import Response
+                    return Response(
+                        {"error": "This feature is not available on your plan.", "upgrade_required": True, "feature": feature_name},
+                        status=403,
+                    )
             return view_func(request, *args, **kwargs)
         return wrapper
     return decorator

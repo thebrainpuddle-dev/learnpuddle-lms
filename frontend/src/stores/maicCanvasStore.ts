@@ -21,6 +21,12 @@ interface MAICCanvasState {
 
   addAnnotation: (annotation: WhiteboardAnnotation) => void;
   removeAnnotation: (id: string) => void;
+  /** Shallow-merge an existing annotation's fields. Used by
+   *  `wb_edit_code` to mutate `meta.codeLines` without remounting the
+   *  renderer's motion wrapper (which would replay the entry animation
+   *  on every keystroke). Skipping undo-stack push — line-level code
+   *  edits are part of playback, not user-reversible drawing actions. */
+  updateAnnotation: (id: string, patch: Partial<WhiteboardAnnotation>) => void;
   clearAnnotations: () => void;
   setAnnotations: (annotations: WhiteboardAnnotation[]) => void;
 
@@ -62,6 +68,11 @@ export const useMAICCanvasStore = create<MAICCanvasState>((set, get) => ({
       annotations: s.annotations.filter((a) => a.id !== id),
       undoStack: [...s.undoStack, s.annotations],
       redoStack: [],
+    })),
+
+  updateAnnotation: (id, patch) =>
+    set((s) => ({
+      annotations: s.annotations.map((a) => (a.id === id ? { ...a, ...patch } : a)),
     })),
 
   clearAnnotations: () =>

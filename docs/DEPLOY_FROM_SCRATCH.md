@@ -323,6 +323,8 @@ Save and exit: `Ctrl+O`, `Enter`, `Ctrl+X`.
 
 ### E.1 Start Database and Redis
 
+> **Postgres image requirement:** the `db` service must use `pgvector/pgvector:pg15` (the upstream image used in docker-compose.yml) to support the semantic search extension — not stock `postgres:15`. `ankane/pgvector:pg15` is a deprecated alias of the same image and will also work for operators on older deployments. Stock `postgres:15` will boot but semantic search will silently return empty results.
+
 ```bash
 cd /opt/lms
 docker compose -f docker-compose.prod.yml up -d db redis

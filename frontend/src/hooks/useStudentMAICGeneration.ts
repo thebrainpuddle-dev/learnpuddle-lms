@@ -370,7 +370,6 @@ export function useStudentMAICGeneration(): UseStudentMAICGenerationReturn {
           outlines: outline.scenes,
           agents,
           chatHistory: [],
-          audioCache: {},
           config: {},
           sceneSlideBounds,
           syncedAt: Date.now(),

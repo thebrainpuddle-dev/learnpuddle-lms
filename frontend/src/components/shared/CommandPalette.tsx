@@ -48,6 +48,27 @@ interface SearchResponse {
   }>;
 }
 
+interface TeacherSearchResponse {
+  results: Array<{
+    id: string;
+    first_name: string;
+    last_name: string;
+    email: string;
+    department?: string;
+    designation?: string;
+    is_active?: boolean;
+  }>;
+}
+
+interface GroupSearchResponse {
+  results: Array<{
+    id: string;
+    name: string;
+    description?: string;
+    group_type?: string;
+  }>;
+}
+
 // ─── Debounce hook ──────────────────────────────────────────────────────────
 
 function useDebounce<T>(value: T, delay: number): T {
@@ -83,6 +104,24 @@ async function fetchSearchResults(query: string): Promise<SearchResponse> {
   return response.data;
 }
 
+async function fetchTeacherResults(query: string): Promise<TeacherSearchResponse> {
+  if (query.length < 2) return { results: [] };
+  const response = await api.get('/admin/teachers/', {
+    params: { search: query, is_active: true, page_size: 5 },
+  });
+  // API may return paginated or plain array — normalise to { results: [] }
+  const data = response.data;
+  if (Array.isArray(data)) return { results: data.slice(0, 5) };
+  return { results: (data.results ?? []).slice(0, 5) };
+}
+
+async function fetchGroupResults(): Promise<GroupSearchResponse> {
+  const response = await api.get('/teacher-groups/', { params: { page_size: 50 } });
+  const data = response.data;
+  if (Array.isArray(data)) return { results: data };
+  return { results: data.results ?? [] };
+}
+
 // ─── Category config ────────────────────────────────────────────────────────
 
 const CATEGORY_META: Record<string, { label: string; order: number }> = {
@@ -109,18 +148,36 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose 
   const debouncedQuery = useDebounce(query, 300);
 
   // Fetch course/content search results
-  const { data: apiResults, isLoading } = useQuery({
+  const { data: apiResults, isLoading: isLoadingCourses } = useQuery({
     queryKey: ['commandPaletteSearch', debouncedQuery],
     queryFn: () => fetchSearchResults(debouncedQuery),
     enabled: isOpen && debouncedQuery.length >= 2,
   });
 
+  // Fetch teacher search results
+  const { data: teacherResults, isLoading: isLoadingTeachers } = useQuery({
+    queryKey: ['commandPaletteTeachers', debouncedQuery],
+    queryFn: () => fetchTeacherResults(debouncedQuery),
+    enabled: isOpen && debouncedQuery.length >= 2,
+    staleTime: 30_000,
+  });
+
+  // Fetch group list (cached; filtered client-side by query)
+  const { data: groupResults } = useQuery({
+    queryKey: ['commandPaletteGroups'],
+    queryFn: fetchGroupResults,
+    enabled: isOpen,
+    staleTime: 60_000,
+  });
+
+  const isLoading = isLoadingCourses || isLoadingTeachers;
+
   // Build combined results
   const allResults = useMemo(() => {
     const results: SearchResult[] = [];
+    const q = query.toLowerCase().trim();
 
     // Filter pages by query
-    const q = query.toLowerCase().trim();
     const matchingPages = q
       ? ADMIN_PAGES.filter(
           (p) =>
@@ -160,11 +217,49 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose 
       }
     }
 
-    // TODO: Add teacher search results from API
-    // TODO: Add group search results from API
+    // Add teacher search results from API
+    if (teacherResults?.results) {
+      for (const teacher of teacherResults.results) {
+        const fullName = [teacher.first_name, teacher.last_name].filter(Boolean).join(' ');
+        const teacherTitle = fullName || teacher.email;
+        // Show email as subtitle only when fullName is the title (avoid duplicate text)
+        const teacherSubtitle =
+          [teacher.designation, teacher.department].filter(Boolean).join(' · ') ||
+          (fullName ? teacher.email : undefined);
+        results.push({
+          id: `teacher-${teacher.id}`,
+          title: teacherTitle,
+          subtitle: teacherSubtitle,
+          category: 'teacher',
+          icon: UsersIcon,
+          href: `/admin/teachers`,
+        });
+      }
+    }
+
+    // Add group results (client-side filtered)
+    if (groupResults?.results) {
+      const matchingGroups = q
+        ? groupResults.results.filter(
+            (g) =>
+              g.name.toLowerCase().includes(q) ||
+              (g.description && g.description.toLowerCase().includes(q))
+          )
+        : [];
+      for (const group of matchingGroups.slice(0, 5)) {
+        results.push({
+          id: `group-${group.id}`,
+          title: group.name,
+          subtitle: group.description?.slice(0, 60) || group.group_type || undefined,
+          category: 'group',
+          icon: UserGroupIcon,
+          href: `/admin/groups`,
+        });
+      }
+    }
 
     return results;
-  }, [query, apiResults]);
+  }, [query, apiResults, teacherResults, groupResults]);
 
   // Group by category
   const grouped = useMemo(() => {

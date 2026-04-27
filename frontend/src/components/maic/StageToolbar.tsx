@@ -22,6 +22,7 @@ import {
   Volume2,
   VolumeX,
   SkipForward,
+  PictureInPicture2,
 } from 'lucide-react';
 import { useMAICStageStore } from '../../stores/maicStageStore';
 import { useMAICSettingsStore } from '../../stores/maicSettingsStore';
@@ -31,6 +32,21 @@ import { SettingsDialog } from './settings';
 
 interface StageToolbarProps {
   role: MAICPlayerRole;
+  /** Fullscreen toggle wired from Stage.tsx so the vendor-prefixed
+   *  fallbacks (iOS Safari webkitEnterFullscreen, etc.) stay in one
+   *  place. When omitted the toolbar falls back to its own minimal
+   *  Fullscreen-API toggle so legacy callers keep working. */
+  onToggleFullscreen?: () => void;
+  /** MOB-P0-3 — When false the Fullscreen button is hidden entirely.
+   *  iPhone Safari has no element-level Fullscreen API so tapping a
+   *  button wired to it is a silent no-op. Defaults to `true` to keep
+   *  legacy callers working on desktop/Android. */
+  fullscreenSupported?: boolean;
+  /** PiP state — when undefined the button is hidden (unsupported /
+   *  mobile). When false the button opens PiP; when true it closes it. */
+  pipSupported?: boolean;
+  pipOpen?: boolean;
+  onTogglePiP?: () => void;
 }
 
 const PLAYBACK_SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
@@ -47,6 +63,11 @@ const SLIDE_TRANSITIONS: { value: MAICSlideTransition; label: string }[] = [
 
 export const StageToolbar = React.memo<StageToolbarProps>(function StageToolbar({
   role: _role,
+  onToggleFullscreen,
+  fullscreenSupported = true,
+  pipSupported = false,
+  pipOpen = false,
+  onTogglePiP,
 }) {
   const isFullscreen = useMAICStageStore((s) => s.isFullscreen);
   const setFullscreen = useMAICStageStore((s) => s.setFullscreen);
@@ -65,13 +86,14 @@ export const StageToolbar = React.memo<StageToolbarProps>(function StageToolbar(
   const [showSettings, setShowSettings] = useState(false);
   const [showSettingsDialog, setShowSettingsDialog] = useState(false);
 
-  const toggleFullscreen = useCallback(() => {
+  const toggleFullscreenFallback = useCallback(() => {
     if (!document.fullscreenElement) {
       document.documentElement.requestFullscreen().then(() => setFullscreen(true)).catch(() => {});
     } else {
       document.exitFullscreen().then(() => setFullscreen(false)).catch(() => {});
     }
   }, [setFullscreen]);
+  const toggleFullscreen = onToggleFullscreen ?? toggleFullscreenFallback;
 
   const handleCycleSpeed = useCallback(() => {
     const currentIdx = INLINE_SPEED_CYCLE.indexOf(playbackSpeed as typeof INLINE_SPEED_CYCLE[number]);
@@ -85,7 +107,7 @@ export const StageToolbar = React.memo<StageToolbarProps>(function StageToolbar(
       <button
         type="button"
         onClick={handleCycleSpeed}
-        className="text-[10px] px-1.5 py-1 rounded-md bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 tabular-nums font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500"
+        className="inline-flex items-center justify-center min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 text-[10px] px-1.5 py-1 rounded-md bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 tabular-nums font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500"
         title={`Playback speed: ${playbackSpeed}x (click to cycle)`}
         aria-label={`Playback speed ${playbackSpeed}x`}
       >
@@ -101,7 +123,7 @@ export const StageToolbar = React.memo<StageToolbarProps>(function StageToolbar(
           type="button"
           onClick={() => setShowSettings((v) => !v)}
           className={cn(
-            'p-1.5 rounded-md transition-colors',
+            'inline-flex items-center justify-center min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 p-1.5 rounded-md transition-colors',
             'focus:outline-none focus:ring-2 focus:ring-primary-500',
             showSettings
               ? 'bg-gray-200 text-gray-900 dark:bg-gray-700 dark:text-gray-100'
@@ -240,20 +262,44 @@ export const StageToolbar = React.memo<StageToolbarProps>(function StageToolbar(
         )}
       </div>
 
-      {/* Fullscreen */}
-      <button
-        type="button"
-        onClick={toggleFullscreen}
-        className={cn(
-          'p-1.5 rounded-md transition-colors',
-          'focus:outline-none focus:ring-2 focus:ring-primary-500',
-          'text-gray-400 hover:text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:text-gray-200 dark:hover:bg-gray-800',
-        )}
-        title="Fullscreen (F11)"
-        aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
-      >
-        {isFullscreen ? <Minimize className="h-4 w-4" /> : <Maximize className="h-4 w-4" />}
-      </button>
+      {/* Document Picture-in-Picture — desktop Chrome/Edge only. Hidden
+          when unsupported (mobile, Safari, Firefox). */}
+      {pipSupported && (
+        <button
+          type="button"
+          onClick={onTogglePiP}
+          className={cn(
+            'inline-flex items-center justify-center min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 p-1.5 rounded-md transition-colors',
+            'focus:outline-none focus:ring-2 focus:ring-primary-500',
+            pipOpen
+              ? 'bg-primary-100 text-primary-700 dark:bg-primary-900/40 dark:text-primary-300'
+              : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:text-gray-200 dark:hover:bg-gray-800',
+          )}
+          title={pipOpen ? 'Close floating player (P)' : 'Open floating player (P)'}
+          aria-label={pipOpen ? 'Close floating player' : 'Open floating player'}
+          aria-pressed={pipOpen}
+        >
+          <PictureInPicture2 className="h-4 w-4" />
+        </button>
+      )}
+
+      {/* Fullscreen — MOB-P0-3: hidden entirely on iPhone Safari where
+          no element-level Fullscreen API exists. */}
+      {fullscreenSupported && (
+        <button
+          type="button"
+          onClick={toggleFullscreen}
+          className={cn(
+            'inline-flex items-center justify-center min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 p-1.5 rounded-md transition-colors',
+            'focus:outline-none focus:ring-2 focus:ring-primary-500',
+            'text-gray-400 hover:text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:text-gray-200 dark:hover:bg-gray-800',
+          )}
+          title="Fullscreen (F11)"
+          aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+        >
+          {isFullscreen ? <Minimize className="h-4 w-4" /> : <Maximize className="h-4 w-4" />}
+        </button>
+      )}
 
       {/* Settings dialog */}
       <SettingsDialog open={showSettingsDialog} onClose={() => setShowSettingsDialog(false)} />

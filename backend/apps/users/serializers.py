@@ -8,7 +8,7 @@ from django.contrib.auth import authenticate
 from django.contrib.auth.password_validation import validate_password
 from django.core.cache import cache
 
-# Account lockout settings
+# Account lockout — baseline defaults used when no tenant policy applies.
 MAX_LOGIN_ATTEMPTS = 5
 LOCKOUT_DURATION_SECONDS = 15 * 60  # 15 minutes
 
@@ -19,6 +19,21 @@ def _lockout_key(email):
 
 def _attempts_key(email):
     return f"login_attempts:{email.lower()}"
+
+
+def _lockout_policy(tenant):
+    """Return (threshold, duration_seconds) from tenant policy or defaults."""
+    if tenant is None:
+        return MAX_LOGIN_ATTEMPTS, LOCKOUT_DURATION_SECONDS
+    try:
+        from apps.tenants.password_policy_models import TenantPasswordPolicy
+        policy = TenantPasswordPolicy.objects.get(tenant=tenant)
+        return (
+            policy.lockout_threshold,
+            policy.lockout_duration_minutes * 60,
+        )
+    except Exception:
+        return MAX_LOGIN_ATTEMPTS, LOCKOUT_DURATION_SECONDS
 
 
 # Patterns for auto-generated user IDs: PREFIX-S-DIGITS or PREFIX-T-DIGITS
@@ -120,13 +135,17 @@ class LoginSerializer(serializers.Serializer):
         if not identifier or not password:
             raise serializers.ValidationError("Identifier and password are required")
 
-        # Check account lockout
+        # Check account lockout — policy is per-tenant when resolvable.
         lockout_key = _lockout_key(identifier)
         attempts_key = _attempts_key(identifier)
+        request = self.context.get('request')
+        tenant_for_policy = getattr(request, 'tenant', None) if request else None
+        threshold, duration = _lockout_policy(tenant_for_policy)
 
         if cache.get(lockout_key):
+            minutes = max(duration // 60, 1)
             raise serializers.ValidationError(
-                "Too many failed login attempts. Please try again in 15 minutes."
+                f"Too many failed login attempts. Please try again in {minutes} minutes."
             )
 
         # Detect identifier type and resolve user
@@ -172,13 +191,14 @@ class LoginSerializer(serializers.Serializer):
                 pass
 
         if not user:
-            # Increment failed attempts
+            # Increment failed attempts — tenant policy drives thresholds.
             attempts = cache.get(attempts_key, 0) + 1
-            cache.set(attempts_key, attempts, LOCKOUT_DURATION_SECONDS)
-            if attempts >= MAX_LOGIN_ATTEMPTS:
-                cache.set(lockout_key, True, LOCKOUT_DURATION_SECONDS)
+            cache.set(attempts_key, attempts, duration)
+            if attempts >= threshold:
+                cache.set(lockout_key, True, duration)
+                minutes = max(duration // 60, 1)
                 raise serializers.ValidationError(
-                    "Too many failed login attempts. Account locked for 15 minutes."
+                    f"Too many failed login attempts. Account locked for {minutes} minutes."
                 )
             raise serializers.ValidationError("Invalid credentials.")
 
@@ -279,21 +299,42 @@ class RegisterTeacherSerializer(serializers.ModelSerializer):
             role='TEACHER'
         )
 
+        # Record the initial password in history so later changes can
+        # enforce prevent_reuse_last_n against this first value.
+        try:
+            from apps.users.password_validators import record_password_history
+            record_password_history(user)
+        except Exception:
+            pass
+
         return user
 
 
 class ChangePasswordSerializer(serializers.Serializer):
     """Serializer for changing password."""
-    
+
     old_password = serializers.CharField(required=True, write_only=True)
-    new_password = serializers.CharField(required=True, write_only=True, validators=[validate_password])
+    # We intentionally don't attach ``validators=[validate_password]`` at
+    # field level because it can't see the user object — history checks
+    # need the user.  We run validate_password() manually in validate().
+    new_password = serializers.CharField(required=True, write_only=True)
     new_password_confirm = serializers.CharField(required=True, write_only=True)
-    
+
     def validate(self, data):
+        from django.contrib.auth.password_validation import validate_password as _vp
+        from django.core.exceptions import ValidationError as _VE
+
         if data['new_password'] != data['new_password_confirm']:
             raise serializers.ValidationError({"new_password": "Passwords don't match"})
+
+        user = self.context['request'].user
+        try:
+            _vp(data['new_password'], user=user)
+        except _VE as exc:
+            messages = getattr(exc, 'messages', [str(exc)])
+            raise serializers.ValidationError({"new_password": list(messages)})
         return data
-    
+
     def validate_old_password(self, value):
         user = self.context['request'].user
         if not user.check_password(value):

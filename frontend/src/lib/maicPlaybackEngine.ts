@@ -25,6 +25,11 @@ export interface PlaybackCallbacks {
   onActionStart?: (index: number, action: MAICAction) => void;
   onSceneComplete?: () => void;
   onDiscussionPending?: (topic: string, agentIds: string[], sessionType: string) => void;
+  /** Fired when a student interrupt happens mid-playback. Host (Stage/
+   *  ChatPanel) is responsible for dispatching the chat stream; the
+   *  engine has already saved a checkpoint so `resumeAfterInterrupt()`
+   *  will replay the interrupted sentence. Porting P4.1. */
+  onUserInterrupt?: (text: string) => void;
 }
 
 // ─── Engine ─────────────────────────────────────────────────────────────────
@@ -52,6 +57,11 @@ export class MAICPlaybackEngine {
   private onActionStart?: (index: number, action: MAICAction) => void;
   private onSceneComplete?: () => void;
   private onDiscussionPending?: (topic: string, agentIds: string[], sessionType: string) => void;
+  private onUserInterrupt?: (text: string) => void;
+  /** Porting P4.1 — latched true between handleUserInterrupt() and
+   *  resumeAfterInterrupt(). Keeps the engine paused without flipping
+   *  to the discussion state machine. */
+  private interruptPending = false;
 
   constructor(actionEngine: MAICActionEngine, callbacks?: PlaybackCallbacks) {
     this.actionEngine = actionEngine;
@@ -59,20 +69,46 @@ export class MAICPlaybackEngine {
     this.onActionStart = callbacks?.onActionStart;
     this.onSceneComplete = callbacks?.onSceneComplete;
     this.onDiscussionPending = callbacks?.onDiscussionPending;
+    this.onUserInterrupt = callbacks?.onUserInterrupt;
   }
 
   // ─── Scene Loading ──────────────────────────────────────────────────
 
   /**
    * Load a scene's actions into the engine. Resets playback position to 0.
+   *
+   * T0.1 — non-slide scene types (quiz / pbl / interactive) are pure
+   * React surfaces; their React renderer owns user interaction. We
+   * explicitly drop any actions the generator may have emitted for them
+   * so the engine doesn't voice agents or fire spotlights over a quiz
+   * card. Matches OpenMAIC where these scene types have no action array
+   * at all (`components/stage.tsx:374-379`).
    */
   loadScene(scene: MAICScene): void {
     this.stop();
-    this.actions = scene.actions ? [...scene.actions] : [];
+    // T0.3 — wipe whiteboard so the new scene opens clean. Scene-local
+    // strokes (user or agent) from the prior scene would otherwise show
+    // behind the first frame of this scene's content.
+    this.actionEngine.clearWhiteboardForNewScene();
+    const interactiveTypes = new Set(['quiz', 'pbl', 'interactive']);
+    const rawActions = scene.actions ?? [];
+    this.actions = interactiveTypes.has(scene.type) ? [] : [...rawActions];
     this.currentActionIndex = 0;
     this.consumedDiscussions.clear();
     this.checkpoint = null;
     this.discussionPending = false;
+
+    // OpenMAIC-parity audio prefetch: kick off TTS fetches for every
+    // speech action in the scene NOW, before the user hits Play. By the
+    // time playback reaches each speech line, its audio is already
+    // decoded and cached — the first line starts instantly and
+    // inter-speaker gaps disappear. Bounded by SCENE_PREFETCH_
+    // CONCURRENCY and PREFETCH_CACHE_LIMIT inside the action engine;
+    // cancelled cleanly on stop()/loadScene() via generationToken.
+    // Skipped for interactive scenes which have no linear action list.
+    if (this.actions.length > 0) {
+      this.actionEngine.prefetchSceneSpeeches(this.actions);
+    }
   }
 
   // ─── Playback Controls ─────────────────────────────────────────────
@@ -229,6 +265,26 @@ export class MAICPlaybackEngine {
   }
 
   /**
+   * Enter a UI-initiated discussion (ProactiveCardManager "Let's discuss"
+   * click, teacher's Roundtable button, etc.) without going through the
+   * scripted `discussion` action in the scene. Pauses audio, saves a
+   * checkpoint at the CURRENT action index (no rewind — we weren't in
+   * the middle of executing a discussion action), and flags
+   * `discussionPending` so `resumeAfterDiscussion()` works the same way
+   * for engine-path and UI-path closes.
+   *
+   * Idempotent — safe to call twice if the user double-clicks Accept.
+   */
+  enterDiscussionFromUI(): void {
+    if (this.disposed) return;
+    if (this.discussionPending) return;
+    this.checkpoint = { actionIndex: this.currentActionIndex };
+    this.discussionPending = true;
+    // engine.pause() is itself idempotent + no-ops when mode !== 'playing'.
+    this.pause();
+  }
+
+  /**
    * Resume playback after a discussion ends. Restores the checkpoint
    * (saved action index) so playback continues from where it was
    * interrupted by the discussion trigger.
@@ -254,14 +310,75 @@ export class MAICPlaybackEngine {
   }
 
   /**
+   * Porting P4.1 — student interrupt mid-lecture.
+   *
+   * Ordering matters: we set mode to 'paused' BEFORE stopping audio.
+   * Some browsers fire `audio.onended` synchronously on `pause()`, and
+   * the speech promise's `.then(() => processNext())` checks the mode —
+   * if we were still 'playing' at that instant the engine would
+   * spuriously advance to the next action. Same dance OpenMAIC does.
+   *
+   * We save `currentActionIndex - 1` as the checkpoint so the
+   * interrupted sentence replays on resume. Full-sentence replay is
+   * deliberate: most students lose the thread once they stop to ask a
+   * question, so rewinding one speech is the right UX.
+   */
+  handleUserInterrupt(text: string): void {
+    if (this.disposed) return;
+    if (this.mode !== 'playing') {
+      // Even when paused/idle, still notify the host so it can route
+      // the chat message through the normal channel.
+      this.onUserInterrupt?.(text);
+      return;
+    }
+    this.setMode('paused');
+    this.actionEngine.pauseCurrentAudio();
+    this.interruptPending = true;
+    // Rewind one so the interrupted sentence replays on resume.
+    // currentActionIndex is post-incremented in processNext; stepping
+    // back once lands on the interrupted action.
+    this.checkpoint = {
+      actionIndex: Math.max(0, this.currentActionIndex - 1),
+    };
+    this.onUserInterrupt?.(text);
+  }
+
+  /**
+   * Resume from a student interrupt — replay the saved action index.
+   */
+  resumeAfterInterrupt(): void {
+    if (!this.interruptPending) return;
+    this.interruptPending = false;
+    if (this.checkpoint) {
+      this.currentActionIndex = this.checkpoint.actionIndex;
+      this.checkpoint = null;
+    }
+    this.setMode('playing');
+    void this.processNext();
+  }
+
+  isInterruptPending(): boolean {
+    return this.interruptPending;
+  }
+
+  /**
    * Scan forward from `startIdx` and prefetch the first N speech
    * actions so their TTS audio is decoded by the time playback reaches
-   * them. N is small (2) to bound memory — the action engine's LRU
-   * cache caps at 4 entries total. Best-effort: each prefetchSpeech
+   * them. N is small (default 2) to bound memory — the action engine's
+   * LRU cache caps at 4 entries total. Best-effort: each prefetchSpeech
    * call is a no-op on any error condition.
+   *
+   * MOB-P0-6: the cap is now network-aware. The action engine reports
+   * its own `getPrefetchLookahead()` derived from the Network Information
+   * API — we halve to 1 on slow-2g/2g/3g/saveData so the currently-
+   * playing speech doesn't compete with lookahead fetches for the pipe.
    */
   private prefetchUpcomingSpeech(startIdx: number): void {
-    const MAX_LOOKAHEAD = 2;
+    const lookahead = typeof (this.actionEngine as unknown as { getPrefetchLookahead?: () => number })
+      .getPrefetchLookahead === 'function'
+      ? (this.actionEngine as unknown as { getPrefetchLookahead: () => number }).getPrefetchLookahead()
+      : 2;
+    const MAX_LOOKAHEAD = Math.max(1, lookahead);
     let prefetched = 0;
     for (let i = startIdx; i < this.actions.length && prefetched < MAX_LOOKAHEAD; i++) {
       const a = this.actions[i];

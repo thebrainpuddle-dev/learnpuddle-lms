@@ -463,6 +463,9 @@ class QuizSubmitEdgeCasesTestCase(TeacherViewsTestBase):
         self.assertEqual(resp.status_code, 400)
 
     def test_quiz_submit_correct_answer_scores_points(self):
+        # Post-TASK-013: must start an attempt before submitting.
+        start = self._post(f"/api/teacher/quizzes/{self.assignment.id}/start/", {})
+        self.assertEqual(start.status_code, 200, start.content)
         resp = self._post(
             f"/api/teacher/quizzes/{self.assignment.id}/submit/",
             {"answers": {str(self.q1.id): {"option_index": 0}}},
@@ -473,6 +476,9 @@ class QuizSubmitEdgeCasesTestCase(TeacherViewsTestBase):
         self.assertIsNotNone(data["graded_at"])
 
     def test_quiz_submit_wrong_answer_scores_zero(self):
+        # Post-TASK-013: must start an attempt before submitting.
+        start = self._post(f"/api/teacher/quizzes/{self.assignment.id}/start/", {})
+        self.assertEqual(start.status_code, 200, start.content)
         resp = self._post(
             f"/api/teacher/quizzes/{self.assignment.id}/submit/",
             {"answers": {str(self.q1.id): {"option_index": 2}}},

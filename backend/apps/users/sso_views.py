@@ -142,10 +142,11 @@ def sso_token_exchange(request):
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
+# No @tenant_required: reads request.user's own linked social accounts; no cross-tenant data exposed.
 def sso_status(request):
     """
     Get SSO status for the current user.
-    
+
     Returns whether user has linked social accounts.
     """
     from social_django.models import UserSocialAuth
@@ -171,6 +172,7 @@ def sso_status(request):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+# No @tenant_required: unlinks request.user's own social account; no cross-tenant data exposed.
 def sso_unlink(request):
     """
     Unlink a social account from the user.

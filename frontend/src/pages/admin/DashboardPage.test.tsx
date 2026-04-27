@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { DashboardPage } from './DashboardPage';
-import { useTenantStore } from '../../stores/tenantStore';
+import { useTenantStore, EDUCATION_DEFAULTS } from '../../stores/tenantStore';
 import { useAuthStore } from '../../stores/authStore';
 import { adminService } from '../../services/adminService';
 
@@ -86,7 +86,7 @@ describe('DashboardPage', () => {
   let queryClient: QueryClient;
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
@@ -98,6 +98,10 @@ describe('DashboardPage', () => {
       theme: { name: 'Test School', primary_color: '#4f46e5' },
       features: {},
       hasFeature: vi.fn(() => false),
+      // Required by useModeLabels — default to education mode so label strings
+      // match the existing assertions ("Total Teachers", "Active Courses", etc.)
+      mode: 'education' as const,
+      modeLabels: EDUCATION_DEFAULTS,
     });
 
     mockedUseAuthStore.mockReturnValue({

@@ -39,6 +39,8 @@ DEFAULT_COURSE_LEAD_DAYS = (7, 3, 1, 0)
 class DispatchResult:
     sent: int
     failed: int
+    in_app_sent: int = 0
+    in_app_failed: int = 0
 
 
 def is_manual_reminder_locked(reminder_type: str) -> bool:
@@ -210,8 +212,10 @@ def dispatch_campaign(campaign: ReminderCampaign, recipients: list[User]) -> Dis
             course=campaign.course,
             assignment=campaign.assignment,
         )
+        result.in_app_sent = len(recipients)
     except Exception as exc:
         logger.warning("in-app reminder notification failed campaign=%s err=%s", campaign.id, exc)
+        result.in_app_failed = len(recipients)
 
     return result
 

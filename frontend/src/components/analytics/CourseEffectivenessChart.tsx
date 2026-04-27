@@ -1,41 +1,20 @@
 // src/components/analytics/CourseEffectivenessChart.tsx
 //
-// Scatter-style chart: completion rate vs average score per course.
-// Helps identify courses that are too easy or too hard.
-// Uses placeholder data — TODO: wire to backend analytics endpoint.
+// Scatter chart: completion rate vs average score per course.
+// Helps identify courses that are too easy, well-balanced, or too hard.
+// Data fetched live from /reports/analytics/course-effectiveness/.
 
 import React, { useMemo } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import {
   ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, Cell,
   ResponsiveContainer, ZAxis,
 } from 'recharts';
 import { AcademicCapIcon, EyeIcon } from '@heroicons/react/24/outline';
-
-/* ── Types ─────────────────────────────────────────────────────── */
-
-interface CourseEffectivenessItem {
-  courseId: string;
-  courseName: string;
-  completionRate: number; // 0-100
-  avgScore: number; // 0-100
-  enrolledCount: number;
-}
-
-interface CourseEffectivenessChartProps {
-  onViewDetails?: () => void;
-}
-
-/* ── Placeholder data (TODO: replace with API call) ──────────── */
-
-const MOCK_DATA: CourseEffectivenessItem[] = [
-  { courseId: '1', courseName: 'Child Safety Basics', completionRate: 95, avgScore: 88, enrolledCount: 45 },
-  { courseId: '2', courseName: 'IB Methods Level 1', completionRate: 70, avgScore: 72, enrolledCount: 38 },
-  { courseId: '3', courseName: 'Advanced Pedagogy', completionRate: 40, avgScore: 55, enrolledCount: 30 },
-  { courseId: '4', courseName: 'Digital Tools', completionRate: 85, avgScore: 92, enrolledCount: 50 },
-  { courseId: '5', courseName: 'Classroom Management', completionRate: 60, avgScore: 65, enrolledCount: 42 },
-  { courseId: '6', courseName: 'Special Needs Ed', completionRate: 50, avgScore: 78, enrolledCount: 20 },
-  { courseId: '7', courseName: 'Leadership Essentials', completionRate: 30, avgScore: 45, enrolledCount: 15 },
-];
+import {
+  adminReportsService,
+  type CourseEffectivenessItem,
+} from '../../services/adminReportsService';
 
 /* ── Helpers ───────────────────────────────────────────────────── */
 
@@ -52,7 +31,7 @@ function difficultyColor(completionRate: number, avgScore: number): string {
 
 const CustomTooltip = ({ active, payload }: any) => {
   if (!active || !payload?.length) return null;
-  const item = payload[0].payload as CourseEffectivenessItem;
+  const item = payload[0].payload as CourseEffectivenessItem & { x: number; y: number; z: number };
   return (
     <div className="bg-white border border-gray-200 rounded-lg shadow-sm px-3 py-2 text-xs">
       <p className="font-medium text-gray-900">{item.courseName}</p>
@@ -65,12 +44,20 @@ const CustomTooltip = ({ active, payload }: any) => {
 
 /* ── Component ─────────────────────────────────────────────────── */
 
+interface CourseEffectivenessChartProps {
+  onViewDetails?: () => void;
+}
+
 export const CourseEffectivenessChart: React.FC<CourseEffectivenessChartProps> = ({
   onViewDetails,
 }) => {
-  // TODO: Replace with useQuery call to backend endpoint
-  // const { data } = useQuery({ queryKey: ['courseEffectiveness'], queryFn: ... });
-  const data = MOCK_DATA;
+  const { data: rawData, isLoading, isError } = useQuery<CourseEffectivenessItem[]>({
+    queryKey: ['courseEffectiveness'],
+    queryFn: () => adminReportsService.courseEffectiveness(),
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const data: CourseEffectivenessItem[] = rawData ?? [];
 
   const chartData = useMemo(
     () => data.map((d) => ({
@@ -103,13 +90,30 @@ export const CourseEffectivenessChart: React.FC<CourseEffectivenessChartProps> =
 
       {/* Legend */}
       <div className="mb-3 flex flex-wrap gap-3 text-xs text-gray-500">
-        <div className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-blue-500" /> Easy (high completion + score)</div>
-        <div className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-emerald-500" /> Balanced</div>
-        <div className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-red-500" /> Challenging (low completion or score)</div>
+        <div className="flex items-center gap-1">
+          <span className="h-2 w-2 rounded-full bg-blue-500" />
+          Easy (high completion + score)
+        </div>
+        <div className="flex items-center gap-1">
+          <span className="h-2 w-2 rounded-full bg-emerald-500" />
+          Balanced
+        </div>
+        <div className="flex items-center gap-1">
+          <span className="h-2 w-2 rounded-full bg-red-500" />
+          Challenging (low completion or score)
+        </div>
       </div>
 
       <div className="h-56">
-        {data.length > 0 ? (
+        {isLoading ? (
+          <div className="flex items-center justify-center h-full">
+            <div className="h-6 w-6 border-2 border-purple-300 border-t-purple-600 rounded-full animate-spin" />
+          </div>
+        ) : isError ? (
+          <div className="flex items-center justify-center h-full text-red-400 text-sm">
+            Failed to load course data
+          </div>
+        ) : data.length > 0 ? (
           <ResponsiveContainer width="100%" height="100%">
             <ScatterChart>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.05)" />

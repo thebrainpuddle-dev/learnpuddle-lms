@@ -3,3 +3,4 @@ export { SchoolsPage } from './SchoolsPage';
 export { SchoolDetailPage } from './SchoolDetailPage';
 export { OperationsPage } from './OperationsPage';
 export { DemoBookingsPage } from './DemoBookingsPage';
+export { SuperAdminTemplateManagerPage } from './SuperAdminTemplateManagerPage';

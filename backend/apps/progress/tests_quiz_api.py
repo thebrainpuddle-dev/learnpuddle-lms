@@ -133,6 +133,13 @@ class QuizApiTestCase(TestCase):
         self.assertEqual(detail.status_code, 200, detail.content)
         self.assertEqual(len(detail.json()["questions"]), 4)
         self.assertEqual(detail.json()["questions"][0]["selection_mode"], "SINGLE")
+        # GET is now read-only (TASK-013 M3 fix) — the teacher must
+        # explicitly POST to /start/ to create the in-progress attempt.
+        self.assertIsNone(detail.json()["current_attempt"])
+
+        start = self.client.post(f"/api/teacher/quizzes/{self.assignment.id}/start/")
+        self.assertEqual(start.status_code, 200, start.content)
+        self.assertIsNotNone(start.json()["current_attempt"])
 
         submit = self.client.post(
             f"/api/teacher/quizzes/{self.assignment.id}/submit/",

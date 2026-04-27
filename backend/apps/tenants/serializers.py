@@ -11,6 +11,7 @@ class TenantThemeSerializer(serializers.ModelSerializer):
     """
 
     logo_url = serializers.SerializerMethodField()
+    mode_labels = serializers.SerializerMethodField()
 
     class Meta:
         model = Tenant
@@ -28,7 +29,15 @@ class TenantThemeSerializer(serializers.ModelSerializer):
             "login_bg_image",
             "welcome_message",
             "school_motto",
+            # TASK-020 — Education vs Corporate mode
+            "mode",
+            "mode_labels",
+            # TASK-058 — Auto-translation service source language pin
+            "default_language",
         ]
+
+    def get_mode_labels(self, obj: Tenant) -> dict:
+        return obj.get_mode_labels()
 
     def get_logo_url(self, obj: Tenant):
         if not obj.logo:

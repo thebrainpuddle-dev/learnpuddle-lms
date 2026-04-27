@@ -1,14 +1,24 @@
 // src/pages/admin/SettingsPage.tsx
 //
-// School admin settings page — 4 sections: School Profile, Branding, Security, Academic.
+// School admin settings page — 6 sections: School Profile, Branding, Security,
+// Academic, Mode & Labels, AI Provider.
 // Form validation uses React Hook Form + Zod via the useZodForm hook.
+//
+// Security section (FE-006) uses the correct backend APIs:
+//   - Password Policy: GET/PATCH /users/admin/password-policy/
+//   - SAML SSO (feature-gated): GET/PATCH /users/admin/saml-config/
+//   - 2FA / Session: remain on /tenants/settings/security/ (pending backend)
+//
+// Mode & Labels section (FE-015 / TASK-020):
+//   - GET/PATCH /tenants/settings/  (mode + mode_label_overrides fields)
 
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { Fragment, useState, useRef, useEffect, useMemo } from 'react';
+import { Dialog, Transition } from '@headlessui/react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { z } from 'zod';
-import { Controller } from 'react-hook-form';
-import { Button, Input, Loading, useToast } from '../../components/common';
+import { Controller, useWatch } from 'react-hook-form';
+import { Button, Input, Loading, useToast, ConfirmDialog } from '../../components/common';
 import { FormField } from '../../components/common/FormField';
 import { useZodForm } from '../../hooks/useZodForm';
 import { useTenantStore } from '../../stores/tenantStore';
@@ -18,8 +28,28 @@ import {
   PhotoIcon,
   CheckCircleIcon,
   ExclamationTriangleIcon,
+  ClipboardDocumentIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
+  ShieldCheckIcon,
+  ArrowPathIcon,
 } from '@heroicons/react/24/outline';
 import { usePageTitle } from '../../hooks/usePageTitle';
+import {
+  adminSettingsService,
+  type PasswordPolicy,
+  type SAMLConfig,
+  type SAMLDefaultRole,
+  type TenantModeSettings,
+} from '../../services/adminSettingsService';
+import {
+  EDUCATION_DEFAULTS,
+  CORPORATE_DEFAULTS,
+  type TenantMode,
+  type ModeLabelKey,
+  type ModeLabels,
+} from '../../stores/tenantStore';
+import { buildSpUrls } from '../../utils/samlUrls';
 
 // ── Types ─────────────────────────────────────────────────────────────
 
@@ -40,18 +70,11 @@ interface TenantSettings {
   trial_end_date: string | null;
 }
 
-interface SecuritySettings {
-  password_min_length: number;
-  password_require_uppercase: boolean;
-  password_require_lowercase: boolean;
-  password_require_numbers: boolean;
-  password_require_special: boolean;
+// SecuritySettings (2FA / session) — legacy interface kept for the
+// existing /tenants/settings/security/ endpoint until backend migrates it.
+interface LegacySecuritySettings {
   two_factor_enabled: boolean;
   session_timeout_minutes: number;
-  sso_enabled: boolean;
-  sso_provider: string;
-  sso_client_id: string;
-  sso_client_secret: string;
 }
 
 // ── API ───────────────────────────────────────────────────────────────
@@ -66,14 +89,15 @@ const updateTenantSettings = async (data: FormData): Promise<TenantSettings> => 
   return response.data;
 };
 
-const fetchSecuritySettings = async (): Promise<SecuritySettings> => {
-  // TODO: Update endpoint when backend is ready
+// Legacy 2FA/session settings — endpoint may not be implemented yet.
+const fetchLegacySecuritySettings = async (): Promise<LegacySecuritySettings> => {
   const response = await api.get('/tenants/settings/security/');
   return response.data;
 };
 
-const updateSecuritySettings = async (data: Partial<SecuritySettings>): Promise<SecuritySettings> => {
-  // TODO: Update endpoint when backend is ready
+const updateLegacySecuritySettings = async (
+  data: Partial<LegacySecuritySettings>,
+): Promise<LegacySecuritySettings> => {
   const response = await api.patch('/tenants/settings/security/', data);
   return response.data;
 };
@@ -99,14 +123,6 @@ const SESSION_TIMEOUT_OPTIONS = [
   { value: 120, label: '2 hours' },
   { value: 240, label: '4 hours' },
   { value: 480, label: '8 hours' },
-];
-
-const SSO_PROVIDER_OPTIONS = [
-  { value: '', label: 'Select provider...' },
-  { value: 'google', label: 'Google Workspace' },
-  { value: 'microsoft', label: 'Microsoft Azure AD' },
-  { value: 'okta', label: 'Okta' },
-  { value: 'saml', label: 'Custom SAML' },
 ];
 
 // ── Zod Schemas ──────────────────────────────────────────────────────
@@ -146,6 +162,45 @@ const AcademicSchema = z.object({
 
 type AcademicData = z.infer<typeof AcademicSchema>;
 
+// ── Password Policy Schema ────────────────────────────────────────────
+
+const PasswordPolicySchema = z.object({
+  min_length: z.coerce.number().int().min(6, 'Minimum 6').max(128, 'Maximum 128'),
+  require_uppercase: z.boolean(),
+  require_lowercase: z.boolean(),
+  require_digit: z.boolean(),
+  require_special: z.boolean(),
+  prevent_common: z.boolean(),
+  prevent_reuse_last_n: z.coerce.number().int().min(0).max(50),
+  max_age_days: z.coerce.number().int().min(0, 'Use 0 for never').max(3650),
+  lockout_threshold: z.coerce.number().int().min(1).max(100),
+  lockout_duration_minutes: z.coerce.number().int().min(1).max(1440),
+});
+
+type PasswordPolicyData = z.infer<typeof PasswordPolicySchema>;
+
+// ── SAML Config Schema ────────────────────────────────────────────────
+
+const SAMLConfigSchema = z.object({
+  enabled: z.boolean(),
+  idp_metadata_xml: z.string(),
+  idp_entity_id: z.string().max(500),
+  idp_sso_url: z.string().url('Must be a valid URL').or(z.literal('')),
+  idp_slo_url: z.string().url('Must be a valid URL').or(z.literal('')),
+  idp_x509_cert: z.string(), // single cert for UI; sent as idp_x509_certs[0] on submit
+  auto_provision: z.boolean(),
+  default_role: z.enum(['TEACHER', 'HOD', 'IB_COORDINATOR', 'SCHOOL_ADMIN', 'STUDENT']),
+  allowed_email_domains: z.string(),
+  // Attribute mapping
+  attr_email: z.string(),
+  attr_first_name: z.string(),
+  attr_last_name: z.string(),
+  attr_groups: z.string(),
+  attr_role: z.string(),
+});
+
+type SAMLConfigFormData = z.infer<typeof SAMLConfigSchema>;
+
 // ── Tabs ──────────────────────────────────────────────────────────────
 
 const TABS = [
@@ -153,6 +208,7 @@ const TABS = [
   { id: 'branding' as const, label: 'Branding' },
   { id: 'security' as const, label: 'Security' },
   { id: 'academic' as const, label: 'Academic' },
+  { id: 'mode' as const, label: 'Mode & Labels' },
   { id: 'ai' as const, label: 'AI Provider' },
 ];
 
@@ -634,180 +690,366 @@ function BrandingSection({ settings }: { settings: TenantSettings }) {
 }
 
 // ── Section: Security ────────────────────────────────────────────────
+//
+// Composed of three independent sub-cards:
+//   1. PasswordPolicyCard  — GET/PATCH /users/admin/password-policy/
+//   2. TwoFactor+Session   — GET/PATCH /tenants/settings/security/ (legacy)
+//   3. SAMLSSOCard         — GET/PATCH /users/admin/saml-config/ (feature-gated)
 
-function SecuritySection() {
+// ── Helper: CopyableField ─────────────────────────────────────────────
+
+function CopyableField({ label, value }: { label: string; value: string }) {
+  const toast = useToast();
+  const copy = () => {
+    navigator.clipboard.writeText(value).then(() =>
+      toast.success('Copied', `${label} copied to clipboard.`),
+    );
+  };
+  return (
+    <div>
+      <p className="text-xs font-medium text-gray-500 mb-1">{label}</p>
+      <div className="flex items-center gap-2">
+        <code className="flex-1 min-w-0 truncate bg-gray-50 border border-gray-200 rounded-md px-3 py-2 text-xs text-gray-700 font-mono select-all">
+          {value}
+        </code>
+        <button
+          type="button"
+          onClick={copy}
+          title={`Copy ${label}`}
+          className="flex-shrink-0 p-2 rounded-md text-gray-400 hover:text-gray-700 hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+        >
+          <ClipboardDocumentIcon className="h-4 w-4" aria-hidden="true" />
+          <span className="sr-only">Copy {label}</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Sub-card 1: Password Policy ───────────────────────────────────────
+
+function PasswordPolicyCard() {
   const toast = useToast();
   const queryClient = useQueryClient();
 
-  const [securityData, setSecurityData] = useState<SecuritySettings>({
-    password_min_length: 8,
-    password_require_uppercase: true,
-    password_require_lowercase: true,
-    password_require_numbers: true,
-    password_require_special: false,
-    two_factor_enabled: false,
-    session_timeout_minutes: 60,
-    sso_enabled: false,
-    sso_provider: '',
-    sso_client_id: '',
-    sso_client_secret: '',
-  });
-
-  const { isLoading } = useQuery({
-    queryKey: ['securitySettings'],
-    queryFn: fetchSecuritySettings,
-    // Use retry: false since the endpoint may not exist yet
+  const { data: policy, isLoading } = useQuery<PasswordPolicy>({
+    queryKey: ['passwordPolicy'],
+    queryFn: adminSettingsService.getPasswordPolicy,
     retry: false,
   });
 
-  // Attempt to load saved security settings (will use defaults if endpoint not ready)
+  const form = useZodForm({
+    schema: PasswordPolicySchema,
+    defaultValues: {
+      min_length: 12,
+      require_uppercase: true,
+      require_lowercase: true,
+      require_digit: true,
+      require_special: false,
+      prevent_common: true,
+      prevent_reuse_last_n: 5,
+      max_age_days: 0,
+      lockout_threshold: 5,
+      lockout_duration_minutes: 15,
+    },
+  });
+
+  // Sync server data → form once loaded
   useEffect(() => {
-    fetchSecuritySettings()
-      .then((data) => setSecurityData(data))
-      .catch(() => {
-        // Security settings endpoint may not exist yet — defaults are already set
+    if (policy) {
+      form.reset({
+        min_length: policy.min_length,
+        require_uppercase: policy.require_uppercase,
+        require_lowercase: policy.require_lowercase,
+        require_digit: policy.require_digit,
+        require_special: policy.require_special,
+        prevent_common: policy.prevent_common,
+        prevent_reuse_last_n: policy.prevent_reuse_last_n,
+        max_age_days: policy.max_age_days,
+        lockout_threshold: policy.lockout_threshold,
+        lockout_duration_minutes: policy.lockout_duration_minutes,
       });
-  }, []);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [policy]);
 
   const mutation = useMutation({
-    mutationFn: updateSecuritySettings,
-    onSuccess: (data) => {
-      setSecurityData(data);
-      queryClient.invalidateQueries({ queryKey: ['securitySettings'] });
-      toast.success('Security saved', 'Security settings have been updated.');
+    mutationFn: adminSettingsService.updatePasswordPolicy,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['passwordPolicy'] });
+      toast.success('Password policy saved', 'Policy has been updated.');
     },
     onError: () => {
       toast.error('Failed to save', 'Please try again.');
     },
   });
 
-  const handleSave = () => {
-    mutation.mutate(securityData);
-  };
+  const onSubmit = form.handleSubmit((data: PasswordPolicyData) => {
+    mutation.mutate(data);
+  });
 
   if (isLoading) {
     return (
-      <div className="flex justify-center py-12">
+      <div className="bg-white rounded-xl border border-gray-200 p-6 flex justify-center">
         <Loading />
       </div>
     );
   }
 
   return (
-    <div data-tour="security-2fa-section" className="space-y-6">
-      {/* Password Policy */}
-      <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6">
-        <h2 className="text-lg font-semibold text-gray-900 mb-4">
-          Password Policy
-        </h2>
-        <div className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Minimum Password Length
-            </label>
-            <select
-              value={securityData.password_min_length}
-              onChange={(e) =>
-                setSecurityData((prev) => ({
-                  ...prev,
-                  password_min_length: Number(e.target.value),
-                }))
-              }
-              className="w-full sm:w-48 px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-indigo-500 focus:border-indigo-500"
-            >
-              {[6, 8, 10, 12, 14, 16].map((len) => (
-                <option key={len} value={len}>
-                  {len} characters
-                </option>
-              ))}
-            </select>
-          </div>
+    <form onSubmit={onSubmit} noValidate className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6">
+      <h2 className="text-lg font-semibold text-gray-900 mb-4">Password Policy</h2>
 
+      <div className="space-y-5">
+        {/* Min length */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <Controller
+            control={form.control}
+            name="min_length"
+            render={({ field, fieldState }) => (
+              <div>
+                <label htmlFor="min_length" className="block text-sm font-medium text-gray-700 mb-1">
+                  Minimum Length
+                </label>
+                <input
+                  id="min_length"
+                  type="number"
+                  min={6}
+                  max={128}
+                  {...field}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-blue-500 focus:border-blue-500"
+                />
+                {fieldState.error && (
+                  <p className="mt-1 text-xs text-red-600">{fieldState.error.message}</p>
+                )}
+              </div>
+            )}
+          />
+          <Controller
+            control={form.control}
+            name="max_age_days"
+            render={({ field, fieldState }) => (
+              <div>
+                <label htmlFor="max_age_days" className="block text-sm font-medium text-gray-700 mb-1">
+                  Max Age (days)
+                  <span className="ml-1 text-xs text-gray-400 font-normal">0 = never expires</span>
+                </label>
+                <input
+                  id="max_age_days"
+                  type="number"
+                  min={0}
+                  {...field}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-blue-500 focus:border-blue-500"
+                />
+                {fieldState.error && (
+                  <p className="mt-1 text-xs text-red-600">{fieldState.error.message}</p>
+                )}
+              </div>
+            )}
+          />
+        </div>
+
+        {/* Character requirements */}
+        <div>
+          <p className="text-sm font-medium text-gray-700 mb-3">Character Requirements</p>
           <div className="space-y-3">
-            <Toggle
-              enabled={securityData.password_require_uppercase}
-              onChange={(val) =>
-                setSecurityData((prev) => ({
-                  ...prev,
-                  password_require_uppercase: val,
-                }))
-              }
-              label="Require uppercase letters"
-              description="Passwords must contain at least one uppercase letter (A-Z)"
-            />
-            <Toggle
-              enabled={securityData.password_require_lowercase}
-              onChange={(val) =>
-                setSecurityData((prev) => ({
-                  ...prev,
-                  password_require_lowercase: val,
-                }))
-              }
-              label="Require lowercase letters"
-              description="Passwords must contain at least one lowercase letter (a-z)"
-            />
-            <Toggle
-              enabled={securityData.password_require_numbers}
-              onChange={(val) =>
-                setSecurityData((prev) => ({
-                  ...prev,
-                  password_require_numbers: val,
-                }))
-              }
-              label="Require numbers"
-              description="Passwords must contain at least one number (0-9)"
-            />
-            <Toggle
-              enabled={securityData.password_require_special}
-              onChange={(val) =>
-                setSecurityData((prev) => ({
-                  ...prev,
-                  password_require_special: val,
-                }))
-              }
-              label="Require special characters"
-              description="Passwords must contain at least one special character (!@#$%^&*)"
+            {(
+              [
+                ['require_uppercase', 'Require uppercase letters', 'A-Z'],
+                ['require_lowercase', 'Require lowercase letters', 'a-z'],
+                ['require_digit', 'Require numbers', '0-9'],
+                ['require_special', 'Require special characters', '!@#$%^&*'],
+              ] as const
+            ).map(([name, label, example]) => (
+              <Controller
+                key={name}
+                control={form.control}
+                name={name}
+                render={({ field }) => (
+                  <Toggle
+                    enabled={field.value}
+                    onChange={field.onChange}
+                    label={label}
+                    description={`Passwords must contain at least one: ${example}`}
+                  />
+                )}
+              />
+            ))}
+          </div>
+        </div>
+
+        {/* Security options */}
+        <div>
+          <p className="text-sm font-medium text-gray-700 mb-3">Security Options</p>
+          <div className="space-y-3">
+            <Controller
+              control={form.control}
+              name="prevent_common"
+              render={({ field }) => (
+                <Toggle
+                  enabled={field.value}
+                  onChange={field.onChange}
+                  label="Block common passwords"
+                  description="Reject passwords found in common password lists"
+                />
+              )}
             />
           </div>
         </div>
+
+        {/* Reuse + lockout */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <Controller
+            control={form.control}
+            name="prevent_reuse_last_n"
+            render={({ field, fieldState }) => (
+              <div>
+                <label htmlFor="prevent_reuse_last_n" className="block text-sm font-medium text-gray-700 mb-1">
+                  Prevent reuse of last N
+                  <span className="ml-1 text-xs text-gray-400 font-normal">0 = off</span>
+                </label>
+                <input
+                  id="prevent_reuse_last_n"
+                  type="number"
+                  min={0}
+                  max={50}
+                  {...field}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-blue-500 focus:border-blue-500"
+                />
+                {fieldState.error && (
+                  <p className="mt-1 text-xs text-red-600">{fieldState.error.message}</p>
+                )}
+              </div>
+            )}
+          />
+          <Controller
+            control={form.control}
+            name="lockout_threshold"
+            render={({ field, fieldState }) => (
+              <div>
+                <label htmlFor="lockout_threshold" className="block text-sm font-medium text-gray-700 mb-1">
+                  Lockout after N attempts
+                </label>
+                <input
+                  id="lockout_threshold"
+                  type="number"
+                  min={1}
+                  max={100}
+                  {...field}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-blue-500 focus:border-blue-500"
+                />
+                {fieldState.error && (
+                  <p className="mt-1 text-xs text-red-600">{fieldState.error.message}</p>
+                )}
+              </div>
+            )}
+          />
+          <Controller
+            control={form.control}
+            name="lockout_duration_minutes"
+            render={({ field, fieldState }) => (
+              <div>
+                <label htmlFor="lockout_duration_minutes" className="block text-sm font-medium text-gray-700 mb-1">
+                  Lockout duration (min)
+                </label>
+                <input
+                  id="lockout_duration_minutes"
+                  type="number"
+                  min={1}
+                  max={1440}
+                  {...field}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-blue-500 focus:border-blue-500"
+                />
+                {fieldState.error && (
+                  <p className="mt-1 text-xs text-red-600">{fieldState.error.message}</p>
+                )}
+              </div>
+            )}
+          />
+        </div>
       </div>
 
-      {/* Two-Factor Authentication */}
+      <div className="mt-6 flex justify-end">
+        <Button
+          type="submit"
+          variant="primary"
+          className="w-full sm:w-auto"
+          loading={mutation.isPending}
+        >
+          Save Password Policy
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+// ── Sub-card 2: 2FA + Session ─────────────────────────────────────────
+
+function TwoFactorSessionCard() {
+  const toast = useToast();
+  const queryClient = useQueryClient();
+
+  const [data, setData] = useState<LegacySecuritySettings>({
+    two_factor_enabled: false,
+    session_timeout_minutes: 60,
+  });
+
+  // Best-effort load — endpoint may not exist yet
+  useEffect(() => {
+    fetchLegacySecuritySettings()
+      .then(setData)
+      .catch(() => {});
+  }, []);
+
+  const mutation = useMutation({
+    mutationFn: updateLegacySecuritySettings,
+    onSuccess: (updated) => {
+      setData(updated);
+      queryClient.invalidateQueries({ queryKey: ['legacySecuritySettings'] });
+      toast.success('Settings saved', '2FA and session settings updated.');
+    },
+    onError: () => {
+      toast.error('Failed to save', 'Please try again.');
+    },
+  });
+
+  return (
+    <div className="space-y-4">
+      {/* 2FA */}
       <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6">
-        <h2 className="text-lg font-semibold text-gray-900 mb-4">
-          Two-Factor Authentication
-        </h2>
+        <h2 className="text-lg font-semibold text-gray-900 mb-4">Two-Factor Authentication</h2>
         <Toggle
-          enabled={securityData.two_factor_enabled}
-          onChange={(val) =>
-            setSecurityData((prev) => ({ ...prev, two_factor_enabled: val }))
-          }
-          label="Enable 2FA for all teachers"
-          description="When enabled, all teachers will be required to set up two-factor authentication on their next login"
+          enabled={data.two_factor_enabled}
+          onChange={(val) => {
+            const next = { ...data, two_factor_enabled: val };
+            setData(next);
+            mutation.mutate({ two_factor_enabled: val });
+          }}
+          label="Require 2FA for all teachers"
+          description="Teachers will be prompted to set up an authenticator app on their next login"
         />
       </div>
 
-      {/* Session Timeout */}
+      {/* Session timeout */}
       <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6">
-        <h2 className="text-lg font-semibold text-gray-900 mb-4">
-          Session Management
-        </h2>
+        <h2 className="text-lg font-semibold text-gray-900 mb-4">Session Management</h2>
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
+          <label htmlFor="session_timeout" className="block text-sm font-medium text-gray-700 mb-1">
             Session Timeout
           </label>
           <p className="text-xs text-gray-500 mb-2">
             Automatically log out inactive users after this duration
           </p>
           <select
-            value={securityData.session_timeout_minutes}
-            onChange={(e) =>
-              setSecurityData((prev) => ({
-                ...prev,
-                session_timeout_minutes: Number(e.target.value),
-              }))
-            }
-            className="w-full sm:w-48 px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-indigo-500 focus:border-indigo-500"
+            id="session_timeout"
+            value={data.session_timeout_minutes}
+            onChange={(e) => {
+              const val = Number(e.target.value);
+              const next = { ...data, session_timeout_minutes: val };
+              setData(next);
+              mutation.mutate({ session_timeout_minutes: val });
+            }}
+            className="w-full sm:w-48 px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-blue-500 focus:border-blue-500"
           >
             {SESSION_TIMEOUT_OPTIONS.map((opt) => (
               <option key={opt.value} value={opt.value}>
@@ -817,101 +1059,859 @@ function SecuritySection() {
           </select>
         </div>
       </div>
+    </div>
+  );
+}
 
-      {/* SSO Configuration */}
-      <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6">
-        <h2 className="text-lg font-semibold text-gray-900 mb-4">
-          Single Sign-On (SSO)
-        </h2>
-        <div className="space-y-4">
-          <Toggle
-            enabled={securityData.sso_enabled}
-            onChange={(val) =>
-              setSecurityData((prev) => ({ ...prev, sso_enabled: val }))
-            }
-            label="Enable SSO"
-            description="Allow teachers to sign in using their organizational identity provider"
+// ── Sub-card 3: SAML 2.0 SSO ─────────────────────────────────────────
+
+const SAML_ROLE_OPTIONS: { value: SAMLDefaultRole; label: string }[] = [
+  { value: 'TEACHER', label: 'Teacher' },
+  { value: 'HOD', label: 'Head of Department' },
+  { value: 'IB_COORDINATOR', label: 'IB Coordinator' },
+  { value: 'SCHOOL_ADMIN', label: 'School Admin' },
+  { value: 'STUDENT', label: 'Student' },
+];
+
+
+function SAMLSSOCard({ subdomain }: { subdomain: string }) {
+  const toast = useToast();
+  const queryClient = useQueryClient();
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [parsing, setParsing] = useState(false);
+
+  const {
+    data: samlConfig,
+    isLoading,
+    isError,
+    error,
+  } = useQuery<SAMLConfig>({
+    queryKey: ['samlConfig'],
+    queryFn: adminSettingsService.getSAMLConfig,
+    retry: false,
+  });
+
+  const form = useZodForm({
+    schema: SAMLConfigSchema,
+    defaultValues: {
+      enabled: false,
+      idp_metadata_xml: '',
+      idp_entity_id: '',
+      idp_sso_url: '',
+      idp_slo_url: '',
+      idp_x509_cert: '',
+      auto_provision: false,
+      default_role: 'TEACHER' as SAMLDefaultRole,
+      allowed_email_domains: '',
+      attr_email: 'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress',
+      attr_first_name: 'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/givenname',
+      attr_last_name: 'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/surname',
+      attr_groups: 'http://schemas.microsoft.com/ws/2008/06/identity/claims/groups',
+      attr_role: '',
+    },
+  });
+
+  // Sync server data → form once loaded
+  useEffect(() => {
+    if (samlConfig) {
+      form.reset({
+        enabled: samlConfig.enabled,
+        idp_metadata_xml: samlConfig.idp_metadata_xml,
+        idp_entity_id: samlConfig.idp_entity_id,
+        idp_sso_url: samlConfig.idp_sso_url,
+        idp_slo_url: samlConfig.idp_slo_url,
+        idp_x509_cert: samlConfig.idp_x509_certs?.[0] ?? '',
+        auto_provision: samlConfig.auto_provision,
+        default_role: samlConfig.default_role,
+        allowed_email_domains: samlConfig.allowed_email_domains,
+        attr_email: samlConfig.attribute_mapping?.email ?? 'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress',
+        attr_first_name: samlConfig.attribute_mapping?.first_name ?? 'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/givenname',
+        attr_last_name: samlConfig.attribute_mapping?.last_name ?? 'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/surname',
+        attr_groups: samlConfig.attribute_mapping?.groups ?? 'http://schemas.microsoft.com/ws/2008/06/identity/claims/groups',
+        attr_role: samlConfig.attribute_mapping?.role ?? '',
+      });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [samlConfig]);
+
+  const mutation = useMutation({
+    mutationFn: adminSettingsService.updateSAMLConfig,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['samlConfig'] });
+      toast.success('SAML SSO saved', 'Configuration has been updated.');
+    },
+    onError: (err: unknown) => {
+      const msg =
+        typeof err === 'object' &&
+        err !== null &&
+        'response' in err &&
+        typeof (err as { response?: { data?: { error?: string } } }).response?.data?.error === 'string'
+          ? (err as { response: { data: { error: string } } }).response.data.error
+          : 'Please try again.';
+      toast.error('Failed to save SAML config', msg);
+    },
+  });
+
+  const enabledValue = useWatch({ control: form.control, name: 'enabled' });
+
+  const onSubmit = form.handleSubmit((data: SAMLConfigFormData) => {
+    // Note: idp_metadata_xml is intentionally excluded from the save payload.
+    // It is only sent in handleParseMetadata so the backend can parse it and
+    // auto-fill the IdP fields. Including it here would cause the backend to
+    // re-parse it on every save and silently clobber any manual edits.
+    const payload = {
+      enabled: data.enabled,
+      idp_entity_id: data.idp_entity_id,
+      idp_sso_url: data.idp_sso_url,
+      idp_slo_url: data.idp_slo_url,
+      idp_x509_certs: data.idp_x509_cert ? [data.idp_x509_cert] : [],
+      auto_provision: data.auto_provision,
+      default_role: data.default_role,
+      allowed_email_domains: data.allowed_email_domains,
+      attribute_mapping: {
+        ...(data.attr_email ? { email: data.attr_email } : {}),
+        ...(data.attr_first_name ? { first_name: data.attr_first_name } : {}),
+        ...(data.attr_last_name ? { last_name: data.attr_last_name } : {}),
+        ...(data.attr_groups ? { groups: data.attr_groups } : {}),
+        ...(data.attr_role ? { role: data.attr_role } : {}),
+      },
+    };
+    mutation.mutate(payload);
+  });
+
+  /** Send the metadata XML to the backend for parsing (fills idp_entity_id, urls, certs). */
+  const handleParseMetadata = async () => {
+    const xml = form.getValues('idp_metadata_xml');
+    if (!xml.trim()) {
+      toast.error('No metadata', 'Paste the IdP metadata XML first.');
+      return;
+    }
+    setParsing(true);
+    try {
+      const updated = await adminSettingsService.updateSAMLConfig({ idp_metadata_xml: xml });
+      form.setValue('idp_entity_id', updated.idp_entity_id);
+      form.setValue('idp_sso_url', updated.idp_sso_url);
+      form.setValue('idp_slo_url', updated.idp_slo_url);
+      form.setValue('idp_x509_cert', updated.idp_x509_certs?.[0] ?? '');
+      queryClient.invalidateQueries({ queryKey: ['samlConfig'] });
+      toast.success('Metadata parsed', 'IdP fields auto-filled from metadata.');
+    } catch {
+      toast.error('Parse failed', 'Check that the XML is valid IdP metadata.');
+    } finally {
+      setParsing(false);
+    }
+  };
+
+  const spUrls = buildSpUrls(subdomain, samlConfig?.sp_entity_id ?? '');
+
+  if (isLoading) {
+    return (
+      <div className="bg-white rounded-xl border border-gray-200 p-6 flex justify-center">
+        <Loading />
+      </div>
+    );
+  }
+
+  // Extract HTTP status from AxiosError-shaped errors.
+  const samlErrorStatus =
+    (error as { response?: { status?: number } } | null)?.response?.status;
+
+  if (isError) {
+    const is403 = samlErrorStatus === 403;
+    return (
+      <div className="bg-white rounded-xl border border-gray-200 p-6">
+        {/* Header — still shown so admins know which card errored */}
+        <div className="flex items-center gap-3 mb-4">
+          <ShieldCheckIcon className="h-5 w-5 text-blue-600 flex-shrink-0" aria-hidden="true" />
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900">SAML 2.0 Single Sign-On</h2>
+          </div>
+        </div>
+        <div className="flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 p-4">
+          <ExclamationTriangleIcon
+            className="h-5 w-5 text-red-500 flex-shrink-0 mt-0.5"
+            aria-hidden="true"
           />
+          <div>
+            <p className="text-sm font-medium text-red-800">
+              {is403
+                ? 'SAML SSO is not enabled for this school'
+                : 'Failed to load SAML configuration'}
+            </p>
+            <p className="mt-1 text-xs text-red-700">
+              {is403
+                ? 'Contact LearnPuddle support to enable SAML SSO for your account.'
+                : 'Please refresh the page or try again later. If the problem persists, contact support.'}
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
-          {securityData.sso_enabled && (
-            <div className="space-y-4 pt-4 border-t border-gray-100">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  SSO Provider
-                </label>
-                <select
-                  value={securityData.sso_provider}
-                  onChange={(e) =>
-                    setSecurityData((prev) => ({
-                      ...prev,
-                      sso_provider: e.target.value,
-                    }))
-                  }
-                  className="w-full sm:w-64 px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-indigo-500 focus:border-indigo-500"
-                >
-                  {SSO_PROVIDER_OPTIONS.map((opt) => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
+  return (
+    <form onSubmit={onSubmit} noValidate className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6">
+      {/* Header */}
+      <div className="flex items-center gap-3 mb-4">
+        <ShieldCheckIcon className="h-5 w-5 text-blue-600 flex-shrink-0" aria-hidden="true" />
+        <div className="flex-1">
+          <h2 className="text-lg font-semibold text-gray-900">SAML 2.0 Single Sign-On</h2>
+          <p className="text-xs text-gray-500 mt-0.5">
+            Connect LearnPuddle to your organization's identity provider (Okta, Azure AD, Google Workspace, etc.)
+          </p>
+        </div>
+      </div>
 
-              {securityData.sso_provider && (
-                <>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Client ID
-                    </label>
-                    <input
-                      type="text"
-                      value={securityData.sso_client_id}
-                      onChange={(e) =>
-                        setSecurityData((prev) => ({
-                          ...prev,
-                          sso_client_id: e.target.value,
-                        }))
-                      }
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-indigo-500 focus:border-indigo-500"
-                      placeholder="Enter client ID"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Client Secret
-                    </label>
-                    <input
-                      type="password"
-                      value={securityData.sso_client_secret}
-                      onChange={(e) =>
-                        setSecurityData((prev) => ({
-                          ...prev,
-                          sso_client_secret: e.target.value,
-                        }))
-                      }
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-indigo-500 focus:border-indigo-500"
-                      placeholder="Enter client secret"
-                    />
-                  </div>
-                </>
+      {/* Enable toggle */}
+      <div className="mb-6">
+        <Controller
+          control={form.control}
+          name="enabled"
+          render={({ field }) => (
+            <Toggle
+              enabled={field.value}
+              onChange={field.onChange}
+              label="Enable SAML SSO"
+              description="Teachers can sign in with their organizational credentials via SAML"
+            />
+          )}
+        />
+      </div>
+
+      {enabledValue && (
+        <div className="space-y-6 pt-5 border-t border-gray-100">
+
+          {/* SP Metadata (read-only — give to IdP admin) */}
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+            <p className="text-sm font-medium text-blue-900 mb-3">
+              Service Provider (SP) Details — Configure in your IdP
+            </p>
+            <div className="space-y-3">
+              <CopyableField label="SP Entity ID" value={spUrls.entityId} />
+              <CopyableField label="ACS URL (Assertion Consumer Service)" value={spUrls.acsUrl} />
+              <CopyableField label="SLS URL (Single Logout Service)" value={spUrls.slsUrl} />
+              <CopyableField label="SP Metadata URL" value={spUrls.metadataUrl} />
+            </div>
+          </div>
+
+          {/* IdP Metadata XML (paste + auto-parse) */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              IdP Metadata XML
+              <span className="ml-1 text-xs text-gray-400 font-normal">
+                — paste here to auto-fill fields below
+              </span>
+            </label>
+            <Controller
+              control={form.control}
+              name="idp_metadata_xml"
+              render={({ field }) => (
+                <textarea
+                  {...field}
+                  rows={4}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-xs font-mono focus:ring-blue-500 focus:border-blue-500 resize-y"
+                  placeholder="<EntityDescriptor xmlns=&quot;urn:oasis:names:tc:SAML:2.0:metadata&quot; ...>"
+                  spellCheck={false}
+                />
               )}
+            />
+            <div className="mt-2 flex justify-end">
+              <Button
+                type="button"
+                variant="secondary"
+                className="text-sm"
+                onClick={handleParseMetadata}
+                loading={parsing}
+              >
+                <ArrowPathIcon className="h-4 w-4 mr-1.5" aria-hidden="true" />
+                Parse &amp; Auto-fill
+              </Button>
+            </div>
+          </div>
+
+          {/* Manual IdP fields */}
+          <div className="space-y-4">
+            <p className="text-sm font-medium text-gray-700">IdP Configuration (Manual)</p>
+            <div className="grid grid-cols-1 gap-4">
+              <Controller
+                control={form.control}
+                name="idp_entity_id"
+                render={({ field, fieldState }) => (
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">IdP Entity ID</label>
+                    <input
+                      {...field}
+                      type="text"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-blue-500 focus:border-blue-500"
+                      placeholder="https://idp.example.com/entity"
+                    />
+                    {fieldState.error && (
+                      <p className="mt-1 text-xs text-red-600">{fieldState.error.message}</p>
+                    )}
+                  </div>
+                )}
+              />
+              <Controller
+                control={form.control}
+                name="idp_sso_url"
+                render={({ field, fieldState }) => (
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">
+                      IdP SSO URL
+                      <span className="ml-1 text-xs text-gray-400 font-normal">(SAML login endpoint)</span>
+                    </label>
+                    <input
+                      {...field}
+                      type="url"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-blue-500 focus:border-blue-500"
+                      placeholder="https://idp.example.com/sso/saml"
+                    />
+                    {fieldState.error && (
+                      <p className="mt-1 text-xs text-red-600">{fieldState.error.message}</p>
+                    )}
+                  </div>
+                )}
+              />
+              <Controller
+                control={form.control}
+                name="idp_slo_url"
+                render={({ field, fieldState }) => (
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">
+                      IdP SLO URL
+                      <span className="ml-1 text-xs text-gray-400 font-normal">(Single Logout endpoint — optional)</span>
+                    </label>
+                    <input
+                      {...field}
+                      type="url"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-blue-500 focus:border-blue-500"
+                      placeholder="https://idp.example.com/slo/saml"
+                    />
+                    {fieldState.error && (
+                      <p className="mt-1 text-xs text-red-600">{fieldState.error.message}</p>
+                    )}
+                  </div>
+                )}
+              />
+              <Controller
+                control={form.control}
+                name="idp_x509_cert"
+                render={({ field }) => (
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">
+                      IdP X.509 Certificate (PEM)
+                      <span className="ml-1 text-xs text-gray-400 font-normal">
+                        — used to verify assertion signatures
+                      </span>
+                    </label>
+                    <textarea
+                      {...field}
+                      rows={4}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md text-xs font-mono focus:ring-blue-500 focus:border-blue-500 resize-y"
+                      placeholder="-----BEGIN CERTIFICATE-----&#10;MIICpDCCAYwCCQD...&#10;-----END CERTIFICATE-----"
+                      spellCheck={false}
+                    />
+                  </div>
+                )}
+              />
+            </div>
+          </div>
+
+          {/* Provisioning */}
+          <div className="space-y-4">
+            <p className="text-sm font-medium text-gray-700">User Provisioning</p>
+            <Controller
+              control={form.control}
+              name="auto_provision"
+              render={({ field }) => (
+                <Toggle
+                  enabled={field.value}
+                  onChange={field.onChange}
+                  label="Auto-provision new users"
+                  description="Automatically create accounts for users who authenticate via SAML but don't yet have a LearnPuddle account"
+                />
+              )}
+            />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Controller
+                control={form.control}
+                name="default_role"
+                render={({ field }) => (
+                  <div>
+                    <label htmlFor="default_role" className="block text-xs font-medium text-gray-600 mb-1">
+                      Default role for new users
+                    </label>
+                    <select
+                      id="default_role"
+                      {...field}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-blue-500 focus:border-blue-500"
+                    >
+                      {SAML_ROLE_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              />
+              <Controller
+                control={form.control}
+                name="allowed_email_domains"
+                render={({ field }) => (
+                  <div>
+                    <label htmlFor="allowed_email_domains" className="block text-xs font-medium text-gray-600 mb-1">
+                      Allowed email domains
+                      <span className="ml-1 text-xs text-gray-400 font-normal">comma-separated; empty = any</span>
+                    </label>
+                    <input
+                      id="allowed_email_domains"
+                      {...field}
+                      type="text"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-blue-500 focus:border-blue-500"
+                      placeholder="school.edu, district.org"
+                    />
+                  </div>
+                )}
+              />
+            </div>
+          </div>
+
+          {/* Advanced: attribute mapping */}
+          <div>
+            <button
+              type="button"
+              onClick={() => setShowAdvanced((v) => !v)}
+              className="flex items-center gap-1.5 text-sm font-medium text-gray-600 hover:text-gray-900 cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-500 rounded"
+            >
+              {showAdvanced ? (
+                <ChevronUpIcon className="h-4 w-4" aria-hidden="true" />
+              ) : (
+                <ChevronDownIcon className="h-4 w-4" aria-hidden="true" />
+              )}
+              Advanced: Attribute Mapping
+            </button>
+
+            {showAdvanced && (
+              <div className="mt-3 bg-gray-50 border border-gray-200 rounded-lg p-4 space-y-3">
+                <p className="text-xs text-gray-500 mb-3">
+                  Map SAML attribute URIs (from the IdP's assertion) to LearnPuddle user fields.
+                  Leave blank to skip mapping for a field.
+                </p>
+                {(
+                  [
+                    ['attr_email', 'Email (required)', 'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress'],
+                    ['attr_first_name', 'First name', 'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/givenname'],
+                    ['attr_last_name', 'Last name', 'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/surname'],
+                    ['attr_groups', 'Groups', 'http://schemas.microsoft.com/ws/2008/06/identity/claims/groups'],
+                    ['attr_role', 'Role', ''],
+                  ] as const
+                ).map(([name, label, placeholder]) => (
+                  <Controller
+                    key={name}
+                    control={form.control}
+                    name={name}
+                    render={({ field }) => (
+                      <div className="flex items-center gap-3">
+                        <span className="w-28 flex-shrink-0 text-xs font-medium text-gray-600">{label}</span>
+                        <input
+                          {...field}
+                          type="text"
+                          className="flex-1 min-w-0 px-3 py-1.5 border border-gray-300 rounded-md text-xs font-mono focus:ring-blue-500 focus:border-blue-500"
+                          placeholder={placeholder || 'SAML attribute URI'}
+                        />
+                      </div>
+                    )}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Existing SP cert status */}
+          {samlConfig?.sp_private_key_configured && (
+            <div className="flex items-center gap-2 text-xs text-gray-500 bg-gray-50 border border-gray-200 rounded-md px-3 py-2">
+              <CheckCircleIcon className="h-4 w-4 text-emerald-500 flex-shrink-0" aria-hidden="true" />
+              SP signing certificate and private key are configured.
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="mt-6 flex justify-end">
+        <Button
+          type="submit"
+          variant="primary"
+          className="w-full sm:w-auto"
+          loading={mutation.isPending}
+        >
+          Save SAML Configuration
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+// ── Sub-card 4: SCIM 2.0 Token Management (FE-032 / TASK-023) ───────────────
+
+const CreateTokenSchema = z.object({
+  name: z
+    .string()
+    .min(1, 'Token name is required')
+    .max(64, 'Token name must be 64 characters or fewer')
+    .regex(/^[\w\s\-()]+$/, 'Only letters, numbers, spaces, hyphens, and parentheses are allowed'),
+});
+type CreateTokenFormData = z.infer<typeof CreateTokenSchema>;
+
+/** Modal shown once after token creation to let the admin copy the raw value. */
+function TokenRevealModal({
+  tokenValue,
+  onClose,
+}: {
+  tokenValue: string;
+  onClose: () => void;
+}) {
+  const toast = useToast();
+  const [copied, setCopied] = React.useState(false);
+
+  const handleCopy = () => {
+    navigator.clipboard
+      .writeText(tokenValue)
+      .then(() => {
+        setCopied(true);
+        toast.success('Token copied', 'Paste it into your IdP / HR system now — it cannot be retrieved again.');
+      })
+      .catch(() => {
+        toast.error('Copy failed', 'Clipboard access was denied — please select and copy the token manually.');
+      });
+  };
+
+  return (
+    <Transition show as={Fragment}>
+      <Dialog as="div" className="relative z-50" onClose={onClose}>
+        <Transition.Child
+          as={Fragment}
+          enter="ease-out duration-200"
+          enterFrom="opacity-0"
+          enterTo="opacity-100"
+          leave="ease-in duration-150"
+          leaveFrom="opacity-100"
+          leaveTo="opacity-0"
+        >
+          <div className="fixed inset-0 bg-black/40" />
+        </Transition.Child>
+
+        <div className="fixed inset-0 overflow-y-auto">
+          <div className="flex min-h-full items-center justify-center p-4">
+            <Transition.Child
+              as={Fragment}
+              enter="ease-out duration-200"
+              enterFrom="opacity-0 scale-95"
+              enterTo="opacity-100 scale-100"
+              leave="ease-in duration-150"
+              leaveFrom="opacity-100 scale-100"
+              leaveTo="opacity-0 scale-95"
+            >
+              <Dialog.Panel className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl">
+                <div className="flex items-start gap-4">
+                  <div className="flex-shrink-0 p-2 rounded-full bg-green-100">
+                    <CheckCircleIcon className="h-6 w-6 text-green-600" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <Dialog.Title className="text-lg font-semibold text-gray-900">
+                      Token created — copy it now
+                    </Dialog.Title>
+                    <p className="mt-1 text-sm text-gray-500">
+                      This token will not be shown again. Copy it and configure your
+                      IdP or directory system immediately.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 flex items-start gap-2">
+                  <ExclamationTriangleIcon className="h-4 w-4 text-amber-600 mt-0.5 flex-shrink-0" />
+                  <p className="text-xs text-amber-700">
+                    This is your only opportunity to view the raw token. It is stored as a
+                    one-way hash — once you close this dialog it cannot be recovered.
+                  </p>
+                </div>
+
+                <div className="mt-4">
+                  <p className="text-xs font-medium text-gray-500 mb-1">Bearer token</p>
+                  <div className="flex items-center gap-2">
+                    <code className="flex-1 block break-all rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs font-mono text-gray-800 select-all">
+                      {tokenValue}
+                    </code>
+                    <button
+                      type="button"
+                      onClick={handleCopy}
+                      className="flex-shrink-0 p-2 rounded-lg border border-gray-200 hover:bg-gray-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                      aria-label="Copy token to clipboard"
+                    >
+                      <ClipboardDocumentIcon
+                        className={`h-4 w-4 ${copied ? 'text-green-600' : 'text-gray-500'}`}
+                      />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="mt-6 flex justify-end">
+                  <Button variant="secondary" onClick={onClose} className="w-full sm:w-auto">
+                    I've copied the token
+                  </Button>
+                </div>
+              </Dialog.Panel>
+            </Transition.Child>
+          </div>
+        </div>
+      </Dialog>
+    </Transition>
+  );
+}
+
+function SCIMTokenCard({ subdomain }: { subdomain: string }) {
+  const toast = useToast();
+  const queryClient = useQueryClient();
+
+  const [showCreateForm, setShowCreateForm] = React.useState(false);
+  const [revealToken, setRevealToken] = React.useState<string | null>(null);
+  const [revokeTarget, setRevokeTarget] = React.useState<{ id: string; name: string } | null>(null);
+
+  const scimEndpoint = subdomain
+    ? `https://${subdomain}.learnpuddle.com/scim/v2/`
+    : `https://<your-school>.learnpuddle.com/scim/v2/`;
+
+  // ── Queries & Mutations ─────────────────────────────────────────────
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ['scim-tokens'],
+    queryFn: adminSettingsService.listSCIMTokens,
+  });
+
+  const form = useZodForm({
+    schema: CreateTokenSchema,
+    defaultValues: { name: '' },
+  });
+
+  const createMutation = useMutation({
+    mutationFn: (name: string) => adminSettingsService.createSCIMToken(name),
+    onSuccess: (created) => {
+      // Guard: if a token is already being shown, don't overwrite it before the
+      // admin has had a chance to copy it. This prevents rapid double-submit from
+      // silently discarding the first token's plaintext value.
+      if (revealToken) return;
+      queryClient.invalidateQueries({ queryKey: ['scim-tokens'] });
+      form.reset();
+      setShowCreateForm(false);
+      setRevealToken(created.token);
+    },
+    onError: (err: unknown) => {
+      const msg =
+        err instanceof Error ? err.message : 'An error occurred creating the token.';
+      toast.error('Failed to create SCIM token', msg);
+    },
+  });
+
+  const revokeMutation = useMutation({
+    mutationFn: (tokenId: string) => adminSettingsService.revokeSCIMToken(tokenId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['scim-tokens'] });
+      toast.success('Token revoked', 'The SCIM token has been deactivated.');
+    },
+    onError: (err: unknown) => {
+      const msg =
+        err instanceof Error ? err.message : 'An error occurred revoking the token.';
+      toast.error('Failed to revoke token', msg);
+    },
+  });
+
+  const onCreateSubmit = form.handleSubmit((data: CreateTokenFormData) => {
+    createMutation.mutate(data.name);
+  });
+
+  // ── Render ──────────────────────────────────────────────────────────
+  const tokens = data?.results ?? [];
+
+  return (
+    <>
+      <div className="rounded-xl border border-gray-200 bg-white p-6">
+        {/* Header */}
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h3 className="text-base font-semibold text-gray-900">SCIM 2.0 Provisioning</h3>
+            <p className="mt-1 text-sm text-gray-500">
+              Manage bearer tokens for automated user provisioning via SCIM 2.0.
+              Configure your Identity Provider (Okta, Azure AD, etc.) to use the
+              endpoint below.
+            </p>
+          </div>
+          {!showCreateForm && (
+            <Button
+              variant="secondary"
+              className="flex-shrink-0"
+              onClick={() => setShowCreateForm(true)}
+            >
+              Add token
+            </Button>
+          )}
+        </div>
+
+        {/* SCIM endpoint URL */}
+        <div className="mt-4">
+          <CopyableField label="SCIM Endpoint URL" value={scimEndpoint} />
+        </div>
+
+        {/* Create token form */}
+        {showCreateForm && (
+          <div className="mt-4 rounded-lg border border-blue-100 bg-blue-50 p-4">
+            <p className="text-sm font-medium text-blue-900 mb-3">Create a new SCIM token</p>
+            <form onSubmit={onCreateSubmit} className="flex items-start gap-3">
+              <div className="flex-1">
+                <FormField
+                  control={form.control}
+                  name="name"
+                  label="Token name"
+                  placeholder='e.g. "Okta SCIM Provisioner"'
+                />
+              </div>
+              <div className="flex gap-2 mt-6">
+                <Button
+                  type="submit"
+                  variant="primary"
+                  loading={createMutation.isPending}
+                  className="whitespace-nowrap"
+                >
+                  Create
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => {
+                    setShowCreateForm(false);
+                    form.reset();
+                  }}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </form>
+          </div>
+        )}
+
+        {/* Token list */}
+        <div className="mt-4">
+          {isLoading && (
+            <div className="py-6 flex justify-center">
+              <Loading />
+            </div>
+          )}
+          {isError && (
+            <div className="rounded-lg border border-red-100 bg-red-50 p-4 flex items-center gap-3">
+              <ExclamationTriangleIcon className="h-5 w-5 text-red-500 flex-shrink-0" />
+              <p className="text-sm text-red-700">Failed to load SCIM tokens. Refresh to retry.</p>
+            </div>
+          )}
+          {!isLoading && !isError && tokens.length === 0 && (
+            <p className="text-sm text-gray-400 py-4 text-center">
+              No tokens yet. Create one above to start provisioning users via SCIM.
+            </p>
+          )}
+          {!isLoading && !isError && tokens.length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-100">
+                    <th className="py-2 pr-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
+                    <th className="py-2 pr-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Created</th>
+                    <th className="py-2 pr-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last used</th>
+                    <th className="py-2 pr-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                    <th className="py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {tokens.map((t) => (
+                    <tr key={t.id} className="hover:bg-gray-50 transition-colors">
+                      <td className="py-2.5 pr-4 font-medium text-gray-900">{t.name}</td>
+                      <td className="py-2.5 pr-4 text-gray-500 whitespace-nowrap">
+                        {new Date(t.created_at).toLocaleDateString()}
+                      </td>
+                      <td className="py-2.5 pr-4 text-gray-500 whitespace-nowrap">
+                        {t.last_used_at
+                          ? new Date(t.last_used_at).toLocaleDateString()
+                          : <span className="text-gray-300">Never</span>}
+                      </td>
+                      <td className="py-2.5 pr-4">
+                        <span
+                          className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
+                            t.is_active
+                              ? 'bg-green-100 text-green-700'
+                              : 'bg-gray-100 text-gray-500'
+                          }`}
+                        >
+                          {t.is_active ? 'Active' : 'Revoked'}
+                        </span>
+                      </td>
+                      <td className="py-2.5 text-right">
+                        {t.is_active && (
+                          <button
+                            type="button"
+                            onClick={() => setRevokeTarget({ id: t.id, name: t.name })}
+                            className="text-xs text-red-500 hover:text-red-700 hover:underline transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-red-400 rounded cursor-pointer"
+                          >
+                            Revoke
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
         </div>
       </div>
 
-      {/* Save button */}
-      <div className="flex justify-end">
-        <Button
-          type="button"
-          variant="primary"
-          className="w-full sm:w-auto"
-          loading={mutation.isPending}
-          onClick={handleSave}
-        >
-          Save Security Settings
-        </Button>
-      </div>
+      {/* Token reveal modal (shown once after creation) */}
+      {revealToken && (
+        <TokenRevealModal
+          tokenValue={revealToken}
+          onClose={() => setRevealToken(null)}
+        />
+      )}
+
+      {/* Revoke confirmation dialog */}
+      <ConfirmDialog
+        isOpen={revokeTarget !== null}
+        onClose={() => setRevokeTarget(null)}
+        onConfirm={() => {
+          if (revokeTarget) {
+            revokeMutation.mutate(revokeTarget.id);
+          }
+          setRevokeTarget(null);
+        }}
+        title="Revoke SCIM token"
+        message={`Revoking "${revokeTarget?.name}" will immediately stop any SCIM provisioning using this token. This cannot be undone.`}
+        confirmLabel="Revoke token"
+        cancelLabel="Keep active"
+        variant="danger"
+        loading={revokeMutation.isPending}
+      />
+    </>
+  );
+}
+
+// ── Section: Security (top-level) ─────────────────────────────────────
+
+function SecuritySection() {
+  const { features, theme } = useTenantStore();
+
+  return (
+    <div data-tour="security-2fa-section" className="space-y-6">
+      <PasswordPolicyCard />
+      <TwoFactorSessionCard />
+      {features.saml && (
+        <SAMLSSOCard subdomain={theme.subdomain ?? ''} />
+      )}
+      <SCIMTokenCard subdomain={theme.subdomain ?? ''} />
     </div>
   );
 }
@@ -1115,6 +2115,258 @@ const IMAGE_PROVIDERS = [
   { value: 'openai', label: 'OpenAI (DALL-E)' },
   { value: 'stability', label: 'Stability AI' },
 ];
+
+// ── Section: Mode & Labels (FE-015 / TASK-020) ───────────────────────────────
+
+/** All label keys alongside their human-readable form names for the settings UI. */
+const MODE_LABEL_META: Array<{ key: ModeLabelKey; name: string; description: string }> = [
+  { key: 'learner',        name: 'Learner (singular)',  description: 'e.g. "Teacher" or "Employee"' },
+  { key: 'learner_plural', name: 'Learner (plural)',    description: 'e.g. "Teachers" or "Employees"' },
+  { key: 'course',         name: 'Course (singular)',   description: 'e.g. "Course" or "Training Program"' },
+  { key: 'course_plural',  name: 'Course (plural)',     description: 'e.g. "Courses" or "Training Programs"' },
+  { key: 'module',         name: 'Module',              description: 'Section within a course' },
+  { key: 'lesson',         name: 'Lesson',              description: 'Individual content item' },
+  { key: 'assignment',     name: 'Assignment',          description: 'Graded task' },
+  { key: 'badge',          name: 'Badge',               description: 'Gamification achievement' },
+  { key: 'league',         name: 'League',              description: 'Competitive grouping' },
+  { key: 'xp',             name: 'XP label',            description: 'Experience point currency label' },
+  { key: 'streak',         name: 'Streak',              description: 'Consecutive-day activity label' },
+  { key: 'dashboard',      name: 'Dashboard',           description: 'Main overview page title' },
+];
+
+function ModeSwitchSection() {
+  const toast = useToast();
+  const queryClient = useQueryClient();
+  const { setModeLabels } = useTenantStore();
+
+  const [currentMode, setCurrentMode] = useState<TenantMode>('education');
+  const [overrides, setOverrides] = useState<Partial<ModeLabels>>({});
+  const [isFetched, setIsFetched] = useState(false);
+
+  // Load current mode settings
+  const { isLoading } = useQuery({
+    queryKey: ['tenantModeSettings'],
+    queryFn: adminSettingsService.getModeSettings,
+    retry: false,
+  });
+
+  // Populate local state once the query resolves
+  useEffect(() => {
+    adminSettingsService.getModeSettings()
+      .then((data: TenantModeSettings) => {
+        setCurrentMode(data.mode);
+        setOverrides(data.mode_label_overrides ?? {});
+        setIsFetched(true);
+      })
+      .catch(() => {
+        setIsFetched(true);
+      });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const saveMutation = useMutation({
+    mutationFn: (payload: { mode: TenantMode; mode_label_overrides: Partial<ModeLabels> }) =>
+      adminSettingsService.updateModeSettings(payload),
+    onSuccess: (data: TenantModeSettings) => {
+      const merged: ModeLabels = { ...EDUCATION_DEFAULTS, ...(data.mode_labels as Partial<ModeLabels>) };
+      setModeLabels(data.mode, merged);
+      queryClient.invalidateQueries({ queryKey: ['tenantModeSettings'] });
+      toast.success('Mode settings saved', 'Label changes are now live across the platform.');
+    },
+    onError: () => {
+      toast.error('Failed to save', 'Please try again.');
+    },
+  });
+
+  // Effective preview labels: mode defaults + current overrides (not yet saved)
+  const modeDefaults = currentMode === 'education' ? EDUCATION_DEFAULTS : CORPORATE_DEFAULTS;
+  const previewLabels: ModeLabels = { ...modeDefaults, ...overrides } as ModeLabels;
+
+  const handleModeChange = (newMode: TenantMode) => {
+    setCurrentMode(newMode);
+    // Clear overrides when switching modes so the user sees clean defaults
+    setOverrides({});
+  };
+
+  const handleOverrideChange = (key: ModeLabelKey, value: string) => {
+    setOverrides((prev) => {
+      const next = { ...prev };
+      const defaultForMode = (currentMode === 'education' ? EDUCATION_DEFAULTS : CORPORATE_DEFAULTS)[key];
+      if (value === '' || value === defaultForMode) {
+        // Remove override — let the default win
+        delete next[key];
+      } else {
+        next[key] = value;
+      }
+      return next;
+    });
+  };
+
+  const handleSave = () => {
+    saveMutation.mutate({ mode: currentMode, mode_label_overrides: overrides });
+  };
+
+  const handleResetOverrides = () => {
+    setOverrides({});
+  };
+
+  if (isLoading && !isFetched) {
+    return (
+      <div className="flex justify-center py-12">
+        <Loading />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Mode selector */}
+      <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6">
+        <h2 className="text-lg font-semibold text-gray-900 mb-1">Platform Mode</h2>
+        <p className="text-sm text-gray-500 mb-5">
+          Switch between Education and Corporate mode to adapt the terminology used throughout
+          the platform. Custom label overrides are applied on top of the mode defaults.
+        </p>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {/* Education option */}
+          <button
+            type="button"
+            onClick={() => handleModeChange('education')}
+            className={`relative rounded-xl border-2 p-4 text-left transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 cursor-pointer ${
+              currentMode === 'education'
+                ? 'border-indigo-500 bg-indigo-50'
+                : 'border-gray-200 hover:border-gray-300'
+            }`}
+          >
+            {currentMode === 'education' && (
+              <span className="absolute top-3 right-3">
+                <CheckCircleIcon className="h-5 w-5 text-indigo-600" />
+              </span>
+            )}
+            <p className="font-semibold text-gray-900 text-sm">Education</p>
+            <p className="text-xs text-gray-500 mt-1">
+              Uses school terminology: Teachers, Courses, Badges, Leagues
+            </p>
+          </button>
+
+          {/* Corporate option */}
+          <button
+            type="button"
+            onClick={() => handleModeChange('corporate')}
+            className={`relative rounded-xl border-2 p-4 text-left transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 cursor-pointer ${
+              currentMode === 'corporate'
+                ? 'border-indigo-500 bg-indigo-50'
+                : 'border-gray-200 hover:border-gray-300'
+            }`}
+          >
+            {currentMode === 'corporate' && (
+              <span className="absolute top-3 right-3">
+                <CheckCircleIcon className="h-5 w-5 text-indigo-600" />
+              </span>
+            )}
+            <p className="font-semibold text-gray-900 text-sm">Corporate</p>
+            <p className="text-xs text-gray-500 mt-1">
+              Uses corporate terminology: Employees, Training Programs, Achievements, Tiers
+            </p>
+          </button>
+        </div>
+      </div>
+
+      {/* Label overrides */}
+      <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6">
+        <div className="flex items-center justify-between mb-1">
+          <h2 className="text-lg font-semibold text-gray-900">Label Overrides</h2>
+          {Object.keys(overrides).length > 0 && (
+            <button
+              type="button"
+              onClick={handleResetOverrides}
+              className="text-xs text-gray-500 hover:text-gray-700 flex items-center gap-1 transition-colors cursor-pointer"
+            >
+              <ArrowPathIcon className="h-3.5 w-3.5" />
+              Reset to mode defaults
+            </button>
+          )}
+        </div>
+        <p className="text-sm text-gray-500 mb-5">
+          Customise individual labels. Leave a field empty or matching its default to remove
+          the override. Changes are previewed in the &quot;Effective&quot; column.
+        </p>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-gray-100">
+                <th className="text-left pb-3 font-medium text-gray-600 w-36">Label</th>
+                <th className="text-left pb-3 font-medium text-gray-600 w-36">Mode Default</th>
+                <th className="text-left pb-3 font-medium text-gray-600">Custom Override</th>
+                <th className="text-left pb-3 font-medium text-gray-600 w-36">Effective</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-50">
+              {MODE_LABEL_META.map(({ key, name, description }) => {
+                const defaultVal = modeDefaults[key];
+                const overrideVal = overrides[key] ?? '';
+                const effective = previewLabels[key];
+                const isOverridden = Boolean(overrides[key]);
+
+                return (
+                  <tr key={key} className="group">
+                    <td className="py-3 pr-4 align-top">
+                      <p className="font-medium text-gray-800">{name}</p>
+                      <p className="text-[11px] text-gray-400 mt-0.5">{description}</p>
+                    </td>
+                    <td className="py-3 pr-4 align-middle">
+                      <span className="text-gray-500">{defaultVal}</span>
+                    </td>
+                    <td className="py-3 pr-4 align-middle">
+                      <input
+                        type="text"
+                        value={overrideVal}
+                        onChange={(e) => handleOverrideChange(key, e.target.value)}
+                        placeholder={defaultVal}
+                        className="w-full rounded-lg border border-gray-200 px-3 py-1.5 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-colors"
+                        aria-label={`Override for ${name}`}
+                        data-testid={`override-${key}`}
+                      />
+                    </td>
+                    <td className="py-3 align-middle">
+                      <span
+                        className={`font-medium ${isOverridden ? 'text-indigo-600' : 'text-gray-700'}`}
+                        data-testid={`effective-${key}`}
+                      >
+                        {effective}
+                      </span>
+                      {isOverridden && (
+                        <span className="ml-1.5 text-[10px] bg-indigo-100 text-indigo-700 rounded px-1 py-0.5 align-middle">
+                          custom
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Save */}
+      <div className="flex justify-end gap-3">
+        <Button
+          variant="primary"
+          onClick={handleSave}
+          disabled={saveMutation.isPending}
+          className="min-w-[120px]"
+        >
+          {saveMutation.isPending ? 'Saving…' : 'Save Mode & Labels'}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// ── Section: AI Provider ─────────────────────────────────────────────────────
 
 function AIProviderSection() {
   const toast = useToast();
@@ -1478,6 +2730,7 @@ export const SettingsPage: React.FC = () => {
       {activeTab === 'academic' && settings && (
         <AcademicSection settings={settings} />
       )}
+      {activeTab === 'mode' && <ModeSwitchSection />}
       {activeTab === 'ai' && <AIProviderSection />}
     </div>
   );

@@ -32,6 +32,7 @@ import api from '../../config/api';
 import { cn } from '../../lib/utils';
 import { useZodForm } from '../../hooks/useZodForm';
 import { useToast } from '../../components/common';
+import { ConfirmDialog } from '../../components/common/ConfirmDialog';
 import { Badge } from '../../components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Button } from '../../components/common/Button';
@@ -246,6 +247,7 @@ function MilestoneTimeline({
   const queryClient = useQueryClient();
   const toast = useToast();
   const [showAddForm, setShowAddForm] = useState(false);
+  const [deleteMilestoneTarget, setDeleteMilestoneTarget] = useState<string | null>(null);
 
   const sortedMilestones = useMemo(
     () => [...milestones].sort((a, b) => a.order - b.order),
@@ -316,6 +318,18 @@ function MilestoneTimeline({
 
   return (
     <div className="px-5 pb-4">
+      <ConfirmDialog
+        isOpen={deleteMilestoneTarget !== null}
+        onClose={() => setDeleteMilestoneTarget(null)}
+        onConfirm={() => {
+          if (deleteMilestoneTarget) deleteMilestoneMutation.mutate(deleteMilestoneTarget);
+          setDeleteMilestoneTarget(null);
+        }}
+        title="Delete Milestone"
+        message="Delete this milestone? This action cannot be undone."
+        confirmLabel="Delete"
+        variant="danger"
+      />
       {sortedMilestones.length === 0 && !showAddForm ? (
         <p className="text-sm text-gray-400 italic py-2">No milestones defined yet.</p>
       ) : (
@@ -379,11 +393,7 @@ function MilestoneTimeline({
                     </button>
                     <button
                       type="button"
-                      onClick={() => {
-                        if (window.confirm('Delete this milestone?')) {
-                          deleteMilestoneMutation.mutate(ms.id);
-                        }
-                      }}
+                      onClick={() => setDeleteMilestoneTarget(ms.id)}
                       className="p-1 rounded hover:bg-red-50 text-gray-400 hover:text-red-500"
                       title="Delete milestone"
                     >

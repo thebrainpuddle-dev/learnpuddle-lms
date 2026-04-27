@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { render, screen, waitFor } from '@testing-library/react';
-import { vi, describe, it, expect, beforeEach } from 'vitest';
+import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import App from './App';
 import { useAuthStore } from './stores/authStore';
 import { useTenantStore } from './stores/tenantStore';
@@ -41,8 +41,14 @@ vi.mock('./config/api', () => {
 const mockedApi = api as unknown as { get: ReturnType<typeof vi.fn>; post: ReturnType<typeof vi.fn> };
 
 describe('App', () => {
+  afterEach(() => {
+    // Reset URL to root so tests that call window.history.pushState()
+    // don't leak URL state into subsequent tests.
+    window.history.pushState({}, '', '/');
+  });
+
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     mockedApi.get.mockResolvedValue({
       data: {
         name: 'LearnPuddle',
@@ -130,6 +136,8 @@ describe('App', () => {
 
     render(<App />);
 
+    // ProductLandingPage is React.lazy() — allow extra time for the async
+    // chunk to load, especially when running in a parallel full-suite context.
     await waitFor(() => {
       expect(
         screen.getByRole('heading', {
@@ -137,7 +145,7 @@ describe('App', () => {
         }),
       ).toBeInTheDocument();
       expect(screen.getByText(/talks back/i)).toBeInTheDocument();
-    });
+    }, { timeout: 5000 });
   });
 
   it('redirects /login to / on platform host', async () => {
@@ -146,6 +154,8 @@ describe('App', () => {
 
     render(<App />);
 
+    // ProductLandingPage is React.lazy() — allow extra time for the async
+    // chunk to load.
     await waitFor(() => {
       expect(
         screen.getByRole('heading', {
@@ -153,6 +163,6 @@ describe('App', () => {
         }),
       ).toBeInTheDocument();
       expect(screen.getByText(/talks back/i)).toBeInTheDocument();
-    });
+    }, { timeout: 5000 });
   });
 });
