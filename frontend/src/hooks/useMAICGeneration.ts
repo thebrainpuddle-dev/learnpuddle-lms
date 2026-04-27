@@ -595,7 +595,8 @@ export function useMAICGeneration(): UseMAICGenerationReturn {
  * comfortably under DATA_UPLOAD_MAX_MEMORY_SIZE (50 MB).
  */
 function scrubSlideDataUrls(slides: MAICSlide[]): MAICSlide[] {
-  return slides.map((s) => ({
+  let strippedCount = 0;
+  const out = slides.map((s) => ({
     ...s,
     elements: (s.elements || []).map((el) => {
       const src =
@@ -603,11 +604,25 @@ function scrubSlideDataUrls(slides: MAICSlide[]): MAICSlide[] {
           ? (el as { src: string }).src
           : '';
       if (src.startsWith('data:')) {
+        strippedCount += 1;
         return { ...el, src: '' };
       }
       return el;
     }),
   }));
+  // CG-P0-9: this scrubber should be a no-op now that the backend image
+  // service has full storage context. If ANY data: URL gets stripped,
+  // something regressed (likely Imagen fell back to `_bytes_to_data_url`
+  // because tenant_id/classroom_id/scene_idx weren't piped through). Log
+  // loudly so the regression is visible during local dev — production
+  // ops can grep for the metric.
+  if (strippedCount > 0 && typeof console !== 'undefined') {
+    console.warn(
+      `[MAIC] scrubSlideDataUrls stripped ${strippedCount} data: URL(s) — ` +
+      `expected zero post-CG-P0-9. Backend storage context likely missing.`,
+    );
+  }
+  return out;
 }
 
 /** Map outline scene types to playback scene types */
