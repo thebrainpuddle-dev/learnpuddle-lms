@@ -93,6 +93,14 @@ export const RoundtableStrip = React.memo<RoundtableStripProps>(function Roundta
         >
           {agents.map((agent) => {
             const isActive = agent.id === speakingAgentId;
+            // CG-P1-2 (2026-04-27): hide name labels when ANY agent is
+            // speaking. The PresentationSpeechOverlay (bottom-left) already
+            // shows the active speaker's full name + role + speech — having
+            // the strip ALSO label the same agent produced a visible
+            // duplicate "Dr. Meera De… / Dr. Meera Desai" pair in the
+            // user's screenshot. Avatars alone keep the cast visible
+            // without competing for the speaker label.
+            const showLabel = !speakingAgentId;
             return (
               <motion.div
                 key={agent.id}
@@ -113,15 +121,17 @@ export const RoundtableStrip = React.memo<RoundtableStripProps>(function Roundta
                   isSpeaking={isActive}
                   size={isActive ? 'md' : 'sm'}
                 />
-                <span
-                  className={cn(
-                    'text-[10px] leading-none tabular-nums truncate max-w-[72px]',
-                    isActive ? 'text-white font-medium' : 'text-white/55',
-                  )}
-                  title={agent.name}
-                >
-                  {truncateName(agent.name, isActive ? 16 : 10)}
-                </span>
+                {showLabel && (
+                  <span
+                    className={cn(
+                      'text-[10px] leading-none tabular-nums truncate max-w-[72px]',
+                      isActive ? 'text-white font-medium' : 'text-white/55',
+                    )}
+                    title={agent.name}
+                  >
+                    {truncateName(agent.name, isActive ? 16 : 10)}
+                  </span>
+                )}
               </motion.div>
             );
           })}
