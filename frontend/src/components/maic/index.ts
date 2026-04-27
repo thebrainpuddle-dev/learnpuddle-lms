@@ -15,7 +15,9 @@ export { PDFUploader } from './PDFUploader';
 export { QuizRenderer } from './QuizRenderer';
 export { SpotlightOverlay } from './SpotlightOverlay';
 export { AgentConfigPanel } from './AgentConfigPanel';
-export { SpeechSubtitles } from './SpeechSubtitles';
+// CG-P1-7: SpeechSubtitles removed — was only ever exported, never
+// imported anywhere. PresentationSpeechOverlay handles the live
+// speech display.
 export { SceneSidebar } from './SceneSidebar';
 export { SceneRenderer } from './SceneRenderer';
 export { InteractiveRenderer } from './InteractiveRenderer';

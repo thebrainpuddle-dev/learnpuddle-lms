@@ -210,21 +210,11 @@ export function usePlaybackEngine(role: MAICRole = 'teacher') {
     setCurrentActionIndex(index);
   }, []);
 
-  /**
-   * Seek to the transition action for a given slide index (within the current
-   * scene) and start playing from there. Triggered by slide-thumbnail clicks
-   * mid-playback. Uses `generationToken` + `sessionId` internally so the
-   * previous slide's audio cannot wake up and corrupt the new slide's state.
-   *
-   * The engineDrivenSlideChangeRef is declared at hook top-level so both
-   * this manual seek and the action engine's automatic transitions (via
-   * the `onEngineDrivenTransition` callback) can flip it.
-   */
-  const seekToSlide = useCallback((slideIndex: number) => {
-    if (!engineRef.current) return;
-    engineDrivenSlideChangeRef.current = true;
-    engineRef.current.seekToSlide(slideIndex);
-  }, []);
+  // CG-P1-7 (2026-04-27): the auto-play `seekToSlide` hook export was
+  // never wired to the UI (Stage.tsx comment confirmed it). The engine
+  // method `MAICPlaybackEngine.seekToSlide` stays for the test suite,
+  // but the hook-level callback + return entry are removed. `seekToSlidePaused`
+  // below is the UI-facing seek (used by Stage on manual slide click).
 
   /**
    * CG-P0-9: cursor-only seek to the action that corresponds to a given
@@ -346,14 +336,9 @@ export function usePlaybackEngine(role: MAICRole = 'teacher') {
     engineRef.current?.play();
   }, []);
 
-  /** Stop full-classroom playback */
-  const stopClass = useCallback(() => {
-    classStoppedRef.current = true;
-    autoAdvanceRef.current = false;
-    setIsClassPlaying(false);
-    useMAICStageStore.getState().setPlaying(false);
-    engineRef.current?.stop();
-  }, []);
+  // CG-P1-7: `stopClass` was exported but no UI caller. `pause()` covers
+  // user-initiated stops; auto-advance ends naturally via onSceneComplete
+  // when the last scene finishes. Removed.
 
   /**
    * Consume-once flag indicating the most recent `currentSlideIndex` change
@@ -379,7 +364,8 @@ export function usePlaybackEngine(role: MAICRole = 'teacher') {
     resume,
     stop,
     seekTo,
-    seekToSlide,
+    // CG-P1-7: `seekToSlide` and `stopClass` removed — never wired to UI.
+    // Engine-level `MAICPlaybackEngine.seekToSlide` stays for tests.
     seekToSlidePaused,
     seekToScene,
     loadScene,
@@ -389,7 +375,6 @@ export function usePlaybackEngine(role: MAICRole = 'teacher') {
     resumeAfterInterrupt,
     startClass,
     playFromCurrent,
-    stopClass,
     consumeEngineDrivenSlideChange,
   };
 }
