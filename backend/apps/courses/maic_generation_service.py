@@ -274,12 +274,18 @@ def _enforce_length_budgets(
 # en-IN Azure Neural voice IDs. Only consulted when validate_agents can't
 # accept the LLM output and we need a safe default.
 
+# CG-P1-1 (2026-04-27): only references voices Microsoft Edge TTS
+# actually serves. AaravNeural/KavyaNeural were fictional (see audit
+# in tasks/2026-04-27-deep-end-to-end-fix.md). Hindi-locale Madhur
+# substitutes for student_rep/student because no en-IN male voice
+# beyond Prabhat exists; Madhur reads English cleanly with a slight
+# regional lilt that fits the Indian-school audience.
 AGENT_VOICE_MAP = {
     "professor": "en-IN-PrabhatNeural",
     "teaching_assistant": "en-IN-NeerjaNeural",
-    "student_rep": "en-IN-AaravNeural",
-    "student": "en-IN-AaravNeural",
-    "moderator": "en-IN-KavyaNeural",
+    "student_rep": "hi-IN-MadhurNeural",
+    "student": "hi-IN-MadhurNeural",
+    "moderator": "en-IN-NeerjaExpressiveNeural",
 }
 
 

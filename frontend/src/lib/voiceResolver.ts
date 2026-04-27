@@ -15,28 +15,29 @@
 
 import type { MAICAgent } from '../types/maic';
 
-/** Full Azure en-IN voice roster, ordered M/F/M/F/... so the global cycling
+/** Verified-working voice roster — see CG-P1-1 audit
+ *  (`tasks/2026-04-27-deep-end-to-end-fix.md`). Microsoft Edge TTS only
+ *  serves 3 en-IN voices; we backfill with 2 hi-IN voices that render
+ *  English text cleanly. Ordered M/F/M/F/... so the global cycling
  *  fallback alternates gender. Mirrors backend `maic_voices.py`. */
 const VOICE_POOL: readonly string[] = [
-  'en-IN-PrabhatNeural',  // M (adult)
-  'en-IN-NeerjaNeural',   // F (adult)
-  'en-IN-AaravNeural',    // M (young)
-  'en-IN-KavyaNeural',    // F (adult)
-  'en-IN-KunalNeural',    // M (adult)
-  'en-IN-AashiNeural',    // F (young)
-  'en-IN-RehaanNeural',   // M (young)
+  'en-IN-PrabhatNeural',           // M (adult)
+  'en-IN-NeerjaNeural',            // F (adult)
+  'hi-IN-MadhurNeural',            // M (adult, hi-IN)
+  'en-IN-NeerjaExpressiveNeural',  // F (adult, expressive)
+  'hi-IN-SwaraNeural',             // F (adult, hi-IN)
 ];
 
 /** Per-role voice pools. Each role gets ≥2 voices so two agents of the same
  *  role still get distinct voices. Genders chosen per role's typical persona. */
 const ROLE_VOICE_POOLS: Record<string, readonly string[]> = {
-  professor: ['en-IN-PrabhatNeural', 'en-IN-KunalNeural'],            // M, M
-  teaching_assistant: ['en-IN-NeerjaNeural', 'en-IN-KavyaNeural'],    // F, F
-  student_rep: ['en-IN-AaravNeural', 'en-IN-RehaanNeural'],           // M, M
-  moderator: ['en-IN-KavyaNeural', 'en-IN-NeerjaNeural'],             // F, F
-  // Students are mixed-gender on purpose so a 3-student panel sounds varied
-  student: ['en-IN-AashiNeural', 'en-IN-AaravNeural', 'en-IN-RehaanNeural'],
-  assistant: ['en-IN-NeerjaNeural', 'en-IN-PrabhatNeural'],           // F, M
+  professor: ['en-IN-PrabhatNeural', 'hi-IN-MadhurNeural'],                 // M, M
+  teaching_assistant: ['en-IN-NeerjaNeural', 'en-IN-NeerjaExpressiveNeural', 'hi-IN-SwaraNeural'],
+  student_rep: ['hi-IN-MadhurNeural', 'en-IN-PrabhatNeural'],               // M, M
+  moderator: ['en-IN-NeerjaExpressiveNeural', 'en-IN-NeerjaNeural'],        // F, F
+  // Students mixed-gender on purpose so a 3-student panel sounds varied
+  student: ['hi-IN-SwaraNeural', 'hi-IN-MadhurNeural', 'en-IN-NeerjaExpressiveNeural'],
+  assistant: ['en-IN-NeerjaNeural', 'en-IN-PrabhatNeural'],                 // F, M
 };
 
 /**

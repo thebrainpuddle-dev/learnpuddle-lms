@@ -49,14 +49,17 @@ describe('resolveVoiceForAgent — cycle-by-index distinct-voice property', () =
     );
   });
 
-  it('uses an Indian Azure neural voice (en-IN-*Neural)', () => {
+  it('uses an Indian Azure neural voice (en-IN or hi-IN)', () => {
+    // CG-P1-1: roster includes Hindi-locale Madhur/Swara that read
+    // English well — needed because Microsoft only serves 3 en-IN
+    // voices and our agent rosters need >3 distinct voices.
     const agent = mkAgent('a1', 'professor');
-    expect(resolveVoiceForAgent(agent, [agent])).toMatch(/^en-IN-\w+Neural$/);
+    expect(resolveVoiceForAgent(agent, [agent])).toMatch(/^(en-IN|hi-IN)-\w+Neural$/);
   });
 
   it('falls back gracefully for unknown agent (returns a real voice, not empty)', () => {
     const v = resolveVoiceForAgent(undefined, []);
-    expect(v).toMatch(/^en-IN-\w+Neural$/);
+    expect(v).toMatch(/^(en-IN|hi-IN)-\w+Neural$/);
   });
 
   it('falls back gracefully for unknown role (uses global pool, still distinct)', () => {

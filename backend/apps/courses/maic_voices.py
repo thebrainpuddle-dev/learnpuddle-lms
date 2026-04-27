@@ -11,19 +11,20 @@ from typing import Literal
 
 Gender = Literal["male", "female", "unknown"]
 
+# CG-P1-1 (2026-04-27): trimmed from 7 voices → 5. Microsoft Edge TTS
+# only serves 3 en-IN voices (Neerja, NeerjaExpressive, Prabhat); the
+# previously-listed Aarav/Aashi/Kavya/Kunal/Rehaan are fictional and
+# raise `edge_tts.exceptions.NoAudioReceived` for every preview/synth
+# call. We backfill with two Hindi-locale voices (Madhur, Swara) that
+# render English text cleanly — verified via direct edge-tts probes.
+# Roster shape: 3F + 2M, every role has ≥2 candidates so the validator
+# can always swap on a gender mismatch.
 AZURE_IN_VOICES = [
-    # Suits lists are intentionally broad so at least one voice of each
-    # gender covers every role — otherwise the validator deadlocks on
-    # roles with only one gender available (e.g. "Mr. Kunal" as TA used
-    # to have zero male voice candidates and the auto-fixer had nothing
-    # to swap in).
-    {"id": "en-IN-PrabhatNeural",   "gender": "male",   "tone": "authoritative", "age": "adult",       "suits": ["professor", "moderator"]},
-    {"id": "en-IN-NeerjaNeural",    "gender": "female", "tone": "warm",          "age": "adult",       "suits": ["teaching_assistant", "professor"]},
-    {"id": "en-IN-AaravNeural",     "gender": "male",   "tone": "friendly",      "age": "young adult", "suits": ["student", "teaching_assistant"]},
-    {"id": "en-IN-AashiNeural",     "gender": "female", "tone": "youthful",      "age": "young adult", "suits": ["student", "teaching_assistant"]},
-    {"id": "en-IN-KavyaNeural",     "gender": "female", "tone": "energetic",     "age": "adult",       "suits": ["teaching_assistant", "moderator", "professor"]},
-    {"id": "en-IN-KunalNeural",     "gender": "male",   "tone": "thoughtful",    "age": "adult",       "suits": ["moderator", "student", "teaching_assistant"]},
-    {"id": "en-IN-RehaanNeural",    "gender": "male",   "tone": "playful",       "age": "young adult", "suits": ["student"]},
+    {"id": "en-IN-PrabhatNeural",         "gender": "male",   "tone": "authoritative", "age": "adult", "suits": ["professor", "moderator"]},
+    {"id": "en-IN-NeerjaNeural",          "gender": "female", "tone": "warm",          "age": "adult", "suits": ["teaching_assistant", "professor", "moderator"]},
+    {"id": "en-IN-NeerjaExpressiveNeural","gender": "female", "tone": "expressive",    "age": "adult", "suits": ["moderator", "teaching_assistant", "student"]},
+    {"id": "hi-IN-MadhurNeural",          "gender": "male",   "tone": "thoughtful",    "age": "adult", "suits": ["student_rep", "student", "professor"]},
+    {"id": "hi-IN-SwaraNeural",           "gender": "female", "tone": "energetic",     "age": "adult", "suits": ["student", "teaching_assistant", "moderator"]},
 ]
 
 VOICE_BY_ID = {v["id"]: v for v in AZURE_IN_VOICES}
