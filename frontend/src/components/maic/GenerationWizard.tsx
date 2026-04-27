@@ -207,6 +207,15 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
   // T4 — scenes whose generation failed. Rendered as a "Some scenes
   // need a retry" callout inside step 4 + 5 with per-scene retry buttons.
   const failedOutlineIds = useMAICStageStore((s) => s.failedOutlineIds);
+  // CG-P1-4 (2026-04-27): mirror the approved agent roster into the
+  // shared stage store so `Stage` (which renders during partial
+  // generation per `MAICPlayerPage` resume flows) has agent metadata
+  // immediately. Previously the store's `agents` stayed empty until
+  // `useMAICGeneration.startContentGeneration`'s success path, which
+  // meant any mid-generation partial scene rendered with no agent
+  // identity. Both stores still own their data independently — this
+  // is a write-through, not a unification.
+  const setStoreAgents = useMAICStageStore((s) => s.setAgents);
   const failedScenes = useMemo(() => {
     if (!outline) return [];
     const failedSet = new Set(failedOutlineIds);
@@ -256,6 +265,10 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
   const handleAgentsComplete = useCallback(
     async (approvedAgents: MAICAgent[]) => {
       setAgents(approvedAgents);
+      // CG-P1-4: write-through to the shared store so Stage renders
+      // partial scenes with proper agent identity from the moment
+      // generation starts. See the setStoreAgents declaration comment.
+      setStoreAgents(approvedAgents);
       setAgentCount(approvedAgents.length);
 
       // Combine PDF text and web search context for richer generation.
@@ -294,6 +307,7 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
       subject,
       syllabusBoard,
       startOutlineGeneration,
+      setStoreAgents,
     ],
   );
 
