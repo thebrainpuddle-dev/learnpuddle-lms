@@ -2187,7 +2187,7 @@ CRITICAL RULES:
 - Each speech should be 1-3 sentences (short, punchy, conversational)
 - Use the speaker's role style: professors explain authoritatively, assistants ask clarifying questions, student reps voice common confusions
 - Spotlight the heading element first, then key content elements on each slide
-- Speaker handoff: insert ONE `{"type":"pause","duration": 200}` action every time the speaker changes. Keeps long dead air out while still giving the listener a beat to register the handoff — the playback engine renders real silences, so large pauses stack into noticeable dead time. Do NOT add pauses between same-speaker turns; rely on natural TTS cadence there.
+- Speaker handoff: optionally insert ONE `{"type":"pause","duration": 80}` action between speakers — the engine caps pauses to 100ms anyway and a 0-80ms beat reads as natural breath, while anything larger compounds with audio decode latency into noticeable dead air. Do NOT add pauses between same-speaker turns; natural TTS cadence covers it.
 - For introduction scenes: each agent introduces themselves personally
 - Use element IDs from the slide content for spotlight/highlight actions
 - End with a strong summary or transition statement

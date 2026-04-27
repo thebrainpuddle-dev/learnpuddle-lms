@@ -1751,7 +1751,16 @@ export class MAICActionEngine {
 
   private async executePause(action: PauseAction): Promise<void> {
     const playbackSpeed = this.settingsStore.getState().playbackSpeed;
-    await delay(action.duration / playbackSpeed);
+    // CG-P1-3 (2026-04-27): cap inter-action pauses at 100ms. The action
+    // generator emits `{type: "pause", duration: 200}` after every speaker
+    // handoff (per the prompt directive in maic_generation_service.py)
+    // which compounds with the per-speech audio decode latency to produce
+    // a noticeable 250-1000ms dead-air gap between speakers. 100ms keeps
+    // a perceptible "breath" beat without breaking conversational rhythm.
+    // Existing classrooms get shorter gaps retroactively without a regen.
+    const MAX_PAUSE_MS = 100;
+    const clamped = Math.min(action.duration, MAX_PAUSE_MS);
+    await delay(clamped / playbackSpeed);
   }
 
   private async executeTransition(action: TransitionAction): Promise<void> {
