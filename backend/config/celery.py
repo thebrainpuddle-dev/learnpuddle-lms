@@ -27,6 +27,15 @@ app.autodiscover_tasks(["apps.courses"], related_name="ai_studio_tasks")
 # TTS-worker capacity.
 app.conf.task_routes = {
     "apps.courses.maic_tasks.tts.*": {"queue": "tts"},
+    # CG-P0-5 (2026-04-27): without an explicit route, Celery would put this
+    # on the default-named "celery" queue, which our workers don't subscribe
+    # to (-Q default,video,notifications). Tasks accumulated forever in Redis
+    # → images_pending stayed True forever → slides rendered with empty src.
+    # Pin to "default" so the existing worker pool actually executes it.
+    "apps.courses.maic_tasks.fill_classroom_images": {"queue": "default"},
+    # Same root cause: semantic_search.* tasks were unrouted and piled up
+    # 210-deep on the unread "celery" queue. Pin to default.
+    "semantic_search.*": {"queue": "default"},
 }
 
 

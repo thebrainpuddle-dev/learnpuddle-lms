@@ -52,7 +52,7 @@ from apps.courses.maic_generation_service import (
     AgentValidationError,
     AGENT_VOICE_MAP,
 )
-from apps.courses.maic_voices import AZURE_IN_VOICES
+from apps.courses.maic_voices import AZURE_IN_VOICES, pick_fallback_voice
 from apps.courses.image_service import fetch_scene_image
 from apps.courses.content_guardrails import validate_topic, validate_pdf_content, validate_chat_message
 from apps.courses._log_helpers import MAICPhase, log_extra
@@ -1240,6 +1240,12 @@ def teacher_maic_classroom_publish(request, classroom_id):
         # will differ from the previous one — clear the stale audioUrl so
         # the pre-gen task regenerates audio instead of reusing the old file.
         # (Fixes edit-and-republish playing stale audio — Chunk 4 review A/B.)
+        # CG-P0-6 (2026-04-27): when agent.voiceId is missing, fall back via
+        # `pick_fallback_voice` (cycles by agent_index) instead of hard-coding
+        # Neerja for everyone — otherwise N agents collapse to one voice.
+        agent_index_by_id: dict[str, int] = {
+            a["id"]: i for i, a in enumerate(agents_list)
+        }
         total = 0
         for scene_idx, scene in enumerate(scenes):
             actions = scene.get("actions", [])
@@ -1248,7 +1254,11 @@ def teacher_maic_classroom_publish(request, classroom_id):
                     continue
                 agent_id = action.get("agentId")
                 agent = agents_by_id.get(agent_id, {})
-                voice_id = agent.get("voiceId") or "en-IN-NeerjaNeural"
+                voice_id = agent.get("voiceId") or pick_fallback_voice(
+                    name=agent.get("name", ""),
+                    role=agent.get("role", ""),
+                    agent_index=agent_index_by_id.get(agent_id, 0),
+                )
                 payload = (
                     f"{scene.get('id', scene_idx)}|{action_idx}|"
                     f"{action.get('text', '')}|{voice_id}"

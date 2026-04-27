@@ -116,3 +116,40 @@ def infer_gender_from_name(name: str) -> Gender:
     if first in _MALE_NAMES:
         return "male"
     return "unknown"
+
+
+# ─── Cycle-by-index fallback voice picker ────────────────────────────────────
+#
+# CG-P0-6 (2026-04-27): the publish-time stamp in maic_views.py used to
+# default every speech action with a missing `voiceId` to a single literal
+# "en-IN-NeerjaNeural", which made N agents in the same roster collapse to
+# one voice. This picker uses gender-from-name + role + agent index so two
+# distinct agents in the same roster can never get the same fallback voice.
+
+def pick_fallback_voice(
+    *,
+    name: str = "",  # noqa: ARG001 — kept for API symmetry; LLM happy-path stamps voiceId already
+    role: str = "",
+    agent_index: int = 0,
+) -> str:
+    """Deterministic fallback voice when an agent's `voiceId` is missing.
+
+    Cycles through the role's voice pool (or the full roster when no role
+    is given) by `agent_index`. Two distinct `agent_index` values inside
+    the same pool MUST return distinct voices — that's the guarantee
+    callers depend on to avoid the "all students sounded alike" collapse.
+
+    Gender filtering was deliberately dropped from the fallback path: it
+    creates pool-size mismatches between agents (a female student has a
+    1-voice pool while an unknown-gender student has 4) and re-introduces
+    collisions. The happy path is the LLM-assigned voiceId, which already
+    carries gender via the validator in maic_generation_service.
+
+    Always returns a real Azure en-IN voice id.
+    """
+    pool: list[dict] = voices_for_role(role) if role else []
+    if not pool:
+        pool = list(AZURE_IN_VOICES)
+
+    safe_idx = max(0, int(agent_index))
+    return pool[safe_idx % len(pool)]["id"]

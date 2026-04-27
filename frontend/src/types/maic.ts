@@ -92,6 +92,15 @@ export interface MAICOutlineScene {
   agentIds: string[];
   /** Number of slides for this scene (1 for legacy, 5-8 for multi-slide). Defaults to 1. */
   slideCount?: number;
+  /** Number of quiz questions for type='quiz' scenes. */
+  questionCount?: number;
+  /** CG-P0-7: measurable Bloom's-taxonomy objective. The slide-content
+   *  LLM uses this to anchor the scene to a committed lesson goal. */
+  teachingObjective?: string;
+  /** CG-P0-7: 3-5 substantive points the scene MUST cover, committed at
+   *  outline time. The slide-content LLM expands these into slides
+   *  instead of re-deriving the topic from `title`/`description`. */
+  keyPoints?: string[];
 }
 
 export interface MAICOutline {

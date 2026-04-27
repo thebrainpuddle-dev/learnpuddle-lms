@@ -28,6 +28,7 @@ import { useMAICStageStore } from '../stores/maicStageStore';
 import { useMAICCanvasStore } from '../stores/maicCanvasStore';
 import { useMAICSettingsStore } from '../stores/maicSettingsStore';
 import { cacheAudio, getCachedAudio } from './maicDb';
+import { resolveVoiceForAgent } from './voiceResolver';
 import type { MAICAction } from '../types/maic-actions';
 import type {
   SpeechAction,
@@ -149,24 +150,11 @@ const READING_FALLBACK_MIN_MS = 800;
  *  feel instant rather than sluggish. */
 const DEFAULT_TRANSITION_DURATION_MS = 250;
 
-/** Default voice mapping by agent role — en-IN Neural so the last-resort
- *  fallback matches the Indian-schools audience. Previously this was
- *  populated with en-US voices, which meant any agent whose per-agent
- *  voiceId wasn't found in the store (e.g. Stage mounted before
- *  setAgents() settled) would silently get an American accent AND every
- *  agent of the same role would share a voice — "all students sounded
- *  alike" during playback. Keeping the enum gender-distinct per role
- *  ensures even the fallback renders distinctly.
- *
- *  Mirrors the backend AGENT_VOICE_MAP in maic_generation_service.py. */
-const ROLE_VOICE_MAP: Record<string, string> = {
-  professor: 'en-IN-PrabhatNeural',          // male
-  teaching_assistant: 'en-IN-NeerjaNeural',  // female
-  student_rep: 'en-IN-AaravNeural',          // male
-  moderator: 'en-IN-KavyaNeural',            // female
-  student: 'en-IN-AashiNeural',              // female (young)
-  assistant: 'en-IN-NeerjaNeural',           // female
-};
+// CG-P0-6 (2026-04-27): the old single-voice-per-role ROLE_VOICE_MAP was
+// replaced by `resolveVoiceForAgent()` from `voiceResolver.ts` which cycles
+// per-role pools by agent index, so two agents of the same role can no
+// longer collapse to one fallback voice. Mirrors the backend's per-agent
+// voice picker in apps/courses/maic_voices.py.
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -573,15 +561,16 @@ export class MAICActionEngine {
       // sound identical. Surface it in the console (non-error) so
       // production debugging can spot this quickly.
       console.warn(
-        `[MAIC] speech for unknown agentId=${agentId} — falling back to ROLE_VOICE_MAP`,
+        `[MAIC] speech for unknown agentId=${agentId} — falling back to cycled voice pool`,
       );
     }
+    // CG-P0-6: cycle by agent index so two agents of the same role can't
+    // collapse to the same fallback voice. See voiceResolver.ts.
     const voiceId =
       action.voiceId ||
       agent?.voiceId ||
       agent?.voice ||
-      (agent?.role ? ROLE_VOICE_MAP[agent.role as keyof typeof ROLE_VOICE_MAP] : undefined) ||
-      'en-IN-NeerjaNeural';
+      resolveVoiceForAgent(agent, agents);
 
     const volume = this.settingsStore.getState().audioVolume;
     const playbackSpeed = this.settingsStore.getState().playbackSpeed;
@@ -837,8 +826,7 @@ export class MAICActionEngine {
       action.voiceId ||
       agent?.voiceId ||
       agent?.voice ||
-      (agent?.role ? ROLE_VOICE_MAP[agent.role as keyof typeof ROLE_VOICE_MAP] : undefined) ||
-      'en-IN-NeerjaNeural';
+      resolveVoiceForAgent(agent, agents);
 
     const text = action.ssml || action.text;
     const key = this.prefetchKey(voiceId, text);
@@ -987,17 +975,13 @@ export class MAICActionEngine {
       // next one. Cheap: we only do it while a scene is loading and
       // a slot is open. `controller.signal.onabort` would be cleaner
       // but the prefetchSpeech abstraction owns the controller.
-      const agent = this.stageStore
-        .getState()
-        .agents.find((a) => a.id === action.agentId);
+      const agentsForFallback = this.stageStore.getState().agents;
+      const agent = agentsForFallback.find((a) => a.id === action.agentId);
       const voiceId =
         action.voiceId ||
         agent?.voiceId ||
         agent?.voice ||
-        (agent?.role
-          ? ROLE_VOICE_MAP[agent.role as keyof typeof ROLE_VOICE_MAP]
-          : undefined) ||
-        'en-IN-NeerjaNeural';
+        resolveVoiceForAgent(agent, agentsForFallback);
       const key = this.prefetchKey(voiceId, action.ssml || action.text);
 
       const waitForSlot = () => {

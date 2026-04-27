@@ -56,13 +56,19 @@ logger = logging.getLogger(__name__)
 # source of truth. Frontend caps (where they exist) are advisory; these enforce.
 # Truncation preserves word boundaries so rendered text doesn't end mid-word.
 
-SLIDE_TITLE_MAX_CHARS = 120
-SLIDE_BULLET_MAX_CHARS = 280
-SLIDE_BULLETS_MAX_COUNT = 7
-SPEAKER_NOTES_MAX_CHARS = 1500
-SCENE_SPEECH_MAX_CHARS = 2000
-QUIZ_QUESTION_MAX_CHARS = 400
-QUIZ_OPTION_MAX_CHARS = 200
+# CG-P0-7 (2026-04-27): caps raised after content-quality audit. Previous
+# values were silently truncating LLM output and producing "AI-generated
+# bullet soup" — speakerScript ≤1500 chars ≈ 60s of narration vs the 2-3 min
+# a teacher would actually deliver per slide. SLIDE_BULLETS_MAX_COUNT 7 was
+# dropping items 8+ on rich content slides. New caps line up with what the
+# slide canvas can actually render at typical teacher widths.
+SLIDE_TITLE_MAX_CHARS = 160
+SLIDE_BULLET_MAX_CHARS = 400
+SLIDE_BULLETS_MAX_COUNT = 12
+SPEAKER_NOTES_MAX_CHARS = 4000
+SCENE_SPEECH_MAX_CHARS = 5000
+QUIZ_QUESTION_MAX_CHARS = 600
+QUIZ_OPTION_MAX_CHARS = 300
 
 
 def _truncate_to_word_boundary(text: str, max_chars: int) -> str:
@@ -1216,7 +1222,14 @@ Return a valid JSON object:
       "estimatedMinutes": 3,
       "agentIds": ["agent-1", "agent-2"],
       "slideCount": 6,
-      "questionCount": 0
+      "questionCount": 0,
+      "teachingObjective": "By the end of this scene, students will be able to <verb> <specific concept>",
+      "keyPoints": [
+        "First substantive point the scene must cover (≤25 words, concrete & specific)",
+        "Second point",
+        "Third point",
+        "Fourth point (optional, 4-5 if topic warrants)"
+      ]
     }
   ],
   "totalMinutes": 20
@@ -1224,6 +1237,10 @@ Return a valid JSON object:
 
 Rules:
 - Scene titles, descriptions, and the overall pacing MUST match the AUDIENCE & CONTEXT block above — vocabulary, depth, and examples should shift with the grade band and subject.
+- `teachingObjective` is REQUIRED for every scene. Use a measurable Bloom's-taxonomy verb (define, explain, analyze, derive, compare, design, evaluate). One sentence, ≤30 words. Example: "Students will be able to derive Newton's second law from a free-body diagram."
+- `keyPoints` is REQUIRED for every scene with type lecture|discussion|introduction|summary|activity|pbl|case_study. List 3-5 specific, substantive points the scene MUST cover. NOT generic ("understand the topic") — concrete claims, formulas, examples, or comparisons. These are the substance the slide-content step expands into slides.
+- For `quiz` scenes: omit `keyPoints` (questionCount drives output instead).
+- For `interactive` scenes: still include `keyPoints` (1-2 are fine) — they describe what the widget should let the student manipulate.
 - The FIRST scene MUST be type "introduction" — all agents introduce themselves and preview the class
 - The LAST scene MUST be type "summary" — wrap up key takeaways and next steps
 - Automatically insert a "quiz" scene after every 2-3 lecture/discussion scenes to reinforce learning
@@ -1320,8 +1337,9 @@ def generate_outline_sse(topic: str, language: str, agents: list[dict],
         audience_role=audience_role,
     )
 
-    # Call LLM
-    raw = _call_llm(config, system_prompt, user_prompt, temperature=0.7, max_tokens=4096)
+    # Call LLM. CG-P0-7: 4096 → 6144 so 9-12 scene outlines with the new
+    # `keyPoints` / `teachingObjective` fields don't overflow.
+    raw = _call_llm(config, system_prompt, user_prompt, temperature=0.7, max_tokens=6144)
 
     if not raw:
         yield _sse_event("error", {"message": "Failed to generate outline. Please try again."})
@@ -1696,6 +1714,27 @@ Generate exactly {slide_count} slides following the layout guidelines (title sli
     if ctx_lines:
         user_prompt += "\nContext:\n" + "\n".join(f"  - {line}" for line in ctx_lines) + "\n"
 
+    # CG-P0-7 (2026-04-27): inject the outline-committed substance
+    # (`teachingObjective` + `keyPoints`) so the slide-content LLM call
+    # expands an anchored lesson plan instead of re-deriving the topic.
+    # This is the OpenMAIC outline→content pipeline pattern: outline
+    # commits the substance, scene-content expands it. Without these,
+    # slides drift off-topic and feel generic. Both fields are optional
+    # for backward compat — pre-CG-P0-7 outlines without them still work.
+    teaching_objective = (scene.get("teachingObjective") or "").strip()
+    key_points = scene.get("keyPoints") or []
+    substance_lines = []
+    if teaching_objective:
+        substance_lines.append(f"Teaching objective: {teaching_objective}")
+    if isinstance(key_points, list) and key_points:
+        substance_lines.append("Key points the slides MUST cover:")
+        for kp in key_points:
+            kp_str = str(kp).strip()
+            if kp_str:
+                substance_lines.append(f"  - {kp_str}")
+    if substance_lines:
+        user_prompt += "\nLesson substance (anchor — do NOT drift from these):\n" + "\n".join(substance_lines) + "\n"
+
     scene_system_prompt = build_scene_content_system_prompt(
         grade_level=grade_level,
         subject=subject,
@@ -1717,7 +1756,10 @@ Generate exactly {slide_count} slides following the layout guidelines (title sli
 
     parsed, _raw = _call_llm_with_json_retry(
         config, scene_system_prompt, user_prompt,
-        temperature=0.6, max_tokens=8192,
+        # CG-P0-7: 8192 → 12288. Lecture scenes with 6+ slides + speakerScript
+        # were getting truncated mid-slide; raised to give the LLM room to
+        # finish a full lesson without OpenMAIC-style follow-ups.
+        temperature=0.6, max_tokens=12288,
         validator=_scene_content_validator,
         post_process=lambda p: _enforce_length_budgets(p, scene_type),
         context_label="scene-content",
