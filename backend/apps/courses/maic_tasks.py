@@ -160,6 +160,13 @@ def fill_classroom_images(classroom_id: str, scene_indices: list[int] | None = N
         # existing row's shard from the legacy blob, so a fresh shard read
         # is always sufficient.
         snapshot_scenes = list(classroom.content_scenes or [])
+        # CG-P1-12 (2026-04-28): production wizard saves the FLAT slide
+        # array under content_meta.slides (with sceneSlideBounds), not
+        # embedded as content_scenes[i].slides. The two embedded walkers
+        # below cover legacy/test-shaped data; this snapshot covers the
+        # production shape so new classrooms actually fill.
+        snapshot_meta = dict(classroom.content_meta or {})
+        snapshot_meta_slides = list(snapshot_meta.get("slides") or [])
 
         # Normalise scene_indices: None means all scenes
         if scene_indices is None:
@@ -292,6 +299,54 @@ def fill_classroom_images(classroom_id: str, scene_indices: list[int] | None = N
                     provider = _infer_provider(url)
                     provider_outcomes[provider] = provider_outcomes.get(provider, 0) + 1
 
+        # CG-P1-12 (2026-04-28): production data shape — slides flat under
+        # content_meta.slides. Walk only when scene_indices is None (full
+        # task run); a partial deferred re-run by scene_indices is for the
+        # legacy embedded paths above and shouldn't double-process meta
+        # slides.
+        if scene_indices is None:
+            for slide_idx, slide in enumerate(snapshot_meta_slides):
+                if not isinstance(slide, dict):
+                    continue
+                for el_idx, element in enumerate(slide.get("elements", [])):
+                    if not isinstance(element, dict):
+                        continue
+                    if element.get("type") != "image":
+                        continue
+                    total_images += 1
+                    existing_src = (element.get("src") or "").strip()
+                    if existing_src and (
+                        existing_src.startswith("https://")
+                        or existing_src.startswith("http://")
+                        or existing_src.startswith("/media/")
+                    ):
+                        provider_outcomes["already_filled"] = (
+                            provider_outcomes.get("already_filled", 0) + 1
+                        )
+                        continue
+                    keyword = element.get("content", "educational illustration")
+                    try:
+                        url = fetch_scene_image(keyword)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "fill_classroom_images: meta-slide image fetch failed keyword=%r err=%s",
+                            keyword, exc,
+                            extra=log_extra(
+                                MAICPhase.FILL_IMAGES,
+                                classroom_id,
+                                metric="image_fill_fetch_error",
+                                outcome="fetch_error",
+                                slide_idx=slide_idx,
+                                el_idx=el_idx,
+                                error_type=type(exc).__name__,
+                            ),
+                        )
+                        url = "https://placehold.co/800x450?text=image"
+                    collected_diffs[("meta_slides", slide_idx, el_idx)] = url
+                    filled_images += 1
+                    provider = _infer_provider(url)
+                    provider_outcomes[provider] = provider_outcomes.get(provider, 0) + 1
+
         # ── Phase 2: merge diffs into a FRESH read under select_for_update ───
         # Re-read the classroom row inside a transaction with a row-level lock.
         # Any teacher PATCH that landed during the fetch phase is now in the DB;
@@ -331,10 +386,41 @@ def fill_classroom_images(classroom_id: str, scene_indices: list[int] | None = N
             # shard. Legacy fallback removed — see comment at the Phase-1
             # snapshot read above.
             fresh_scenes = list(fresh.content_scenes or [])
+            # CG-P1-12: also pull a mutable copy of meta.slides for the
+            # third walker. Empty list when not in production-shape data.
+            fresh_meta = dict(fresh.content_meta or {})
+            fresh_meta_slides = list(fresh_meta.get("slides") or [])
+            fresh_meta_slides_dirty = False
 
             for key, url in collected_diffs.items():
                 try:
-                    if key[0] == "slides":
+                    if key[0] == "meta_slides":
+                        # CG-P1-12: production-shape merge — content_meta.slides
+                        # is global (no per-scene shift to worry about), but a
+                        # concurrent teacher edit could still re-order slides.
+                        # Same (id, content) fingerprint pattern as the embedded
+                        # walkers below.
+                        _, sl_idx, el_idx = key
+                        snap_el = snapshot_meta_slides[sl_idx]["elements"][el_idx]
+                        fresh_el = fresh_meta_slides[sl_idx]["elements"][el_idx]
+                        if (snap_el.get("id"), snap_el.get("content", "")) != (
+                            fresh_el.get("id"), fresh_el.get("content", "")
+                        ):
+                            logger.warning(
+                                "fill_classroom_images: meta-slide index-shift at %s — skipping",
+                                key,
+                                extra=log_extra(
+                                    MAICPhase.FILL_IMAGES,
+                                    classroom_id,
+                                    metric="image_fill_index_shift",
+                                    outcome="index_shift_detected",
+                                    diff_key=str(key),
+                                ),
+                            )
+                            continue
+                        fresh_meta_slides[sl_idx]["elements"][el_idx]["src"] = url
+                        fresh_meta_slides_dirty = True
+                    elif key[0] == "slides":
                         _, s_idx, sl_idx, el_idx = key
 
                         # F3: fingerprint check — verify the element at this
@@ -424,12 +510,22 @@ def fill_classroom_images(classroom_id: str, scene_indices: list[int] | None = N
             # directly. ``save=False`` stages the change; we then save the
             # shard + flag in a single round-trip below.
             fresh.update_content_section("scenes", fresh_scenes, save=False)
+            # CG-P1-12: also write back content_meta.slides if any image
+            # src landed there. Stage with save=False so the row save below
+            # bundles both shards.
+            if fresh_meta_slides_dirty:
+                fresh.update_content_section(
+                    "meta", {"slides": fresh_meta_slides}, save=False,
+                )
             # AUDIT-2026-04-25-10: keep ``images_pending=True`` when work
             # was deferred so the FE poll loop continues to spin until the
             # follow-up task finishes the remaining scenes.
             fresh.images_pending = bool(deferred_indices)
 
-            fresh.save(update_fields=["content_scenes", "images_pending", "updated_at"])
+            save_fields = ["content_scenes", "images_pending", "updated_at"]
+            if fresh_meta_slides_dirty:
+                save_fields.append("content_meta")
+            fresh.save(update_fields=save_fields)
 
         # AUDIT-2026-04-25-10: enqueue the follow-up task OUTSIDE the
         # transaction so the broker dispatch can't roll back along with a
