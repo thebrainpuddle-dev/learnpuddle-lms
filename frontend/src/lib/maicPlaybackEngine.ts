@@ -137,11 +137,25 @@ export class MAICPlaybackEngine {
   /**
    * Pause playback. Audio is paused immediately. The next processNext()
    * will see mode !== 'playing' and return without advancing.
+   *
+   * CG-P1-13 (2026-04-28): also abort any in-flight TTS fetch. Without
+   * this, a fetch that was started before Pause was clicked would
+   * resolve AFTER pause(), and `playAudioSynced` would call `audio.play()`
+   * regardless of mode — UI says "paused" but audio plays. If a fetch
+   * was actually aborted, the speech action that triggered it is now
+   * stale; rewind currentActionIndex so resume() re-runs the action
+   * cleanly with a fresh fetch.
    */
   pause(): void {
     if (this.mode !== 'playing') return;
     this.setMode('paused');
     this.actionEngine.pauseCurrentAudio();
+    if (this.actionEngine.abortInFlightFetch()) {
+      // currentActionIndex was incremented at processNext line 466
+      // BEFORE we dispatched the speech action. Decrement so the speech
+      // replays on resume() rather than silently being skipped.
+      this.currentActionIndex = Math.max(0, this.currentActionIndex - 1);
+    }
   }
 
   /**

@@ -405,6 +405,37 @@ export class MAICActionEngine {
   }
 
   /**
+   * CG-P1-13 (2026-04-28): abort the in-flight TTS fetch (if any).
+   *
+   * Used by PlaybackEngine.pause() to handle the case where Pause is
+   * pressed BEFORE the speech's TTS fetch resolves. Without this:
+   *   1. fetch resolves
+   *   2. executeSpeech proceeds to playAudioSynced
+   *   3. audio.play() runs even though engine.mode === 'paused'
+   * Result: UI says paused, audio plays anyway.
+   *
+   * Aborting the fetch causes fetchTtsBlob to return null (its abort
+   * handler at the catch site). Bumping generationToken makes any
+   * post-fetch token check inside executeSpeech (line ~618) return
+   * early, preventing the audio.play() call entirely.
+   *
+   * Returns true if a fetch was actually aborted (so the caller can
+   * choose to rewind the action index for clean replay-on-resume).
+   * Returns false if no fetch was in flight (audio was already
+   * playing — pauseCurrentAudio handles that case).
+   */
+  abortInFlightFetch(): boolean {
+    if (!this.currentFetchController) return false;
+    this.currentFetchController.abort();
+    this.currentFetchController = null;
+    // Bump token so any post-fetch executeSpeech sees the staleness check
+    // fire and returns before audio.play(). Also invalidates any
+    // prefetches in flight; they'll be re-fetched on resume if still needed.
+    this.generationToken++;
+    return true;
+  }
+
+  /**
    * T0.3 — wipe ALL whiteboard annotations. Called by PlaybackEngine
    * from `loadScene` so a new scene never inherits the prior scene's
    * strokes or agent-drawn elements. Distinct from `wb_clear` (an
