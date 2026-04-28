@@ -20,11 +20,18 @@ Gender = Literal["male", "female", "unknown"]
 # Roster shape: 3F + 2M, every role has ≥2 candidates so the validator
 # can always swap on a gender mismatch.
 AZURE_IN_VOICES = [
-    {"id": "en-IN-PrabhatNeural",         "gender": "male",   "tone": "authoritative", "age": "adult", "suits": ["professor", "moderator"]},
-    {"id": "en-IN-NeerjaNeural",          "gender": "female", "tone": "warm",          "age": "adult", "suits": ["teaching_assistant", "professor", "moderator"]},
-    {"id": "en-IN-NeerjaExpressiveNeural","gender": "female", "tone": "expressive",    "age": "adult", "suits": ["moderator", "teaching_assistant", "student"]},
-    {"id": "hi-IN-MadhurNeural",          "gender": "male",   "tone": "thoughtful",    "age": "adult", "suits": ["student_rep", "student", "professor"]},
-    {"id": "hi-IN-SwaraNeural",           "gender": "female", "tone": "energetic",     "age": "adult", "suits": ["student", "teaching_assistant", "moderator"]},
+    # CG-P1-8 (2026-04-28): every role MUST have at least one MALE and one
+    # FEMALE candidate so the validator + `_auto_fix_voice_gender_mismatches`
+    # can swap on a name/voice gender mismatch. The CG-P1-1 trim accidentally
+    # dropped male coverage for `teaching_assistant` and female coverage for
+    # `student_rep`, causing a 500 in `agent-profiles` when the LLM picked
+    # e.g. "Mr. Kunal Reddy" as a TA → auto-fixer found no male TA voice →
+    # validator failed 3 retries.
+    {"id": "en-IN-PrabhatNeural",         "gender": "male",   "tone": "authoritative", "age": "adult", "suits": ["professor", "moderator", "teaching_assistant", "student_rep"]},
+    {"id": "en-IN-NeerjaNeural",          "gender": "female", "tone": "warm",          "age": "adult", "suits": ["teaching_assistant", "professor", "moderator", "student_rep"]},
+    {"id": "en-IN-NeerjaExpressiveNeural","gender": "female", "tone": "expressive",    "age": "adult", "suits": ["moderator", "teaching_assistant", "student", "student_rep"]},
+    {"id": "hi-IN-MadhurNeural",          "gender": "male",   "tone": "thoughtful",    "age": "adult", "suits": ["student_rep", "student", "professor", "teaching_assistant", "moderator"]},
+    {"id": "hi-IN-SwaraNeural",           "gender": "female", "tone": "energetic",     "age": "adult", "suits": ["student", "teaching_assistant", "moderator", "student_rep"]},
 ]
 
 VOICE_BY_ID = {v["id"]: v for v in AZURE_IN_VOICES}
