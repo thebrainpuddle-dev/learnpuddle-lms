@@ -509,21 +509,33 @@ export const MAICPlayerPage: React.FC = () => {
 
   // ─── READY — wait for store to hydrate ───────────────────────────────────────
 
-  if (!storeReady) {
-    return (
-      <div className="flex items-center justify-center min-h-[60vh]">
-        <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600" />
-      </div>
-    );
-  }
-
-  // ─── READY — full Stage ──────────────────────────────────────────────────────
-
   // CG-P0-3: extract images_pending from the polled classroom so the Stage
   // can show the "fetching image…" skeleton on slides with empty src.
   const imagesPending = !!(
     (classroom as unknown as Record<string, unknown>).images_pending
   );
+
+  // CG-P1-9 (2026-04-28): hold the Stage on a "preparing classroom" panel
+  // while `images_pending=true`. Previously we let users into the player
+  // immediately on `status=READY`, which exposed empty-src image elements
+  // as "Fetching image…" skeletons mid-playback — a bad first impression.
+  // Polling (computeRefetchInterval) drives the unblock automatically when
+  // Celery finishes fill_classroom_images. The existing F7 stall banner +
+  // 10-min stall detector still cover the "Celery crashed" failure mode.
+  if (!storeReady || (imagesPending && !imagesStalled)) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
+        <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600" />
+        {imagesPending && (
+          <p className="text-sm text-gray-500">
+            Finishing up — fetching slide images…
+          </p>
+        )}
+      </div>
+    );
+  }
+
+  // ─── READY — full Stage ──────────────────────────────────────────────────────
 
   return (
     // MOB-P0-4 — `100dvh` (dynamic viewport height) avoids the iOS URL-bar
