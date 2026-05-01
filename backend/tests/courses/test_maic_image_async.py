@@ -73,7 +73,12 @@ def teacher_client(teacher_user, maic_enabled_tenant):
 
 
 def _classroom_with_slides(tenant, creator, *, images_pending=False, n_scenes=1):
-    """Build a READY MAICClassroom with image elements that have empty src."""
+    """Build a READY MAICClassroom with image elements that have empty src.
+
+    PERF-P0-4 cutover 2026-04-26: writes scenes to the ``content_scenes`` shard
+    instead of the legacy ``content`` JSONField (which is no longer populated
+    by production code).
+    """
     scenes = []
     for i in range(n_scenes):
         scenes.append({
@@ -96,7 +101,7 @@ def _classroom_with_slides(tenant, creator, *, images_pending=False, n_scenes=1)
         topic="Test topic",
         status="READY",
         images_pending=images_pending,
-        content={"scenes": scenes},
+        content_scenes=scenes,
     )
 
 
@@ -196,7 +201,8 @@ def test_fill_classroom_images_fills_srcs_and_clears_pending(
     assert classroom.images_pending is False
 
     # The image element's src should be filled
-    scene = classroom.content["scenes"][0]
+    # PERF-P0-4 cutover: read from content_scenes shard, not legacy content.
+    scene = classroom.content_scenes[0]
     img_el = next(
         el for el in scene["slides"][0]["elements"] if el["type"] == "image"
     )
@@ -211,30 +217,29 @@ def test_fill_classroom_images_idempotent(maic_enabled_tenant, teacher_user):
     """Running the task twice on a filled classroom must not re-fetch images."""
     from apps.courses.maic_tasks import fill_classroom_images
 
+    # PERF-P0-4 cutover 2026-04-26: write to content_scenes shard.
     classroom = MAICClassroom.objects.create(
         tenant=maic_enabled_tenant,
         creator=teacher_user,
         title="Already filled",
         status="READY",
         images_pending=False,
-        content={
-            "scenes": [
-                {
-                    "id": "scene-1",
-                    "slides": [
-                        {
-                            "elements": [
-                                {
-                                    "type": "image",
-                                    "src": "https://images.unsplash.com/photo-already-filled",
-                                    "content": "photosynthesis",
-                                }
-                            ]
-                        }
-                    ],
-                }
-            ]
-        },
+        content_scenes=[
+            {
+                "id": "scene-1",
+                "slides": [
+                    {
+                        "elements": [
+                            {
+                                "type": "image",
+                                "src": "https://images.unsplash.com/photo-already-filled",
+                                "content": "photosynthesis",
+                            }
+                        ]
+                    }
+                ],
+            }
+        ],
     )
 
     fetch_call_count = {"n": 0}
@@ -255,7 +260,7 @@ def test_fill_classroom_images_idempotent(maic_enabled_tenant, teacher_user):
 
     classroom.refresh_from_db()
     # Src should be unchanged
-    el = classroom.content["scenes"][0]["slides"][0]["elements"][0]
+    el = classroom.content_scenes[0]["slides"][0]["elements"][0]
     assert el["src"] == "https://images.unsplash.com/photo-already-filled"
 
 
@@ -393,7 +398,8 @@ def test_fill_classroom_images_clears_pending_on_fetch_error(
         "images_pending must be cleared after task completes (even on fetch errors)"
     )
     # Image element gets placeholder URL (not empty, not exception)
-    el = classroom.content["scenes"][0]["slides"][0]["elements"][0]
+    # PERF-P0-4 cutover: read from content_scenes shard.
+    el = classroom.content_scenes[0]["slides"][0]["elements"][0]
     assert el["type"] == "image"
     assert el["src"].startswith("https://"), (
         f"Element should have a placeholder URL after fetch failure, got: {el['src']!r}"
@@ -496,17 +502,19 @@ def test_fill_classroom_images_preserves_concurrent_user_patch(
     IMAGE_URL = "https://images.unsplash.com/photo-race-test"
 
     def fetch_and_patch_concurrently(keyword, **kwargs):
-        """Simulate the race: teacher PATCHes the DB mid-fetch."""
-        # Directly update the scene title in the DB (simulating a teacher
-        # PATCH that arrives while the Celery task is blocked on HTTP).
+        """Simulate the race: teacher PATCHes the DB mid-fetch.
+
+        PERF-P0-4 cutover 2026-04-26: the simulated teacher PATCH writes to
+        the ``content_scenes`` shard (post-cutover production behaviour),
+        not the legacy ``content`` JSONField.
+        """
         from apps.courses.maic_models import MAICClassroom as _C
         obj = _C.all_objects.get(id=classroom_id)
-        content = obj.content or {}
-        scenes = content.get("scenes", [])
+        scenes = list(obj.content_scenes or [])
         if scenes:
             scenes[0]["title"] = PATCHED_TITLE
-        obj.content = content
-        obj.save(update_fields=["content", "updated_at"])
+        obj.content_scenes = scenes
+        obj.save(update_fields=["content_scenes", "updated_at"])
         return IMAGE_URL
 
     with patch(
@@ -518,7 +526,8 @@ def test_fill_classroom_images_preserves_concurrent_user_patch(
     classroom.refresh_from_db()
 
     # (a) Image URL diff must have been applied
-    scene = classroom.content["scenes"][0]
+    # PERF-P0-4 cutover: read from content_scenes shard.
+    scene = classroom.content_scenes[0]
     img_el = next(
         el for el in scene["slides"][0]["elements"] if el["type"] == "image"
     )
@@ -549,30 +558,29 @@ def test_fill_classroom_images_skips_when_not_pending(
     """
     from apps.courses.maic_tasks import fill_classroom_images
 
+    # PERF-P0-4 cutover 2026-04-26: write to content_scenes shard.
     classroom = MAICClassroom.objects.create(
         tenant=maic_enabled_tenant,
         creator=teacher_user,
         title="Already completed",
         status="READY",
         images_pending=False,  # task already ran once
-        content={
-            "scenes": [
-                {
-                    "id": "scene-1",
-                    "slides": [
-                        {
-                            "elements": [
-                                {
-                                    "type": "image",
-                                    "src": "https://images.unsplash.com/photo-already",
-                                    "content": "photosynthesis",
-                                }
-                            ]
-                        }
-                    ],
-                }
-            ]
-        },
+        content_scenes=[
+            {
+                "id": "scene-1",
+                "slides": [
+                    {
+                        "elements": [
+                            {
+                                "type": "image",
+                                "src": "https://images.unsplash.com/photo-already",
+                                "content": "photosynthesis",
+                            }
+                        ]
+                    }
+                ],
+            }
+        ],
     )
 
     fetch_call_count = {"n": 0}
@@ -596,8 +604,9 @@ def test_fill_classroom_images_skips_when_not_pending(
     )
 
     # Image src unchanged (not re-fetched)
+    # PERF-P0-4 cutover: read from content_scenes shard.
     classroom.refresh_from_db()
-    el = classroom.content["scenes"][0]["slides"][0]["elements"][0]
+    el = classroom.content_scenes[0]["slides"][0]["elements"][0]
     assert el["src"] == "https://images.unsplash.com/photo-already"
 
 
@@ -641,8 +650,9 @@ def test_fill_classroom_images_doubled_enqueue_second_call_is_noop(
     assert fetch_call_count_second["n"] == 0
 
     # Image src still the first fill's URL (not re-written)
+    # PERF-P0-4 cutover: read from content_scenes shard.
     classroom.refresh_from_db()
-    el = classroom.content["scenes"][0]["slides"][0]["elements"][0]
+    el = classroom.content_scenes[0]["slides"][0]["elements"][0]
     assert el["src"] == "https://images.unsplash.com/first-fill"
 
 
@@ -826,6 +836,7 @@ def _classroom_with_two_scenes(tenant, creator, *, images_pending=True):
             ],
         },
     ]
+    # PERF-P0-4 cutover 2026-04-26: write to content_scenes shard.
     return MAICClassroom.objects.create(
         tenant=tenant,
         creator=creator,
@@ -833,7 +844,7 @@ def _classroom_with_two_scenes(tenant, creator, *, images_pending=True):
         topic="Science",
         status="READY",
         images_pending=images_pending,
-        content={"scenes": scenes},
+        content_scenes=scenes,
     )
 
 
@@ -866,13 +877,16 @@ def test_fill_classroom_images_handles_concurrent_scene_prepend(
     fetch_order = []
 
     def fetch_and_prepend(keyword, **kwargs):
-        """First fetch: prepend a new Welcome scene in the DB mid-task."""
+        """First fetch: prepend a new Welcome scene in the DB mid-task.
+
+        PERF-P0-4 cutover 2026-04-26: simulated teacher PATCH writes to
+        content_scenes shard instead of legacy content field.
+        """
         fetch_order.append(keyword)
         if len(fetch_order) == 1:
-            # Simulate teacher prepending a new scene at index 0
             from apps.courses.maic_models import MAICClassroom as _C
             obj = _C.all_objects.get(id=classroom_id)
-            existing_scenes = list((obj.content or {}).get("scenes", []))
+            existing_scenes = list(obj.content_scenes or [])
             new_welcome = {
                 "id": "scene-welcome",
                 "title": "Welcome",
@@ -891,15 +905,16 @@ def test_fill_classroom_images_handles_concurrent_scene_prepend(
                 ],
             }
             # Prepend: new scene at index 0; old scenes shift to 1, 2
-            obj.content = {"scenes": [new_welcome] + existing_scenes}
-            obj.save(update_fields=["content", "updated_at"])
+            obj.content_scenes = [new_welcome] + existing_scenes
+            obj.save(update_fields=["content_scenes", "updated_at"])
         return PHOTO_URL if "photosynthesis" in keyword else MITOSIS_URL
 
     with patch("apps.courses.image_service.fetch_scene_image", side_effect=fetch_and_prepend):
         fill_classroom_images(classroom_id)
 
     classroom.refresh_from_db()
-    scenes = classroom.content["scenes"]
+    # PERF-P0-4 cutover: read from content_scenes shard.
+    scenes = classroom.content_scenes
 
     # Scene 0 is now the "Welcome" scene — its image src should NOT have been
     # written with the photosynthesis URL (that was for original scene-0, now at idx 1).
@@ -937,14 +952,15 @@ def test_fill_classroom_images_handles_concurrent_scene_delete(
     fetch_order = []
 
     def fetch_and_delete_scene_0(keyword, **kwargs):
+        # PERF-P0-4 cutover 2026-04-26: simulated teacher PATCH writes to
+        # content_scenes shard.
         fetch_order.append(keyword)
         if len(fetch_order) == 1:
-            # Teacher deletes scene-0 — only scene-1 remains
             from apps.courses.maic_models import MAICClassroom as _C
             obj = _C.all_objects.get(id=classroom_id)
-            existing = list((obj.content or {}).get("scenes", []))
-            obj.content = {"scenes": existing[1:]}  # drop scene-0
-            obj.save(update_fields=["content", "updated_at"])
+            existing = list(obj.content_scenes or [])
+            obj.content_scenes = existing[1:]  # drop scene-0
+            obj.save(update_fields=["content_scenes", "updated_at"])
         return "https://images.unsplash.com/photo-any"
 
     with patch("apps.courses.image_service.fetch_scene_image", side_effect=fetch_and_delete_scene_0):
@@ -980,21 +996,23 @@ def test_fill_classroom_images_handles_scene_rename_at_target_index(
     IMAGE_URL = "https://images.unsplash.com/photo-photosynthesis-renamed"
 
     def fetch_and_rename_title(keyword, **kwargs):
-        # Rename the scene title (not the image content/keyword)
+        # PERF-P0-4 cutover 2026-04-26: simulated teacher PATCH writes to
+        # content_scenes shard.
         from apps.courses.maic_models import MAICClassroom as _C
         obj = _C.all_objects.get(id=classroom_id)
-        scenes = list((obj.content or {}).get("scenes", []))
+        scenes = list(obj.content_scenes or [])
         if scenes:
             scenes[0]["title"] = "Renamed Title (concurrent PATCH)"
-        obj.content = {"scenes": scenes}
-        obj.save(update_fields=["content", "updated_at"])
+        obj.content_scenes = scenes
+        obj.save(update_fields=["content_scenes", "updated_at"])
         return IMAGE_URL
 
     with patch("apps.courses.image_service.fetch_scene_image", side_effect=fetch_and_rename_title):
         fill_classroom_images(classroom_id)
 
     classroom.refresh_from_db()
-    scenes = classroom.content["scenes"]
+    # PERF-P0-4 cutover: read from content_scenes shard.
+    scenes = classroom.content_scenes
 
     # The title rename must be preserved
     assert scenes[0]["title"] == "Renamed Title (concurrent PATCH)", (
@@ -1133,6 +1151,7 @@ def test_fill_classroom_images_detects_duplicate_keyword_misplacement(
             ],
         },
     ]
+    # PERF-P0-4 cutover 2026-04-26: write to content_scenes shard.
     classroom = MAICClassroom.objects.create(
         tenant=maic_enabled_tenant,
         creator=teacher_user,
@@ -1140,7 +1159,7 @@ def test_fill_classroom_images_detects_duplicate_keyword_misplacement(
         topic="Science",
         status="READY",
         images_pending=True,
-        content={"scenes": scenes},
+        content_scenes=scenes,
     )
     classroom_id = str(classroom.id)
 
@@ -1149,12 +1168,16 @@ def test_fill_classroom_images_detects_duplicate_keyword_misplacement(
     fetch_order = []
 
     def fetch_and_prepend(keyword, **kwargs):
-        """On the first fetch, prepend a NEW scene with the SAME keyword."""
+        """On the first fetch, prepend a NEW scene with the SAME keyword.
+
+        PERF-P0-4 cutover 2026-04-26: simulated teacher PATCH writes to the
+        ``content_scenes`` shard.
+        """
         fetch_order.append(keyword)
         if len(fetch_order) == 1:
             from apps.courses.maic_models import MAICClassroom as _C
             obj = _C.all_objects.get(id=classroom_id)
-            existing_scenes = list((obj.content or {}).get("scenes", []))
+            existing_scenes = list(obj.content_scenes or [])
             new_scene = {
                 "id": "scene-new",
                 "title": "New prepended scene",
@@ -1173,8 +1196,8 @@ def test_fill_classroom_images_detects_duplicate_keyword_misplacement(
                 ],
             }
             # Prepend: new scene at index 0; originals shift to 1, 2
-            obj.content = {"scenes": [new_scene] + existing_scenes}
-            obj.save(update_fields=["content", "updated_at"])
+            obj.content_scenes = [new_scene] + existing_scenes
+            obj.save(update_fields=["content_scenes", "updated_at"])
         return PHOTO_URL
 
     import logging
@@ -1190,7 +1213,8 @@ def test_fill_classroom_images_detects_duplicate_keyword_misplacement(
         fill_classroom_images(classroom_id)
 
     classroom.refresh_from_db()
-    scenes_after = classroom.content["scenes"]
+    # PERF-P0-4 cutover: read from content_scenes shard.
+    scenes_after = classroom.content_scenes
 
     # The new scene-0 has a different element id ("img-new") so the fingerprint
     # check must detect the mismatch even though both share "photosynthesis keyword".
@@ -1398,7 +1422,8 @@ def test_fill_classroom_images_succeeds_when_tenant_context_correct(
 
     classroom.refresh_from_db()
     assert classroom.images_pending is False
-    img = classroom.content["scenes"][0]["slides"][0]["elements"][0]
+    # PERF-P0-4 cutover: read from content_scenes shard.
+    img = classroom.content_scenes[0]["slides"][0]["elements"][0]
     assert img["src"] == "https://images.unsplash.com/photo-ok"
 
 
@@ -1432,6 +1457,7 @@ def _classroom_with_n_scenes(tenant, creator, *, n_scenes, images_pending=True):
                 }
             ],
         })
+    # PERF-P0-4 cutover 2026-04-26: write to content_scenes shard.
     return MAICClassroom.objects.create(
         tenant=tenant,
         creator=creator,
@@ -1439,7 +1465,7 @@ def _classroom_with_n_scenes(tenant, creator, *, n_scenes, images_pending=True):
         topic="Topic",
         status="READY",
         images_pending=images_pending,
-        content={"scenes": scenes},
+        content_scenes=scenes,
     )
 
 
@@ -1607,3 +1633,465 @@ def test_phase1_deadline_invalid_env_falls_back_with_warning(monkeypatch, caplog
     finally:
         monkeypatch.delenv("IMAGE_FILL_PHASE1_DEADLINE_SECS", raising=False)
         importlib.reload(mt_module)
+
+
+# ---------------------------------------------------------------------------
+# WAVE-8-F2: deferred-indices race window — fresh re-publish during the
+# 5s countdown between parent-finally and continuation-start must hit the
+# orchestrator lock and short-circuit, NOT race the continuation.
+# ---------------------------------------------------------------------------
+
+
+def test_wave_8_f2_deferred_continuation_holds_lock_across_countdown(
+    maic_enabled_tenant, teacher_user, monkeypatch,
+):
+    """Regression: when the parent run defers work, it must hand off the
+    orchestrator lock to the continuation rather than releasing it. A
+    fresh re-publish landing during the countdown window must observe
+    the lock as still held and back-off with ``lock_held``.
+
+    The previous behaviour released the lock in the parent's outer
+    ``finally`` before the deferred ``apply_async(countdown=5)`` actually
+    fired, opening a 5s race window where a re-publish could acquire
+    the lock and run concurrently with the continuation.
+    """
+    from django.core.cache import cache
+
+    from apps.courses import maic_tasks
+    from apps.courses.maic_tasks import (
+        _IMAGE_FILL_LOCK_KEY_TEMPLATE,
+        fill_classroom_images,
+    )
+
+    classroom = _classroom_with_n_scenes(
+        maic_enabled_tenant, teacher_user, n_scenes=10, images_pending=True
+    )
+    lock_key = _IMAGE_FILL_LOCK_KEY_TEMPLATE.format(
+        classroom_id=str(classroom.id),
+    )
+    # Defensive: ensure no stale lock from a previous test run.
+    cache.delete(lock_key)
+
+    # Force the deadline to 0 so Phase-1 trips on the very first iteration
+    # and we exercise the deferral branch.
+    monkeypatch.setattr(
+        maic_tasks, "IMAGE_FILL_PHASE_1_DEADLINE_SECS", 0.0, raising=False,
+    )
+
+    # Capture deferred apply_async kwargs so we can drive the continuation
+    # ourselves (synchronously) — this lets us assert lock state at the
+    # exact moment a re-publish would land in production.
+    deferred_calls: list[dict] = []
+
+    def fake_apply_async(*args, **kwargs):
+        deferred_calls.append({"args": args, "kwargs": kwargs})
+
+    monkeypatch.setattr(
+        fill_classroom_images, "apply_async", fake_apply_async,
+    )
+
+    with patch(
+        "apps.courses.image_service.fetch_scene_image",
+        return_value="https://images.example.com/img",
+    ):
+        # Step 1: parent run trips the budget and defers remaining indices.
+        fill_classroom_images(str(classroom.id))
+
+        # Sanity: a continuation was scheduled.
+        assert len(deferred_calls) == 1, (
+            "parent must have deferred remaining work; "
+            f"got {len(deferred_calls)} apply_async calls"
+        )
+        deferred = deferred_calls[0]
+        deferred_kwargs = deferred["kwargs"].get("kwargs") or {}
+        assert deferred_kwargs.get("_continuation") is True, (
+            "WAVE-8-F2: deferred dispatch must pass _continuation=True so "
+            f"the continuation skips lock re-acquire; got {deferred_kwargs!r}"
+        )
+        assert deferred_kwargs.get("scene_indices"), (
+            "deferred kwargs must carry remaining scene_indices"
+        )
+
+        # Step 2: parent's finally has just run. Assert the lock IS still
+        # held — this is the WAVE-8-F2 invariant. Pre-fix, this would be
+        # False because the parent's finally released it before the
+        # countdown elapsed.
+        assert cache.get(lock_key) is not None, (
+            "WAVE-8-F2 race: parent released the orchestrator lock before "
+            "the deferred continuation ran. A fresh re-publish during the "
+            "countdown window can now race the continuation."
+        )
+
+        # Step 3: simulate a fresh re-publish landing during the countdown.
+        # It must observe lock_held and short-circuit without doing work.
+        repub_result = fill_classroom_images(str(classroom.id))
+        assert repub_result == {"skipped": True, "reason": "lock_held"}, (
+            "WAVE-8-F2: re-publish during deferred-window must back off "
+            f"naturally on the held lock; got {repub_result!r}"
+        )
+
+        # Step 4: drive the continuation (as Celery would after countdown).
+        # It must NOT see lock_held — it inherits ownership via _continuation.
+        cont_result = fill_classroom_images(
+            str(classroom.id),
+            scene_indices=deferred_kwargs["scene_indices"],
+            _continuation=True,
+        )
+        # Continuation either ran to completion (returns None) or further
+        # deferred (defensible if more work remains under the 0.0 budget).
+        # Either way it must NOT have skipped on lock_held.
+        assert cont_result != {"skipped": True, "reason": "lock_held"}, (
+            "Continuation must inherit the lock via _continuation=True "
+            f"and not be skipped; got {cont_result!r}"
+        )
+
+    # Step 5: after the continuation returns (and assuming it did NOT
+    # itself defer further), the lock should be released. With a 0.0
+    # deadline the continuation may defer again — in that case the lock
+    # is again handed off and stays held. Either is correct; just verify
+    # we don't see a stuck infinite-TTL key by reaching here without
+    # raising. (Final cleanup below catches any leftover key.)
+    cache.delete(lock_key)
+
+
+def test_wave_8_f2_normal_completion_still_releases_lock(
+    maic_enabled_tenant, teacher_user, monkeypatch,
+):
+    """Negative-shape companion: when no deferral happens, the parent's
+    finally must STILL release the lock (no handoff). Guards against a
+    regression where lock_handed_off is mistakenly left True on the
+    happy path.
+    """
+    from django.core.cache import cache
+
+    from apps.courses.maic_tasks import (
+        _IMAGE_FILL_LOCK_KEY_TEMPLATE,
+        fill_classroom_images,
+    )
+
+    classroom = _classroom_with_n_scenes(
+        maic_enabled_tenant, teacher_user, n_scenes=2, images_pending=True
+    )
+    lock_key = _IMAGE_FILL_LOCK_KEY_TEMPLATE.format(
+        classroom_id=str(classroom.id),
+    )
+    cache.delete(lock_key)
+
+    with patch(
+        "apps.courses.image_service.fetch_scene_image",
+        return_value="https://images.example.com/img",
+    ):
+        fill_classroom_images(str(classroom.id))
+
+    assert cache.get(lock_key) is None, (
+        "WAVE-8-F2 regression: parent must release the lock when no "
+        "deferral handoff occurred; lock still held after normal completion."
+    )
+
+
+# ---------------------------------------------------------------------------
+# WAVE-8-F2-F1: continuation-entry observability breadcrumb. Without this
+# log, the parent task id and continuation task id share an orchestrator
+# lock with no entry in the log stream linking them — pager-debug
+# nightmare. The breadcrumb fires ONLY on _continuation=True entry.
+# ---------------------------------------------------------------------------
+
+
+def test_wave_8_f2_f1_continuation_entry_emits_breadcrumb(
+    maic_enabled_tenant, teacher_user, caplog,
+):
+    """Regression: a ``_continuation=True`` entry to ``fill_classroom_images``
+    MUST emit a structured INFO log with
+    ``metric="image_fill_continuation_entry"`` and
+    ``outcome="continuation_inherited_lock"`` so operators can correlate
+    parent and continuation task ids in production logs.
+
+    Negative-shape: a normal (parent) entry MUST NOT emit that metric —
+    it would otherwise pollute dashboards / alerts that count handoffs.
+    """
+    import logging
+    from django.core.cache import cache
+
+    from apps.courses.maic_tasks import (
+        _IMAGE_FILL_LOCK_KEY_TEMPLATE,
+        fill_classroom_images,
+    )
+
+    classroom = _classroom_with_n_scenes(
+        maic_enabled_tenant, teacher_user, n_scenes=2, images_pending=True,
+    )
+    lock_key = _IMAGE_FILL_LOCK_KEY_TEMPLATE.format(
+        classroom_id=str(classroom.id),
+    )
+    cache.delete(lock_key)
+
+    breadcrumb_metric = "image_fill_continuation_entry"
+    breadcrumb_outcome = "continuation_inherited_lock"
+
+    with patch(
+        "apps.courses.image_service.fetch_scene_image",
+        return_value="https://images.example.com/img",
+    ):
+        # ── Negative shape: parent (non-continuation) entry must NOT emit. ──
+        caplog.clear()
+        with caplog.at_level(logging.INFO, logger="apps.courses.maic_tasks"):
+            fill_classroom_images(str(classroom.id))
+        parent_records = [
+            r for r in caplog.records
+            if getattr(r, "metric", None) == breadcrumb_metric
+        ]
+        assert not parent_records, (
+            "WAVE-8-F2-F1: normal (parent) entry must NOT emit the "
+            "continuation_entry breadcrumb; got "
+            f"{[r.getMessage() for r in parent_records]!r}"
+        )
+
+        # Re-pend so the continuation has work to do (and isn't short-circuited
+        # by the not_pending guard). Pre-seed the lock to mimic how Celery
+        # would arrive at the continuation: parent extended TTL, lock is held.
+        classroom.images_pending = True
+        classroom.save(update_fields=["images_pending"])
+        cache.set(lock_key, "1", timeout=60)
+
+        # ── Positive shape: continuation entry MUST emit the breadcrumb. ──
+        caplog.clear()
+        with caplog.at_level(logging.INFO, logger="apps.courses.maic_tasks"):
+            fill_classroom_images(
+                str(classroom.id),
+                scene_indices=[0],
+                _continuation=True,
+            )
+
+        cont_records = [
+            r for r in caplog.records
+            if getattr(r, "metric", None) == breadcrumb_metric
+        ]
+        assert cont_records, (
+            "WAVE-8-F2-F1: continuation entry must emit a structured INFO "
+            f"log with metric={breadcrumb_metric!r}; none found. "
+            f"Captured metrics: "
+            f"{sorted({getattr(r, 'metric', None) for r in caplog.records})}"
+        )
+        rec = cont_records[0]
+        # Field-allowlist sanity: phase, classroom_id, outcome, task_id all
+        # present (task_id may be empty when called outside a Celery worker).
+        assert rec.levelno == logging.INFO, (
+            f"breadcrumb must be INFO-level; got {logging.getLevelName(rec.levelno)}"
+        )
+        assert getattr(rec, "outcome", None) == breadcrumb_outcome, (
+            f"breadcrumb outcome must be {breadcrumb_outcome!r}; "
+            f"got {getattr(rec, 'outcome', None)!r}"
+        )
+        assert getattr(rec, "phase", None) == "fill_images", (
+            f"breadcrumb phase must be 'fill_images'; "
+            f"got {getattr(rec, 'phase', None)!r}"
+        )
+        assert getattr(rec, "classroom_id", None) == str(classroom.id), (
+            "breadcrumb classroom_id must match the target classroom; "
+            f"got {getattr(rec, 'classroom_id', None)!r}"
+        )
+        # task_id field must exist (allowlist-permitted), even if empty
+        # because we're not executing under a real Celery worker.
+        assert hasattr(rec, "task_id"), (
+            "breadcrumb must include a task_id field for parent/continuation "
+            "correlation in production logs"
+        )
+
+    # Cleanup any residual lock so subsequent tests start clean.
+    cache.delete(lock_key)
+
+
+# ---------------------------------------------------------------------------
+# WAVE-8-F2-F2: TTL-refresh failure path. The dispatch block at
+# ``maic_tasks.py:1432-1485`` calls ``cache.set(lock_key, "1", timeout=600)``
+# to refresh the orchestrator-lock TTL just before scheduling the deferred
+# continuation via ``apply_async(countdown=5)``. If that ``cache.set`` raises
+# (Redis flap, network error, serialization failure), production code MUST:
+#   1. swallow the exception (best-effort TTL refresh — the original 600s
+#      TTL acquired by ``cache.add`` at task entry is still in place, so a
+#      transient cache.set failure does not invalidate the existing hold);
+#   2. log a WARNING naming the failure mode so on-call can correlate;
+#   3. STILL dispatch the deferred continuation with ``_continuation=True``;
+#   4. set ``lock_handed_off=True`` so the parent's ``finally`` does NOT
+#      release the lock — otherwise we'd re-open the WAVE-8-F2 race window
+#      that the whole handoff scheme exists to close.
+#
+# Pre-WAVE-8-F2-F2 this code path was untested; the reviewer flagged it as a
+# regression risk. This test patches ``cache.set`` to raise at the
+# TTL-refresh call site only (other ``cache.set`` calls earlier in the test
+# stay unpatched) and pins the four invariants above.
+# ---------------------------------------------------------------------------
+
+
+def test_wave_8_f2_f2_ttl_refresh_failure_still_hands_off_lock(
+    maic_enabled_tenant, teacher_user, monkeypatch, caplog,
+):
+    """Regression: when the orchestrator-lock TTL-refresh ``cache.set``
+    raises mid-dispatch, the parent run MUST still:
+
+      * dispatch the deferred continuation with ``_continuation=True`` and
+        the remaining ``scene_indices``,
+      * mark the lock as handed off (so the outer ``finally`` skips
+        ``cache.delete`` — the lock stays held under its original ``cache.add``
+        600s TTL until the continuation releases it),
+      * emit a WARNING-level log breadcrumb naming the cache failure so the
+        on-call can correlate the narrowed-but-not-closed race window.
+
+    What this test does NOT pin: the exact lock TTL value after the failed
+    refresh — production code does not retry, so the only guarantee is that
+    the original ``cache.add`` TTL (set at task entry) remains in force.
+    """
+    import logging
+    from django.core.cache import cache
+
+    from apps.courses import maic_tasks
+    from apps.courses.maic_tasks import (
+        _IMAGE_FILL_LOCK_KEY_TEMPLATE,
+        fill_classroom_images,
+    )
+
+    classroom = _classroom_with_n_scenes(
+        maic_enabled_tenant, teacher_user, n_scenes=10, images_pending=True,
+    )
+    lock_key = _IMAGE_FILL_LOCK_KEY_TEMPLATE.format(
+        classroom_id=str(classroom.id),
+    )
+    # Defensive: clear any stale lock from a previous run.
+    cache.delete(lock_key)
+
+    # Force Phase-1 to trip on the very first iteration so we hit the
+    # deferral / TTL-refresh / dispatch block.
+    monkeypatch.setattr(
+        maic_tasks, "IMAGE_FILL_PHASE_1_DEADLINE_SECS", 0.0, raising=False,
+    )
+
+    # Capture deferred apply_async kwargs for downstream assertions; do
+    # NOT actually enqueue (no broker in tests).
+    deferred_calls: list[dict] = []
+
+    def fake_apply_async(*args, **kwargs):
+        deferred_calls.append({"args": args, "kwargs": kwargs})
+
+    monkeypatch.setattr(
+        fill_classroom_images, "apply_async", fake_apply_async,
+    )
+
+    # ── Targeted ``cache.set`` failure injection. ────────────────────────
+    # The production module imports ``cache`` once at module scope
+    # (``from django.core.cache import cache``) and calls ``cache.set`` in
+    # exactly one place: the TTL-refresh at line 1432-1435 inside the
+    # ``if deferred_indices:`` block. We wrap the bound method so OTHER
+    # callers (test setup, the cache.add at task entry, the cache.delete
+    # in finally) are unaffected — only the TTL-refresh call raises.
+    real_cache_set = maic_tasks.cache.set
+    set_call_log: list[tuple] = []
+    raised_for_lock_refresh = {"count": 0}
+
+    class _SimulatedCacheError(Exception):
+        """Surrogate for redis.exceptions.ConnectionError — production code
+        catches bare ``Exception`` so the exact class doesn't matter, only
+        that it inherits from Exception."""
+
+    def flaky_set(key, value, timeout=None, *args, **kwargs):
+        set_call_log.append((key, value, timeout))
+        # Only fail on the lock-refresh call site (key matches the
+        # orchestrator-lock template, value="1", timeout matches the lock TTL
+        # constant). Any other cache.set call goes through unchanged.
+        if (
+            key == lock_key
+            and value == "1"
+            and timeout == maic_tasks._IMAGE_FILL_LOCK_TTL_SECONDS
+        ):
+            raised_for_lock_refresh["count"] += 1
+            raise _SimulatedCacheError(
+                "simulated Redis flap on TTL-refresh"
+            )
+        return real_cache_set(key, value, timeout=timeout, *args, **kwargs)
+
+    monkeypatch.setattr(maic_tasks.cache, "set", flaky_set)
+
+    with patch(
+        "apps.courses.image_service.fetch_scene_image",
+        return_value="https://images.example.com/img",
+    ):
+        with caplog.at_level(logging.WARNING, logger="apps.courses.maic_tasks"):
+            fill_classroom_images(str(classroom.id))
+
+    # ── Invariant 1: TTL-refresh was attempted exactly once. ─────────────
+    # If this drops to 0 the deferral branch never ran — likely the
+    # Phase-1 deadline monkeypatch broke. If it's >1 the production code
+    # gained a retry loop without test coverage.
+    assert raised_for_lock_refresh["count"] == 1, (
+        "WAVE-8-F2-F2: expected exactly one TTL-refresh attempt at the "
+        "lock_key; production code must not silently retry on cache failure. "
+        f"Got {raised_for_lock_refresh['count']} attempts. "
+        f"Full cache.set log: {set_call_log!r}"
+    )
+
+    # ── Invariant 2: continuation was STILL dispatched. ──────────────────
+    # The whole point of WAVE-8-F2-F2 is that a transient TTL-refresh
+    # failure must NOT abort the deferral — the deferred work would
+    # otherwise be silently dropped on the floor.
+    assert len(deferred_calls) == 1, (
+        "WAVE-8-F2-F2: cache.set raised on TTL-refresh, but the deferred "
+        "continuation MUST still be dispatched (best-effort TTL refresh "
+        "policy). Got "
+        f"{len(deferred_calls)} apply_async calls."
+    )
+    deferred = deferred_calls[0]
+    deferred_kwargs = deferred["kwargs"].get("kwargs") or {}
+    assert deferred_kwargs.get("_continuation") is True, (
+        "WAVE-8-F2-F2: deferred dispatch must carry _continuation=True even "
+        "when the TTL-refresh failed; got "
+        f"{deferred_kwargs!r}"
+    )
+    assert deferred_kwargs.get("scene_indices"), (
+        "WAVE-8-F2-F2: deferred dispatch must still carry the remaining "
+        "scene_indices when TTL-refresh failed; got "
+        f"{deferred_kwargs!r}"
+    )
+
+    # ── Invariant 3: parent's finally did NOT release the lock. ──────────
+    # ``lock_handed_off`` is set True inside the apply_async try/except
+    # AFTER the failed cache.set. The outer finally checks
+    # ``if not lock_handed_off`` before cache.delete, so a successful
+    # apply_async dispatch (regardless of cache.set outcome) means the
+    # lock survives the parent's exit. This is the central WAVE-8-F2
+    # invariant — without it, a fresh re-publish during the 5s countdown
+    # window would race the continuation.
+    assert cache.get(lock_key) is not None, (
+        "WAVE-8-F2-F2: parent released the orchestrator lock after a "
+        "TTL-refresh failure. The original cache.add TTL is still valid; "
+        "the parent's finally MUST honour lock_handed_off=True and skip "
+        "cache.delete on this path."
+    )
+
+    # ── Invariant 4: a structured WARNING log was emitted. ───────────────
+    # On-call needs an audit trail when the race window is "narrowed but
+    # not closed" (continuation runs under whatever TTL was in place from
+    # the cache.add at entry, not a fresh 600s).
+    refresh_warnings = [
+        r for r in caplog.records
+        if r.levelno == logging.WARNING
+        and "lock-refresh" in r.getMessage().lower()
+    ]
+    assert refresh_warnings, (
+        "WAVE-8-F2-F2: cache.set TTL-refresh failure must emit a WARNING "
+        "naming the failure (substring 'lock-refresh' expected). "
+        f"Captured WARNING messages: "
+        f"{[r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]!r}"
+    )
+    # Sanity: the warning must mention the classroom_id so log-search can
+    # pivot from a pager alert to the affected tenant resource.
+    assert any(
+        str(classroom.id) in r.getMessage() for r in refresh_warnings
+    ), (
+        "WAVE-8-F2-F2: lock-refresh WARNING must include the classroom_id "
+        f"({classroom.id}) for pager-debug correlation; got "
+        f"{[r.getMessage() for r in refresh_warnings]!r}"
+    )
+
+    # Cleanup: release the lock so subsequent tests start from a clean
+    # slate (the production code intentionally left it held under the
+    # original cache.add TTL).
+    cache.delete(lock_key)

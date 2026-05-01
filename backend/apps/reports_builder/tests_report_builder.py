@@ -1017,8 +1017,13 @@ class TestSendMailFailuresSurfaceInRunError(TestCase):
         self.assertEqual(run.status, "success")
         self.assertIn("DELIVERY_FAILED to fail@delivfail.test", run.error or "")
 
-    def test_all_recipients_fail_sets_status_failed(self):
-        """All sends fail → run.status=='failed' and schedule.last_run_status=='delivery_failed'."""
+    def test_all_recipients_fail_sets_run_status_error(self):
+        """All sends fail → run.status=='error' and schedule.last_run_status=='delivery_failed'.
+
+        'failed' was a bug — not in ReportRun.STATUS_CHOICES. Correct value is 'error'.
+        The schedule-level delivery failure is recorded in schedule.last_run_status
+        ('delivery_failed' is valid in ReportSchedule.STATUS_CHOICES).
+        """
 
         def always_fail(**kwargs):
             raise OSError("SMTP timeout")
@@ -1032,7 +1037,7 @@ class TestSendMailFailuresSurfaceInRunError(TestCase):
             tenant=self.tenant, definition=self.definition
         ).order_by("-started_at").first()
         self.assertIsNotNone(run)
-        self.assertEqual(run.status, "failed")
+        self.assertEqual(run.status, "error")  # 'error' is the valid STATUS_CHOICES failure value
 
         schedule.refresh_from_db()
         self.assertEqual(schedule.last_run_status, "delivery_failed")

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import secrets
 import urllib.parse
 import uuid
 from typing import Optional
@@ -196,11 +197,19 @@ def saml_metadata(request, tenant_subdomain: str):
 
 @require_GET
 def saml_login(request, tenant_subdomain: str):
-    """Initiate SSO by redirecting the browser to the IdP SSO URL.
+    """Initiate SSO by sending the browser to the IdP SSO URL.
 
-    This implementation uses HTTP-Redirect binding with a minimal unsigned
-    AuthnRequest.  If your IdP requires signed requests, configure
-    ``sp_x509_cert`` + ``sp_private_key`` and extend this view to sign.
+    Two binding modes:
+
+    * **No SP private key configured** (default): emit an unsigned
+      AuthnRequest via the HTTP-Redirect binding (deflate-encoded query
+      param).  Many IdPs accept unsigned requests; this preserves existing
+      behaviour.
+    * **SP private key configured** (``sp_private_key_encrypted`` set
+      and ``sp_x509_cert`` populated): emit an enveloped-XMLDSig-signed
+      AuthnRequest via the HTTP-POST binding (auto-submitting form).
+      Strict-mode IdPs — Microsoft Entra/AzureAD strict, ADFS — require
+      this.
     """
     tenant, config, err = _load_tenant_saml(tenant_subdomain)
     if err is not None:
@@ -227,10 +236,48 @@ def saml_login(request, tenant_subdomain: str):
         "</samlp:AuthnRequest>"
     )
 
+    relay_state = request.GET.get("next", "/")
+
+    sp_key_pem = config.sp_private_key_pem
+    sp_cert_pem = config.sp_x509_cert if sp_key_pem else ""
+    if sp_key_pem and sp_cert_pem:
+        # Sign + emit via HTTP-POST binding.  An enveloped XMLDSig is not
+        # compatible with HTTP-Redirect (which uses an external SigAlg /
+        # Signature query string instead).
+        from apps.users.saml_service import sign_saml_xml
+
+        signed_xml = sign_saml_xml(
+            authn_request,
+            sp_private_key_pem=sp_key_pem,
+            sp_x509_cert_pem=sp_cert_pem,
+        )
+        encoded = base64.b64encode(signed_xml.encode("utf-8")).decode("ascii")
+        # Auto-posting HTML form per SAML §3.5.4 (HTTP POST binding).
+        # The values placed into ``value="…"`` attributes are HTML-escaped
+        # so a hostile RelayState (URL-controlled) can't break out of the
+        # attribute.  ``encoded`` is base64 (a-zA-Z0-9+/=) so it's already
+        # HTML-safe.
+        from django.utils.html import escape as _html_escape
+
+        form_html = (
+            "<!DOCTYPE html><html><head>"
+            "<meta charset=\"utf-8\">"
+            "<title>Redirecting…</title></head>"
+            "<body onload=\"document.forms[0].submit()\">"
+            "<noscript><p>JavaScript is disabled. Click the button to continue.</p></noscript>"
+            f"<form method=\"post\" action=\"{_html_escape(config.idp_sso_url)}\">"
+            f"<input type=\"hidden\" name=\"SAMLRequest\" value=\"{encoded}\">"
+            f"<input type=\"hidden\" name=\"RelayState\" value=\"{_html_escape(relay_state)}\">"
+            "<noscript><button type=\"submit\">Continue</button></noscript>"
+            "</form></body></html>"
+        )
+        return HttpResponse(form_html, content_type="text/html; charset=utf-8")
+
+    # Unsigned fallback — HTTP-Redirect binding (deflate + base64).
     import zlib
+
     deflated = zlib.compress(authn_request.encode("utf-8"))[2:-4]
     encoded = base64.b64encode(deflated).decode("ascii")
-    relay_state = request.GET.get("next", "/")
 
     query = urllib.parse.urlencode(
         {"SAMLRequest": encoded, "RelayState": relay_state}
@@ -397,13 +444,49 @@ def saml_acs(request, tenant_subdomain: str):
         pass
 
     relay_state = request.POST.get("RelayState", "/")
-    # If the IdP POSTed a relay state, send the browser there with tokens
-    # as a hash fragment so they aren't logged by intermediate proxies.
+    # AUDIT-2026-04-26-PHASE3-10: do NOT embed JWTs in a URL fragment.
+    # Browser history, JS-based error trackers (Sentry, Datadog RUM), and
+    # the address bar all capture fragments — fragments only avoid being
+    # transmitted in HTTP request bodies, which is a much weaker guarantee
+    # than people assume.  Mirror the OAuth callback's pattern instead:
+    # cache the token pair under a short-lived, single-use, opaque code
+    # and redirect with ``?code=<code>``.  The frontend then POSTs the
+    # code to ``/users/auth/sso/token-exchange/`` (sso_views.sso_token_exchange)
+    # which pops the cache key and returns the JWT pair.
     if relay_state and relay_state.startswith("/"):
+        sso_code = secrets.token_urlsafe(48)
+        # 120 s TTL: long enough for a slow frontend bootstrap, short
+        # enough that a leaked code is rapidly useless.  Same key
+        # namespace as the OAuth callback (``sso_code:<code>``) so a
+        # single exchange endpoint serves both flows.
+        try:
+            cache.set(
+                f"sso_code:{sso_code}",
+                {
+                    "access_token": tokens["access"],
+                    "refresh_token": tokens["refresh"],
+                    "user_id": str(user.id),
+                },
+                timeout=120,
+            )
+        except Exception as exc:  # pragma: no cover — Redis unavailable
+            logger.error("SAML ACS: cache write failed for sso_code: %s", exc)
+            # Fail closed: without the cache we can't exchange the code,
+            # so don't pretend the redirect worked.  Return JSON so the
+            # frontend can surface a sensible error.
+            return JsonResponse(
+                {"error": "Login succeeded but token exchange is unavailable"},
+                status=503,
+            )
+
         scheme = "https" if request.is_secure() else "http"
         host = request.get_host()
+        # Preserve any existing query string on the relay path (rare, but
+        # the frontend may include ``?next=...``).  The ``code`` is
+        # appended with the right separator either way.
+        separator = "&" if "?" in relay_state else "?"
         return HttpResponseRedirect(
-            f"{scheme}://{host}{relay_state}#access={tokens['access']}&refresh={tokens['refresh']}"
+            f"{scheme}://{host}{relay_state}{separator}code={sso_code}"
         )
     return JsonResponse(
         {"tokens": tokens, "user": {"id": str(user.id), "email": user.email}},
@@ -503,11 +586,18 @@ def saml_sls(request, tenant_subdomain: str):
             if logout_req
             else "urn:oasis:names:tc:SAML:2.0:status:Responder"
         )
+        # When the SP private key is configured, sign the LogoutResponse so
+        # strict-mode IdPs (Microsoft Entra/AzureAD strict, ADFS) accept it.
+        # Backwards compatible: if no key is set, emit unsigned.
+        sp_key_pem = config.sp_private_key_pem
+        sp_cert_pem = config.sp_x509_cert if sp_key_pem else ""
         response_xml = build_logout_response(
             in_response_to=request_id,
             issuer=sp_entity,
             destination=config.idp_slo_url,
             status_code=status_code,
+            sp_private_key_pem=sp_key_pem,
+            sp_x509_cert_pem=sp_cert_pem,
         )
 
         import zlib

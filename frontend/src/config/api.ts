@@ -129,7 +129,7 @@ function shouldAttemptRefresh(error: any): boolean {
   }
 
   const data = error?.response?.data || {};
-  const detail = String(data.detail || data.error || '').toLowerCase();
+  const detail = String(data.error || data.detail || '').toLowerCase();
   const code = String(data.code || '').toLowerCase();
   const messages = Array.isArray(data.messages)
     ? data.messages.map((item: any) => String(item?.message || '')).join(' ').toLowerCase()
@@ -147,7 +147,7 @@ function isTenantAccessDenied(error: any): boolean {
     return false;
   }
   const data = error?.response?.data || {};
-  const detail = String(data.detail || data.error || '').toLowerCase();
+  const detail = String(data.error || data.detail || '').toLowerCase();
   return (
     detail.includes('does not belong to this tenant') ||
     detail.includes('tenant required') ||

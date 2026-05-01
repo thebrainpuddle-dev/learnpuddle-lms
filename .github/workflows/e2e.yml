@@ -30,7 +30,10 @@ jobs:
 
     services:
       postgres:
-        image: postgres:15
+        # pgvector/pgvector:pg15 matches docker-compose.prod.yml so the
+        # `vector` extension, HNSW index, and chatbot RAG migrations all run
+        # exactly as they do in production (not in a silently-degraded state).
+        image: pgvector/pgvector:pg15
         env:
           POSTGRES_DB: lms_test
           POSTGRES_USER: postgres

@@ -49,8 +49,8 @@ const WINDOW_PRESETS = [
 function getErrorMessage(err: unknown, fallback: string): string {
   if (axios.isAxiosError(err)) {
     const data = err.response?.data as { detail?: string; error?: string } | undefined;
-    if (data?.detail) return data.detail;
     if (data?.error) return data.error;
+    if (data?.detail) return data.detail;
     if (err.message) return err.message;
   }
   if (err instanceof Error) return err.message;

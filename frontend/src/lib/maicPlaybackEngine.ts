@@ -70,7 +70,38 @@ export class MAICPlaybackEngine {
     this.onSceneComplete = callbacks?.onSceneComplete;
     this.onDiscussionPending = callbacks?.onDiscussionPending;
     this.onUserInterrupt = callbacks?.onUserInterrupt;
+
+    // F10 (2026-04-28): pause the engine when the tab is backgrounded.
+    // iOS Safari can re-suspend AudioContext on hide; without flipping mode
+    // to 'paused' the engine would resume scheduling speeches into a
+    // half-silent audio stack on return. This handler pauses ONLY — it does
+    // not auto-resume on visible (autoplay policy would reject programmatic
+    // play after a hide, and the action engine's F11 listener already resets
+    // the unlock latches so the next user gesture re-runs the unlock
+    // pipeline). The user clicks Play to resume; that gesture is the right
+    // place to re-engage audio.
+    if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+      document.addEventListener('visibilitychange', this._onVisibilityChange);
+    }
   }
+
+  /** F10 (2026-04-28): bound handler so add/removeEventListener pair up.
+   *  Pause-on-hide only — pause() itself guards on mode === 'playing' so
+   *  this is a no-op when idle/paused. We do NOT auto-resume on visible
+   *  (see constructor comment). */
+  private _onVisibilityChange = (): void => {
+    if (typeof document === 'undefined') return;
+    if (this.disposed) return;
+    if (document.hidden && this.mode === 'playing') {
+      this.setMode('paused');
+      // Also stop the audio that's already playing — same shape as the
+      // user-driven pause() above. abortInFlightFetch is intentionally
+      // omitted here: the action engine's F11 listener fires on the same
+      // event and resets unlock latches, and the user-gesture-required
+      // resume path will handle a clean restart.
+      this.actionEngine.pauseCurrentAudio();
+    }
+  };
 
   // ─── Scene Loading ──────────────────────────────────────────────────
 
@@ -138,34 +169,62 @@ export class MAICPlaybackEngine {
    * Pause playback. Audio is paused immediately. The next processNext()
    * will see mode !== 'playing' and return without advancing.
    *
-   * CG-P1-13 (2026-04-28): also abort any in-flight TTS fetch. Without
-   * this, a fetch that was started before Pause was clicked would
-   * resolve AFTER pause(), and `playAudioSynced` would call `audio.play()`
-   * regardless of mode — UI says "paused" but audio plays. If a fetch
-   * was actually aborted, the speech action that triggered it is now
-   * stale; rewind currentActionIndex so resume() re-runs the action
-   * cleanly with a fresh fetch.
+   * CG-P1-13 / F6 (2026-04-28): handle the pause-mid-fetch race. If the
+   * currently-executing speech is still awaiting its TTS fetch (no
+   * audio element yet), `pauseCurrentAudio` is a no-op. Without
+   * intervention the fetch resolves and `playAudioSynced` calls
+   * `audio.play()` despite the engine being paused.
+   *
+   * F6 fix shape (replaces the earlier index-rewind variant): the
+   * action engine's `pauseMidFetch()` aborts the fetch controller AND
+   * arms a resume-waiter inside the still-running `executeSpeech`.
+   * `executeSpeech` enters a wait-for-resume loop instead of falling
+   * into the reading-time fallback. On `resume()` we wake the waiter
+   * and the same speech re-fetches and plays — no `currentActionIndex`
+   * rewind required, the action remains in flight at the action-engine
+   * level. Self-contained; the playback engine only signals.
    */
   pause(): void {
     if (this.mode !== 'playing') return;
     this.setMode('paused');
     this.actionEngine.pauseCurrentAudio();
-    if (this.actionEngine.abortInFlightFetch()) {
-      // currentActionIndex was incremented at processNext line 466
-      // BEFORE we dispatched the speech action. Decrement so the speech
-      // replays on resume() rather than silently being skipped.
-      this.currentActionIndex = Math.max(0, this.currentActionIndex - 1);
-    }
+    // F6 (2026-04-28): replace the prior `abortInFlightFetch` + index
+    // rewind with `pauseMidFetch` + a resume-waiter inside the action
+    // engine. Returns true if a fetch was actually mid-flight; the
+    // playback engine doesn't need to react to that — `resume()` calls
+    // `resumeFromPauseMidFetch()` unconditionally and the action
+    // engine's own state knows whether to wake a waiter.
+    this.actionEngine.pauseMidFetch();
   }
 
   /**
    * Resume playback after a pause. If audio was paused, it resumes and
    * the onEnded chain continues. If no audio (completed during pause),
    * processNext is called directly.
+   *
+   * F6 (2026-04-28): also signals the action engine to wake any
+   * pending pause-mid-fetch waiter so the in-flight `executeSpeech`
+   * re-fetches and plays the same speech. Safe to call when no waiter
+   * is pending — `resumeFromPauseMidFetch()` is idempotent.
    */
   resume(): void {
     if (this.mode !== 'paused') return;
     this.setMode('playing');
+    // F6 (2026-04-28): wake the action engine's pause-mid-fetch waiter
+    // BEFORE the audio-resume branching. If we're resuming from a
+    // pause-mid-fetch, this fires the waiter; executeSpeech re-runs
+    // the fetch and proceeds. Returns true ONLY when a waiter was
+    // actually woken — used below to skip the processNext chain (the
+    // in-flight executeSpeech's `.then()` will drive it once the
+    // speech completes).
+    const wokeWaiter = this.actionEngine.resumeFromPauseMidFetch();
+    if (wokeWaiter) {
+      // The original execute() promise is still in flight; its `.then()`
+      // (in processNext's `case 'speech':`) drives the next action
+      // when this speech completes. Calling processNext here would
+      // double-advance.
+      return;
+    }
 
     if (this.actionEngine.hasActiveAudio()) {
       // Audio is paused — resume it. When audio ends, the speech promise
@@ -437,6 +496,13 @@ export class MAICPlaybackEngine {
     this.onActionStart = undefined;
     this.onSceneComplete = undefined;
     this.onDiscussionPending = undefined;
+    // F10 (2026-04-28): detach the visibility listener attached in the
+    // constructor. The bound handler reference is identical, so
+    // removeEventListener pairs cleanly — no leak across engine recreations
+    // (route changes / classroom reloads create a fresh engine).
+    if (typeof document !== 'undefined' && typeof document.removeEventListener === 'function') {
+      document.removeEventListener('visibilitychange', this._onVisibilityChange);
+    }
   }
 
   // ─── Core Processing (Recursive, Mode-Guarded) ─────────────────────

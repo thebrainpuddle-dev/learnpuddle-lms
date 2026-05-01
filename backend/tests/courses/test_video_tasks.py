@@ -223,7 +223,7 @@ class TestGenerateThumbnail:
     def test_happy_path_sets_thumbnail_url(
         self, mock_remove, mock_exists, mock_storage, mock_subprocess, mock_download, video_asset
     ):
-        """Valid run → thumbnail_url saved on asset."""
+        """Valid run → thumbnail_url saved on asset and persisted to DB."""
         from apps.courses.tasks import generate_thumbnail
 
         # subprocess.check_output creates the file; stub storage.save + url
@@ -231,7 +231,6 @@ class TestGenerateThumbnail:
         mock_storage.url.return_value = "https://cdn.example.com/thumb.jpg"
 
         # Also patch tempfile.TemporaryDirectory to control tmpdir
-        fake_thumb = "/tmp/fakethumb/thumb.jpg"
         with patch("apps.courses.tasks.tempfile.TemporaryDirectory") as mock_tmpdir, \
              patch("builtins.open", MagicMock(return_value=MagicMock(__enter__=MagicMock(return_value=MagicMock()), __exit__=MagicMock(return_value=False)))), \
              patch("apps.courses.tasks.os.path.join", side_effect=lambda *args: "/".join(args)):
@@ -241,6 +240,14 @@ class TestGenerateThumbnail:
             result = generate_thumbnail(str(video_asset.id))
 
         assert result == str(video_asset.id)
+
+        # Verify thumbnail_url was persisted to the database (regression guard:
+        # confirms asset.save(update_fields=["thumbnail_url",...]) was actually called).
+        video_asset.refresh_from_db()
+        assert video_asset.thumbnail_url == "https://cdn.example.com/thumb.jpg", (
+            f"Expected thumbnail_url to be set after generate_thumbnail, "
+            f"got: {video_asset.thumbnail_url!r}"
+        )
 
     def test_skips_failed_asset(self, video_asset_failed):
         """FAILED asset → returns early without calling ffmpeg."""
@@ -335,7 +342,7 @@ class TestTranscribeVideo:
     def test_happy_path_creates_transcript(
         self, mock_remove, mock_exists, mock_storage, mock_download, video_asset
     ):
-        """Full happy path: WhisperModel transcribes → VideoTranscript created."""
+        """Full happy path: WhisperModel transcribes → VideoTranscript created in DB."""
         from apps.courses.tasks import transcribe_video
         from apps.courses.video_models import VideoTranscript
 
@@ -371,6 +378,20 @@ class TestTranscribeVideo:
                 result = transcribe_video(str(video_asset.id))
 
         assert result == str(video_asset.id)
+
+        # Verify a VideoTranscript row was created in the database (regression guard:
+        # confirms VideoTranscript.objects.get_or_create(...) was actually called and saved).
+        assert VideoTranscript.objects.filter(video_asset=video_asset).exists(), (
+            "Expected a VideoTranscript to be created after successful transcription"
+        )
+        transcript = VideoTranscript.objects.get(video_asset=video_asset)
+        assert transcript.full_text == "Hello world", (
+            f"Expected transcript text 'Hello world', got: {transcript.full_text!r}"
+        )
+        assert transcript.vtt_url == "https://cdn.example.com/captions.vtt", (
+            f"Expected vtt_url to be set, got: {transcript.vtt_url!r}"
+        )
+        assert transcript.language == "en"
 
     @patch("apps.courses.tasks._download_to_tempfile", return_value=MOCK_STORAGE_PATH)
     @patch("apps.courses.tasks.os.path.exists", return_value=True)

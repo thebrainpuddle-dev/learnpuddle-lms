@@ -12,6 +12,9 @@ import { useMAICStageStore } from '../../stores/maicStageStore';
 import { getStoredClassroom, saveClassroom } from '../../lib/maicDb';
 import { Stage } from '../../components/maic/Stage';
 import { computeRefetchInterval } from '../../lib/maicPollingPolicy';
+import { useMaicMediaGenerationStore } from '../../stores/maicMediaGenerationStore';
+import { useMaicClassroomChannel } from '../../hooks/useMaicClassroomChannel';
+import { isClassroomPlayable } from '../../lib/maicReadinessGate';
 
 const ArrowLeftIcon = () => (
   <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
@@ -39,6 +42,17 @@ export const MAICPlayerPage: React.FC = () => {
   // Track the previous images_pending value so we can detect the
   // true→false flip and force a slide-asset refresh.
   const prevImagesPendingRef = useRef<boolean | undefined>(undefined);
+
+  // F2 (P0): per-element media-task store — hydrated from the
+  // `content_image_tasks` map on the classroom-detail GET, then kept fresh
+  // by the per-classroom WS channel (`useMaicClassroomChannel`).
+  const hydrateMediaTasks = useMaicMediaGenerationStore((s) => s.hydrateFromMap);
+  const clearMediaTasksForStage = useMaicMediaGenerationStore(
+    (s) => s.clearStage,
+  );
+  // F3 readiness gate input: subscribed at top of the component so the hook
+  // call is unconditional (must run before any early `return` below).
+  const mediaTasksForGate = useMaicMediaGenerationStore((s) => s.tasks);
 
   const { data: classroom, isLoading, error, refetch } = useQuery({
     queryKey: ['maic-classroom', id],
@@ -78,12 +92,25 @@ export const MAICPlayerPage: React.FC = () => {
       const apiContent = meta.content as {
         slides?: unknown[]; scenes?: unknown[]; sceneSlideBounds?: unknown[];
       } | undefined;
+      // R4: setSlides/setScenes both reset currentSlideIndex/currentSceneIndex
+      // to 0, which yanks the user back to slide 0 mid-playback when Celery
+      // finishes filling images. The Stage slide-change effect then sees the
+      // jump as user-driven and calls seekToSlidePaused(0), pausing the
+      // engine. Snapshot position before the writes and restore after so
+      // an in-flight class keeps playing through the image-fill milestone.
+      const storeBefore = useMAICStageStore.getState();
+      const prevSceneIdx = storeBefore.currentSceneIndex;
+      const prevSlideIdx = storeBefore.currentSlideIndex;
       if (apiContent?.slides?.length) {
         setSlides(apiContent.slides as Parameters<typeof setSlides>[0]);
       }
       if (apiContent?.scenes?.length) {
         setScenes(apiContent.scenes as Parameters<typeof setScenes>[0]);
       }
+      useMAICStageStore.setState({
+        currentSceneIndex: prevSceneIdx,
+        currentSlideIndex: prevSlideIdx,
+      });
       // Overwrite IndexedDB with the image-filled payload so the next
       // visit doesn't show empty-src slides.
       const apiConfig = meta.config as { agents?: unknown[] } | undefined;
@@ -106,6 +133,32 @@ export const MAICPlayerPage: React.FC = () => {
 
     prevImagesPendingRef.current = currentPending;
   }, [classroom, id, setSlides, setScenes, setSceneSlideBounds, setAgents]);
+
+  // F2 (P0): hydrate the per-element media-task store from the GET response
+  // each time the classroom record changes. The map is the server's source
+  // of truth; we replace whatever's in the store for this classroom.
+  // For classrooms generated before F2 the map is `{}` and the store stays
+  // empty — SlideRenderer falls through to the legacy `imagesPending` path.
+  useEffect(() => {
+    if (!classroom || !id) return;
+    const meta = classroom as unknown as Record<string, unknown>;
+    const tasksMap = (meta.content_image_tasks ?? {}) as Parameters<
+      typeof hydrateMediaTasks
+    >[1];
+    hydrateMediaTasks(id, tasksMap);
+  }, [classroom, id, hydrateMediaTasks]);
+
+  // F2 (P0): subscribe to the per-classroom WS channel so live
+  // `maic.image.task` events flow into the media-task store.
+  useMaicClassroomChannel(id ?? null);
+
+  // F2 (P0): drop this classroom's tasks on unmount so navigating to a
+  // different classroom doesn't leak the previous one's task entries.
+  useEffect(() => {
+    return () => {
+      if (id) clearMediaTasksForStage(id);
+    };
+  }, [id, clearMediaTasksForStage]);
 
   // SPRINT-2-BATCH-5-F7: detect when the images_pending poll has stalled.
   // computeRefetchInterval returns `false` when updated_at is >10min old,
@@ -515,14 +568,29 @@ export const MAICPlayerPage: React.FC = () => {
     (classroom as unknown as Record<string, unknown>).images_pending
   );
 
-  // CG-P1-9 (2026-04-28): hold the Stage on a "preparing classroom" panel
-  // while `images_pending=true`. Previously we let users into the player
-  // immediately on `status=READY`, which exposed empty-src image elements
-  // as "Fetching image…" skeletons mid-playback — a bad first impression.
-  // Polling (computeRefetchInterval) drives the unblock automatically when
-  // Celery finishes fill_classroom_images. The existing F7 stall banner +
-  // 10-min stall detector still cover the "Celery crashed" failure mode.
-  if (!storeReady || (imagesPending && !imagesStalled)) {
+  // F3 (P0): two-milestone gate. Pre-F3 we held the player on the
+  // "Finishing up — fetching slide images…" panel until the WHOLE batch
+  // was done (`images_pending=false`). With F2's per-element media-task
+  // store hydrated, we now let the user in as soon as scene 0 is ready
+  // and stream the rest behind the scenes. The F2-aware path activates
+  // automatically once `content_image_tasks` is populated; legacy
+  // classrooms (empty map) keep gating on `!imagesPending` exactly like
+  // before. See `lib/maicReadinessGate.ts` for the full decision tree.
+  //
+  // The classroom-level `images_pending` boolean still drives the polling
+  // refetch interval (computeRefetchInterval) and the "Fetching images…"
+  // header badge until the WHOLE batch is done — both stay until then.
+  //
+  // CG-P1-9 / SPRINT-2-BATCH-5-F7: the stall override is preserved — if
+  // Celery looks crashed (>10min stuck on images_pending) we skip the
+  // gate and drop the user into the player, where the stall banner is
+  // shown.
+  const playable = isClassroomPlayable({
+    tasks: mediaTasksForGate,
+    imagesPending,
+  });
+
+  if (!storeReady || (!playable && !imagesStalled)) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
         <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600" />

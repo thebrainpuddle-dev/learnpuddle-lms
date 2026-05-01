@@ -71,6 +71,227 @@ QUIZ_QUESTION_MAX_CHARS = 600
 QUIZ_OPTION_MAX_CHARS = 300
 
 
+# ─── F4: Typed slide schema (role discriminator) ─────────────────────────────
+#
+# Phase-2 OpenMAIC follow-up F4. Adds two OPTIONAL fields to every slide
+# (``template`` + ``slots``) without removing or breaking the legacy
+# free-form ``elements[]`` shape. The frontend renderer falls through to
+# the existing absolute-position rendering when ``template`` is absent or
+# unknown, so this change is fully additive.
+#
+# Smallest first cut: only the ``body-image-right`` template is shipped.
+# It maps the dominant scene-content layout (title + body bullets on the
+# left, supporting image on the right) into a slot-based CSS grid on the
+# frontend. Other templates from the audit's 7-template proposal will be
+# added in follow-up commits.
+#
+# Contract (must stay in lock-step with frontend ``MAICSlide`` typing —
+# see ``frontend/src/types/maic.ts``):
+#
+#   slide.template?: 'body-image-right' | 'free-form'
+#   slide.slots?: {
+#     title?:  { text: string },
+#     body?:   { text?: string, bullets?: string[] },
+#     image?:  { src?: string, alt?: string, meta?: dict },
+#     footer?: { text: string },
+#   }
+#
+# The validator/normalizer is permissive on ``slots`` (unknown sub-keys
+# are ignored, not rejected) but strict on ``template`` — values outside
+# the allowed set raise ``ValidationError``. Empty slots dict is OK.
+
+ALLOWED_SLIDE_TEMPLATES: frozenset[str] = frozenset({
+    "body-image-right",
+    "free-form",
+})
+
+# Whitelisted slot keys. Sub-keys outside this map are dropped silently
+# during normalization (additive forward-compat).
+ALLOWED_SLOT_KEYS: frozenset[str] = frozenset({"title", "body", "image", "footer"})
+
+
+class SlideSchemaValidationError(ValueError):
+    """Raised when a slide carries an unknown/invalid ``template`` value.
+
+    Subclasses ``ValueError`` so existing catch sites that expect ``ValueError``
+    (e.g. DRF serializer ``validate_*`` hooks) continue to bubble correctly.
+    DRF's ``ValidationError`` is intentionally NOT used here so this module
+    stays import-clean for non-DRF callers (Celery tasks, generation pipeline).
+    """
+
+
+def validate_slide_template(slide: dict) -> None:
+    """Raise ``SlideSchemaValidationError`` if ``slide.template`` is invalid.
+
+    No-op when the slide carries no ``template`` field (legacy free-form
+    slide — backward-compatible path).
+
+    Allowed values: see ``ALLOWED_SLIDE_TEMPLATES``.
+
+    A non-string ``template`` value (None handled separately above; ints,
+    dicts, etc.) is treated as invalid because the renderer can't dispatch
+    on it. ``slots`` shape is NOT validated here — that's permissive on
+    purpose: see ``normalize_slide_slots`` for the slot-key whitelist.
+    """
+    if not isinstance(slide, dict):
+        return
+    template = slide.get("template")
+    if template is None:
+        return
+    if not isinstance(template, str) or template not in ALLOWED_SLIDE_TEMPLATES:
+        raise SlideSchemaValidationError(
+            f"Invalid slide template {template!r}. "
+            f"Allowed values: {sorted(ALLOWED_SLIDE_TEMPLATES)}."
+        )
+
+
+def normalize_slide_slots(slots: dict | None) -> dict:
+    """Drop unknown top-level slot keys; coerce missing dict to {}.
+
+    Permissive on sub-keys: ``slots.title.foo`` is left untouched even if
+    ``foo`` is unknown — the frontend renderer ignores anything it doesn't
+    consume. Only the OUTER slot names (``title|body|image|footer``) are
+    whitelisted here so a typo at the top level (``slots.titel``) doesn't
+    silently miss the renderer's slot map.
+
+    Returns a NEW dict (does not mutate input).
+    """
+    if not isinstance(slots, dict):
+        return {}
+    return {k: v for k, v in slots.items() if k in ALLOWED_SLOT_KEYS}
+
+
+def _backfill_slots_from_elements(slide: dict) -> None:
+    """Best-effort heuristic: fill ``slots.{title,body,image}`` from elements.
+
+    Triggered only when the slide carries ``template: 'body-image-right'``
+    and the corresponding slot is missing/empty. Mutates the slide in place.
+
+    Heuristic per slot:
+      * ``slots.title.text``  — first ``elements[]`` entry of type ``text``
+        whose ``style.fontWeight`` is ``"bold"`` OR whose font size is
+        ≥ 24px (the prompt template uses 28-36px for titles).
+      * ``slots.image.src``   — first ``elements[]`` entry of type ``image``,
+        carrying its ``src``, ``content`` (alt), and ``meta``.
+      * ``slots.body.text``   — first ``elements[]`` entry of type ``text``
+        that wasn't picked as the title.
+
+    Skips silently when the heuristic is ambiguous (no clear title/image)
+    so the renderer's free-form fallback can still kick in.
+    """
+    if not isinstance(slide, dict):
+        return
+    if slide.get("template") != "body-image-right":
+        return
+    elements = slide.get("elements") or []
+    if not isinstance(elements, list):
+        return
+
+    slots = dict(slide.get("slots") or {})
+
+    text_elements: list[dict] = []
+    image_element: dict | None = None
+    for el in elements:
+        if not isinstance(el, dict):
+            continue
+        el_type = el.get("type")
+        if el_type == "text":
+            text_elements.append(el)
+        elif el_type == "image" and image_element is None:
+            image_element = el
+
+    # Pick the most title-like text element: prefer bold OR fontSize >= 24.
+    title_el: dict | None = None
+    for el in text_elements:
+        style = el.get("style") or {}
+        font_weight = str(style.get("fontWeight") or "").lower()
+        try:
+            font_size = float(style.get("fontSize") or 0)
+        except (TypeError, ValueError):
+            font_size = 0
+        if "bold" in font_weight or font_weight == "700" or font_size >= 24:
+            title_el = el
+            break
+
+    # Title slot
+    if "title" not in slots and title_el is not None:
+        text = str(title_el.get("content") or "").strip()
+        if text:
+            slots["title"] = {"text": text}
+
+    # Image slot
+    if image_element is not None:
+        existing_image_slot = slots.get("image")
+        if not isinstance(existing_image_slot, dict):
+            existing_image_slot = {}
+        # Backfill src only when the slot's src is empty and the element
+        # has one. Backfill alt + meta from element when slot lacks them.
+        new_image: dict = dict(existing_image_slot)
+        if not new_image.get("src"):
+            el_src = image_element.get("src")
+            if isinstance(el_src, str) and el_src:
+                new_image["src"] = el_src
+        if not new_image.get("alt"):
+            alt = image_element.get("content") or image_element.get("alt")
+            if isinstance(alt, str) and alt.strip():
+                new_image["alt"] = alt.strip()
+        if "meta" not in new_image:
+            meta = image_element.get("meta")
+            if isinstance(meta, dict) and meta:
+                new_image["meta"] = dict(meta)
+        if new_image:
+            slots["image"] = new_image
+
+    # Body slot — pick first text element that wasn't the title, IF body is missing.
+    if "body" not in slots:
+        for el in text_elements:
+            if el is title_el:
+                continue
+            text = str(el.get("content") or "").strip()
+            if text:
+                slots["body"] = {"text": text}
+                break
+
+    if slots:
+        slide["slots"] = slots
+
+
+def normalize_slide_schema(slide: dict) -> dict:
+    """Validate + normalize the F4 slide schema additions in place.
+
+    Pipeline (additive, non-breaking):
+      1. ``validate_slide_template`` — raises on unknown template values.
+      2. ``normalize_slide_slots``   — strips unknown top-level slot keys.
+      3. ``_backfill_slots_from_elements`` — best-effort heuristic that
+         derives ``slots`` from ``elements[]`` when the LLM emitted a
+         ``template`` but left ``slots`` partial/empty.
+
+    LOAD-BEARING ORDERING — DO NOT REORDER (BUNDLE-2026-04-29-FX-5).
+    Step 1 (validate) MUST run before step 3 (backfill). Callers wrap this
+    function in ``try/except SlideSchemaValidationError`` and recover via
+    ``slide.pop("template"); slide.pop("slots")``. That escape hatch only
+    works because validation raises BEFORE backfill mutates ``slide["slots"]``.
+    If backfill ran first, the pop would not undo the heuristically-populated
+    slots and the slide would persist with orphaned ``slots`` data alongside
+    a popped ``template`` — silent drift between storage and the renderer.
+
+    Slides without ``template`` and ``slots`` are returned unchanged. The
+    caller is expected to keep the legacy ``elements[]`` array intact —
+    the renderer falls back to absolute positioning for any slide whose
+    ``template`` is absent or whose ``slots`` are empty.
+
+    Returns the same slide dict (mutated). Raises ``SlideSchemaValidationError``
+    on invalid templates.
+    """
+    if not isinstance(slide, dict):
+        return slide
+    validate_slide_template(slide)
+    if "slots" in slide:
+        slide["slots"] = normalize_slide_slots(slide.get("slots"))
+    _backfill_slots_from_elements(slide)
+    return slide
+
+
 def _truncate_to_word_boundary(text: str, max_chars: int) -> str:
     """Truncate *text* to *max_chars*, snapping back to the last word boundary.
 
@@ -1390,6 +1611,18 @@ def generate_outline_sse(topic: str, language: str, agents: list[dict],
 
 
 # ─── Scene Content Generation ────────────────────────────────────────────────
+#
+# Visual-style note (WAVE-6-F4):
+# The OPTIONAL TYPED LAYOUT directive below introduces the `body-image-right`
+# template (typed slot schema in `slots`) ALONGSIDE the legacy free-form
+# `elements[]` array. The two paths render with different visual rhythms:
+#   * `elements[]` — absolute-positioned (x/y/width/height in 800x450 px),
+#     legacy scaled-canvas renderer.
+#   * `slots` (template) — relative-unit CSS grid in the typed renderer; spacing
+#     and alignment are template-driven, NOT per-coordinate.
+# Slides MUST emit BOTH (the directive enforces this) so renderers without
+# typed-slot support still display correctly. Prompt authors editing this body
+# should keep the dual-emit rule visible in the directive copy below.
 
 _SCENE_CONTENT_BODY = """You are an expert educational content designer creating rich, visually appealing multi-slide presentations for an interactive AI classroom.
 
@@ -1475,6 +1708,22 @@ SLIDE LAYOUT GUIDELINES (follow this pattern for each slide position):
 - Slide 5-6: DEEP DIVE slides — detailed content with examples, code snippets, or step-by-step explanations. Can be text-heavy.
 - Slide 7: KEY CONCEPTS slide — summary grid or comparison table layout. Use multiple smaller text blocks arranged in a grid.
 - Slide 8: TRANSITION slide — summary of the scene + teaser for next scene. Clean, minimal text.
+
+OPTIONAL TYPED LAYOUT (preferred for body+image-right slides — additive, free-form still supported):
+For any slide that fits the dominant "body content + supporting image on the right" pattern (Slides 2-3 in the guideline above), you MAY emit two extra fields ALONGSIDE the existing `elements[]` array:
+  "template": "body-image-right",
+  "slots": {
+    "title": {"text": "<slide title>"},
+    "body":  {"text": "<paragraph>", "bullets": ["<bullet 1>", "<bullet 2>"]},
+    "image": {"src": "", "alt": "<short alt text>"},
+    "footer": {"text": "<key takeaway>"}
+  }
+Rules:
+- The ONLY allowed `template` value right now is `body-image-right`. Use `free-form` (or omit `template`) for any other layout.
+- `slots` is OPTIONAL. Allowed top-level keys: `title`, `body`, `image`, `footer`. Sub-keys outside the shape above are ignored, not rejected.
+- When you emit `template: "body-image-right"`, ALSO emit a free-form `elements[]` array (title, body text, image, footer) so older renderers that don't yet consume `slots` still display the slide. The renderer prefers `slots` when present; the `elements[]` are the fallback path.
+- Leave `slots.image.src` as the empty string ""; the backend image pipeline fills the URL post-return (same contract as `elements[].src`).
+- Do NOT use `template` for the title slide, the diagram-only slide, or any layout that isn't a clean body-on-the-left + image-on-the-right split.
 
 IMAGE ELEMENTS:
 Include "type": "image" elements with "content" being a descriptive prompt for image generation (e.g., "Diagram showing the water cycle with evaporation, condensation, and precipitation labeled"), and "src" set to empty string "".
@@ -1843,6 +2092,20 @@ Generate exactly {slide_count} slides following the layout guidelines (title sli
             # a placeholder image element using the slide title as the
             # image keyword; _fill_image_urls will fetch a real URL.
             _ensure_slide_has_image(slide, scene_title=scene.get("title", ""), slide_idx=i)
+            # F4: validate + normalize the typed-slide schema additions
+            # (``template`` + ``slots``). No-op for legacy slides without
+            # those fields. Unknown template values raise; we drop the
+            # ``template`` field rather than aborting the whole scene so
+            # one rogue LLM emission can't take down generation.
+            try:
+                normalize_slide_schema(slide)
+            except SlideSchemaValidationError as exc:
+                logger.warning(
+                    "F4: dropping invalid slide template scene=%s slide_idx=%d: %s",
+                    scene_id, i, exc,
+                )
+                slide.pop("template", None)
+                slide.pop("slots", None)
         # Backward compatibility: include "slide" key pointing to first slide
         parsed["slide"] = parsed["slides"][0]
     elif "slide" in parsed:
@@ -1858,6 +2121,15 @@ Generate exactly {slide_count} slides following the layout guidelines (title sli
             if not el.get("id"):
                 el["id"] = f"el-{j + 1}"
         _ensure_slide_has_image(slide, scene_title=scene.get("title", ""), slide_idx=0)
+        try:
+            normalize_slide_schema(slide)
+        except SlideSchemaValidationError as exc:
+            logger.warning(
+                "F4: dropping invalid single-slide template scene=%s: %s",
+                scene_id, exc,
+            )
+            slide.pop("template", None)
+            slide.pop("slots", None)
         parsed["slides"] = [slide]
 
     _fill_image_urls(
@@ -2117,7 +2389,6 @@ Return a valid JSON object:
     {"type": "speech", "agentId": "agent-1", "text": "Welcome everyone! Today we are exploring..."},
     {"type": "spotlight", "elementId": "el-s1-1", "duration": 2500},
     {"type": "speech", "agentId": "agent-2", "text": "I am excited to dive into this topic with you all!"},
-    {"type": "pause", "duration": 200},
     {"type": "transition", "slideIndex": 1},
     {"type": "speech", "agentId": "agent-1", "text": "Now let us look at the key concepts..."},
     {"type": "spotlight", "elementId": "el-s2-1", "duration": 2000},
@@ -2136,23 +2407,22 @@ Return a valid JSON object:
   ]
 }
 
-ACTION TYPES (15 types — use all of these for maximum engagement):
+ACTION TYPES (14 types — use all of these for maximum engagement):
 
 1. speech       — Agent speaks (requires: agentId, text). 1-3 sentences each.
 2. spotlight    — Highlight element glow (requires: elementId, duration in ms)
 3. highlight    — Color overlay on element (requires: elementId, color hex like "#DBEAFE")
-4. pause        — Dramatic pause (requires: duration in ms, 500-1500)
-5. transition   — Advance to next slide (requires: slideIndex — 0-based index of the target slide). CRITICAL for multi-slide scenes.
-6. wb_open      — Open whiteboard overlay (no params)
-7. wb_draw_text — Draw text on whiteboard (requires: text, x, y, fontSize, color)
-8. wb_draw_shape— Draw shape on whiteboard (requires: shape ["circle"|"rect"|"arrow"], x, y, width, height, color)
-9. wb_draw_line — Draw line on whiteboard (requires: x1, y1, x2, y2, color, strokeWidth)
-10. wb_draw_latex — Draw a LaTeX equation on the whiteboard (requires: id, latex, left, top, width, fontSize). Use for formulas, derivations.
-11. wb_draw_code  — Seed a code block on the whiteboard (requires: id, lines, left, top, width; optional: language, fontSize). Lines can be empty to seed a block the agent then fills via wb_edit_code.
-12. wb_edit_code  — Mutate an existing code block (requires: targetId matching a prior wb_draw_code id, operation ["insert_after"|"replace_lines"|"delete_lines"], lineStart, optional lineEnd, optional content[]). Use to make code appear a few lines at a time, interleaved with speech, so the agent is "typing" the code live.
-13. wb_close    — Close whiteboard overlay (no params)
-14. wb_clear    — Clear whiteboard content (no params)
-15. discussion  — Start discussion segment (requires: sessionType ["qa"|"roundtable"], topic, agentIds)
+4. transition   — Advance to next slide (requires: slideIndex — 0-based index of the target slide). CRITICAL for multi-slide scenes.
+5. wb_open      — Open whiteboard overlay (no params)
+6. wb_draw_text — Draw text on whiteboard (requires: text, x, y, fontSize, color)
+7. wb_draw_shape— Draw shape on whiteboard (requires: shape ["circle"|"rect"|"arrow"], x, y, width, height, color)
+8. wb_draw_line — Draw line on whiteboard (requires: x1, y1, x2, y2, color, strokeWidth)
+9. wb_draw_latex — Draw a LaTeX equation on the whiteboard (requires: id, latex, left, top, width, fontSize). Use for formulas, derivations.
+10. wb_draw_code  — Seed a code block on the whiteboard (requires: id, lines, left, top, width; optional: language, fontSize). Lines can be empty to seed a block the agent then fills via wb_edit_code.
+11. wb_edit_code  — Mutate an existing code block (requires: targetId matching a prior wb_draw_code id, operation ["insert_after"|"replace_lines"|"delete_lines"], lineStart, optional lineEnd, optional content[]). Use to make code appear a few lines at a time, interleaved with speech, so the agent is "typing" the code live.
+12. wb_close    — Close whiteboard overlay (no params)
+13. wb_clear    — Clear whiteboard content (no params)
+14. discussion  — Start discussion segment (requires: sessionType ["qa"|"roundtable"], topic, agentIds)
 
 CRITICAL RULES:
 - VOICE DISCIPLINE: You MUST write speech text that reflects each agent's `speakingStyle` through ENGLISH register only — warm vs crisp, Socratic vs supportive, formal vs informal. Each agent's lines should be identifiable as that agent's voice without relying on non-English words.
@@ -2187,7 +2457,7 @@ CRITICAL RULES:
 - Each speech should be 1-3 sentences (short, punchy, conversational)
 - Use the speaker's role style: professors explain authoritatively, assistants ask clarifying questions, student reps voice common confusions
 - Spotlight the heading element first, then key content elements on each slide
-- Speaker handoff: optionally insert ONE `{"type":"pause","duration": 80}` action between speakers — the engine caps pauses to 100ms anyway and a 0-80ms beat reads as natural breath, while anything larger compounds with audio decode latency into noticeable dead air. Do NOT add pauses between same-speaker turns; natural TTS cadence covers it.
+- Speaker handoff: rely on natural TTS cadence between speakers. Do NOT insert beat/spacer actions between turns — the playback engine reflows audio with its own micro-gap.
 - For introduction scenes: each agent introduces themselves personally
 - Use element IDs from the slide content for spotlight/highlight actions
 - End with a strong summary or transition statement
@@ -2432,7 +2702,6 @@ def _fallback_actions(scene: dict, agents: list) -> dict:
 
     # Second agent responds
     if secondary:
-        actions.append({"type": "pause", "duration": 200})
         actions.append({
             "type": "speech", "agentId": secondary["id"],
             "text": _persona_flavored(
@@ -2464,7 +2733,6 @@ def _fallback_actions(scene: dict, agents: list) -> dict:
             actions.append({"type": "highlight", "elementId": slide_elements[1].get("id", f"el-s{si+1}-2"), "color": "#DBEAFE"})
 
         if secondary:
-            actions.append({"type": "pause", "duration": 200})
             actions.append({
                 "type": "speech", "agentId": secondary["id"],
                 "text": _persona_flavored(

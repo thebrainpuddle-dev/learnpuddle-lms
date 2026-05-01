@@ -218,12 +218,58 @@ export class MAICActionEngine {
   private settingsStore = useMAICSettingsStore;
 
   private audioElement: HTMLAudioElement | null = null;
+  /** F5 (2026-04-28): the lifetime-owned HTMLAudioElement reused across
+   *  every speech action in this engine instance. Lazily allocated on
+   *  first `playAudioSynced` call so SSR / pre-test-construction stays
+   *  safe. After a speech ends or aborts, `audioElement` is nulled (the
+   *  "currently bound" reference) but `_sharedAudio` stays — the next
+   *  play just reattaches handlers and assigns `src`. Only `dispose()`
+   *  drops it.
+   *
+   *  Saves 50-200 ms of audio-decode/setup cost per speaker handoff that
+   *  the previous `new Audio()`-per-speech allocation paid. Matches the
+   *  OpenMAIC `audio-player.ts` pattern (one `audio` field reused via
+   *  `audio.src = …; audio.play()` cycles). */
+  private _sharedAudio: HTMLAudioElement | null = null;
+  /** F5 (2026-04-28): unsubscribe handle for the engine-lifetime
+   *  settings-store subscription. Wired ONCE on first audio allocation
+   *  (deferred from constructor so SSR / no-Audio-global tests don't
+   *  pre-allocate). Lives until `dispose()` calls it. The subscription
+   *  pushes settings.{playbackSpeed,audioVolume} changes to
+   *  `_sharedAudio` whenever the store changes — gives mid-speech speed
+   *  / volume slider drags an instant effect (AV-P0-1 / AV-P0-3 /
+   *  AV-P2-12). */
+  private _settingsUnsub: (() => void) | null = null;
   private audioResolve: (() => void) | null = null;
+  /** F9 (2026-04-28): generation token captured at the time `audioResolve`
+   *  was registered (inside `playAudioSynced`). The abort path uses this to
+   *  decide whether to fire the planted resolve: it captures `myToken` from
+   *  `this.generationToken` BEFORE bumping, then only calls `audioResolve()`
+   *  when `audioResolveToken === myToken`. A stale planted resolve (e.g.
+   *  the rare race where a `play().catch` reaction settled but its early-
+   *  return token-check left `audioResolve` non-null) is silently dropped
+   *  rather than double-fired on top of the normal play().catch resolve.
+   *  Stays in lockstep with `audioResolve` — null when audioResolve is null. */
+  private audioResolveToken: number | null = null;
   /** Currently-playing video element (from a `play_video` action).
    *  Tracked so `pauseCurrentAudio` can also pause video when the user
    *  pauses the engine, and so `abortCurrentAction` stops both. */
   private currentVideoElement: HTMLVideoElement | null = null;
   private currentFetchController: AbortController | null = null;
+  /** F6 (2026-04-28): set true by `pauseMidFetch()` when it aborts an
+   *  in-flight TTS fetch. `executeSpeech` checks this AFTER its
+   *  `fetchTtsBlob` returns null — instead of falling into the
+   *  reading-time fallback (which silently loses the speech), it awaits
+   *  `_resumeWaiter` and re-runs the fetch when the user clicks Play.
+   *  Reset to false at executeSpeech entry, after the resume-waiter
+   *  resolves, and on abort. */
+  private _pausedMidFetch = false;
+  /** F6 (2026-04-28): resolve fn for the resume-waiter promise. Set by
+   *  `executeSpeech` while paused mid-fetch, fired by either
+   *  `resumeFromPauseMidFetch()` (user clicks Play) or
+   *  `abortCurrentAction()` (scene change drops the speech entirely —
+   *  the post-resume token check then bails executeSpeech out cleanly). */
+  private _resumeWaiter: (() => void) | null = null;
   private effectTimers: ReturnType<typeof setTimeout>[] = [];
   /** AV-P0-4 (2026-04-24): handles for the scene-wide prefetch
    *  `waitForSlot` polling timers. Tracked separately from effectTimers
@@ -294,7 +340,35 @@ export class MAICActionEngine {
     // Halve the lookahead on slow links (concurrency < default ⇒ slow).
     this.prefetchLookahead =
       this.prefetchConcurrency < SCENE_PREFETCH_CONCURRENCY_DEFAULT ? 1 : 2;
+
+    // F11 (2026-04-28): visibility-driven unlock retry.
+    // iOS Safari re-suspends AudioContext after the tab has been hidden for
+    // ~30s. Without resetting the unlock latch, unlockAudio() short-circuits
+    // forever (`_audioUnlocked === true`) and audio never recovers without
+    // a page reload. On hide we drop both latches so the next user-gesture
+    // call to unlockAudio() runs the full pipeline again. We attach a single
+    // listener per engine instance, bound once, and detach in dispose().
+    if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+      document.addEventListener('visibilitychange', this._onVisibilityChange);
+    }
   }
+
+  /** F11 (2026-04-28): bound handler so add/removeEventListener pair up.
+   *  When the tab goes hidden, drop both unlock latches so the next user
+   *  gesture re-runs unlockAudio(). Cheap; no-op while visible. */
+  private _onVisibilityChange = (): void => {
+    if (typeof document === 'undefined') return;
+    if (document.hidden) {
+      this._audioUnlocked = false;
+      // The in-flight promise (if any) is for a now-stale unlock round.
+      // Dropping the reference is safe — the original promise still settles
+      // in the background but its only side-effect (setting _audioUnlocked
+      // = true via .then) is fine because we'll get hidden→visible again
+      // and reset on the next hide. The important invariant: the next
+      // unlockAudio() call must NOT short-circuit on the latch.
+      this._unlockInFlightPromise = null;
+    }
+  };
 
   /** MOB-P0-6 — used by `maicPlaybackEngine.prefetchUpcomingSpeech` to
    *  scale the in-flight look-ahead window with the same network hint
@@ -323,6 +397,15 @@ export class MAICActionEngine {
    * different scene or the playback engine changes mode mid-action.
    */
   abortCurrentAction(): void {
+    // F9 (2026-04-28): capture the pre-bump token so we can decide whether
+    // the planted `audioResolve` belongs to the action we're aborting (its
+    // `audioResolveToken` was set under the same generation as `myToken`)
+    // or whether it's a stale leftover from a `play().catch` race. Only the
+    // matching case fires the resolve — stale resolves are silently dropped
+    // (along with the field) so there is no chance of a double-fire on top
+    // of whatever already settled the awaiting promise.
+    const myToken = this.generationToken;
+
     // Token bump FIRST — any live callback is now stale.
     this.generationToken++;
 
@@ -346,6 +429,12 @@ export class MAICActionEngine {
     }
 
     // Stop playing audio; detach all handlers so buffered events are no-ops.
+    // F5 (2026-04-28): the audio element is now engine-lifetime
+    // (`_sharedAudio`). We detach handlers + revoke the blob URL but
+    // KEEP `_sharedAudio` allocated for the next speech. Only `dispose()`
+    // tears down the element itself. `audioElement` (the "currently
+    // bound" alias) is nulled so `hasActiveAudio()` correctly reports
+    // false during the abort window.
     if (this.audioElement) {
       this.audioElement.onplaying = null;
       this.audioElement.onended = null;
@@ -362,9 +451,29 @@ export class MAICActionEngine {
       this.audioElement = null;
     }
 
+    // F6 (2026-04-28): clear paused-mid-fetch state. If a resume-waiter
+    // is pending, fire it so the awaiting executeSpeech wakes — its
+    // post-resume token check sees the just-bumped generationToken and
+    // bails cleanly without playing audio.
+    this._pausedMidFetch = false;
+    if (this._resumeWaiter) {
+      const waiter = this._resumeWaiter;
+      this._resumeWaiter = null;
+      try { waiter(); } catch { /* defensive */ }
+    }
+
     if (this.audioResolve) {
-      this.audioResolve();
+      // F9 guard: only fire when the planted resolve matches the pre-bump
+      // token we captured above. A stale planted resolve (older generation
+      // — possible if a play().catch reaction returned early on a prior
+      // staleness check without nulling the field) gets dropped silently.
+      // Either way we clear the field + token so the next playAudioSynced
+      // starts from a clean slate.
+      if (this.audioResolveToken === myToken) {
+        this.audioResolve();
+      }
       this.audioResolve = null;
+      this.audioResolveToken = null;
     }
 
     // Clear reading-time fallback timer if running.
@@ -436,6 +545,101 @@ export class MAICActionEngine {
   }
 
   /**
+   * F6 (2026-04-28): pause-mid-fetch race fix.
+   *
+   * Called by the playback engine's `pause()` path INSTEAD of
+   * `abortInFlightFetch()` + currentActionIndex rewind. The semantics:
+   *
+   *   1. Aborts the in-flight fetch controller (if any) — fetchTtsBlob
+   *      catches the AbortError and returns null cleanly.
+   *   2. Sets `_pausedMidFetch = true` — but does NOT bump the
+   *      generationToken. Without the bump, executeSpeech's post-fetch
+   *      token check passes and it falls through to a new branch that
+   *      awaits `_resumeWaiter` instead of running readingTimeFallback
+   *      (which would silently lose the speech).
+   *   3. Returns true if a fetch was actually aborted (caller can use
+   *      this to decide whether to take the audio-already-playing
+   *      branch via `pauseCurrentAudio`).
+   *
+   * On `resumeFromPauseMidFetch()`, the resume-waiter resolves and
+   * executeSpeech re-runs `fetchTtsBlob` with the same args, then
+   * proceeds to play. If `abortCurrentAction()` fires while paused-mid-
+   * fetch (scene change), it bumps the token AND clears the resume-
+   * waiter — executeSpeech wakes, sees the stale token, and bails.
+   *
+   * Self-contained inside the action engine (the playback engine no
+   * longer rewinds `currentActionIndex - 1`).
+   */
+  pauseMidFetch(): boolean {
+    if (!this.currentFetchController) return false;
+    this.currentFetchController.abort();
+    this.currentFetchController = null;
+    this._pausedMidFetch = true;
+    // Deliberately NOT bumping generationToken: executeSpeech needs to
+    // continue under its original token so the post-fetch / post-
+    // resume code paths see the same identity as the action's myToken.
+    return true;
+  }
+
+  /**
+   * F6 (2026-04-28): resolve the pending resume-waiter (if any) so the
+   * paused-mid-fetch executeSpeech wakes up and re-runs its fetch.
+   * Idempotent — no-op when no waiter is pending.
+   *
+   * Returns true when an actual waiter was woken. The playback engine's
+   * `resume()` uses this to decide whether to skip its own
+   * `processNext()` chain: when a waiter was woken, the in-flight
+   * `executeSpeech` promise will eventually settle and its `.then()`
+   * already drives `processNext`. Calling `processNext()` again here
+   * would race with the in-flight speech and double-advance the cursor.
+   */
+  resumeFromPauseMidFetch(): boolean {
+    const waiter = this._resumeWaiter;
+    this._resumeWaiter = null;
+    this._pausedMidFetch = false;
+    if (waiter) {
+      try { waiter(); } catch { /* never throws but defensive */ }
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * F5 (2026-04-28): lazy-allocate the engine-lifetime shared audio
+   * element + wire the engine-lifetime settings subscription.
+   *
+   * Called from `playAudioSynced` on first speech. Subsequent speeches
+   * just reuse the element. SSR-safe: skipped when `Audio` is undefined.
+   */
+  private _ensureSharedAudio(): HTMLAudioElement | null {
+    if (this._sharedAudio) return this._sharedAudio;
+    if (typeof Audio === 'undefined') return null;
+    const audio = new Audio();
+    this._sharedAudio = audio;
+
+    // Engine-lifetime subscription. Pushes settings updates to the
+    // shared element on every store change. Survives every play —
+    // unsubscribe only on dispose. AV-P0-1 / AV-P0-3 / AV-P2-12.
+    try {
+      this._settingsUnsub = this.settingsStore.subscribe(
+        (s: { playbackSpeed: number; audioVolume: number }) => {
+          if (!this._sharedAudio) return;
+          if (this._sharedAudio.playbackRate !== s.playbackSpeed) {
+            try { this._sharedAudio.playbackRate = s.playbackSpeed; } catch { /* ignore */ }
+          }
+          if (this._sharedAudio.volume !== s.audioVolume) {
+            try { this._sharedAudio.volume = s.audioVolume; } catch { /* ignore */ }
+          }
+        },
+      );
+    } catch {
+      /* older zustand / test mock without subscribe — non-fatal */
+    }
+
+    return audio;
+  }
+
+  /**
    * T0.3 — wipe ALL whiteboard annotations. Called by PlaybackEngine
    * from `loadScene` so a new scene never inherits the prior scene's
    * strokes or agent-drawn elements. Distinct from `wb_clear` (an
@@ -478,6 +682,29 @@ export class MAICActionEngine {
   dispose(): void {
     this.disposed = true;
     this.abortCurrentAction();
+    // F11 (2026-04-28): detach visibility listener to prevent leaks across
+    // engine recreations. addEventListener was paired in the constructor
+    // with the same bound handler reference, so removeEventListener resolves.
+    if (typeof document !== 'undefined' && typeof document.removeEventListener === 'function') {
+      document.removeEventListener('visibilitychange', this._onVisibilityChange);
+    }
+    // F5 (2026-04-28): tear down the engine-lifetime audio + settings sub.
+    // Detach handlers first so any buffered events are no-ops, then drop.
+    if (this._sharedAudio) {
+      this._sharedAudio.onplaying = null;
+      this._sharedAudio.onended = null;
+      this._sharedAudio.onerror = null;
+      try { this._sharedAudio.pause(); } catch { /* ignore */ }
+      if (this._sharedAudio.src && this._sharedAudio.src.startsWith('blob:')) {
+        try { URL.revokeObjectURL(this._sharedAudio.src); } catch { /* ignore */ }
+      }
+      this._sharedAudio.src = '';
+      this._sharedAudio = null;
+    }
+    if (this._settingsUnsub) {
+      try { this._settingsUnsub(); } catch { /* ignore */ }
+      this._settingsUnsub = null;
+    }
   }
 
   // ─── Main Dispatch ──────────────────────────────────────────────────
@@ -579,6 +806,11 @@ export class MAICActionEngine {
    */
   private async executeSpeech(action: SpeechAction): Promise<void> {
     const myToken = ++this.generationToken;
+    // F6 (2026-04-28): clear any stale pause-mid-fetch state from a prior
+    // action's lifecycle. resumeFromPauseMidFetch + abortCurrentAction
+    // already handle their respective paths; this is a defensive reset
+    // so the resume-waiter loop below starts with a clean flag.
+    this._pausedMidFetch = false;
     const { agentId, text, ssml } = action;
 
     // Resolve per-agent voice ID (explicit on action > agent.voiceId > legacy
@@ -639,18 +871,51 @@ export class MAICActionEngine {
     this.stageStore.getState().setSpeechFetchLoading(true);
 
     let blobUrl: string | null = null;
-    try {
-      blobUrl = await this.fetchTtsBlob(ssml || text, voiceId, myToken);
-    } finally {
-      if (myToken === this.generationToken) {
-        this.stageStore.getState().setSpeechFetchLoading(false);
+    // F6 (2026-04-28): wrap the fetch in a resume-waiter loop. If
+    // `pauseMidFetch()` aborts the in-flight fetch, fetchTtsBlob
+    // returns null AND `_pausedMidFetch === true`. Without bumping the
+    // token, we await the resume-waiter and re-fetch the same speech
+    // when the user clicks Play. abortCurrentAction also fires the
+    // waiter (via the bumped-token + cleared-waiter path), and the
+    // post-resume token check below bails the loop out cleanly.
+    // Capped at a small retry count to defend against a pathological
+    // pause-then-pause-again pattern.
+    let pauseResumeAttempts = 0;
+    const MAX_PAUSE_RESUME_ATTEMPTS = 5;
+    // Fetch loop: re-enter when a pause aborted us.
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      try {
+        blobUrl = await this.fetchTtsBlob(ssml || text, voiceId, myToken);
+      } finally {
+        if (myToken === this.generationToken) {
+          this.stageStore.getState().setSpeechFetchLoading(false);
+        }
       }
-    }
-    if (myToken !== this.generationToken) {
-      // Stale — abort happened after the fetch completed. Revoke the blob
-      // we decoded so the URL doesn't linger for the page's lifetime.
-      if (blobUrl) URL.revokeObjectURL(blobUrl);
-      return;
+      if (myToken !== this.generationToken) {
+        // Stale — abort happened after the fetch completed. Revoke the blob
+        // we decoded so the URL doesn't linger for the page's lifetime.
+        if (blobUrl) URL.revokeObjectURL(blobUrl);
+        return;
+      }
+      // F6: paused-mid-fetch case. fetchTtsBlob returned null AND we
+      // are NOT under a stale token (no abort). Await the resume-waiter
+      // and re-run the fetch when it fires.
+      if (
+        !blobUrl
+        && this._pausedMidFetch
+        && pauseResumeAttempts < MAX_PAUSE_RESUME_ATTEMPTS
+      ) {
+        pauseResumeAttempts++;
+        await new Promise<void>((r) => { this._resumeWaiter = r; });
+        // Re-check token after the await — abortCurrentAction may have
+        // bumped it and cleared the waiter to wake us.
+        if (myToken !== this.generationToken) return;
+        // Re-show the fetch-loading indicator for the retried fetch.
+        this.stageStore.getState().setSpeechFetchLoading(true);
+        continue;
+      }
+      break;
     }
     if (!blobUrl) {
       // 3. Final fallback: no audio at all. Fire subtitles now (nothing
@@ -865,14 +1130,34 @@ export class MAICActionEngine {
     // Already cached or in-flight — nothing to do.
     if (this.prefetchCache.has(key) || this.prefetchControllers.has(key)) return;
 
-    // LRU eviction when cache is full — drop the oldest entry.
+    // LRU eviction when cache is full — drop the oldest entry that is NOT
+    // currently in flight. F12 (2026-04-28): the previous implementation
+    // grabbed `keys().next().value` blindly, which could revoke a blob URL
+    // that an in-flight `.then()` was about to write into the cache. The
+    // race manifested as silent audio for the just-prefetched line because
+    // the URL it held was already revoked.
+    //
+    // Fix: scan keys in insertion order (oldest first) and skip any whose
+    // controller is still present in `prefetchControllers`. If every key is
+    // in flight (rare — the cache full of brand-new fetches), allow the
+    // cache to grow temporarily; the natural drain when those fetches
+    // settle will bring us back under the cap. Letting active fetches
+    // complete is strictly better than revoking their URLs.
     if (this.prefetchCache.size >= PREFETCH_CACHE_LIMIT) {
-      const oldestKey = this.prefetchCache.keys().next().value;
-      if (oldestKey) {
-        const oldUrl = this.prefetchCache.get(oldestKey);
-        if (oldUrl) URL.revokeObjectURL(oldUrl);
-        this.prefetchCache.delete(oldestKey);
+      let evictedKey: string | undefined;
+      for (const candidate of this.prefetchCache.keys()) {
+        if (!this.prefetchControllers.has(candidate)) {
+          evictedKey = candidate;
+          break;
+        }
       }
+      if (evictedKey !== undefined) {
+        const oldUrl = this.prefetchCache.get(evictedKey);
+        if (oldUrl) URL.revokeObjectURL(oldUrl);
+        this.prefetchCache.delete(evictedKey);
+      }
+      // else: every entry is in flight — fall through and let the cache
+      // exceed its cap by one rather than corrupt an active fetch.
     }
 
     const controller = new AbortController();
@@ -1093,38 +1378,45 @@ export class MAICActionEngine {
         return;
       }
 
-      const audio = new Audio();
+      // F5 (2026-04-28): reuse the engine-lifetime shared audio element
+      // instead of allocating `new Audio()` per speech. The element is
+      // lazily allocated on first speech (so SSR / no-Audio-global tests
+      // still construct cleanly) and persists for the engine lifetime.
+      const audio = this._ensureSharedAudio();
+      if (!audio) {
+        // Audio global not available (SSR / locked-down env) — degrade
+        // to a sub-tick resolve so the caller isn't left hanging.
+        resolve();
+        return;
+      }
+      // Detach any handlers left over from a prior speech (defensive —
+      // abortCurrentAction also clears them, but a clean onended path
+      // does not). Revoke the previous blob URL if any so we don't leak.
+      audio.onplaying = null;
+      audio.onended = null;
+      audio.onerror = null;
+      if (audio.src && audio.src.startsWith('blob:') && audio.src !== src) {
+        try { URL.revokeObjectURL(audio.src); } catch { /* ignore */ }
+      }
       this.audioElement = audio;
       this.audioResolve = resolve;
+      // F9 (2026-04-28): pin the resolve to the action's token. abortCurrentAction
+      // captures the pre-bump token and only fires this resolve when the tokens
+      // match — protects against double-fire when a play().catch reaction
+      // returns early (its existing token check skips before nulling) and
+      // leaves the field non-null at the wrong generation.
+      this.audioResolveToken = token;
 
       audio.volume = volume;
       audio.playbackRate = playbackRate;
 
-      // AV-P0-1 (2026-04-24): live-sync speed + volume to this in-flight
-      // audio element. Without this, dragging the speed slider to 2×
-      // mid-speech keeps the CURRENT speech at 1× until it ends. Same for
-      // mute. We subscribe to the settings store for the element's
-      // lifetime and unsubscribe in each terminal handler (onended,
-      // onerror, play().catch) + abortCurrentAction via audioResolve.
-      let settingsUnsub: (() => void) | null = null;
-      try {
-        settingsUnsub = this.settingsStore.subscribe((s: { playbackSpeed: number; audioVolume: number }) => {
-          // Guard against the element being torn down between the store
-          // dispatch and the callback running.
-          if (this.audioElement !== audio) return;
-          if (audio.playbackRate !== s.playbackSpeed) {
-            try { audio.playbackRate = s.playbackSpeed; } catch { /* ignore */ }
-          }
-          if (audio.volume !== s.audioVolume) {
-            try { audio.volume = s.audioVolume; } catch { /* ignore */ }
-          }
-        });
-      } catch {
-        /* older zustand / test mock without subscribe — non-fatal */
-      }
-      const cleanup = () => {
-        if (settingsUnsub) { try { settingsUnsub(); } catch { /* ignore */ } settingsUnsub = null; }
-      };
+      // F5 (2026-04-28): the per-play settings subscription is gone —
+      // `_ensureSharedAudio` wired an engine-lifetime subscription that
+      // pushes settings updates to `_sharedAudio` for as long as the
+      // engine lives. Mid-speech speed/volume slider drags still work
+      // (AV-P0-1 / AV-P0-3 / AV-P2-12) without per-play sub/unsub
+      // churn. The terminal handlers no longer carry a `cleanup()` for
+      // the subscription.
 
       audio.onplaying = () => {
         if (token !== this.generationToken) {
@@ -1133,7 +1425,6 @@ export class MAICActionEngine {
           } catch {
             /* ignore */
           }
-          cleanup();
           return;
         }
         // Audio has actually started playing. If subtitles were NOT
@@ -1149,32 +1440,33 @@ export class MAICActionEngine {
       };
 
       audio.onended = () => {
-        cleanup();
         if (token !== this.generationToken) return;
         // T0.2 — hold the bubble on the last line between speakers.
         // Only clear `isSpeaking` (via onSpeechEnd); don't null the
         // speaker/text. Next action's onSpeechStart will overwrite.
         this.onSpeechEnd?.();
-        // Clear the audioElement reference so hasActiveAudio() returns false.
+        // F5 (2026-04-28): null `audioElement` (the "currently bound"
+        // alias) so `hasActiveAudio()` returns false. `_sharedAudio`
+        // stays — next speech reuses it.
         this.audioElement = null;
         this.audioResolve = null;
+        this.audioResolveToken = null;
         resolve();
       };
 
       audio.onerror = () => {
-        cleanup();
         if (token !== this.generationToken) return;
         // Fail-open: advance playback so one broken audio doesn't hang the
         // whole classroom. Do not flash subtitles for audio that never started.
         this.onSpeechEnd?.();
         this.audioElement = null;
         this.audioResolve = null;
+        this.audioResolveToken = null;
         resolve();
       };
 
       audio.src = src;
       audio.play().catch((err) => {
-        cleanup();
         if (token !== this.generationToken) return;
         // Distinguish autoplay-block (NotAllowedError) from decode errors.
         // Autoplay block is the leading cause of "classroom plays with zero
@@ -1195,6 +1487,7 @@ export class MAICActionEngine {
         this.onSpeechEnd?.();
         this.audioElement = null;
         this.audioResolve = null;
+        this.audioResolveToken = null;
         resolve();
       });
     });
@@ -1356,6 +1649,10 @@ export class MAICActionEngine {
       // awaiting playback engine immediately (rather than waiting the full
       // reading duration).
       this.audioResolve = resolve;
+      // F9 (2026-04-28): pin the resolve to this fallback's token so the
+      // abort path's pre-bump-token guard fires it correctly. Same shape
+      // as the live-audio path in playAudioSynced.
+      this.audioResolveToken = token;
 
       const ms = stampedDurationMs && stampedDurationMs > 0
         ? stampedDurationMs
@@ -1369,6 +1666,7 @@ export class MAICActionEngine {
         this.onSpeechEnd?.();
         this.readingTimer = null;
         this.audioResolve = null;
+        this.audioResolveToken = null;
         resolve();
       }, ms);
       // agentId unused now that executeSpeech fires subtitles eagerly — keep
@@ -1780,18 +2078,20 @@ export class MAICActionEngine {
     this.effectTimers.push(timer);
   }
 
-  private async executePause(action: PauseAction): Promise<void> {
-    const playbackSpeed = this.settingsStore.getState().playbackSpeed;
-    // CG-P1-3 (2026-04-27): cap inter-action pauses at 100ms. The action
-    // generator emits `{type: "pause", duration: 200}` after every speaker
-    // handoff (per the prompt directive in maic_generation_service.py)
-    // which compounds with the per-speech audio decode latency to produce
-    // a noticeable 250-1000ms dead-air gap between speakers. 100ms keeps
-    // a perceptible "breath" beat without breaking conversational rhythm.
-    // Existing classrooms get shorter gaps retroactively without a regen.
-    const MAX_PAUSE_MS = 100;
-    const clamped = Math.min(action.duration, MAX_PAUSE_MS);
-    await delay(clamped / playbackSpeed);
+  // F7 (2026-04-28, wave 3): the OpenMAIC reference engine has no `pause`
+  // action — natural TTS cadence and the per-action async tick already give
+  // listeners the breath they need. Earlier we clamped to 100ms (CG-P1-3)
+  // but even that compounded with audio-decode latency into a perceptible
+  // gap. This method is now a no-op so existing classrooms whose stored
+  // JSON contains `{type:"pause"}` actions still match the dispatch switch
+  // (no "unknown action" warnings) and deserialization keeps working —
+  // they simply skip without waiting. The `PauseAction` type stays in the
+  // union (see types/maic-actions.ts — deprecated; engine no-ops it). The
+  // backend prompt directive that emits these actions is queued for
+  // removal in a follow-up (apps/courses/maic_generation_service.py:2120,
+  // 2144, 2190, 2435, 2467).
+  private async executePause(_action: PauseAction): Promise<void> {
+    return;
   }
 
   private async executeTransition(action: TransitionAction): Promise<void> {

@@ -12,8 +12,10 @@ from rest_framework.pagination import PageNumberPagination
 from django.shortcuts import get_object_or_404
 from utils.decorators import admin_only, tenant_required, teacher_or_admin
 from utils.audit import log_audit
-from .models import Course, Module, Content
+from .models import Course, Module, Content, TeacherGroup
+from apps.users.models import User as _User
 from .serializers import (
+    ACTIVE_TEACHER_FILTERS,
     CourseListSerializer, CourseDetailSerializer,
     ModuleSerializer, CreateModuleSerializer,
     ContentSerializer, CreateContentSerializer
@@ -127,7 +129,23 @@ def course_list_create(request):
             'tenant', 'created_by'
         ).prefetch_related(
             'assigned_teachers',
-            'assigned_groups',
+            # Prefetch assigned groups AND their active-teacher members in a single
+            # extra query so the serializer's get_assigned_teacher_count never
+            # issues a per-course COUNT (eliminates N+1 for group-assigned courses).
+            Prefetch(
+                'assigned_groups',
+                queryset=TeacherGroup.objects.prefetch_related(
+                    Prefetch(
+                        'members',
+                        # ACTIVE_TEACHER_FILTERS keeps this predicate in sync
+                        # with the DB-fallback in serializers.get_assigned_teacher_count.
+                        queryset=_User.objects.filter(
+                            **ACTIVE_TEACHER_FILTERS,
+                        ).only('id'),
+                        to_attr='_active_teachers',
+                    )
+                ),
+            ),
         ).annotate(
             # Precompute counts to eliminate N+1 queries in CourseListSerializer
             _module_count=Count(
@@ -170,8 +188,7 @@ def course_list_create(request):
 
         # Pre-compute the tenant-wide teacher count once (used by CourseListSerializer
         # for courses with assigned_to_all=True, avoiding N+1 per-course queries).
-        from apps.users.models import User as UserModel
-        tenant_teacher_count = UserModel.objects.filter(
+        tenant_teacher_count = _User.objects.filter(
             tenant=request.tenant,
             role='TEACHER',
             is_active=True,

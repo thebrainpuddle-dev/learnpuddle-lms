@@ -210,6 +210,10 @@ class Content(SoftDeleteMixin, models.Model):
         ('AI_CLASSROOM', 'AI Classroom'),
         ('CHATBOT', 'AI Chatbot'),
         ('SCORM', 'SCORM Package'),
+        # TASK-043 (2026-04-28): Quiz content backed by QuizConfig + QuestionBank.
+        # A QuizConfig row is created lazily on first admin access via
+        # GET /api/v1/assessments/quiz-config/<content_id>/.
+        ('QUIZ', 'Quiz'),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

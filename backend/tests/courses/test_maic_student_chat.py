@@ -76,9 +76,15 @@ def ai_config(tenant):
 
 @pytest.fixture
 def grade(tenant):
-    from apps.academics.models import Grade
+    from apps.academics.models import Grade, GradeBand
+    band, _ = GradeBand.all_objects.get_or_create(
+        tenant=tenant,
+        name="High School",
+        defaults={"short_code": "HS", "order": 1},
+    )
     return Grade.objects.create(
         tenant=tenant,
+        grade_band=band,
         name="Grade 9",
         short_code="G9",
         order=9,
@@ -134,6 +140,10 @@ SECRET_SCENE = "PRIVATE-SCENE-B-DO-NOT-LEAK"
 
 
 def _make_classroom(tenant, teacher, *, title, topic, agent, scene, **kwargs):
+    """PERF-P0-4 cutover 2026-04-26: write scenes/audioManifest to shards
+    instead of legacy ``content`` JSONField, so the student-chat endpoint
+    (which reads from ``content_scenes`` directly post-cutover) sees the
+    seeded scene titles."""
     from apps.courses.maic_models import MAICClassroom
     defaults = dict(
         tenant=tenant,
@@ -143,10 +153,8 @@ def _make_classroom(tenant, teacher, *, title, topic, agent, scene, **kwargs):
         topic=topic,
         is_public=False,
         config={"agents": [{"name": agent, "role": "professor"}]},
-        content={
-            "audioManifest": {"status": "ready"},
-            "scenes": [{"title": scene}],
-        },
+        content_scenes=[{"title": scene}],
+        content_meta={"audioManifest": {"status": "ready"}},
     )
     defaults.update(kwargs)
     return MAICClassroom.objects.create(**defaults)

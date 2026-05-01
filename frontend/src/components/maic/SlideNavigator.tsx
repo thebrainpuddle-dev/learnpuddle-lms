@@ -88,6 +88,15 @@ export const SlideNavigator = React.memo(function SlideNavigator({
     ? Math.max(0, currentSlideIndex - activeScene.startSlide) + 1
     : 0;
 
+  // Position of the active scene within navScenes (slide-bearing scenes
+  // only). Without this, the counter reads the raw `sceneIndex` from the
+  // unfiltered `scenes` array and mixes it with `navScenes.length` — e.g.
+  // "Scene 10 of 8" when quiz/pbl/interactive scenes are in the middle.
+  const activeNavPosition = useMemo(() => {
+    const idx = navScenes.findIndex((s) => s.sceneIndex === activeSceneIdx);
+    return idx >= 0 ? idx + 1 : null;
+  }, [navScenes, activeSceneIdx]);
+
   // Jump to scene by index. Prefer the engine-aware seek provided by
   // Stage (stops the engine atomically before the store update) so
   // pressing Play right after a chip click always plays from action 0
@@ -145,7 +154,14 @@ export const SlideNavigator = React.memo(function SlideNavigator({
     [handlePrev, handleNext, isPlaying, setPlaying, onPlayPause],
   );
 
+  // Hide the navigator entirely when:
+  //   1. No slide-bearing scenes exist at all (nothing to chip), OR
+  //   2. The active scene isn't slide-bearing (quiz / pbl / interactive) —
+  //      `activeNavPosition` is null and the counter would otherwise read
+  //      "Scene – of N", a confusing stale placeholder. See FX-3 in the
+  //      2026-04-29 bundle review.
   if (navScenes.length === 0) return null;
+  if (activeNavPosition === null) return null;
 
   const isFirstScene = activeSceneIdx <= (navScenes[0]?.sceneIndex ?? 0);
   const isLastScene = activeSceneIdx >= (navScenes[navScenes.length - 1]?.sceneIndex ?? 0);
@@ -198,7 +214,7 @@ export const SlideNavigator = React.memo(function SlideNavigator({
           {activeScene ? activeScene.title : 'Classroom'}
         </div>
         <div className="text-[10px] text-gray-400">
-          Scene {activeSceneIdx + 1} of {navScenes.length}
+          Scene {activeNavPosition ?? '–'} of {navScenes.length}
           {activeScene && activeScene.slideCount > 1 && (
             <> · slide {slideInScene} of {activeScene.slideCount}</>
           )}

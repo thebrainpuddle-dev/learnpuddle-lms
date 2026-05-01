@@ -132,7 +132,7 @@ export const AIGeneratorJobsList: React.FC = () => {
       setJobs(data);
       setPage(1);
     } catch (err: any) {
-      setError(err?.response?.data?.detail ?? 'Failed to load jobs.');
+      setError(err?.response?.data?.error ?? err?.response?.data?.detail ?? 'Failed to load jobs.');
     } finally {
       setLoading(false);
     }
@@ -151,7 +151,7 @@ export const AIGeneratorJobsList: React.FC = () => {
       setJobToDelete(null);
       await loadJobs();
     } catch (err: any) {
-      toast.error('Delete failed', err?.response?.data?.detail ?? 'Please try again.');
+      toast.error('Delete failed', err?.response?.data?.error ?? err?.response?.data?.detail ?? 'Please try again.');
     } finally {
       setDeleting(false);
     }

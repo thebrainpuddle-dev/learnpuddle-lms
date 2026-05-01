@@ -259,6 +259,88 @@ def _assert_cert_validity_period(pem: str) -> None:
         )
 
 
+# SAML best-practice canonicalization + signing algorithms (matching what
+# Microsoft Entra/ADFS strict mode expects for SP-signed AuthnRequest /
+# LogoutResponse).
+SP_SIG_C14N = "http://www.w3.org/2001/10/xml-exc-c14n#"
+SP_SIG_ALG = "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"
+SP_DIGEST_ALG = "http://www.w3.org/2001/04/xmlenc#sha256"
+
+
+def sign_saml_xml(xml_string: str, *, sp_private_key_pem: str, sp_x509_cert_pem: str) -> str:
+    """Embed an enveloped XMLDSig over the root element of ``xml_string``.
+
+    Produces an enveloped signature with exclusive XML canonicalization
+    (``http://www.w3.org/2001/10/xml-exc-c14n#``) and ``rsa-sha256`` /
+    ``sha256`` digest — current SAML best-practice and what strict-mode
+    IdPs (Microsoft Entra/AzureAD strict, ADFS) require.
+
+    The ``ID`` attribute of the root element is referenced as the signed
+    fragment.  Returns a UTF-8 XML string with a ``<ds:Signature>`` child
+    inserted as the first element child of the root (per SAML §5).
+    """
+    if not sp_private_key_pem or not sp_x509_cert_pem:
+        raise SAMLValidationError(
+            "REJECT_SIGNATURE",
+            "sign_saml_xml called without both private key and certificate",
+        )
+    try:
+        from lxml import etree  # type: ignore
+        from signxml import XMLSigner, methods  # type: ignore
+        from signxml.algorithms import (  # type: ignore
+            CanonicalizationMethod,
+            DigestAlgorithm,
+            SignatureMethod,
+        )
+    except Exception as exc:  # pragma: no cover
+        raise SAMLValidationError(
+            "REJECT_SIGNATURE",
+            f"signxml unavailable — cannot sign SAML XML: {exc}",
+        )
+
+    raw = xml_string.encode("utf-8") if isinstance(xml_string, str) else xml_string
+    root = _parse_xml(raw)
+    root_id = root.get("ID")
+    if not root_id:
+        raise SAMLValidationError(
+            "REJECT_SIGNATURE",
+            "Cannot sign SAML XML: root element has no ID attribute",
+        )
+
+    signer = XMLSigner(
+        method=methods.enveloped,
+        signature_algorithm=SignatureMethod.RSA_SHA256,
+        digest_algorithm=DigestAlgorithm.SHA256,
+        c14n_algorithm=CanonicalizationMethod.EXCLUSIVE_XML_CANONICALIZATION_1_0,
+    )
+    # SAML §5.4.1: the Signature element MUST be the first child of the
+    # signed element.  signxml inserts the Signature as the last child by
+    # default; we relocate after signing.  We also pin the reference URI
+    # to the root ID so the signature covers exactly this AuthnRequest /
+    # LogoutResponse and verifiers don't have to guess.
+    try:
+        signed_root = signer.sign(
+            root,
+            key=sp_private_key_pem.encode("utf-8") if isinstance(sp_private_key_pem, str) else sp_private_key_pem,
+            cert=sp_x509_cert_pem,
+            reference_uri=f"#{root_id}",
+        )
+    except Exception as exc:
+        raise SAMLValidationError(
+            "REJECT_SIGNATURE", f"Failed to sign SAML XML: {exc}"
+        )
+
+    # Move the Signature element to the front (SAML positional requirement).
+    sig = signed_root.find("ds:Signature", NS)
+    if sig is not None and len(signed_root) and signed_root[0] is not sig:
+        signed_root.remove(sig)
+        signed_root.insert(0, sig)
+
+    return etree.tostring(signed_root, xml_declaration=True, encoding="utf-8").decode(
+        "utf-8"
+    )
+
+
 def _verify_xml_signature(signed_element, pem_certs: Iterable[str]) -> None:
     """Verify XMLDSig on ``signed_element`` against any of ``pem_certs``.
 
@@ -343,22 +425,9 @@ def verify_and_parse_response(
     if not response_id:
         raise SAMLValidationError("REJECT_MALFORMED", "Response missing ID")
 
-    if expected_destination:
-        destination = root.get("Destination", "")
-        # SECURITY: missing Destination is not acceptable — a response
-        # harvested from another SP could otherwise be replayed here.
-        if not destination:
-            raise SAMLValidationError(
-                "REJECT_AUDIENCE",
-                "SAML Response missing required Destination attribute",
-            )
-        if destination != expected_destination:
-            raise SAMLValidationError(
-                "REJECT_AUDIENCE",
-                f"Destination mismatch: {destination!r} != {expected_destination!r}",
-            )
-
     # Find the assertion element (support both encrypted & plain).
+    # We need the assertion BEFORE the signature check because the
+    # signature can be on either the Response or the Assertion.
     assertion = root.find("saml:Assertion", NS)
     if assertion is None:
         # EncryptedAssertion is unsupported in this minimal implementation.
@@ -376,6 +445,14 @@ def verify_and_parse_response(
     # ------------------------------------------------------------------
     # Signature verification — require signature on the Response *or* on
     # the Assertion (ideally both).  Unsigned messages are rejected.
+    #
+    # SECURITY (AUDIT-2026-04-26-PHASE3-3): the signature check MUST run
+    # before the Destination / AudienceRestriction / Conditions checks.
+    # Signature is the cryptographic gate; everything else is contextual.
+    # If we let Destination fire first, an unsigned response is logged as
+    # ``REJECT_AUDIENCE`` instead of ``REJECT_SIGNATURE`` — which silently
+    # under-counts failed-signature attempts on SOC dashboards and points
+    # admins triaging "broken IdP cert" alerts at the wrong subsystem.
     # ------------------------------------------------------------------
     normalized_certs = [_ensure_pem(c) for c in idp_certs_pem if c]
     if not normalized_certs:
@@ -396,6 +473,25 @@ def verify_and_parse_response(
         _verify_xml_signature(root, normalized_certs)
     if assertion_sig is not None:
         _verify_xml_signature(assertion, normalized_certs)
+
+    # ------------------------------------------------------------------
+    # Destination check — runs AFTER signature verification so that an
+    # unsigned response is correctly classified as REJECT_SIGNATURE.
+    # ------------------------------------------------------------------
+    if expected_destination:
+        destination = root.get("Destination", "")
+        # SECURITY: missing Destination is not acceptable — a response
+        # harvested from another SP could otherwise be replayed here.
+        if not destination:
+            raise SAMLValidationError(
+                "REJECT_AUDIENCE",
+                "SAML Response missing required Destination attribute",
+            )
+        if destination != expected_destination:
+            raise SAMLValidationError(
+                "REJECT_AUDIENCE",
+                f"Destination mismatch: {destination!r} != {expected_destination!r}",
+            )
 
     # ------------------------------------------------------------------
     # Conditions: NotBefore / NotOnOrAfter + AudienceRestriction
@@ -608,19 +704,25 @@ def build_logout_response(
     issuer: str,
     destination: str,
     status_code: str = "urn:oasis:names:tc:SAML:2.0:status:Success",
+    sp_private_key_pem: str = "",
+    sp_x509_cert_pem: str = "",
 ) -> str:
-    """Build a minimal unsigned SAML LogoutResponse XML string.
+    """Build a SAML LogoutResponse XML string, optionally SP-signed.
 
     Args:
         in_response_to: The ID of the LogoutRequest this is responding to.
         issuer: SP entity ID (``<saml:Issuer>``).
         destination: IdP SLO URL that will receive the response.
         status_code: SAML status code URI (default: Success).
+        sp_private_key_pem: PEM private key.  When supplied with
+            ``sp_x509_cert_pem`` the response is enveloped-signed using
+            exclusive XML canonicalization + ``rsa-sha256``.  When empty
+            the response is emitted unsigned (backwards-compatible
+            behaviour for IdPs that don't require a signed LogoutResponse).
+        sp_x509_cert_pem: PEM SP certificate matching the private key.
 
     Returns:
-        UTF-8 XML string.  Signing is not currently performed; if your IdP
-        requires signed LogoutResponses, add ``sp_x509_cert`` /
-        ``sp_private_key`` handling here.
+        UTF-8 XML string.
     """
     import uuid
 
@@ -631,7 +733,7 @@ def build_logout_response(
     # ``in_response_to`` originates from the parsed LogoutRequest ID attribute
     # and is attacker-controlled when the request is forged; the other values
     # are server-controlled but are escaped for defence-in-depth.
-    return (
+    xml = (
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
         "<samlp:LogoutResponse"
         " xmlns:samlp=\"urn:oasis:names:tc:SAML:2.0:protocol\""
@@ -647,6 +749,13 @@ def build_logout_response(
         "</samlp:Status>"
         "</samlp:LogoutResponse>"
     )
+    if sp_private_key_pem and sp_x509_cert_pem:
+        xml = sign_saml_xml(
+            xml,
+            sp_private_key_pem=sp_private_key_pem,
+            sp_x509_cert_pem=sp_x509_cert_pem,
+        )
+    return xml
 
 
 # ----------------------------------------------------------------------

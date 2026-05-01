@@ -161,6 +161,14 @@ export interface HighlightAction {
   duration?: number;
 }
 
+/**
+ * @deprecated F7 (2026-04-28, wave 3): the engine no-ops this action.
+ * Kept in the union so existing classrooms with stored `{type:"pause"}`
+ * actions still deserialize and match the dispatch switch (no "unknown
+ * action" warnings). The backend prompt directive that emits these
+ * actions is queued for removal in a follow-up; once removed and any
+ * cached scenes regenerated, this type can be deleted.
+ */
 export interface PauseAction {
   type: 'pause';
   duration: number;

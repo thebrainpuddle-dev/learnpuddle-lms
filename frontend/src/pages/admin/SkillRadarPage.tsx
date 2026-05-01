@@ -44,7 +44,8 @@ import { usePageTitle } from '../../hooks/usePageTitle';
 /** Pull stable, user-facing error text out of an unknown error. */
 function getErrorMessage(err: unknown, fallback: string): string {
   if (axios.isAxiosError(err)) {
-    const data = err.response?.data as { detail?: string } | undefined;
+    const data = err.response?.data as { detail?: string; error?: string } | undefined;
+    if (data?.error) return data.error;
     if (data?.detail) return data.detail;
     if (err.message) return err.message;
   }

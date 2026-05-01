@@ -42,9 +42,9 @@ export function ParentLoginPage() {
       setStatus('error');
       const message =
         (err as { response?: { data?: { detail?: string; error?: string } } })?.response
-          ?.data?.detail ||
-        (err as { response?: { data?: { detail?: string; error?: string } } })?.response
           ?.data?.error ||
+        (err as { response?: { data?: { detail?: string; error?: string } } })?.response
+          ?.data?.detail ||
         'Failed to send login link. Please try again.';
       setErrorMessage(message);
     }
@@ -70,9 +70,9 @@ export function ParentLoginPage() {
       setStatus('error');
       const message =
         (err as { response?: { data?: { detail?: string; error?: string } } })?.response
-          ?.data?.detail ||
-        (err as { response?: { data?: { detail?: string; error?: string } } })?.response
           ?.data?.error ||
+        (err as { response?: { data?: { detail?: string; error?: string } } })?.response
+          ?.data?.detail ||
         'Demo login failed. Make sure seed data is loaded.';
       setErrorMessage(message);
     }

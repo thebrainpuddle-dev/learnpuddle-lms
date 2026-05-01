@@ -12,7 +12,6 @@ Supports:
 import io
 import base64
 import logging
-import secrets
 from django.conf import settings
 from rest_framework import status
 from django.core.cache import cache
@@ -25,20 +24,35 @@ from rest_framework.throttling import ScopedRateThrottle
 class TwoFAVerifyThrottle(ScopedRateThrottle):
     scope = 'twofa_verify'
 from django_otp.plugins.otp_totp.models import TOTPDevice
-from django_otp.plugins.otp_static.models import StaticDevice, StaticToken
+from django_otp.plugins.otp_static.models import StaticDevice  # noqa: F401 — legacy fallback
+
+from apps.users.twofa_models import (
+    BackupCode,
+    create_encrypted_totp_device,
+    encrypted_provisioning_uri,
+    generate_hashed_backup_codes,
+    remaining_backup_codes,
+    verify_and_consume_backup_code,
+    verify_encrypted_totp,
+)
 
 logger = logging.getLogger(__name__)
 
 
-def get_qr_code_data_uri(device: TOTPDevice) -> str:
-    """Generate QR code as data URI for TOTP setup."""
+def get_qr_code_data_uri(device: TOTPDevice, provisioning_uri: str = None) -> str:
+    """Generate QR code as data URI for TOTP setup.
+
+    ``provisioning_uri`` may be passed explicitly for encryption-at-rest
+    devices (where ``device.config_url`` would derive the secret from
+    the sentinel ``bin_key``).  When omitted we fall back to the
+    legacy in-row derivation for backwards compatibility.
+    """
     try:
         import qrcode
         from qrcode.image.pure import PyPNGImage
-        
-        # Generate provisioning URI
-        uri = device.config_url
-        
+
+        uri = provisioning_uri or device.config_url
+
         # Create QR code
         qr = qrcode.QRCode(
             version=1,
@@ -46,7 +60,7 @@ def get_qr_code_data_uri(device: TOTPDevice) -> str:
             box_size=10,
             border=4,
         )
-        qr.add_data(uri)
+        qr.add_data(uri)  # type: ignore[arg-type]
         qr.make(fit=True)
         
         # Create image
@@ -64,25 +78,13 @@ def get_qr_code_data_uri(device: TOTPDevice) -> str:
 
 
 def generate_backup_codes(user, count: int = 10) -> list[str]:
-    """Generate new backup codes for user."""
-    # Get or create static device
-    device, _ = StaticDevice.objects.get_or_create(
-        user=user,
-        name='backup',
-        defaults={'confirmed': True}
-    )
-    
-    # Remove old tokens
-    device.token_set.all().delete()
-    
-    # Generate new tokens
-    codes = []
-    for _ in range(count):
-        code = secrets.token_hex(4).upper()  # 8-character hex code
-        StaticToken.objects.create(device=device, token=code)
-        codes.append(code)
-    
-    return codes
+    """Generate new backup codes for user.
+
+    AUDIT-2026-04-26-PHASE3-7: codes are now stored as Django password
+    hashes via ``BackupCode``.  The plaintext returned here is the only
+    moment the codes exist outside the user's possession.
+    """
+    return generate_hashed_backup_codes(user, count=count)
 
 
 @api_view(['GET'])
@@ -99,11 +101,9 @@ def twofa_status(request):
     # Check for TOTP device
     totp_device = TOTPDevice.objects.filter(user=user, confirmed=True).first()
     
-    # Check for backup codes
-    static_device = StaticDevice.objects.filter(user=user, confirmed=True).first()
-    backup_codes_remaining = (
-        static_device.token_set.count() if static_device else 0
-    )
+    # Check for backup codes (hashed BackupCode rows; legacy StaticToken
+    # rows are migrated by 0015_migrate_legacy_2fa_to_encrypted).
+    backup_codes_remaining = remaining_backup_codes(user)
     
     # Check tenant requirement
     tenant = getattr(request, 'tenant', None)
@@ -144,21 +144,24 @@ def twofa_setup_start(request):
     
     # Remove any unconfirmed devices
     TOTPDevice.objects.filter(user=user, confirmed=False).delete()
-    
-    # Create new device
-    device = TOTPDevice.objects.create(
-        user=user,
+
+    # Create new device with the seed Fernet-encrypted at rest
+    # (AUDIT-2026-04-26-PHASE3-7).  ``secret_b32`` is the only place the
+    # plaintext secret exists in this request — it is shipped to the
+    # client for QR rendering and discarded.
+    device, secret_b32 = create_encrypted_totp_device(
+        user,
         name=f"{settings.OTP_TOTP_ISSUER} ({user.email})",
         confirmed=False,
     )
-    
-    # Generate QR code
-    qr_code = get_qr_code_data_uri(device)
-    
+
+    provisioning_uri = encrypted_provisioning_uri(device, secret_b32)
+    qr_code = get_qr_code_data_uri(device, provisioning_uri=provisioning_uri)
+
     return Response({
-        'secret': base64.b32encode(device.bin_key).decode('utf-8'),
+        'secret': secret_b32,
         'qr_code': qr_code,
-        'provisioning_uri': device.config_url,
+        'provisioning_uri': provisioning_uri,
         'device_id': str(device.id),
     })
 
@@ -194,13 +197,13 @@ def twofa_setup_confirm(request):
             status=status.HTTP_400_BAD_REQUEST
         )
     
-    # Verify code
-    if not device.verify_token(code):
+    # Verify code via the encryption-at-rest wrapper.
+    if not verify_encrypted_totp(device, code):
         return Response(
             {'error': 'Invalid code. Please try again.'},
             status=status.HTTP_400_BAD_REQUEST
         )
-    
+
     # Confirm device
     device.confirmed = True
     device.save()
@@ -258,19 +261,19 @@ def twofa_disable(request):
             status=status.HTTP_400_BAD_REQUEST
         )
     
-    # Check TOTP code
-    if not totp_device.verify_token(code):
+    # Check TOTP code (via encrypted-at-rest wrapper)
+    if not verify_encrypted_totp(totp_device, code):
         # Try backup code
-        static_device = StaticDevice.objects.filter(user=user).first()
-        if not static_device or not static_device.verify_token(code):
+        if not verify_and_consume_backup_code(user, code):
             return Response(
                 {'error': 'Invalid verification code'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-    
-    # Delete all OTP devices
+
+    # Delete all OTP devices and backup codes
     TOTPDevice.objects.filter(user=user).delete()
     StaticDevice.objects.filter(user=user).delete()
+    BackupCode.objects.filter(user=user).delete()
     
     logger.info(f"2FA disabled for user {user.email}")
     
@@ -303,13 +306,13 @@ def twofa_regenerate_backup_codes(request):
             status=status.HTTP_400_BAD_REQUEST
         )
     
-    # Verify TOTP code
-    if not totp_device.verify_token(code):
+    # Verify TOTP code (encryption-at-rest wrapper)
+    if not verify_encrypted_totp(totp_device, code):
         return Response(
             {'error': 'Invalid verification code'},
             status=status.HTTP_400_BAD_REQUEST
         )
-    
+
     # Generate new backup codes
     backup_codes = generate_backup_codes(user)
     
@@ -319,6 +322,83 @@ def twofa_regenerate_backup_codes(request):
         'backup_codes': backup_codes,
         'warning': 'Old backup codes have been invalidated. Save these new codes securely.',
     })
+
+
+# ---------------------------------------------------------------------------
+# Per-account 2FA lockout (AUDIT-2026-04-26-PHASE3-8)
+# ---------------------------------------------------------------------------
+#
+# The bare-bones IP throttle on twofa_verify can be bypassed by an attacker
+# who rotates source IPs.  These constants drive a defence-in-depth lockout
+# that is keyed by user_id (and additionally by IP) and persisted in the
+# Django cache so it survives across distinct challenge_tokens.
+#
+# Threshold: 5 failed attempts → lock for ``TWOFA_LOCKOUT_TTL`` seconds.
+TWOFA_MAX_ATTEMPTS = 5
+TWOFA_CHALLENGE_ATTEMPT_TTL = 10 * 60   # 10 min — same as challenge_token TTL
+TWOFA_LOCKOUT_TTL = 15 * 60             # 15 min per (user, IP)
+
+
+def _client_ip(request) -> str:
+    """Best-effort IP extraction; matches DRF's default behaviour."""
+    xff = request.META.get('HTTP_X_FORWARDED_FOR', '')
+    if xff:
+        return xff.split(',')[0].strip()
+    return request.META.get('REMOTE_ADDR', '0.0.0.0')
+
+
+def _twofa_lockout_key(user_id, ip: str) -> str:
+    return f"2fa_lockout:{user_id}:{ip}"
+
+
+def _twofa_attempts_key(challenge_token: str) -> str:
+    return f"2fa_attempts:{challenge_token}"
+
+
+def _is_locked_out(user_id, ip: str) -> bool:
+    return bool(cache.get(_twofa_lockout_key(user_id, ip)))
+
+
+def _register_failed_attempt(challenge_token: str, user_id, ip: str) -> bool:
+    """Record a failed verify attempt.
+
+    Returns ``True`` when the lockout threshold has just been crossed
+    (caller should issue a 429 and destroy the challenge_token).
+    """
+    # Per-challenge counter — destroyed when the challenge_token is invalidated.
+    chal_key = _twofa_attempts_key(challenge_token)
+    chal_count = cache.get(chal_key, 0) + 1
+    cache.set(chal_key, chal_count, timeout=TWOFA_CHALLENGE_ATTEMPT_TTL)
+
+    # Per-user/IP counter — survives a fresh challenge_token, so an attacker
+    # who burns one challenge then password-re-auths is still locked.
+    user_key = f"2fa_attempts_user:{user_id}:{ip}"
+    user_count = cache.get(user_key, 0) + 1
+    cache.set(user_key, user_count, timeout=TWOFA_LOCKOUT_TTL)
+
+    if chal_count >= TWOFA_MAX_ATTEMPTS or user_count >= TWOFA_MAX_ATTEMPTS:
+        cache.set(
+            _twofa_lockout_key(user_id, ip), True, timeout=TWOFA_LOCKOUT_TTL
+        )
+        return True
+    return False
+
+
+def _clear_attempts(challenge_token: str, user_id, ip: str) -> None:
+    """Reset all counters after a successful verify."""
+    cache.delete(_twofa_attempts_key(challenge_token))
+    cache.delete(f"2fa_attempts_user:{user_id}:{ip}")
+    cache.delete(_twofa_lockout_key(user_id, ip))
+
+
+def _lockout_response():
+    return Response(
+        {
+            'detail': 'Too many 2FA attempts. Sign in again.',
+            'code': 'too_many_2fa_attempts',
+        },
+        status=status.HTTP_429_TOO_MANY_REQUESTS,
+    )
 
 
 @api_view(['POST'])
@@ -338,6 +418,13 @@ def twofa_verify(request):
     }
 
     Returns JWT tokens on success.
+
+    Security (AUDIT-2026-04-26-PHASE3-8):
+      * Per-challenge_token attempt counter — at 5 wrong codes the challenge
+        is destroyed and the endpoint returns 429.
+      * Per-(user_id, IP) lockout counter — survives fresh challenge_tokens
+        so an attacker who password-re-auths after burning a challenge stays
+        locked for 15 minutes.
     """
     from apps.users.models import User
     from rest_framework_simplejwt.tokens import RefreshToken
@@ -360,6 +447,16 @@ def twofa_verify(request):
             status=status.HTTP_400_BAD_REQUEST
         )
 
+    ip = _client_ip(request)
+
+    # Per-account lockout — short-circuit BEFORE consulting the OTP devices,
+    # so the attacker can't probe whether any code matches once locked.
+    if _is_locked_out(user_id, ip):
+        # Defensive: also destroy the challenge so a stuck client doesn't
+        # keep hammering the same key after the lockout TTL expires.
+        cache.delete(cache_key)
+        return _lockout_response()
+
     try:
         user = User.objects.get(id=user_id, is_active=True)
     except User.DoesNotExist:
@@ -368,30 +465,49 @@ def twofa_verify(request):
             status=status.HTTP_400_BAD_REQUEST
         )
 
-    # Verify TOTP code
+    # Verify TOTP code (encryption-at-rest wrapper)
     totp_device = TOTPDevice.objects.filter(user=user, confirmed=True).first()
-    if totp_device and totp_device.verify_token(code):
-        # Delete the challenge token after successful use
+    if totp_device and verify_encrypted_totp(totp_device, code):
+        # Successful: reset attempt counters and consume the challenge.
+        _clear_attempts(challenge_token, user_id, ip)
         cache.delete(cache_key)
-        # Generate tokens
         refresh = RefreshToken.for_user(user)
         return Response({
             'access': str(refresh.access_token),
             'refresh': str(refresh),
         })
 
-    # Try backup code
-    static_device = StaticDevice.objects.filter(user=user).first()
-    if static_device and static_device.verify_token(code):
-        # Delete the challenge token after successful use
+    # Try backup code (hashed, single-use BackupCode rows).  Legacy
+    # StaticToken plaintext fallback is preserved for installations
+    # that have not yet run the data migration.
+    if verify_and_consume_backup_code(user, code):
+        _clear_attempts(challenge_token, user_id, ip)
         cache.delete(cache_key)
-        # Generate tokens
         refresh = RefreshToken.for_user(user)
         return Response({
             'access': str(refresh.access_token),
             'refresh': str(refresh),
             'backup_code_used': True,
         })
+
+    static_device = StaticDevice.objects.filter(user=user).first()
+    if static_device and static_device.verify_token(code):
+        _clear_attempts(challenge_token, user_id, ip)
+        cache.delete(cache_key)
+        refresh = RefreshToken.for_user(user)
+        return Response({
+            'access': str(refresh.access_token),
+            'refresh': str(refresh),
+            'backup_code_used': True,
+        })
+
+    # Wrong code — register the failure.  When the threshold is reached
+    # the per-(user, IP) lockout is set; the *current* response is still
+    # 400 ("Invalid verification code") so the user who simply mistyped
+    # the 5th code is not whip-sawed into a different error mid-attempt.
+    # The *next* request will resolve the still-live challenge, hit the
+    # lockout gate above, destroy the challenge, and return 429.
+    _register_failed_attempt(challenge_token, user_id, ip)
 
     return Response(
         {'error': 'Invalid verification code'},

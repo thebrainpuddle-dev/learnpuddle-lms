@@ -53,11 +53,19 @@ from apps.courses.maic_generation_service import (
     AGENT_VOICE_MAP,
 )
 from apps.courses.maic_voices import AZURE_IN_VOICES, pick_fallback_voice
-from apps.courses.image_service import fetch_scene_image
-from apps.courses.content_guardrails import validate_topic, validate_pdf_content, validate_chat_message
+
+# CG-P1-7: ``fetch_scene_image`` import dropped — view layer no longer fetches
+# images synchronously.  Image fetching lives in
+# ``apps.courses.maic_tasks.fill_classroom_images`` (Celery task) only.
+from apps.courses.content_guardrails import (
+    validate_topic,
+    validate_pdf_content,
+    validate_chat_message,
+)
 from apps.courses._log_helpers import MAICPhase, log_extra
 from utils.decorators import teacher_or_admin, student_or_admin, tenant_required, check_feature
 from utils.audit import log_audit
+
 # TEST-P1-10: Prometheus counter for classroom-detail polling rate.
 from utils.metrics import maic_classroom_polls_total
 
@@ -92,9 +100,10 @@ def _extract_generation_context(body: dict, request) -> dict:
     """
     grade_level = str(body.get("grade_level") or body.get("gradeLevel") or "").strip()
     subject = str(body.get("subject") or "").strip()
-    syllabus_board = str(
-        body.get("syllabus_board") or body.get("syllabusBoard") or "Generic"
-    ).strip() or "Generic"
+    syllabus_board = (
+        str(body.get("syllabus_board") or body.get("syllabusBoard") or "Generic").strip()
+        or "Generic"
+    )
 
     override = str(body.get("audience_role") or body.get("audienceRole") or "").strip().lower()
     if override in ("teacher", "student"):
@@ -123,13 +132,16 @@ _SIDECAR_CONNECT_TIMEOUT = 2
 # Internal helpers
 # ======================================================================
 
+
 def _get_ai_config(tenant):
     """Load and validate TenantAIConfig, return (config, error_response)."""
     try:
         config = TenantAIConfig.objects.get(tenant=tenant)
     except TenantAIConfig.DoesNotExist:
         return None, Response(
-            {"error": "AI Classroom is not configured. Ask your admin to set up AI Provider in Settings."},
+            {
+                "error": "AI Classroom is not configured. Ask your admin to set up AI Provider in Settings."
+            },
             status=status.HTTP_403_FORBIDDEN,
         )
     if not config.maic_enabled:
@@ -179,7 +191,11 @@ def _proxy_sse(request, path, config):
 
     try:
         upstream = http_requests.post(
-            url, data=body, headers=headers, stream=True, timeout=(_SIDECAR_CONNECT_TIMEOUT, 300),
+            url,
+            data=body,
+            headers=headers,
+            stream=True,
+            timeout=(_SIDECAR_CONNECT_TIMEOUT, 300),
         )
     except http_requests.ConnectionError:
         logger.error(
@@ -240,9 +256,13 @@ def _proxy_json(request, path, config, method="POST"):
 
     try:
         if method == "POST":
-            upstream = http_requests.post(url, data=body, headers=headers, timeout=(_SIDECAR_CONNECT_TIMEOUT, 120))
+            upstream = http_requests.post(
+                url, data=body, headers=headers, timeout=(_SIDECAR_CONNECT_TIMEOUT, 120)
+            )
         else:
-            upstream = http_requests.get(url, headers=headers, timeout=(_SIDECAR_CONNECT_TIMEOUT, 120))
+            upstream = http_requests.get(
+                url, headers=headers, timeout=(_SIDECAR_CONNECT_TIMEOUT, 120)
+            )
     except http_requests.ConnectionError:
         return Response(
             {"error": "AI Classroom service is temporarily unavailable."},
@@ -273,7 +293,9 @@ def _proxy_binary(request, path, config):
         body = "{}"
 
     try:
-        upstream = http_requests.post(url, data=body, headers=headers, timeout=(_SIDECAR_CONNECT_TIMEOUT, 120))
+        upstream = http_requests.post(
+            url, data=body, headers=headers, timeout=(_SIDECAR_CONNECT_TIMEOUT, 120)
+        )
     except (http_requests.ConnectionError, http_requests.Timeout):
         return HttpResponse(
             json.dumps({"error": "AI Classroom service unavailable."}),
@@ -288,81 +310,6 @@ def _proxy_binary(request, path, config):
     )
 
 
-def _fill_image_urls(data, *, image_provider: str = "disabled"):
-    """Fill empty image src fields with actual image URLs.
-
-    After scene content generation, image elements may have ``src: ""``
-    because the LLM cannot produce real URLs.  This post-processor walks
-    every slide and resolves empty ``src`` fields via the image service
-    (Imagen / Nano Banana / Unsplash / Pexels / Pollinations / placeholder).
-
-    When the tenant has `image_provider == "disabled"`, we skip the fetch
-    and instead stamp `meta.imageProviderDisabled = true` on each image
-    element so the frontend can render an honest "AI images disabled"
-    placeholder instead of a random Unsplash photo the school didn't ask
-    for.
-
-    NOTE (CG-P0-3): This function is still used for:
-    - Immediate security scrubbing of unsafe ``src`` values (SEC-P0-4)
-    - Stamping ``meta.imageProviderDisabled`` when provider is disabled
-    Image fetching for non-disabled providers is now deferred to the
-    ``fill_classroom_images`` Celery task (see _defer_image_fill).
-    """
-    disabled = (image_provider or "disabled").lower() == "disabled"
-    slides = data.get("slides", [])
-    for slide in slides:
-        for element in slide.get("elements", []):
-            if element.get("type") != "image":
-                continue
-            # SEC-P0-4 (2026-04-23): strip LLM-supplied `src` values that
-            # are not http(s) or site-relative. An LLM can emit
-            # `data:text/html;base64,...<script>` in src and the frontend
-            # <img> tag would execute it as HTML on some legacy render
-            # paths. Frontend does the same check (defense-in-depth); the
-            # backend strips before persist so DB never stores the payload.
-            existing_src = (element.get("src") or "").strip()
-            if existing_src:
-                if not (
-                    existing_src.startswith("https://")
-                    or existing_src.startswith("http://")
-                    or existing_src.startswith("/")
-                ):
-                    logger.warning(
-                        "dropping unsafe image src: %r (element=%r)",
-                        existing_src[:80], element.get("id"),
-                        extra=log_extra(
-                            MAICPhase.IMAGE_FETCH,
-                            metric="image_unsafe_src",
-                            outcome="dropped",
-                            element_id=element.get("id"),
-                        ),
-                    )
-                    element["src"] = ""
-                    existing_src = ""
-            if existing_src:
-                continue
-            if disabled:
-                meta = element.setdefault("meta", {})
-                meta["imageProviderDisabled"] = True
-                continue
-            keyword = element.get("content", "educational illustration")
-            try:
-                url = fetch_scene_image(keyword)
-                element["src"] = url
-            except Exception as exc:  # noqa: BLE001 — log + fail open
-                logger.warning(
-                    "image fill failed keyword=%r err=%s", keyword, exc,
-                    extra=log_extra(
-                        MAICPhase.IMAGE_FETCH,
-                        metric="image_fill_inline_error",
-                        outcome="exception",
-                        keyword=str(keyword)[:80],
-                        error_type=type(exc).__name__,
-                    ),
-                )
-    return data
-
-
 def _defer_image_fill(
     data,
     *,
@@ -372,8 +319,10 @@ def _defer_image_fill(
 ):
     """CG-P0-3: Security-scrub + disabled-stamp only; defer actual fetching.
 
-    Replaces the inline ``_fill_image_urls`` call at the per-scene-content
-    endpoints. The synchronous part is:
+    Replaced the inline ``_fill_image_urls`` call at the per-scene-content
+    endpoints (the duplicate view-side ``_fill_image_urls`` was deleted in
+    CG-P1-7 — this is now the only image-fill boundary in the view layer).
+    The synchronous part is:
       1. SEC-P0-4 unsafe-src strip (same as before — always runs).
       2. When provider is "disabled", stamp ``meta.imageProviderDisabled``.
       3. Leave ``src=""`` for non-disabled image elements (frontend renders
@@ -399,7 +348,8 @@ def _defer_image_fill(
     classroom does not exist in the caller's tenant, we silently no-op
     (matches the prior "best-effort" semantics for legitimate misses).
 
-    Returns ``data`` mutated in-place (same contract as ``_fill_image_urls``).
+    Returns ``data`` mutated in-place (same contract the legacy
+    ``_fill_image_urls`` had before CG-P1-7).
     """
     disabled = (image_provider or "disabled").lower() == "disabled"
     slides = data.get("slides", [])
@@ -419,7 +369,8 @@ def _defer_image_fill(
                 ):
                     logger.warning(
                         "dropping unsafe image src: %r (element=%r)",
-                        existing_src[:80], element.get("id"),
+                        existing_src[:80],
+                        element.get("id"),
                         extra=log_extra(
                             MAICPhase.DEFER_IMAGE_FILL,
                             classroom_id=classroom_id,
@@ -468,6 +419,7 @@ def _defer_image_fill(
             return data
         try:
             from apps.courses.maic_tasks import fill_classroom_images
+
             # Mark images_pending on the classroom row (best-effort).
             # Use a try/except so a missing classroom doesn't crash the endpoint.
             #
@@ -475,9 +427,7 @@ def _defer_image_fill(
             # body-supplied ``classroomId`` cannot be used to toggle/enqueue
             # work against another tenant's classroom.  ``tenant=None`` is
             # rejected above.
-            qs = MAICClassroom.all_objects.filter(
-                id=classroom_id, tenant=tenant
-            )
+            qs = MAICClassroom.all_objects.filter(id=classroom_id, tenant=tenant)
             updated = qs.update(images_pending=True)
             if not updated:
                 # No row matched — either classroom doesn't exist or belongs
@@ -493,8 +443,7 @@ def _defer_image_fill(
                 # is empty when the classroom_id matches no row at all
                 # (typo / stale UUID / hostile probe with random UUID).
                 victim_tenant_id = (
-                    MAICClassroom.all_objects
-                    .filter(id=classroom_id)
+                    MAICClassroom.all_objects.filter(id=classroom_id)
                     .values_list("tenant_id", flat=True)
                     .first()
                 )
@@ -510,9 +459,7 @@ def _defer_image_fill(
                         metric="image_fill_skipped",
                         outcome="cross_tenant",
                         tenant_id=str(getattr(tenant, "id", "")),
-                        victim_tenant_id=(
-                            str(victim_tenant_id) if victim_tenant_id else ""
-                        ),
+                        victim_tenant_id=(str(victim_tenant_id) if victim_tenant_id else ""),
                     ),
                 )
                 return data
@@ -536,7 +483,8 @@ def _defer_image_fill(
         except Exception as exc:  # noqa: BLE001 — deferred path, fail open
             logger.warning(
                 "could not enqueue fill_classroom_images for classroom_id=%s: %s",
-                classroom_id, exc,
+                classroom_id,
+                exc,
                 extra=log_extra(
                     MAICPhase.DEFER_IMAGE_FILL,
                     classroom_id=classroom_id,
@@ -552,6 +500,7 @@ def _defer_image_fill(
 # ======================================================================
 # Teacher Proxy Endpoints
 # ======================================================================
+
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
@@ -577,7 +526,9 @@ def teacher_maic_chat(request):
     preparse_cid = _preparse_body.get("classroomId") if isinstance(_preparse_body, dict) else None
     if preparse_cid:
         if not MAICClassroom.objects.filter(
-            pk=preparse_cid, tenant=request.tenant, creator=request.user,
+            pk=preparse_cid,
+            tenant=request.tenant,
+            creator=request.user,
         ).exists():
             return Response(
                 {"error": "Classroom not found."},
@@ -617,7 +568,9 @@ def teacher_maic_chat(request):
             # already rejected cross-owner IDs, but keep the filter here as
             # defense-in-depth against future refactors.
             classroom = MAICClassroom.objects.get(
-                pk=classroom_id, tenant=request.tenant, creator=request.user,
+                pk=classroom_id,
+                tenant=request.tenant,
+                creator=request.user,
             )
             classroom_title = classroom.title or classroom.topic
             agents = (classroom.config or {}).get("agents", [])
@@ -745,8 +698,9 @@ def teacher_maic_generate_scene_content(request):
         language=body.get("language", "en"),
         config=config,
         classroom_id=classroom_id,
-        # CG-P0-9: storage context for inline _fill_image_urls so Imagen
-        # bytes get persisted to /media instead of returned as a data: URL.
+        # CG-P0-9 / CG-P1-7: storage context still threaded for callers that
+        # may need it, but ``_fill_image_urls`` is now scrub-only — Imagen
+        # bytes are persisted by ``fill_classroom_images`` (Celery task).
         tenant_id=str(request.tenant.id) if request.tenant else None,
         scene_idx=scene_idx,
         **ctx,
@@ -852,6 +806,7 @@ def teacher_maic_generate_image(request):
 # Teacher Classroom CRUD
 # ======================================================================
 
+
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 @teacher_or_admin
@@ -860,7 +815,8 @@ def teacher_maic_generate_image(request):
 def teacher_maic_classroom_list(request):
     """List the current teacher's MAIC classrooms."""
     qs = MAICClassroom.objects.filter(
-        tenant=request.tenant, creator=request.user,
+        tenant=request.tenant,
+        creator=request.user,
     ).order_by("-updated_at")
 
     status_filter = request.query_params.get("status")
@@ -875,23 +831,29 @@ def teacher_maic_classroom_list(request):
 
     classrooms = []
     for c in qs:
-        classrooms.append({
-            "id": str(c.id),
-            "title": c.title,
-            "description": c.description,
-            "topic": c.topic,
-            "status": c.status,
-            "is_public": c.is_public,
-            "scene_count": c.scene_count,
-            "estimated_minutes": c.estimated_minutes,
-            "course_id": str(c.course_id) if c.course_id else None,
-            "assigned_sections": [
-                {"id": str(s.id), "name": s.name, "grade_name": s.grade.name if s.grade else None}
-                for s in c.assigned_sections.all()
-            ],
-            "created_at": c.created_at.isoformat(),
-            "updated_at": c.updated_at.isoformat(),
-        })
+        classrooms.append(
+            {
+                "id": str(c.id),
+                "title": c.title,
+                "description": c.description,
+                "topic": c.topic,
+                "status": c.status,
+                "is_public": c.is_public,
+                "scene_count": c.scene_count,
+                "estimated_minutes": c.estimated_minutes,
+                "course_id": str(c.course_id) if c.course_id else None,
+                "assigned_sections": [
+                    {
+                        "id": str(s.id),
+                        "name": s.name,
+                        "grade_name": s.grade.name if s.grade else None,
+                    }
+                    for s in c.assigned_sections.all()
+                ],
+                "created_at": c.created_at.isoformat(),
+                "updated_at": c.updated_at.isoformat(),
+            }
+        )
 
     return Response(classrooms)
 
@@ -910,12 +872,19 @@ def teacher_maic_classroom_create(request):
     # Check classroom limit
     try:
         config = TenantAIConfig.objects.get(tenant=request.tenant)
-        existing_count = MAICClassroom.objects.filter(
-            tenant=request.tenant, creator=request.user,
-        ).exclude(status="ARCHIVED").count()
+        existing_count = (
+            MAICClassroom.objects.filter(
+                tenant=request.tenant,
+                creator=request.user,
+            )
+            .exclude(status="ARCHIVED")
+            .count()
+        )
         if existing_count >= config.max_classrooms_per_teacher:
             return Response(
-                {"error": f"You have reached the maximum of {config.max_classrooms_per_teacher} classrooms."},
+                {
+                    "error": f"You have reached the maximum of {config.max_classrooms_per_teacher} classrooms."
+                },
                 status=status.HTTP_403_FORBIDDEN,
             )
     except TenantAIConfig.DoesNotExist:
@@ -925,6 +894,7 @@ def teacher_maic_classroom_create(request):
     course = None
     if course_id:
         from apps.courses.models import Course
+
         try:
             course = Course.objects.get(pk=course_id, tenant=request.tenant)
         except Course.DoesNotExist:
@@ -942,12 +912,15 @@ def teacher_maic_classroom_create(request):
         status="DRAFT",
     )
 
-    return Response({
-        "id": str(classroom.id),
-        "title": classroom.title,
-        "status": classroom.status,
-        "created_at": classroom.created_at.isoformat(),
-    }, status=status.HTTP_201_CREATED)
+    return Response(
+        {
+            "id": str(classroom.id),
+            "title": classroom.title,
+            "status": classroom.status,
+            "created_at": classroom.created_at.isoformat(),
+        },
+        status=status.HTTP_201_CREATED,
+    )
 
 
 @api_view(["GET"])
@@ -956,12 +929,21 @@ def teacher_maic_classroom_create(request):
 @tenant_required
 @check_feature("feature_maic")
 def teacher_maic_classroom_detail(request, classroom_id):
-    """Get a single classroom's metadata."""
+    """Get a single classroom's metadata.
+
+    WAVE-8-F1 (2026-04-28): the inline ``creator=request.user`` queryset
+    filter was replaced with the canonical ``_can_view_classroom`` gate
+    so the HTTP detail and WS consumer use a single source of truth.
+    Behavior change: SCHOOL_ADMIN / SUPER_ADMIN in the same tenant now
+    receive the row instead of a 404. Peer TEACHER / HOD / IB_COORDINATOR
+    are still rejected (now via the helper, returning 404 to avoid
+    leaking existence — same as the legacy filter behavior).
+    """
     try:
-        classroom = MAICClassroom.objects.get(
-            pk=classroom_id, tenant=request.tenant, creator=request.user,
-        )
+        classroom = MAICClassroom.objects.get(pk=classroom_id)
     except MAICClassroom.DoesNotExist:
+        return Response({"error": "Classroom not found."}, status=status.HTTP_404_NOT_FOUND)
+    if not _can_view_classroom(request.user, classroom):
         return Response({"error": "Classroom not found."}, status=status.HTTP_404_NOT_FOUND)
 
     # TEST-P1-10: per-poll Counter labelled by effective state. The FE polls
@@ -984,55 +966,62 @@ def teacher_maic_classroom_detail(request, classroom_id):
     #
     # Escape hatch: `?full=1` forces the full payload (used by admin tools
     # or one-shot backfill scripts).
-    want_full = (
-        request.query_params.get("full") == "1"
-        or classroom.status in ("READY", "FAILED", "ARCHIVED")
+    want_full = request.query_params.get("full") == "1" or classroom.status in (
+        "READY",
+        "FAILED",
+        "ARCHIVED",
     )
     # PERF-P0-4: use composed_content property which prefers shards over legacy field.
     content_payload = classroom.composed_content if want_full else {}
     audio_manifest = content_payload.get("audioManifest") if want_full else None
 
-    return Response({
-        "id": str(classroom.id),
-        "title": classroom.title,
-        "description": classroom.description,
-        "topic": classroom.topic,
-        "language": classroom.language,
-        "status": classroom.status,
-        "error_message": classroom.error_message,
-        "is_public": classroom.is_public,
-        "scene_count": classroom.scene_count,
-        "estimated_minutes": classroom.estimated_minutes,
-        "course_id": str(classroom.course_id) if classroom.course_id else None,
-        "assigned_sections": [
-            {"id": str(s.id), "name": s.name, "grade_name": s.grade.name if s.grade else None}
-            for s in sections
-        ],
-        "config": classroom.config,
-        # Full generated payload (agents, scenes, actions, slides, audioManifest).
-        # Populated only when status=READY/FAILED/ARCHIVED or ?full=1 is set —
-        # see PERF-P0-1 note above.
-        "content": content_payload,
-        "audioManifest": audio_manifest,
-        # Live generation progress — honest stats for the MAICPlayerPage
-        # progress UI. See MAICClassroom.GENERATION_PHASES for phase values.
-        "progress": {
-            "phase": classroom.generation_phase,
-            "phase_scene_index": classroom.phase_scene_index,
-            "scenes_ready": classroom.scenes_ready,
-            "expected_scenes": (classroom.config or {}).get("sceneCount"),
-            "started_at": classroom.started_at.isoformat() if classroom.started_at else None,
-            "last_progress_at": (
-                classroom.last_progress_at.isoformat() if classroom.last_progress_at else None
-            ),
-        },
-        # CG-P0-3: images_pending — True while the fill_classroom_images
-        # Celery task is in-flight. Frontend can show a loading indicator on
-        # image slots and re-fetch when this flips to False.
-        "images_pending": classroom.images_pending,
-        "created_at": classroom.created_at.isoformat(),
-        "updated_at": classroom.updated_at.isoformat(),
-    })
+    return Response(
+        {
+            "id": str(classroom.id),
+            "title": classroom.title,
+            "description": classroom.description,
+            "topic": classroom.topic,
+            "language": classroom.language,
+            "status": classroom.status,
+            "error_message": classroom.error_message,
+            "is_public": classroom.is_public,
+            "scene_count": classroom.scene_count,
+            "estimated_minutes": classroom.estimated_minutes,
+            "course_id": str(classroom.course_id) if classroom.course_id else None,
+            "assigned_sections": [
+                {"id": str(s.id), "name": s.name, "grade_name": s.grade.name if s.grade else None}
+                for s in sections
+            ],
+            "config": classroom.config,
+            # Full generated payload (agents, scenes, actions, slides, audioManifest).
+            # Populated only when status=READY/FAILED/ARCHIVED or ?full=1 is set —
+            # see PERF-P0-1 note above.
+            "content": content_payload,
+            "audioManifest": audio_manifest,
+            # Live generation progress — honest stats for the MAICPlayerPage
+            # progress UI. See MAICClassroom.GENERATION_PHASES for phase values.
+            "progress": {
+                "phase": classroom.generation_phase,
+                "phase_scene_index": classroom.phase_scene_index,
+                "scenes_ready": classroom.scenes_ready,
+                "expected_scenes": (classroom.config or {}).get("sceneCount"),
+                "started_at": classroom.started_at.isoformat() if classroom.started_at else None,
+                "last_progress_at": (
+                    classroom.last_progress_at.isoformat() if classroom.last_progress_at else None
+                ),
+            },
+            # CG-P0-3: images_pending — True while the fill_classroom_images
+            # Celery task is in-flight. Frontend can show a loading indicator on
+            # image slots and re-fetch when this flips to False.
+            "images_pending": classroom.images_pending,
+            # F2 (P0): per-element image-task store — let the FE hydrate its
+            # ``useMediaGenerationStore`` on mount with the authoritative
+            # task map BEFORE the WS connects. Empty dict for legacy rows.
+            "content_image_tasks": classroom.content_image_tasks or {},
+            "created_at": classroom.created_at.isoformat(),
+            "updated_at": classroom.updated_at.isoformat(),
+        }
+    )
 
 
 @api_view(["PATCH"])
@@ -1041,18 +1030,33 @@ def teacher_maic_classroom_detail(request, classroom_id):
 @tenant_required
 @check_feature("feature_maic")
 def teacher_maic_classroom_update(request, classroom_id):
-    """Update classroom metadata."""
+    """Update classroom metadata.
+
+    WAVE-8-F1 (2026-04-28): write-permission gate uses the canonical
+    ``_can_modify_classroom`` helper. SCHOOL_ADMIN / SUPER_ADMIN in the
+    same tenant may modify (oversight). Peer teachers are still rejected.
+    """
     try:
-        classroom = MAICClassroom.objects.get(
-            pk=classroom_id, tenant=request.tenant, creator=request.user,
-        )
+        classroom = MAICClassroom.objects.get(pk=classroom_id)
     except MAICClassroom.DoesNotExist:
+        return Response({"error": "Classroom not found."}, status=status.HTTP_404_NOT_FOUND)
+    if not _can_modify_classroom(request.user, classroom):
         return Response({"error": "Classroom not found."}, status=status.HTTP_404_NOT_FOUND)
 
     # PERF-P0-4: exclude "content" from the simple setattr loop; we handle it
     # separately by splitting into shards.
-    updatable = ["title", "description", "topic", "language", "status",
-                  "is_public", "scene_count", "estimated_minutes", "config", "error_message"]
+    updatable = [
+        "title",
+        "description",
+        "topic",
+        "language",
+        "status",
+        "is_public",
+        "scene_count",
+        "estimated_minutes",
+        "config",
+        "error_message",
+    ]
     updated_fields = []
     for field in updatable:
         if field in request.data:
@@ -1085,10 +1089,7 @@ def teacher_maic_classroom_update(request, classroom_id):
         # PERF-P0-4: read scenes from the shard we just populated above.
         scenes = classroom.content_scenes or []
         # Count scenes that have BOTH slides (content) and actions arrays
-        ready = sum(
-            1 for s in scenes
-            if s.get("slides") and s.get("actions") is not None
-        )
+        ready = sum(1 for s in scenes if s.get("slides") and s.get("actions") is not None)
         if ready and ready != classroom.scenes_ready:
             classroom.scenes_ready = ready
             updated_fields.append("scenes_ready")
@@ -1108,8 +1109,10 @@ def teacher_maic_classroom_update(request, classroom_id):
         section_ids = request.data["assigned_section_ids"]
         if isinstance(section_ids, list):
             from apps.academics.models import Section
+
             sections = Section.objects.filter(
-                id__in=section_ids, tenant=request.tenant,
+                id__in=section_ids,
+                tenant=request.tenant,
             )
             classroom.assigned_sections.set(sections)
 
@@ -1135,12 +1138,14 @@ def teacher_maic_classroom_progress(request, classroom_id):
     Always stamps ``last_progress_at=now()`` and, on first call,
     ``started_at=now()``. Transitioning phase to ``complete`` does NOT
     change status — the publish endpoint owns status transitions.
+
+    WAVE-8-F1 (2026-04-28): write gate via ``_can_modify_classroom``.
     """
     try:
-        classroom = MAICClassroom.objects.get(
-            pk=classroom_id, tenant=request.tenant, creator=request.user,
-        )
+        classroom = MAICClassroom.objects.get(pk=classroom_id)
     except MAICClassroom.DoesNotExist:
+        return Response({"error": "Classroom not found."}, status=status.HTTP_404_NOT_FOUND)
+    if not _can_modify_classroom(request.user, classroom):
         return Response({"error": "Classroom not found."}, status=status.HTTP_404_NOT_FOUND)
 
     body = request.data if isinstance(request.data, dict) else {}
@@ -1158,7 +1163,11 @@ def teacher_maic_classroom_progress(request, classroom_id):
         updated_fields.append("phase_scene_index")
 
     scenes_ready = body.get("scenes_ready")
-    if isinstance(scenes_ready, int) and scenes_ready >= 0 and scenes_ready != classroom.scenes_ready:
+    if (
+        isinstance(scenes_ready, int)
+        and scenes_ready >= 0
+        and scenes_ready != classroom.scenes_ready
+    ):
         classroom.scenes_ready = scenes_ready
         updated_fields.append("scenes_ready")
 
@@ -1172,13 +1181,15 @@ def teacher_maic_classroom_progress(request, classroom_id):
 
     classroom.save(update_fields=updated_fields)
 
-    return Response({
-        "phase": classroom.generation_phase,
-        "phase_scene_index": classroom.phase_scene_index,
-        "scenes_ready": classroom.scenes_ready,
-        "started_at": classroom.started_at.isoformat() if classroom.started_at else None,
-        "last_progress_at": classroom.last_progress_at.isoformat(),
-    })
+    return Response(
+        {
+            "phase": classroom.generation_phase,
+            "phase_scene_index": classroom.phase_scene_index,
+            "scenes_ready": classroom.scenes_ready,
+            "started_at": classroom.started_at.isoformat() if classroom.started_at else None,
+            "last_progress_at": classroom.last_progress_at.isoformat(),
+        }
+    )
 
 
 # ─── CG-P0-8: partial-classroom finalizer ────────────────────────────────────
@@ -1193,6 +1204,7 @@ def teacher_maic_classroom_progress(request, classroom_id):
 # This finalizer flips the row to READY when there's anything worth playing,
 # leveraging the per-scene snapshots we already saved. It does NOT regenerate
 # missing scenes — those would still need a fresh wizard run.
+
 
 def finalize_partial_classroom(classroom) -> dict:
     """Pure helper — flips a stalled classroom to READY when partial content is salvageable.
@@ -1241,13 +1253,15 @@ def finalize_partial_classroom(classroom) -> dict:
     if getattr(classroom, "error_message", ""):
         classroom.error_message = ""
 
-    classroom.save(update_fields=[
-        "status",
-        "scenes_ready",
-        "scene_count",
-        "error_message",
-        "updated_at",
-    ])
+    classroom.save(
+        update_fields=[
+            "status",
+            "scenes_ready",
+            "scene_count",
+            "error_message",
+            "updated_at",
+        ]
+    )
 
     return {
         "ok": True,
@@ -1267,12 +1281,14 @@ def teacher_maic_classroom_finalize_partial(request, classroom_id):
     whatever content was saved by the per-scene persistPartial path.
 
     Triggered from MAICPlayerPage's stall panel "Use what's saved" button.
+
+    WAVE-8-F1 (2026-04-28): write gate via ``_can_modify_classroom``.
     """
     try:
-        classroom = MAICClassroom.objects.get(
-            pk=classroom_id, tenant=request.tenant, creator=request.user,
-        )
+        classroom = MAICClassroom.objects.get(pk=classroom_id)
     except MAICClassroom.DoesNotExist:
+        return Response({"error": "Classroom not found."}, status=status.HTTP_404_NOT_FOUND)
+    if not _can_modify_classroom(request.user, classroom):
         return Response({"error": "Classroom not found."}, status=status.HTTP_404_NOT_FOUND)
 
     result = finalize_partial_classroom(classroom)
@@ -1287,12 +1303,15 @@ def teacher_maic_classroom_finalize_partial(request, classroom_id):
 @tenant_required
 @check_feature("feature_maic")
 def teacher_maic_classroom_delete(request, classroom_id):
-    """Delete (archive) a classroom."""
+    """Delete (archive) a classroom.
+
+    WAVE-8-F1 (2026-04-28): write gate via ``_can_modify_classroom``.
+    """
     try:
-        classroom = MAICClassroom.objects.get(
-            pk=classroom_id, tenant=request.tenant, creator=request.user,
-        )
+        classroom = MAICClassroom.objects.get(pk=classroom_id)
     except MAICClassroom.DoesNotExist:
+        return Response({"error": "Classroom not found."}, status=status.HTTP_404_NOT_FOUND)
+    if not _can_modify_classroom(request.user, classroom):
         return Response({"error": "Classroom not found."}, status=status.HTTP_404_NOT_FOUND)
 
     classroom.status = "ARCHIVED"
@@ -1317,11 +1336,18 @@ def teacher_maic_classroom_publish(request, classroom_id):
     carry ``audioUrl`` are skipped).
     """
     with transaction.atomic():
+        # WAVE-8-F1 (2026-04-28): write gate via ``_can_modify_classroom``.
+        # Row lock acquired BEFORE the permission check so concurrent
+        # publish attempts serialize regardless of who initiated them;
+        # the permission check then 404s anyone who shouldn't be here.
         try:
-            classroom = MAICClassroom.objects.select_for_update().get(
-                pk=classroom_id, tenant=request.tenant, creator=request.user,
-            )
+            classroom = MAICClassroom.objects.select_for_update().get(pk=classroom_id)
         except MAICClassroom.DoesNotExist:
+            return Response(
+                {"error": "Classroom not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        if not _can_modify_classroom(request.user, classroom):
             return Response(
                 {"error": "Classroom not found."},
                 status=status.HTTP_404_NOT_FOUND,
@@ -1349,9 +1375,7 @@ def teacher_maic_classroom_publish(request, classroom_id):
         # CG-P0-6 (2026-04-27): when agent.voiceId is missing, fall back via
         # `pick_fallback_voice` (cycles by agent_index) instead of hard-coding
         # Neerja for everyone — otherwise N agents collapse to one voice.
-        agent_index_by_id: dict[str, int] = {
-            a["id"]: i for i, a in enumerate(agents_list)
-        }
+        agent_index_by_id: dict[str, int] = {a["id"]: i for i, a in enumerate(agents_list)}
         total = 0
         for scene_idx, scene in enumerate(scenes):
             actions = scene.get("actions", [])
@@ -1396,14 +1420,11 @@ def teacher_maic_classroom_publish(request, classroom_id):
         classroom.content_scenes = scenes
         classroom.content_meta = meta
         classroom.status = "GENERATING"
-        classroom.save(
-            update_fields=[
-                "content_scenes", "content_meta", "status", "updated_at"
-            ]
-        )
+        classroom.save(update_fields=["content_scenes", "content_meta", "status", "updated_at"])
 
     # Enqueue after the transaction commits so the worker sees the new state
     from apps.courses.maic_tasks import pre_generate_classroom_tts
+
     pre_generate_classroom_tts.delay(str(classroom.id))
 
     return Response(
@@ -1617,6 +1638,7 @@ def teacher_maic_generate_agent_profiles(request):
 # Student Endpoints
 # ======================================================================
 
+
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 @student_or_admin
@@ -1632,22 +1654,27 @@ def student_maic_classroom_list(request):
     """
     from django.db.models import Q
 
-    qs = MAICClassroom.objects.filter(
-        tenant=request.tenant, status="READY",
-    ).filter(
-        # PERF-P0-4 cutover: gate on the ``content_meta`` shard rather
-        # than the legacy ``content`` blob. audioManifest lives in
-        # ``content_meta`` post-cutover; migration 0043 backfilled every
-        # existing row.
-        Q(content_meta__audioManifest__status="ready") |
-        Q(content_meta__audioManifest__status="partial")
-    ).order_by("-updated_at")
+    qs = (
+        MAICClassroom.objects.filter(
+            tenant=request.tenant,
+            status="READY",
+        )
+        .filter(
+            # PERF-P0-4 cutover: gate on the ``content_meta`` shard rather
+            # than the legacy ``content`` blob. audioManifest lives in
+            # ``content_meta`` post-cutover; migration 0043 backfilled every
+            # existing row.
+            Q(content_meta__audioManifest__status="ready")
+            | Q(content_meta__audioManifest__status="partial")
+        )
+        .order_by("-updated_at")
+    )
 
     student_section = getattr(request.user, "section_fk", None)
     if student_section:
         qs = qs.filter(
-            Q(is_public=True, assigned_sections__isnull=True) |  # public to all
-            Q(assigned_sections=student_section)                 # assigned to student's section
+            Q(is_public=True, assigned_sections__isnull=True)
+            | Q(assigned_sections=student_section)  # public to all  # assigned to student's section
         ).distinct()
     else:
         # Student without a section — only see fully public classrooms
@@ -1663,21 +1690,157 @@ def student_maic_classroom_list(request):
 
     classrooms = []
     for c in qs:
-        classrooms.append({
-            "id": str(c.id),
-            "title": c.title,
-            "description": c.description,
-            "topic": c.topic,
-            "scene_count": c.scene_count,
-            "estimated_minutes": c.estimated_minutes,
-            "course_id": str(c.course_id) if c.course_id else None,
-            "created_at": c.created_at.isoformat(),
-        })
+        classrooms.append(
+            {
+                "id": str(c.id),
+                "title": c.title,
+                "description": c.description,
+                "topic": c.topic,
+                "scene_count": c.scene_count,
+                "estimated_minutes": c.estimated_minutes,
+                "course_id": str(c.course_id) if c.course_id else None,
+                "created_at": c.created_at.isoformat(),
+            }
+        )
 
     return Response(classrooms)
 
 
-# ─── Student visibility helper ────────────────────────────────────────────────
+# ─── Visibility helpers ───────────────────────────────────────────────────────
+
+
+def _can_view_classroom(user, classroom) -> bool:
+    """Return ``True`` iff *user* may **read** *classroom* (any role).
+
+    This is the **single canonical READ-visibility gate** for MAIC
+    classrooms. Both the HTTP ``teacher_maic_classroom_detail`` GET path
+    and the WebSocket ``MAICClassroomConsumer.connect`` path call this
+    helper directly so the rules cannot drift. WAVE-8-F1 (2026-04-28)
+    completed the migration of the HTTP detail view onto this helper —
+    previously only the WS consumer used it.
+
+    Use this gate for **READ** access only (GET detail, image-task
+    hydration, WS subscribe). For **WRITE** operations (PATCH, DELETE,
+    publish, finalize-partial, progress-stamp) use
+    ``_can_modify_classroom`` instead — write access is intentionally
+    narrower (creator + admin only), never widened to peer teachers.
+
+    Evaluation order:
+
+    1. **SUPER_ADMIN** -> allow (platform-wide access; bypasses tenant).
+    2. **Tenant scope** -> classroom.tenant_id must equal user.tenant_id
+       (anything else is rejected before role checks).
+    3. **SCHOOL_ADMIN** in the same tenant -> allow (tenant-wide
+       oversight; same role gate as the courses+teachers admin views).
+    4. **Creator** (any role) -> allow (the user who created the
+       classroom always sees their own work, mirroring the legacy
+       HTTP queryset filter ``creator=request.user`` that this helper
+       supersedes).
+    5. **Students** -> delegate to ``_student_can_view_classroom`` so
+       the section/public/audio-manifest gate stays consistent with
+       the student-facing detail endpoint.
+    6. **HOD / IB_COORDINATOR / TEACHER** (non-creator) -> reject.
+       These roles previously fell through the consumer's coarse
+       same-tenant allowlist and could subscribe to peers' image-task
+       events without owning the classroom; the HTTP path has always
+       rejected them via the creator filter.
+
+    Returns False on missing tenant or unknown role.
+    """
+    if classroom is None:
+        return False
+
+    role = getattr(user, "role", None)
+
+    # 1. Platform admin bypasses all tenant scoping.
+    if role == "SUPER_ADMIN":
+        return True
+
+    # 2. Tenant scope — must match before any role-based allow fires.
+    user_tenant_id = getattr(user, "tenant_id", None)
+    if user_tenant_id is None or classroom.tenant_id != user_tenant_id:
+        return False
+
+    # 3. SCHOOL_ADMIN — tenant-wide oversight (matches courses+teachers
+    #    admin endpoints' role gate).
+    if role == "SCHOOL_ADMIN":
+        return True
+
+    # 4. Creator — same as the HTTP detail's ``creator=request.user``
+    #    filter. Works for any role (TEACHER / HOD / IB_COORDINATOR).
+    if classroom.creator_id == user.id:
+        return True
+
+    # 5. Students go through the canonical student gate so we don't
+    #    bypass the section-assignment / audio-manifest rules.
+    if role == "STUDENT":
+        return bool(_student_can_view_classroom(user, classroom))
+
+    # 6. HOD / IB_COORDINATOR / TEACHER (non-creator) and any other role
+    #    fall through to reject. Previously the WS consumer treated these
+    #    as same-tenant allow which leaked image-task transitions for
+    #    classrooms the user did not own — see WAVE-F2-F1.
+    return False
+
+
+def _can_modify_classroom(user, classroom) -> bool:
+    """Return ``True`` iff *user* may **mutate** *classroom*.
+
+    The **canonical WRITE-permission gate** for MAIC classrooms,
+    introduced in WAVE-8-F1 (2026-04-28) when the read endpoints were
+    migrated to ``_can_view_classroom``. The read gate is deliberately
+    looser than the write gate (oversight admins may *see* but only
+    creators / admins may *modify*) so we keep them as two separate
+    helpers rather than a single role-flagged gate.
+
+    Used by every classroom-mutation endpoint: PATCH metadata, PATCH
+    content, POST progress, POST finalize-partial, DELETE, POST
+    publish.
+
+    Evaluation order:
+
+    1. **SUPER_ADMIN** -> allow (platform-wide access; bypasses tenant).
+    2. **Tenant scope** -> classroom.tenant_id must equal user.tenant_id
+       (cross-tenant rejected before role checks).
+    3. **SCHOOL_ADMIN** in the same tenant -> allow (tenant-wide
+       admin oversight, mirrors ``_can_view_classroom`` for parity
+       with the courses+teachers admin endpoints).
+    4. **Creator** (any role) -> allow (the user who created the
+       classroom owns the row).
+    5. **Everyone else** (peer TEACHER / HOD / IB_COORDINATOR / STUDENT
+       / unknown role) -> reject. Peer teachers must NEVER be able to
+       mutate another teacher's work even if the read gate let them
+       through (which currently it doesn't — peer reads are also
+       rejected — but the write gate is the security floor).
+
+    Returns False on missing tenant or unknown role.
+    """
+    if classroom is None:
+        return False
+
+    role = getattr(user, "role", None)
+
+    # 1. Platform admin bypasses tenant scope.
+    if role == "SUPER_ADMIN":
+        return True
+
+    # 2. Tenant scope.
+    user_tenant_id = getattr(user, "tenant_id", None)
+    if user_tenant_id is None or classroom.tenant_id != user_tenant_id:
+        return False
+
+    # 3. School admin tenant-wide oversight.
+    if role == "SCHOOL_ADMIN":
+        return True
+
+    # 4. Creator owns the row.
+    if classroom.creator_id == user.id:
+        return True
+
+    # 5. Everyone else is rejected — write access is intentionally
+    #    NARROWER than read access (no peer-teacher / HOD / student
+    #    write paths).
+    return False
 
 
 def _student_can_view_classroom(user, classroom) -> bool:
@@ -1742,7 +1905,8 @@ def student_maic_classroom_detail(request, classroom_id):
     """
     try:
         classroom = MAICClassroom.objects.get(
-            pk=classroom_id, tenant=request.tenant,
+            pk=classroom_id,
+            tenant=request.tenant,
         )
     except MAICClassroom.DoesNotExist:
         return Response({"error": "Classroom not found."}, status=status.HTTP_404_NOT_FOUND)
@@ -1755,24 +1919,30 @@ def student_maic_classroom_detail(request, classroom_id):
     # state label disambiguates them on the dashboard.
     maic_classroom_polls_total.labels(state=_polling_state_label(classroom)).inc()
 
-    return Response({
-        "id": str(classroom.id),
-        "title": classroom.title,
-        "description": classroom.description,
-        "topic": classroom.topic,
-        "language": classroom.language,
-        "status": classroom.status,
-        "scene_count": classroom.scene_count,
-        "estimated_minutes": classroom.estimated_minutes,
-        "course_id": str(classroom.course_id) if classroom.course_id else None,
-        "config": classroom.config,
-        # PERF-P0-4: use composed_content property (prefers shards over legacy field).
-        "content": classroom.composed_content,
-        # CG-P0-3: images_pending — frontend polls this to know when images
-        # are ready (True = fill task still in-flight).
-        "images_pending": classroom.images_pending,
-        "created_at": classroom.created_at.isoformat(),
-    })
+    return Response(
+        {
+            "id": str(classroom.id),
+            "title": classroom.title,
+            "description": classroom.description,
+            "topic": classroom.topic,
+            "language": classroom.language,
+            "status": classroom.status,
+            "scene_count": classroom.scene_count,
+            "estimated_minutes": classroom.estimated_minutes,
+            "course_id": str(classroom.course_id) if classroom.course_id else None,
+            "config": classroom.config,
+            # PERF-P0-4: use composed_content property (prefers shards over legacy field).
+            "content": classroom.composed_content,
+            # CG-P0-3: images_pending — frontend polls this to know when images
+            # are ready (True = fill task still in-flight).
+            "images_pending": classroom.images_pending,
+            # F2 (P0): per-element image-task store — same hydration shape as
+            # the teacher endpoint so the student player's media-generation
+            # store can read from this on mount.
+            "content_image_tasks": classroom.content_image_tasks or {},
+            "created_at": classroom.created_at.isoformat(),
+        }
+    )
 
 
 @api_view(["POST"])
@@ -1941,7 +2111,6 @@ def student_maic_quiz_grade(request):
 # ======================================================================
 
 
-
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 @student_or_admin
@@ -1964,13 +2133,16 @@ def student_maic_validate_topic(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    return Response({
-        "allowed": True,
-        "is_educational": True,
-        "subject_area": "general",
-        "confidence": 1.0,
-        "reason": "Approved",
-    }, status=status.HTTP_200_OK)
+    return Response(
+        {
+            "allowed": True,
+            "is_educational": True,
+            "subject_area": "general",
+            "confidence": 1.0,
+            "reason": "Approved",
+        },
+        status=status.HTTP_200_OK,
+    )
 
 
 @api_view(["POST"])
@@ -2005,19 +2177,23 @@ def student_maic_classroom_create(request):
     )
 
     log_audit(
-        "CREATE", "MAICClassroom",
+        "CREATE",
+        "MAICClassroom",
         target_id=str(classroom.id),
         target_repr=f"student_classroom:{title[:100]}",
         changes={"topic": topic[:200]},
         request=request,
     )
 
-    return Response({
-        "id": str(classroom.id),
-        "title": classroom.title,
-        "status": classroom.status,
-        "created_at": classroom.created_at.isoformat(),
-    }, status=status.HTTP_201_CREATED)
+    return Response(
+        {
+            "id": str(classroom.id),
+            "title": classroom.title,
+            "status": classroom.status,
+            "created_at": classroom.created_at.isoformat(),
+        },
+        status=status.HTTP_201_CREATED,
+    )
 
 
 @api_view(["PATCH"])
@@ -2026,16 +2202,29 @@ def student_maic_classroom_create(request):
 @tenant_required
 @check_feature("feature_maic")
 def student_maic_classroom_update(request, classroom_id):
-    """Update a student's own classroom (content sync after generation)."""
+    """Update a student's own classroom (content sync after generation).
+
+    WAVE-8-F1 (2026-04-28): write gate via ``_can_modify_classroom``.
+    SCHOOL_ADMIN / SUPER_ADMIN in the same tenant retain oversight write
+    access; peer students are still rejected.
+    """
     try:
-        classroom = MAICClassroom.objects.get(
-            pk=classroom_id, tenant=request.tenant, creator=request.user,
-        )
+        classroom = MAICClassroom.objects.get(pk=classroom_id)
     except MAICClassroom.DoesNotExist:
         return Response({"error": "Classroom not found."}, status=status.HTTP_404_NOT_FOUND)
+    if not _can_modify_classroom(request.user, classroom):
+        return Response({"error": "Classroom not found."}, status=status.HTTP_404_NOT_FOUND)
 
-    updatable = ["title", "description", "status", "scene_count",
-                  "estimated_minutes", "config", "content", "error_message"]
+    updatable = [
+        "title",
+        "description",
+        "status",
+        "scene_count",
+        "estimated_minutes",
+        "config",
+        "content",
+        "error_message",
+    ]
     updated_fields = []
     for field in updatable:
         if field in request.data:
@@ -2055,19 +2244,23 @@ def student_maic_classroom_update(request, classroom_id):
 @tenant_required
 @check_feature("feature_maic")
 def student_maic_classroom_delete(request, classroom_id):
-    """Delete (archive) a student's own classroom."""
+    """Delete (archive) a student's own classroom.
+
+    WAVE-8-F1 (2026-04-28): write gate via ``_can_modify_classroom``.
+    """
     try:
-        classroom = MAICClassroom.objects.get(
-            pk=classroom_id, tenant=request.tenant, creator=request.user,
-        )
+        classroom = MAICClassroom.objects.get(pk=classroom_id)
     except MAICClassroom.DoesNotExist:
+        return Response({"error": "Classroom not found."}, status=status.HTTP_404_NOT_FOUND)
+    if not _can_modify_classroom(request.user, classroom):
         return Response({"error": "Classroom not found."}, status=status.HTTP_404_NOT_FOUND)
 
     classroom.status = "ARCHIVED"
     classroom.save(update_fields=["status", "updated_at"])
 
     log_audit(
-        "ARCHIVE", "MAICClassroom",
+        "ARCHIVE",
+        "MAICClassroom",
         target_id=str(classroom.id),
         target_repr=f"student_classroom:{classroom.title[:100]}",
         request=request,
@@ -2082,20 +2275,28 @@ def student_maic_classroom_delete(request, classroom_id):
 @check_feature("feature_maic")
 def student_maic_my_classrooms(request):
     """List classrooms created by the current student."""
-    qs = MAICClassroom.objects.filter(
-        tenant=request.tenant, creator=request.user,
-    ).exclude(status="ARCHIVED").order_by("-updated_at")
+    qs = (
+        MAICClassroom.objects.filter(
+            tenant=request.tenant,
+            creator=request.user,
+        )
+        .exclude(status="ARCHIVED")
+        .order_by("-updated_at")
+    )
 
-    classrooms = [{
-        "id": str(c.id),
-        "title": c.title,
-        "description": c.description,
-        "topic": c.topic,
-        "status": c.status,
-        "scene_count": c.scene_count,
-        "estimated_minutes": c.estimated_minutes,
-        "created_at": c.created_at.isoformat(),
-    } for c in qs]
+    classrooms = [
+        {
+            "id": str(c.id),
+            "title": c.title,
+            "description": c.description,
+            "topic": c.topic,
+            "status": c.status,
+            "scene_count": c.scene_count,
+            "estimated_minutes": c.estimated_minutes,
+            "created_at": c.created_at.isoformat(),
+        }
+        for c in qs
+    ]
 
     return Response(classrooms)
 
@@ -2120,7 +2321,8 @@ def student_maic_generate_outlines(request):
     pdf_text = (body.get("pdfText") or "").strip()
 
     log_audit(
-        "GENERATE_OUTLINE", "MAICClassroom",
+        "GENERATE_OUTLINE",
+        "MAICClassroom",
         target_repr=f"topic={topic[:100]}",
         request=request,
     )
@@ -2202,7 +2404,10 @@ def student_maic_generate_scene_content(request):
 
     ctx = _extract_generation_context(body, request)
     data = generate_scene_content(
-        scene, agents, language, config,
+        scene,
+        agents,
+        language,
+        config,
         classroom_id=body.get("classroomId") or None,
         **ctx,
     )
@@ -2256,7 +2461,10 @@ def student_maic_generate_scene_actions(request):
 
     ctx = _extract_generation_context(body, request)
     data = generate_scene_actions(
-        scene, agents, language, config,
+        scene,
+        agents,
+        language,
+        config,
         classroom_id=body.get("classroomId") or None,
         **ctx,
     )
@@ -2266,6 +2474,7 @@ def student_maic_generate_scene_actions(request):
 # ======================================================================
 # Public MAIC endpoints (authenticated, role-agnostic)
 # ======================================================================
+
 
 # No @tenant_required: returns a static platform-wide list of Azure TTS voice options;
 # no tenant-scoped data accessed.
@@ -2281,6 +2490,7 @@ def maic_list_voices(request):
 # ======================================================================
 # Agent profile + regenerate-one + TTS preview (shared impls)
 # ======================================================================
+
 
 def _generate_agent_profiles_impl(request, config):
     """Shared logic for agent-profile generation. NO decorators — called by
@@ -2425,6 +2635,7 @@ def teacher_maic_tts_preview(request):
 # Admin AI Config Endpoints
 # ======================================================================
 
+
 @api_view(["GET", "PATCH"])
 @permission_classes([IsAuthenticated])
 @tenant_required
@@ -2447,20 +2658,22 @@ def tenant_ai_config_view(request):
         tts_key = config.get_tts_api_key()
         img_key = config.get_image_api_key()
 
-        return Response({
-            "llm_provider": config.llm_provider,
-            "llm_model": config.llm_model,
-            "llm_api_key_set": bool(llm_key),
-            "llm_api_key_preview": f"...{llm_key[-4:]}" if len(llm_key) > 4 else "",
-            "llm_base_url": config.llm_base_url,
-            "tts_provider": config.tts_provider,
-            "tts_api_key_set": bool(tts_key),
-            "tts_voice_id": config.tts_voice_id,
-            "image_provider": config.image_provider,
-            "image_api_key_set": bool(img_key),
-            "maic_enabled": config.maic_enabled,
-            "max_classrooms_per_teacher": config.max_classrooms_per_teacher,
-        })
+        return Response(
+            {
+                "llm_provider": config.llm_provider,
+                "llm_model": config.llm_model,
+                "llm_api_key_set": bool(llm_key),
+                "llm_api_key_preview": f"...{llm_key[-4:]}" if len(llm_key) > 4 else "",
+                "llm_base_url": config.llm_base_url,
+                "tts_provider": config.tts_provider,
+                "tts_api_key_set": bool(tts_key),
+                "tts_voice_id": config.tts_voice_id,
+                "image_provider": config.image_provider,
+                "image_api_key_set": bool(img_key),
+                "maic_enabled": config.maic_enabled,
+                "max_classrooms_per_teacher": config.max_classrooms_per_teacher,
+            }
+        )
 
     # PATCH
     data = request.data
@@ -2490,7 +2703,13 @@ def tenant_ai_config_view(request):
     config.save()
 
     from utils.audit import log_audit
-    log_audit("SETTINGS_CHANGE", "TenantAIConfig", target_id=str(config.id),
-              target_repr=str(config.tenant), request=request)
+
+    log_audit(
+        "SETTINGS_CHANGE",
+        "TenantAIConfig",
+        target_id=str(config.id),
+        target_repr=str(config.tenant),
+        request=request,
+    )
 
     return Response({"status": "updated"})

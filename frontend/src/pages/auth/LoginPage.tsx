@@ -80,8 +80,8 @@ export const LoginPage: React.FC = () => {
     } catch (err: any) {
       const detail =
         err.response?.data?.non_field_errors?.[0] ||
-        err.response?.data?.detail ||
         err.response?.data?.error ||
+        err.response?.data?.detail ||
         '';
 
       let message: string;

@@ -556,3 +556,101 @@ def test_update_content_section_allows_when_no_tenant_set(tenant, teacher_user):
     classroom.update_content_section("scenes", new_scenes)
     classroom.refresh_from_db()
     assert classroom.content_scenes == new_scenes
+
+
+# ---------------------------------------------------------------------------
+# PERF-P0-4 cutover (2026-04-26) — finalizer must not write the legacy field.
+#
+# Lock-in invariant: after a successful TTS chord finalize, the legacy
+# ``content`` JSONField stays at its row-creation value (default ``{}``).
+# Pre-cutover the chord callback dual-wrote the legacy mirror; post-cutover
+# it writes shards only. This test guards against an accidental
+# re-introduction of the dual-write — the existence of any legacy ``content``
+# write would defeat the partial-save (TOAST) optimisation that motivated
+# the sharding migration.
+# ---------------------------------------------------------------------------
+
+
+def test_perf_p0_4_finalizer_does_not_write_legacy_content_field(
+    tenant, teacher_user,
+):
+    """After ``_finalize_classroom_tts`` runs successfully (via the
+    ``pre_generate_classroom_tts`` happy path), the legacy ``content``
+    JSONField must remain ``{}``. Only ``content_scenes`` and
+    ``content_meta`` are written.
+    """
+    from apps.courses.maic_models import TenantAIConfig
+
+    TenantAIConfig.objects.create(
+        tenant=tenant,
+        llm_provider="openrouter",
+        llm_model="openai/gpt-4o-mini",
+        tts_provider="disabled",
+        maic_enabled=True,
+    )
+
+    scenes = [
+        {
+            "id": "s1",
+            "title": "Intro",
+            "slides": [],
+            "actions": [
+                {
+                    "type": "speech",
+                    "agentId": "a1",
+                    "text": "Hello cutover lock-in",
+                    "audioId": "lockin0001",
+                    "voiceId": "en-IN-PrabhatNeural",
+                },
+            ],
+        }
+    ]
+    meta = {
+        "audioManifest": {
+            "status": "generating",
+            "progress": 0,
+            "totalActions": 1,
+            "completedActions": 0,
+            "failedAudioIds": [],
+            "generatedAt": None,
+        }
+    }
+    # Default content={} at row creation — the invariant we are locking in.
+    classroom = MAICClassroom.objects.create(
+        tenant=tenant,
+        creator=teacher_user,
+        title="PERF-P0-4 lock-in",
+        status="GENERATING",
+        content_scenes=copy.deepcopy(scenes),
+        content_agents=copy.deepcopy(AGENTS),
+        content_meta=copy.deepcopy(meta),
+    )
+    # Sanity: the legacy field starts empty.
+    assert classroom.content == {}
+
+    from apps.courses.maic_tasks import pre_generate_classroom_tts
+
+    FAKE_AUDIO = b"\xff\xfb\x90\x00" * 100
+    FAKE_URL = "https://cdn.example.com/tts/lockin0001.mp3"
+
+    with (
+        patch("apps.courses.maic_tasks.generate_tts_audio", return_value=FAKE_AUDIO),
+        patch("apps.courses.maic_tasks.storage_exists", return_value=False),
+        patch("apps.courses.maic_tasks.storage_upload", return_value=FAKE_URL),
+        patch("apps.courses.maic_tasks.set_current_tenant"),
+        patch("apps.courses.maic_tasks.clear_current_tenant"),
+    ):
+        pre_generate_classroom_tts(str(classroom.id))
+
+    classroom.refresh_from_db()
+
+    # ── PERF-P0-4 cutover lock-in: legacy field is still empty. ──
+    assert classroom.content == {}, (
+        "PERF-P0-4 regression: the chord finalizer wrote to the legacy "
+        f"``content`` JSONField. Got: {classroom.content!r}. "
+        "All writes must go to content_scenes / content_meta shards."
+    )
+
+    # Shard writes landed.
+    assert classroom.content_scenes[0]["actions"][0]["audioUrl"] == FAKE_URL
+    assert classroom.content_meta["audioManifest"]["status"] in ("ready", "partial")

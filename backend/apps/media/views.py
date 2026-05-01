@@ -1,5 +1,7 @@
 # apps/media/views.py
 
+import logging
+
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes, parser_classes
 from rest_framework.parsers import JSONParser, MultiPartParser, FormParser
@@ -16,6 +18,8 @@ from utils.decorators import admin_only, tenant_required
 
 from .models import MediaAsset
 from .serializers import MediaAssetSerializer, MediaAssetCreateSerializer
+
+logger = logging.getLogger(__name__)
 
 
 class MediaPagination(PageNumberPagination):
@@ -120,83 +124,144 @@ def media_stats(request):
 def serve_media_file(request, path):
     """
     Serve media files with authentication and tenant isolation.
-    
+
+    Security invariants (tenant isolation + path-traversal):
+
+    1. Reject any path containing ``..``, NUL bytes, CR/LF, or backslash —
+       these are non-portable and the only legitimate sources of them
+       in this endpoint are attempted traversal / header injection.
+    2. After ``posixpath.normpath`` the path must not be absolute and
+       must not escape upward (no ``..`` segments).
+    3. Non-SUPER_ADMIN users may only fetch files whose path begins with
+       ``tenant/<their-tenant-id>/``.  Files outside that prefix are
+       considered cross-tenant or platform-internal and are denied.
+       Previously, paths that did not contain a ``tenant/`` segment at
+       all silently bypassed the tenant check.
+    4. For local storage the resolved real path must stay strictly
+       beneath ``MEDIA_ROOT`` — symlinks pointing outside the tree are
+       rejected via ``os.path.realpath``.
+    5. The X-Accel-Redirect header is built from the *normalized* path
+       only (raw input never reaches the response).
+
     For S3 storage: Generates a signed URL and redirects.
     For local storage: Serves via X-Accel-Redirect (prod) or directly (dev).
     """
+    import os
     import posixpath
-    
-    # Validate path safety
-    normalized = posixpath.normpath(path)
-    if normalized.startswith('/') or normalized.startswith('..') or '..' in normalized.split('/'):
+
+    # ── Step 1: Reject obviously-malicious characters BEFORE normalize.
+    # ``\``, NUL, CR, LF can survive posixpath.normpath but break header
+    # safety (X-Accel-Redirect) and storage backends in surprising ways.
+    if (
+        not path
+        or '\x00' in path
+        or '\r' in path
+        or '\n' in path
+        or '\\' in path
+    ):
         raise Http404("Invalid path")
-    
-    # Extract tenant from path and verify access
-    parts = path.split('/')
+
+    # ── Step 2: Normalize and re-validate. After this point we use
+    # ``normalized`` everywhere — never raw ``path``.
+    normalized = posixpath.normpath(path)
+    if (
+        normalized.startswith('/')
+        or normalized == '..'
+        or normalized.startswith('../')
+        or '/../' in normalized
+        or normalized.endswith('/..')
+    ):
+        raise Http404("Invalid path")
+
+    # ── Step 3: Tenant prefix enforcement (defense in depth).
+    # SUPER_ADMIN can fetch anything; everyone else must be inside
+    # their own tenant subtree.  Refusing paths that lack the
+    # ``tenant/<id>/`` prefix closes the previous gap where a request
+    # for ``videos/<id>/segment.ts`` (no tenant segment) bypassed the
+    # cross-tenant check entirely.
+    parts = normalized.split('/')
     path_tenant_id = None
-    for i, part in enumerate(parts):
-        if part == 'tenant' and i + 1 < len(parts):
-            path_tenant_id = parts[i + 1]
-            break
-    
-    if path_tenant_id:
-        user_tenant_id = str(request.user.tenant_id) if request.user.tenant_id else None
-        # Super admins can access any tenant's files
-        if request.user.role != 'SUPER_ADMIN' and user_tenant_id != path_tenant_id:
+    if len(parts) >= 2 and parts[0] == 'tenant':
+        path_tenant_id = parts[1]
+
+    if request.user.role != 'SUPER_ADMIN':
+        user_tenant_id = (
+            str(request.user.tenant_id) if request.user.tenant_id else None
+        )
+        # NOTE: ``user_tenant_id`` may be None for unbound users (e.g. a
+        # mis-provisioned non-SUPER_ADMIN with tenant_id=NULL). The
+        # falsy compare below MUST remain a strict inequality — do NOT
+        # "simplify" to ``if user_tenant_id and user_tenant_id != ...``
+        # which would *bypass* the check on None and let an unbound
+        # user fetch any file. Both ``not path_tenant_id`` and
+        # ``None != "..."`` are intentionally truthy denial paths.
+        if not path_tenant_id or user_tenant_id != path_tenant_id:
+            # Treat as 404 (not 403) so we don't leak existence of
+            # cross-tenant or platform-internal files.
             raise Http404("File not found")
-    
-    # Check if file exists in storage
-    if not default_storage.exists(path):
+
+    # ── Step 4: Existence check uses the normalized path.
+    if not default_storage.exists(normalized):
         raise Http404("File not found")
-    
-    # For S3 storage, generate signed URL and redirect
+
+    # ── Step 5: S3 signed URL.
     storage_backend = getattr(settings, 'STORAGE_BACKEND', 'local').lower()
     if storage_backend == 's3':
-        # Generate a time-limited signed URL
         try:
-            from botocore.config import Config
-            from storages.backends.s3boto3 import S3Boto3Storage
-            
             storage = default_storage
-            # Generate signed URL (expires in 1 hour)
-            signed_url = storage.url(path, parameters={'ResponseContentDisposition': 'inline'})
-            
-            # If querystring_auth is disabled, we need to generate a signed URL manually
+            signed_url = storage.url(
+                normalized,
+                parameters={'ResponseContentDisposition': 'inline'},
+            )
+
             if not getattr(settings, 'AWS_QUERYSTRING_AUTH', False):
-                # Access the underlying boto3 client
                 client = storage.connection.meta.client
                 bucket_name = storage.bucket_name
-                
                 signed_url = client.generate_presigned_url(
                     'get_object',
-                    Params={'Bucket': bucket_name, 'Key': path},
-                    ExpiresIn=3600  # 1 hour
+                    Params={'Bucket': bucket_name, 'Key': normalized},
+                    ExpiresIn=3600,  # 1 hour
                 )
-            
+
             return HttpResponseRedirect(signed_url)
-        except Exception:
-            # Fallback: try to serve directly if signed URL fails
-            pass
-    
-    # Local storage: serve via X-Accel-Redirect (prod) or directly (dev)
+        except Exception as exc:
+            # Log S3 signed-URL failures so ops can detect misconfiguration;
+            # fall through to local-serve path as a best-effort fallback.
+            logger.warning(
+                "media: S3 signed-URL generation failed for path=%s — falling back to direct serve: %s",
+                normalized, exc,
+            )
+
+    # ── Step 6: Local storage. X-Accel-Redirect path comes from the
+    # normalized value so CR/LF or .. cannot reach nginx.
     use_x_accel = getattr(settings, 'USE_X_ACCEL_REDIRECT', not settings.DEBUG)
-    
+
     if use_x_accel:
         response = HttpResponse()
         response['Content-Type'] = ''  # Let nginx determine
-        response['X-Accel-Redirect'] = f'/protected-media/{path}'
+        response['X-Accel-Redirect'] = f'/protected-media/{normalized}'
         return response
-    
-    # Development: Serve directly
-    import os
+
+    # ── Step 7: Development direct-serve. Resolve realpath and require
+    # it to stay beneath MEDIA_ROOT — defeats symlink escapes.
     import mimetypes
-    full_path = os.path.join(settings.MEDIA_ROOT, path)
-    
-    if not os.path.exists(full_path) or not os.path.isfile(full_path):
+    media_root = os.path.realpath(settings.MEDIA_ROOT)
+    candidate = os.path.realpath(os.path.join(settings.MEDIA_ROOT, normalized))
+
+    # Use os.path.commonpath rather than .startswith to avoid the
+    # classic ``/var/www/media-evil`` vs ``/var/www/media`` prefix bug.
+    try:
+        if os.path.commonpath([candidate, media_root]) != media_root:
+            raise Http404("Invalid path")
+    except ValueError:
+        # commonpath raises on different drives (Windows) or empty input.
+        raise Http404("Invalid path")
+
+    if not os.path.exists(candidate) or not os.path.isfile(candidate):
         raise Http404("File not found")
-    
-    content_type, _ = mimetypes.guess_type(full_path)
+
+    content_type, _ = mimetypes.guess_type(candidate)
     return FileResponse(
-        open(full_path, 'rb'),
-        content_type=content_type or 'application/octet-stream'
+        open(candidate, 'rb'),
+        content_type=content_type or 'application/octet-stream',
     )

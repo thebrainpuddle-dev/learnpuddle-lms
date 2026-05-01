@@ -17,8 +17,11 @@ import { SourcePicker, FILE_SOURCE_TYPES } from './components/SourcePicker';
 
 export function mapApiError(err: any): string {
   const status = err?.response?.status;
-  const code = err?.response?.data?.error as string | undefined;
-  const detail = err?.response?.data?.detail as string | undefined;
+  // Canonical shape: `code` is the optional error code (e.g. "FILE_TOO_LARGE")
+  // and `error` is the human-readable message. Pre-canonical responses placed
+  // the code in `error` and the message in `detail`, so we accept either.
+  const code = (err?.response?.data?.code ?? err?.response?.data?.error) as string | undefined;
+  const message = (err?.response?.data?.error ?? err?.response?.data?.detail) as string | undefined;
 
   if (status === 413 || code === 'FILE_TOO_LARGE') {
     return 'File exceeds 20 MB. Please use a smaller file.';
@@ -32,7 +35,7 @@ export function mapApiError(err: any): string {
   if (status === 429 || status === 503 || code === 'RATE_LIMIT_EXCEEDED' || code === 'SERVICE_UNAVAILABLE') {
     return "You've hit the hourly generation limit. Try again in an hour.";
   }
-  return detail ?? 'Something went wrong. Please try again.';
+  return message ?? 'Something went wrong. Please try again.';
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────

@@ -115,3 +115,78 @@ def test_defaults_do_not_raise_and_are_non_empty():
     for build in BUILDERS:
         out = build()
         assert isinstance(out, str) and len(out) > 200
+
+
+def test_actions_prompt_does_not_advertise_pause_action_type():
+    """F7 follow-up: the LLM director prompt must not document, demonstrate, or
+    recommend the `pause` action type. The frontend playback engine no-ops
+    `{type: "pause", ...}` actions today (see frontend/src/lib/maicActionEngine.ts
+    `executePause`). Keeping the directive in the prompt invites the model to
+    keep emitting wasted actions and bloats stored classroom JSON.
+
+    Asserts the assembled actions prompt contains no:
+      * `"type": "pause"` example object literal
+      * a numbered/bulleted action-schema entry of the form `pause —` or
+        `pause:` describing it as a valid action type
+      * any `{"type":"pause"...}` snippet inside narrative directive text
+    Allows incidental uses of the english word "pause" (e.g. a persona
+    `speakingStyle` like "warm, unhurried, pauses to check understanding"),
+    which is voice direction, not an action-type directive.
+    """
+    import re
+
+    for build in BUILDERS:
+        prompt = build(grade_level="Grade 10", subject="Physics",
+                       syllabus_board="Generic", audience_role="student")
+        # Forbidden: example literal in JSON shape
+        assert '"type": "pause"' not in prompt, (
+            f"{build.__name__}: prompt still emits a `\"type\": \"pause\"` example. "
+            f"Snippet: …{prompt[max(0, prompt.find('pause') - 60):prompt.find('pause') + 80]}…"
+        )
+        assert '"type":"pause"' not in prompt, (
+            f"{build.__name__}: prompt still emits a `\"type\":\"pause\"` example."
+        )
+        # Forbidden: schema-entry style description (e.g. "4. pause — Dramatic …"
+        # or "- pause: …"). Match action-list/bullet contexts only, not prose.
+        schema_entry = re.search(
+            r"(?im)^\s*(?:\d+\.|[-*])\s*pause\b\s*[—\-:]",
+            prompt,
+        )
+        assert schema_entry is None, (
+            f"{build.__name__}: prompt still describes `pause` in the action-type "
+            f"schema list. Match: {schema_entry.group(0)!r}"
+        )
+
+
+def test_scene_content_prompt_advertises_body_image_right_template():
+    """F4: the scene-content system prompt must mention `body-image-right` as a
+    template option so the LLM knows the typed slot-based shape is allowed.
+
+    Asserts the prompt string includes both:
+      * the template literal `body-image-right` (the only allowed value
+        in the smallest-first-cut), AND
+      * a reference to the `slots` field shape so the model knows what to
+        emit alongside the legacy `elements[]` array.
+
+    Backwards compat: legacy free-form slides without a `template` keep
+    rendering exactly as today — the prompt must NOT make `template`
+    mandatory. The check below asserts the directive is described as
+    optional.
+    """
+    prompt = build_scene_content_system_prompt(
+        grade_level="Grade 10", subject="Physics",
+        syllabus_board="Generic", audience_role="student",
+    )
+    assert "body-image-right" in prompt, (
+        "scene-content prompt missing `body-image-right` template advertisement"
+    )
+    assert "slots" in prompt, (
+        "scene-content prompt missing `slots` field reference"
+    )
+    # Optional, NOT mandatory — make sure the prompt frames the new
+    # fields as additive (e.g. uses MAY / OPTIONAL / OPTIONAL TYPED).
+    lower = prompt.lower()
+    assert any(token in lower for token in ("optional", "may emit", "you may")), (
+        "scene-content prompt makes typed-slot emission sound mandatory; "
+        "it must stay additive so legacy free-form slides keep working"
+    )

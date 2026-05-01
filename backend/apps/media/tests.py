@@ -510,3 +510,174 @@ class ServeMediaFileSecurityTestCase(TestCase):
             HTTP_HOST=HOST_A,
         )
         self.assertEqual(response.status_code, 404)
+
+
+# ---------------------------------------------------------------------------
+# BE-SEC-MEDIA-FILE-HARDENING (2026-04-27)
+# ---------------------------------------------------------------------------
+#
+# Regression coverage for the proactive serve_media_file hardening:
+#   1. Paths without a ``tenant/<id>/`` prefix must NOT bypass the
+#      cross-tenant guard (previously: silently allowed for any
+#      authenticated user).
+#   2. Backslash / CR / LF / NUL must be rejected before normalize.
+#   3. SUPER_ADMIN may still fetch any path under MEDIA_ROOT.
+#   4. Symlink-escape attempts (path resolves outside MEDIA_ROOT) are 404.
+# ---------------------------------------------------------------------------
+
+import os
+import tempfile
+
+from unittest import mock
+
+
+@override_settings(
+    ALLOWED_HOSTS=['test.lms.com', 'other.lms.com', 'testserver', 'localhost'],
+    PLATFORM_DOMAIN='lms.com',
+    STORAGE_BACKEND='local',
+    USE_X_ACCEL_REDIRECT=False,
+    DEBUG=True,
+)
+class ServeMediaFileTenantPrefixTestCase(TestCase):
+    """
+    Defense-in-depth: refuse to serve any path that lacks the
+    ``tenant/<id>/`` prefix when the requester is not SUPER_ADMIN.
+    """
+
+    def setUp(self):
+        self.tenant_a = _make_tenant(
+            'A School', 'serve-prefix-a', 'test', 'pa@serve.com'
+        )
+        self.tenant_b = _make_tenant(
+            'B School', 'serve-prefix-b', 'other', 'pb@serve.com'
+        )
+        self.admin_a = _make_user('admin-a@serve.com', self.tenant_a)
+        self.super_admin = _make_user(
+            'sa@serve.com', self.tenant_a, role='SUPER_ADMIN', first='Sa',
+        )
+
+    def test_path_without_tenant_prefix_denied_for_admin(self):
+        """
+        A SCHOOL_ADMIN requesting a path that has NO ``tenant/<id>/``
+        segment must get 404 — not an existence-check pass-through.
+        Previously, ``serve_media_file`` only checked the cross-tenant
+        path when the path contained a ``tenant`` segment, so files
+        like ``videos/<id>/segment.ts`` or ``shared/banner.png``
+        bypassed isolation.
+        """
+        client = _auth(self.admin_a)
+        response = client.get(
+            '/api/v1/media/file/videos/abc/segment.ts',
+            HTTP_HOST=HOST_A,
+        )
+        self.assertEqual(
+            response.status_code, 404,
+            "non-tenant-prefixed path must be rejected for non-SUPER_ADMIN",
+        )
+
+    def test_other_tenant_path_denied_for_admin(self):
+        """Cross-tenant prefix still 404s (existing invariant)."""
+        client = _auth(self.admin_a)
+        response = client.get(
+            f'/api/v1/media/file/tenant/{self.tenant_b.id}/uploads/x.png',
+            HTTP_HOST=HOST_A,
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_super_admin_may_fetch_any_prefix(self):
+        """SUPER_ADMIN bypass — may fetch paths without tenant prefix.
+
+        We patch ``default_storage.exists`` so the lookup succeeds
+        without actually creating files; the assertion is that the
+        existence check is *reached* (proving the prefix gate did
+        not 404 first). The bind ``as mock_exists`` is required so
+        we can assert the call — without it the test passes vacuously
+        even if the prefix gate begins denying SUPER_ADMIN.
+        """
+        client = _auth(self.super_admin)
+        with mock.patch(
+            'apps.media.views.default_storage.exists', return_value=False,
+        ) as mock_exists:
+            response = client.get(
+                '/api/v1/media/file/shared/banner.png',
+                HTTP_HOST=HOST_A,
+            )
+        # The mock MUST have been called — that proves the prefix gate
+        # let SUPER_ADMIN through. If the gate denied them we would
+        # have raised Http404 before reaching default_storage.exists.
+        mock_exists.assert_called_once_with('shared/banner.png')
+        # And since the mock returned False, the view 404s at step 4.
+        self.assertEqual(response.status_code, 404)
+
+    def test_backslash_in_path_rejected(self):
+        """Backslash is non-portable and only used for sneak-paths."""
+        client = _auth(self.admin_a)
+        response = client.get(
+            f'/api/v1/media/file/tenant/{self.tenant_a.id}/uploads/..\\..\\evil',
+            HTTP_HOST=HOST_A,
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_path_with_double_dot_segment_rejected(self):
+        """``a/../b`` → after normalize is ``b`` which would still need
+        the tenant prefix. Reject pre-normalize to be explicit."""
+        client = _auth(self.admin_a)
+        response = client.get(
+            f'/api/v1/media/file/tenant/{self.tenant_a.id}/../tenant/{self.tenant_b.id}/x.png',
+            HTTP_HOST=HOST_A,
+        )
+        self.assertEqual(response.status_code, 404)
+
+
+@override_settings(
+    ALLOWED_HOSTS=['test.lms.com', 'testserver', 'localhost'],
+    PLATFORM_DOMAIN='lms.com',
+    STORAGE_BACKEND='local',
+    USE_X_ACCEL_REDIRECT=False,
+    DEBUG=True,
+)
+class ServeMediaFileSymlinkEscapeTestCase(TestCase):
+    """
+    Symlink-escape: even if a file exists under MEDIA_ROOT and passes
+    the prefix gate, ``os.path.realpath`` resolution must keep it
+    inside MEDIA_ROOT.
+    """
+
+    def setUp(self):
+        self.tenant = _make_tenant(
+            'Sym School', 'serve-sym', 'test', 'sym@serve.com'
+        )
+        self.admin = _make_user('admin-sym@serve.com', self.tenant)
+
+    def test_symlink_pointing_outside_media_root_returns_404(self):
+        """A symlink under MEDIA_ROOT whose target is outside
+        MEDIA_ROOT must be refused — realpath() resolves the link
+        and the commonpath check rejects the result."""
+        with tempfile.TemporaryDirectory() as media_root, \
+             tempfile.TemporaryDirectory() as outside_root:
+            # Create the file we want to leak (outside MEDIA_ROOT).
+            secret_path = os.path.join(outside_root, 'secret.txt')
+            with open(secret_path, 'w') as f:
+                f.write('SECRET')
+
+            # Symlink under MEDIA_ROOT/tenant/<id>/leak → outside.
+            tenant_dir = os.path.join(
+                media_root, 'tenant', str(self.tenant.id),
+            )
+            os.makedirs(tenant_dir)
+            link_path = os.path.join(tenant_dir, 'leak.txt')
+            try:
+                os.symlink(secret_path, link_path)
+            except (OSError, NotImplementedError):
+                self.skipTest("symlinks unsupported on this platform")
+
+            with override_settings(MEDIA_ROOT=media_root):
+                client = _auth(self.admin)
+                response = client.get(
+                    f'/api/v1/media/file/tenant/{self.tenant.id}/leak.txt',
+                    HTTP_HOST=HOST_A,
+                )
+                # The default_storage.exists check passes (the symlink
+                # exists), but the realpath/commonpath check rejects
+                # the resolved target.
+                self.assertEqual(response.status_code, 404)

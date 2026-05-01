@@ -264,7 +264,7 @@ export const AIGeneratorJobDetail: React.FC = () => {
     } catch (err: any) {
       toast.error(
         'Failed to create draft',
-        err?.response?.data?.detail ?? 'Please try again.'
+        err?.response?.data?.error ?? err?.response?.data?.detail ?? 'Please try again.'
       );
     } finally {
       setMaterialising(false);
@@ -298,7 +298,7 @@ export const AIGeneratorJobDetail: React.FC = () => {
       toast.success('Retrying generation', 'A new job has been enqueued.');
       navigate(`/admin/ai-course-generator/jobs/${res.job_id}`);
     } catch (err: any) {
-      toast.error('Failed to retry', err?.response?.data?.detail ?? 'Please try again.');
+      toast.error('Failed to retry', err?.response?.data?.error ?? err?.response?.data?.detail ?? 'Please try again.');
     }
   };
 

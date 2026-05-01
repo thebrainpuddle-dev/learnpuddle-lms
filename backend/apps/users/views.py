@@ -1,5 +1,7 @@
 # apps/users/views.py
 
+import logging
+
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes, throttle_classes, authentication_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -19,6 +21,8 @@ from .tokens import get_tokens_for_user
 from apps.notifications.email_utils import build_tenant_url, build_bucket_headers, send_templated_email
 from utils.decorators import admin_only, tenant_required, check_tenant_limit
 from utils.audit import log_audit
+
+logger = logging.getLogger(__name__)
 
 
 class LoginThrottle(ScopedRateThrottle):
@@ -269,9 +273,6 @@ def register_teacher_view(request):
     """
     Admin endpoint to create teacher accounts.
     """
-    import logging
-    logger = logging.getLogger(__name__)
-
     serializer = RegisterTeacherSerializer(
         data=request.data,
         context={'request': request}
@@ -351,12 +352,16 @@ def change_password_view(request):
     user.save(update_fields=['password', 'must_change_password', 'password_changed_at'])
 
     # Persist prior password hash so TenantPasswordValidator can enforce
-    # prevent_reuse_last_n on future changes.
+    # prevent_reuse_last_n on future changes.  Log failures so ops can
+    # detect when password-history recording is silently broken.
     try:
         from apps.users.password_validators import record_password_history
         record_password_history(user)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning(
+            "password_change: failed to record password history for user=%s: %s",
+            user.id, exc,
+        )
 
     # Update session to keep user logged in
     update_session_auth_hash(request, user)
@@ -477,12 +482,16 @@ def confirm_password_reset_view(request):
     user.password_changed_at = timezone.now()
     user.save(update_fields=['password', 'last_login', 'password_changed_at'])
 
-    # Record password in history for reuse-prevention.
+    # Record password in history for reuse-prevention.  Log failures so ops
+    # can detect when password-history recording is silently broken.
     try:
         from apps.users.password_validators import record_password_history
         record_password_history(user)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning(
+            "password_reset: failed to record password history for user=%s: %s",
+            user.id, exc,
+        )
 
     log_audit('PASSWORD_RESET', 'User', target_id=str(user.id), target_repr=str(user), request=request, actor=user)
 

@@ -17,24 +17,66 @@ logger = logging.getLogger(__name__)
 
 def associate_by_email(backend, details, user=None, *args, **kwargs):
     """
-    Associate SSO login with existing user by email.
-    
-    If user already exists with this email, link the social account.
+    Associate SSO login with existing user by email — *scoped to the
+    request's tenant*.
+
+    SECURITY (AUDIT-2026-04-26-PHASE3-1): we must NEVER cross-link a
+    Google identity to a user living in a different tenant than the
+    OAuth callback came from.  ``User.email`` is globally unique, so an
+    attacker controlling a Google account for an email that happens to
+    match a user in tenant A can otherwise navigate to tenant B's
+    subdomain, complete the OAuth dance there, and have their identity
+    silently attached to the tenant-A user — a privilege-escalation
+    primitive.  We resolve the tenant from the social-auth ``strategy``
+    (which carries the live Django ``request`` populated by
+    ``TenantMiddleware``) and refuse to fall through to an unscoped
+    lookup if that tenant cannot be determined.
     """
     if user:
         return {'user': user}
-    
+
     email = details.get('email', '').lower()
     if not email:
         return None
-    
+
+    # Resolve the request tenant.  ``social_django`` invokes pipeline
+    # functions with ``strategy=`` populated; ``strategy.request`` is
+    # the active Django HttpRequest and ``request.tenant`` is set by
+    # ``utils.tenant_middleware.TenantMiddleware``.
+    strategy = kwargs.get('strategy')
+    request = getattr(strategy, 'request', None) if strategy is not None else None
+    request_tenant = getattr(request, 'tenant', None) if request is not None else None
+
+    if request_tenant is None:
+        # No tenant context — refuse to identify a user.  This keeps
+        # OAuth callbacks that bypass tenant resolution (root domain,
+        # mis-routed callback, async/non-HTTP context) from acting as
+        # an unscoped account-lookup oracle.
+        logger.warning(
+            "SSO associate_by_email called without a resolved request tenant; "
+            "refusing to cross-link email=%s",
+            email,
+        )
+        return None
+
     from apps.users.models import User
-    
+
     try:
-        existing_user = User.objects.get(email=email)
-        return {'user': existing_user, 'is_new': False}
+        existing_user = User.objects.get(email=email, tenant=request_tenant)
     except User.DoesNotExist:
         return None
+    except User.MultipleObjectsReturned:
+        # ``User.email`` is globally unique today, but defensively log
+        # and refuse if that invariant is ever broken.
+        logger.error(
+            "SSO associate_by_email matched multiple users for email=%s tenant=%s; "
+            "refusing to associate",
+            email,
+            getattr(request_tenant, 'subdomain', request_tenant),
+        )
+        return None
+
+    return {'user': existing_user, 'is_new': False}
 
 
 def create_user_if_allowed(
@@ -170,9 +212,19 @@ def provision_saml_user(*, tenant, config, assertion):
     if existing is not None and (
         existing.tenant_id is None or existing.tenant_id != tenant.id
     ):
-        raise PermissionError(
-            "This email is registered with another account; contact support."
+        # AUDIT-2026-04-26-PHASE3-11: use the same generic message as the SCIM
+        # path ("Email unavailable.") so the IdP-visible error does not confirm
+        # email existence in another tenant.  The cross-tenant diagnostic detail
+        # is logged server-side so SOC retains forensic data without surfacing it
+        # to the caller.
+        logger.warning(
+            "provision_saml_user: cross-tenant email collision — "
+            "existing_tenant=%s attempted_tenant=%s email=%s",
+            existing.tenant_id,
+            tenant.id,
+            email,
         )
+        raise PermissionError("Email unavailable.")
     if existing and getattr(existing, "is_deleted", False):
         raise PermissionError("User account is disabled.")
     if existing:

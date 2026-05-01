@@ -42,7 +42,7 @@ export const useBillingStore = create<BillingState>((set) => ({
       const plans = await billingService.getPlans();
       set({ plans, loading: false });
     } catch (err: any) {
-      set({ error: err?.response?.data?.detail ?? err.message ?? 'Failed to fetch plans', loading: false });
+      set({ error: err?.response?.data?.error ?? err?.response?.data?.detail ?? err.message ?? 'Failed to fetch plans', loading: false });
     }
   },
 
@@ -52,7 +52,7 @@ export const useBillingStore = create<BillingState>((set) => ({
       const subscription = await billingService.getCurrentSubscription();
       set({ subscription, loading: false });
     } catch (err: any) {
-      set({ error: err?.response?.data?.detail ?? err.message ?? 'Failed to fetch subscription', loading: false });
+      set({ error: err?.response?.data?.error ?? err?.response?.data?.detail ?? err.message ?? 'Failed to fetch subscription', loading: false });
     }
   },
 
@@ -62,7 +62,7 @@ export const useBillingStore = create<BillingState>((set) => ({
       const payments = await billingService.getPaymentHistory(params);
       set({ payments, loading: false });
     } catch (err: any) {
-      set({ error: err?.response?.data?.detail ?? err.message ?? 'Failed to fetch payment history', loading: false });
+      set({ error: err?.response?.data?.error ?? err?.response?.data?.detail ?? err.message ?? 'Failed to fetch payment history', loading: false });
     }
   },
 
@@ -73,7 +73,7 @@ export const useBillingStore = create<BillingState>((set) => ({
       set({ loading: false });
       return checkout_url;
     } catch (err: any) {
-      set({ error: err?.response?.data?.detail ?? err.message ?? 'Failed to create checkout session', loading: false });
+      set({ error: err?.response?.data?.error ?? err?.response?.data?.detail ?? err.message ?? 'Failed to create checkout session', loading: false });
       throw err;
     }
   },
@@ -85,7 +85,7 @@ export const useBillingStore = create<BillingState>((set) => ({
       set({ loading: false });
       window.open(portal_url, '_blank');
     } catch (err: any) {
-      set({ error: err?.response?.data?.detail ?? err.message ?? 'Failed to open billing portal', loading: false });
+      set({ error: err?.response?.data?.error ?? err?.response?.data?.detail ?? err.message ?? 'Failed to open billing portal', loading: false });
     }
   },
 
@@ -96,7 +96,7 @@ export const useBillingStore = create<BillingState>((set) => ({
       set({ loading: false });
       return preview;
     } catch (err: any) {
-      set({ error: err?.response?.data?.detail ?? err.message ?? 'Failed to preview plan change', loading: false });
+      set({ error: err?.response?.data?.error ?? err?.response?.data?.detail ?? err.message ?? 'Failed to preview plan change', loading: false });
       throw err;
     }
   },

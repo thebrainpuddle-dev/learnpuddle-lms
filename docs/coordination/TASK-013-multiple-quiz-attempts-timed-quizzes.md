@@ -13,10 +13,31 @@
 
 ## Open Follow-ups (non-blocking)
 
-- **XP on timed-out attempts**: `on_quiz_submission` currently fires even for
+- ~~**XP on timed-out attempts**: `on_quiz_submission` currently fires even for
   `time_expired=True, score=0` force-closes. Reviewer suggests guarding
-  `award_xp` to skip timed-out zero-score submissions. Tracked as separate
-  low-severity ticket. See `TASK-013-APPROVED.md` for detail.
+  `award_xp` to skip timed-out zero-score submissions.~~ **Closed 2026-04-30
+  — see Follow-up Closeouts below.**
+
+## Follow-up Closeouts (2026-04-30)
+
+- **XP on timed-out attempts** — guard added in
+  `backend/apps/progress/gamification_signals.py:150-167` (`on_quiz_submission`
+  now skips `award_xp` when `time_expired=True` and `score in (None, 0)`).
+  Other side-effects (mastery, streak, leaderboard) still fire. Skip emits a
+  structured `logger.info` with `extra={"metric": "quiz_xp_skipped_on_timeout",
+  "attempt_id": ..., "quiz_id": ..., "teacher_id": ..., "tenant_id": ...,
+  "attempt_number": ...}` for observability.
+- **Tests** — `backend/apps/progress/tests_gamification_signals.py`
+  `QuizSubmissionSignalTest`:
+  - `test_abandoned_timed_attempt_is_skipped` — timed-out + score=0 ⇒ no XP.
+  - `test_time_expired_with_nonzero_score_still_awards` — timed-out +
+    score=40 ⇒ XP awarded (partial credit before timer fired).
+  - `test_earned_zero_score_not_timed_out_still_awards` — score=0 +
+    `time_expired=False` ⇒ XP still awarded (policy targets force-closes,
+    not earned zeros).
+  - `test_abandoned_timed_attempt_emits_structured_log` — skip path
+    emits `metric=quiz_xp_skipped_on_timeout` LogRecord with
+    `attempt_id` extra.
 
 ## Problem
 

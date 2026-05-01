@@ -5,20 +5,21 @@ Canonical error shape under test::
 
     {
         "error": "<string>",           # canonical key (always present)
-        "detail": "<same value>",      # legacy key (present during TASK-012 transition)
         "details": [{"field": str|None, "message": str}, ...],  # optional
         "code": "<string>"                                        # optional
     }
 
-Transition note
----------------
-The handler emits BOTH ``error`` (canonical) and ``detail`` (legacy) simultaneously
-until TASK-012 completes the frontend cleanup pass.  Tests assert both keys are
-present and equal for every response shape.
+TASK-008 AC6 — cleanup complete
+---------------------------------
+The legacy ``detail`` key has been removed from all responses (FE migration of
+``data.detail`` reads confirmed complete 2026-04-30 by frontend-engineer).
+Tests assert ``"detail" NOT in data`` to prevent regression.
+
+The ``Deprecation: detail-key`` monitoring header is also no longer emitted.
 """
 
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from rest_framework import status
 from rest_framework.exceptions import (
@@ -30,7 +31,6 @@ from rest_framework.exceptions import (
     ValidationError,
     MethodNotAllowed,
 )
-from rest_framework.response import Response
 
 from utils.exception_handler import custom_exception_handler, _flatten_drf_errors
 
@@ -67,13 +67,19 @@ class TestSystemErrors:
         response = run_handler(exc)
         assert response.data.get("code") == "not_authenticated"
 
-    def test_not_authenticated_legacy_detail_key(self):
-        """TASK-012 transition: 'detail' key must be present and equal 'error'."""
+    def test_not_authenticated_no_legacy_detail_key(self):
+        """TASK-008 cleanup: 'detail' key must NOT be present after FE migration."""
         exc = NotAuthenticated()
         response = run_handler(exc)
-        data = response.data
-        assert "detail" in data, "Legacy 'detail' key must be present during TASK-012 transition"
-        assert data["detail"] == data["error"]
+        assert "detail" not in response.data, (
+            "Legacy 'detail' key must be removed — FE migration confirmed 2026-04-30"
+        )
+
+    def test_no_deprecation_header(self):
+        """Deprecation monitoring header must be absent after cleanup."""
+        exc = NotAuthenticated()
+        response = run_handler(exc)
+        assert response.get("Deprecation") is None
 
     def test_permission_denied_shape(self):
         exc = PermissionDenied()
@@ -83,11 +89,11 @@ class TestSystemErrors:
         assert isinstance(response.data["error"], str)
         assert "details" not in response.data
 
-    def test_permission_denied_legacy_detail_key(self):
-        """TASK-012 transition: 'detail' key must be present and equal 'error'."""
+    def test_permission_denied_no_legacy_detail_key(self):
+        """TASK-008 cleanup: 'detail' key must NOT be present."""
         exc = PermissionDenied()
         response = run_handler(exc)
-        assert response.data.get("detail") == response.data["error"]
+        assert "detail" not in response.data
 
     def test_not_found_shape(self):
         exc = NotFound()
@@ -124,23 +130,17 @@ class TestSystemErrors:
         assert isinstance(response.data["error"], str)
         assert "Invalid token" in response.data["error"]
 
-    def test_authentication_failed_legacy_detail_key(self):
-        """TASK-012 transition: 'detail' mirrors 'error' on AuthenticationFailed."""
+    def test_authentication_failed_no_legacy_detail_key(self):
+        """TASK-008 cleanup: 'detail' key must NOT be present."""
         exc = AuthenticationFailed("Invalid token.")
         response = run_handler(exc)
-        assert response.data.get("detail") == response.data["error"]
+        assert "detail" not in response.data
 
     def test_error_value_is_plain_string_not_object(self):
         """The error value must be a plain string — never a dict or ErrorDetail."""
         exc = NotAuthenticated()
         response = run_handler(exc)
         assert type(response.data["error"]) is str  # noqa: E721
-
-    def test_detail_value_is_plain_string_not_object(self):
-        """TASK-012 transition: legacy 'detail' must also be a plain string."""
-        exc = NotAuthenticated()
-        response = run_handler(exc)
-        assert type(response.data["detail"]) is str  # noqa: E721
 
 
 # ---------------------------------------------------------------------------
@@ -162,13 +162,19 @@ class TestValidationErrors:
         assert entry["field"] == "email"
         assert "valid email" in entry["message"]
 
-    def test_field_validation_legacy_detail_key(self):
-        """TASK-012 transition: 'detail' mirrors 'error' for validation errors."""
+    def test_field_validation_no_legacy_detail_key(self):
+        """TASK-008 cleanup: 'detail' key must NOT be present after FE migration."""
         exc = ValidationError({"email": ["Enter a valid email address."]})
         response = run_handler(exc)
-        data = response.data
-        assert "detail" in data, "Legacy 'detail' key must be present during TASK-012 transition"
-        assert data["detail"] == data["error"]
+        assert "detail" not in response.data, (
+            "Legacy 'detail' key must be removed — FE migration confirmed 2026-04-30"
+        )
+
+    def test_field_validation_no_deprecation_header(self):
+        """Deprecation monitoring header must be absent after cleanup."""
+        exc = ValidationError({"email": ["Enter a valid email address."]})
+        response = run_handler(exc)
+        assert response.get("Deprecation") is None
 
     def test_multiple_field_errors(self):
         exc = ValidationError({
@@ -205,13 +211,11 @@ class TestValidationErrors:
         assert len(details) == 2
         assert all(d["field"] is None for d in details)
 
-    def test_list_form_validation_legacy_detail_key(self):
-        """TASK-012 transition: list-form ValidationError also emits 'detail'."""
+    def test_list_form_validation_no_legacy_detail_key(self):
+        """TASK-008 cleanup: list-form ValidationError must NOT emit 'detail'."""
         exc = ValidationError(["Something went wrong."])
         response = run_handler(exc)
-        data = response.data
-        assert "detail" in data
-        assert data["detail"] == data["error"]
+        assert "detail" not in response.data
 
     def test_error_summary_string_for_field_errors(self):
         """Summary 'error' key must still be a string even for validation errors."""

@@ -1,5 +1,178 @@
 # LearnPuddle LMS — Shared Coordination Log
 
+## 2026-04-30 — Coordinator Session
+
+**Agent:** coordinator (Opus)
+
+### TASK-013 XP-on-timeout follow-up — CLOSED
+
+The only remaining open follow-up on
+`docs/coordination/TASK-013-multiple-quiz-attempts-timed-quizzes.md`
+(reviewer's note: `on_quiz_submission` was awarding XP on force-closed
+timed quiz attempts) is now closed.
+
+- **Guard already existed** in HEAD at
+  `backend/apps/progress/gamification_signals.py:147-167` from sprint-2
+  batch work (`7e6439b`). What was missing: structured log + 2 policy-
+  clarifying tests.
+- **Added** structured `logger.info(..., extra={"metric":
+  "quiz_xp_skipped_on_timeout", "attempt_id": ..., "quiz_id": ...,
+  "teacher_id": ..., "tenant_id": ..., "attempt_number": ...})` to make
+  the skip path discoverable in observability.
+- **Tests** in `backend/apps/progress/tests_gamification_signals.py`
+  `QuizSubmissionSignalTest`:
+  - existing — `test_abandoned_timed_attempt_is_skipped` (timed-out + 0
+    ⇒ no XP) and `test_time_expired_with_nonzero_score_still_awards`.
+  - NEW — `test_earned_zero_score_not_timed_out_still_awards` (locks in
+    policy that earned zeros still earn XP — only force-closes are
+    skipped).
+  - NEW — `test_abandoned_timed_attempt_emits_structured_log`.
+- **Docs** — TASK-013 follow-up bullet struck and a `## Follow-up
+  Closeouts (2026-04-30)` section added with file:line + test names.
+- **Daily** — `~/ObsidianVault/learnpuddle-lms/daily/2026-04-30.md`.
+
+### Bundle status (unchanged from 2026-04-29)
+
+Wave 5–9 MAIC bundle reported "commit-ready" by yesterday's reviewer
+pass. Outstanding gates (all user-blocked):
+
+1. F6 cert (CG-P1-13 + F6-v2) — browser DevTools task.
+2. CG-P1-15 production fix — research-only writeup awaiting user
+   Option A/B/C decision.
+3. Wave 5–9 commit bundle — user controls all git writes.
+
+### TASK-013 verification — 9/9 GREEN
+
+`pytest apps/progress/tests_gamification_signals.py -k "QuizSubmission or
+quiz_submission or timed or abandoned or earned_zero or structured_log"`
+came back **9 passed, 18 deselected** in 7:13 (host venv). All four
+targeted cases pass: `test_abandoned_timed_attempt_is_skipped`,
+`test_time_expired_with_nonzero_score_still_awards`,
+`test_earned_zero_score_not_timed_out_still_awards` (NEW),
+`test_abandoned_timed_attempt_emits_structured_log` (NEW). One
+harmless teardown warning (`database "test_lms_db" does not exist` — known
+pytest-django host-venv artifact, not a real failure).
+
+### Wave 5–9 bundle verification — 334/4 (4 known-RED, 0 new)
+
+Focused pytest `tests/courses/ + apps/courses/tests_maic_image_fill_meta.py
++ apps/courses/tests_maic_prompts.py` came back **334 passed / 4 failed in
+28:34**. The 4 failures are exactly the 4 known-RED CG-P1-15 cases in
+`tests/courses/test_image_fill_dedup.py` (gated on user Option A/B/C):
+
+- `test_teacher_scene_content_does_not_inline_fetch_images`
+- `test_student_scene_content_does_not_inline_fetch_images`
+- `test_service_fill_image_urls_does_not_call_fetch_scene_image`
+- `test_defer_image_fill_does_not_leak_across_tenants`
+
+All 4 fail with `mock_fetch.call_count == 1, expected 0` — service-layer
+`_fill_image_urls` still inlines `fetch_scene_image` per
+`maic_generation_service.py:1838,1845`. Pre-existing contract drift, not
+a regression from today's or yesterday's work.
+
+**Verdict: bundle commit-ready.** Zero new reds beyond the documented
+CG-P1-15 set; the wave 5–9 + 2026-04-29 R-fixes + today's TASK-013
+closeout all hold.
+
+### TASK-010 (60% coverage gate)
+
+Coverage % not measured this session — the focused suite alone ran
+28+ min and a full `--cov` pass would have blown the time budget.
+TASK-010 status remains `in-progress`; a Docker-based
+`pytest --cov --cov-fail-under=60` is the canonical measurement that
+matches CI. Recommend running that under
+`docker compose exec web pytest --cov` rather than the host venv.
+
+### Subagent dispatch caveat
+
+Specialist subagents (`backend-security`, `backend-engineer`, etc.) are
+not registered in this Claude harness — only `general-purpose`, `Explore`,
+`Plan`. Two `general-purpose` dispatches paused at ~12 min waiting on
+pytest and could not be resumed (`SendMessage` not exposed). One of them
+landed its file edits before pausing — that's the TASK-013 work above.
+The verification dispatch left no changes and was re-run via direct Bash.
+
+### Hard rules respected
+
+Zero `git commit/add/push` by coordinator or any dispatched subagent.
+
+---
+
+## 2026-04-28 — DevOps Agent Session
+
+**Agent:** devops (Sonnet)
+
+### Audit Findings — Post MAIC CG-P1 Sprint
+
+Performed a comprehensive read-through of all DevOps-owned files and reviewed
+recent commits (CG-P1-2 through CG-P1-13) to check for infra regressions or
+new requirements. All Phase 1/2/3 tasks remain complete.
+
+### Infrastructure Health Check
+
+| Area | Status | Evidence |
+|------|--------|---------|
+| Docker Compose (prod) | ✅ OK | All services: log rotation, healthchecks, resource limits |
+| Docker Compose (staging) | ✅ OK | Mirrors prod with relaxed limits |
+| Docker Compose (dev) | ✅ OK | Minimal infra services, correct learnpuddle defaults |
+| nginx/nginx.conf | ✅ OK | Cloudflare origin cert config, shared_locations.conf |
+| nginx/production.conf | ✅ OK | Local SSL termination, correct 10M/512M body limits |
+| nginx/nginx.staging.conf | ✅ OK | Security headers aligned to production (fixed 2026-04-25) |
+| nginx/Dockerfile | ✅ OK | USER nginx, multi-stage frontend bake, chown complete |
+| backend/Dockerfile | ✅ OK | Non-root appuser, multi-stage deps layer |
+| frontend/Dockerfile | ✅ OK | USER nginx, healthcheck via wget |
+| CI/CD (ci.yml) | ✅ OK | E2E blocking, 60% coverage threshold, rollback deploy |
+| CI/CD (e2e.yml) | ✅ OK | Full local stack E2E on PR |
+| Celery queues | ✅ OK | default, video, notifications (worker), tts (worker-tts) |
+| Backup scripts | ✅ OK | Integrity verification with gunzip -t + header check |
+
+### New Backend Development — Infra Impact Assessment
+
+Reviewed uncommitted backend changes (MAIC CG-P1-* sprint + SCIM + billing):
+
+**`backend/config/celery.py`** (backend agent's work):
+- Consolidated all Celery beat tasks into single `app.conf.beat_schedule` source
+  (fixes "silent drop" bug where settings.py CELERY_BEAT_SCHEDULE was ignored)
+- Added `fill_classroom_images` → `default` queue routing (previously unrouted,
+  accumulated on unread "celery" queue causing images_pending to stick True)
+- Added `semantic_search.*` → `default` queue routing (same root cause)
+- **Infra impact**: None — both route to `default`, already drained by `worker` service
+  (`-Q default,video,notifications`)
+
+**New app modules** (SCIM2, billing, integrations_chat, integrations_calendar):
+- All are Django apps served by existing `web` service via Django URL routing
+- **Infra impact**: None — no new Docker services needed
+
+**`backend/requirements.txt`**:
+- Added `urllib3>=2.0,<3` floor-pin for SSRF guard (backend security fix)
+- **Infra impact**: None — Docker image rebuild picks up on next deploy
+
+### Working Tree Status
+
+| File | Status | Action needed |
+|------|--------|--------------|
+| `scripts/restore-db.sh` | Has uncommitted fix (postgres→learnpuddle) | Commit when merging current branch |
+| `backend/config/celery.py` | Backend agent's beat schedule consolidation | Commit (backend agent owns) |
+| `backend/requirements.txt` | urllib3 pin | Commit (backend agent owns) |
+
+### Maintenance Item (non-urgent)
+
+`nginx/nginx.conf` Cloudflare IP ranges (`set_real_ip_from`) should be
+periodically verified against https://cloudflare.com/ips-v4. Current list
+matches early-2024 snapshot. Cloudflare rarely changes these but an annual
+refresh is good practice. Not a blocking issue.
+
+### Outstanding Items (unchanged from prior session)
+
+1. **TASK-010** (`in-progress`, qa-tester): Actual pytest run needed to confirm
+   ≥ 60% threshold. Estimated 58–62%; CI will gate any deploy that falls short.
+2. **CSP `unsafe-inline`/`unsafe-eval`** (deferred): Present in `production.conf`
+   and `nginx.staging.conf`; requires frontend bundle audit before removal.
+3. **Uncommitted worktrees**: TASK-005/006/007/008/009/012 and current MAIC work
+   need human merge/commit.
+
+---
+
 ## 2026-04-25 — DevOps Agent Session
 
 **Agent:** devops (Sonnet)
@@ -1596,4 +1769,19 @@ four services (db, redis, minio, ollama).
 1. **Docker smoke test** (from 2026-04-21): `docker build -f nginx/Dockerfile -t lms-nginx-test . && docker run --rm lms-nginx-test nginx -t` — pending human/CI run.
 2. **TASK-010**: Coverage ≥ 60% — pending `pytest --cov` run with Docker.
 3. **CSP tightening**: `unsafe-inline`/`unsafe-eval` in `script-src` — frontend security pass.
+
+---
+
+## 2026-04-30 — Coordinator session 2 — hold-state confirmation (no-op)
+
+**Agent:** coordinator (in-session; specialist subagents not registered in this harness — only `general-purpose`/`Explore`/`Plan` exposed).
+
+Second pickup the same day. Drift-check vs. yesterday's hand-off:
+- `git status --short` → **230** changes (unchanged).
+- HEAD still at `ffa08fc` (CG-P1-13 pause-mid-fetch race).
+- TASK-013 closeout files (`gamification_signals.py` +12 / `tests_gamification_signals.py` +32) match yesterday's writeup byte-for-byte.
+
+**No actionable unblocked work remains.** All P0/P1 in `tasks/_BACKLOG.md` are ✅ Done. The wave 5–9 bundle is commit-ready and held on three explicit user-blocked items: (1) F6 browser-DevTools manual cert, (2) CG-P1-15 Option A/B/C decision, (3) Wave 5–9 commit (user controls all git writes per hard rule). Four known-RED tests in `tests/courses/test_image_fill_dedup.py` are gated on item (2) and are not regressions.
+
+**Output:** documentation only — coordinator hold-state section in `~/ObsidianVault/learnpuddle-lms/daily/2026-04-30.md` and this entry. Zero git operations, zero production code edits, zero test runs.
 

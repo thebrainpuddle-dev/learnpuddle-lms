@@ -1,6 +1,9 @@
 # apps/users/serializers.py
 
+import logging
 import re
+
+logger = logging.getLogger(__name__)
 
 from rest_framework import serializers
 from apps.users.models import User
@@ -304,8 +307,11 @@ class RegisterTeacherSerializer(serializers.ModelSerializer):
         try:
             from apps.users.password_validators import record_password_history
             record_password_history(user)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                "register: failed to record initial password history for user=%s: %s",
+                user.id, exc,
+            )
 
         return user
 

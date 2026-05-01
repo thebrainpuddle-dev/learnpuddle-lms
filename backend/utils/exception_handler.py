@@ -4,8 +4,7 @@ Custom DRF exception handler that normalises all DRF exception responses to the
 LearnPuddle canonical error shape:
 
     {
-        "error": "<human-readable summary>",          # canonical key (new)
-        "detail": "<same value>",                     # legacy key (emitted during transition)
+        "error": "<human-readable summary>",          # canonical key
         "details": [                                  # optional, present when there are
             {"field": "email", "message": "Enter a valid email address."},
             {"field": null,    "message": "Non-field error message."}
@@ -13,13 +12,13 @@ LearnPuddle canonical error shape:
         "code": "optional_snake_case_code"            # only when DRF provides one
     }
 
-Transition note
----------------
-Both ``error`` (canonical) and ``detail`` (legacy) are emitted simultaneously
-until TASK-012 completes the frontend cleanup pass.  Any frontend code that
-reads ``data.detail`` will keep working; new code should read ``data.error``.
-After TASK-012 ships, remove the ``"detail"`` line from each case below and
-drop it from the TypeScript response types.
+TASK-008 AC6 — cleanup complete (2026-04-30)
+--------------------------------------------
+The legacy ``detail`` key has been removed.  Frontend migration of all
+``data.detail`` reads to ``data?.error ?? data?.detail`` was confirmed
+complete by frontend-engineer on 2026-04-30 (see inbox note
+``FE-TASK008-DETAIL-KEY-MIGRATION-COMPLETE-2026-04-30.md``).
+The ``Deprecation: detail-key`` monitoring header has also been removed.
 
 Error sources and their handling
 ---------------------------------
@@ -140,7 +139,6 @@ def custom_exception_handler(exc, context):
         error_str = str(detail_value)
         new_data: dict = {
             "error": error_str,
-            "detail": error_str,  # TASK-012 transition: drop once frontend cleanup is done
         }
         # Preserve error code when DRF provides one (e.g. "not_authenticated")
         code = getattr(detail_value, "code", None)
@@ -154,7 +152,6 @@ def custom_exception_handler(exc, context):
         detail_value = data.pop("detail")
         error_str = str(detail_value)
         data["error"] = error_str
-        data["detail"] = error_str  # TASK-012 transition: drop once frontend cleanup is done
         code = getattr(detail_value, "code", None)
         if code and code not in ("invalid", "error"):
             data["code"] = str(code)
@@ -168,7 +165,6 @@ def custom_exception_handler(exc, context):
         details = _flatten_drf_errors(data)
         response.data = {
             "error": "Validation failed.",
-            "detail": "Validation failed.",  # TASK-012 transition: drop once frontend cleanup is done
             "details": details,
         }
         return response
@@ -178,7 +174,6 @@ def custom_exception_handler(exc, context):
         details = _flatten_drf_errors(data)
         response.data = {
             "error": "Validation failed.",
-            "detail": "Validation failed.",  # TASK-012 transition: drop once frontend cleanup is done
             "details": details,
         }
         return response
@@ -187,6 +182,5 @@ def custom_exception_handler(exc, context):
     error_str = str(data)
     response.data = {
         "error": error_str,
-        "detail": error_str,  # TASK-012 transition: drop once frontend cleanup is done
     }
     return response

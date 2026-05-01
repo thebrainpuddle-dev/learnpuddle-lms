@@ -7,7 +7,7 @@
 //      the speech before/after it.
 //   3. seekToSlide(n) is idempotent w.r.t. a no-match (returns no-op).
 
-import { describe, test, expect, vi, beforeEach } from 'vitest';
+import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 import { MAICPlaybackEngine } from '../maicPlaybackEngine';
 import { MAICActionEngine } from '../maicActionEngine';
 import { useMAICStageStore } from '../../stores/maicStageStore';
@@ -382,5 +382,166 @@ describe('MAICPlaybackEngine.enterDiscussionFromUI', () => {
     // Checkpoint shouldn't advance.
     // @ts-expect-error private test-only access
     expect(pe.checkpoint?.actionIndex).toBe(1);
+  });
+});
+
+// ─── F10 — Tab visibilitychange handled in playback engine ──────────────────
+//
+// Bug shape: when the user backgrounds the tab on iOS Safari, AudioContext
+// can re-suspend mid-playback. The action engine's F11 listener (added today)
+// resets the unlock latches, but the playback engine itself stays in mode
+// 'playing'. On return, the next scheduled speech tries to start while the
+// AudioContext is still asleep — silent skipped speech.
+//
+// Fix shape: a single document.visibilitychange listener inside the playback
+// engine. On document.hidden === true → setMode('paused') so the user comes
+// back to a deliberately paused engine (rather than a "playing-but-silent"
+// half state). We do NOT auto-resume on visible — autoplay policy blocks
+// programmatic play after a hide, and the action engine's F11 listener
+// already resets the unlock latches so the next user gesture re-runs unlock.
+// Detached in dispose() so engine recreation across route changes does not
+// leak listeners.
+describe('MAICPlaybackEngine — F10 visibilitychange handler', () => {
+  let originalHidden: PropertyDescriptor | undefined;
+
+  beforeEach(() => {
+    originalHidden = Object.getOwnPropertyDescriptor(document, 'hidden');
+  });
+
+  afterEach(() => {
+    if (originalHidden) {
+      Object.defineProperty(document, 'hidden', originalHidden);
+    } else {
+      Object.defineProperty(document, 'hidden', {
+        value: false,
+        configurable: true,
+        writable: true,
+      });
+    }
+  });
+
+  test('document.hidden=true while playing flips engine to paused', () => {
+    const ae = new MAICActionEngine({ ttsEndpoint: '/tts', token: 't' });
+    vi.spyOn(ae, 'execute').mockImplementation(() => Promise.resolve());
+    vi.spyOn(ae, 'prefetchSpeech').mockImplementation(() => undefined);
+    vi.spyOn(ae, 'pauseCurrentAudio').mockImplementation(() => undefined);
+    const pe = new MAICPlaybackEngine(ae);
+
+    pe.loadScene({
+      id: 's1',
+      title: 's',
+      type: 'lecture',
+      actions: [
+        { type: 'speech', agentId: 'a1', text: 'one' },
+        { type: 'speech', agentId: 'a1', text: 'two' },
+      ],
+    } as any);
+
+    // Drive to a 'playing' state without invoking the real recursive chain.
+    // @ts-expect-error private test-only access
+    pe.mode = 'playing';
+    expect(pe.getState()).toBe('playing');
+
+    // Simulate iOS tab background.
+    Object.defineProperty(document, 'hidden', {
+      value: true,
+      configurable: true,
+      writable: true,
+    });
+    document.dispatchEvent(new Event('visibilitychange'));
+
+    // Engine flipped to paused — UI shows pause state, no half-silent
+    // playback when the user returns.
+    expect(pe.getState()).toBe('paused');
+  });
+
+  test('document.hidden=true while idle is a no-op', () => {
+    const ae = new MAICActionEngine({ ttsEndpoint: '/tts', token: 't' });
+    vi.spyOn(ae, 'execute').mockImplementation(() => Promise.resolve());
+    vi.spyOn(ae, 'prefetchSpeech').mockImplementation(() => undefined);
+    // WAVE-2-F10-F1: spy pauseCurrentAudio so we can assert the visibility
+    // handler does NOT call it when mode !== 'playing'. Without this
+    // assertion, removing the `mode === 'playing'` guard would leave the
+    // mode === 'idle' check passing while still firing pauseCurrentAudio
+    // — an audible side effect on a tab that wasn't even playing yet.
+    const pauseAudioSpy = vi
+      .spyOn(ae, 'pauseCurrentAudio')
+      .mockImplementation(() => undefined);
+    const pe = new MAICPlaybackEngine(ae);
+
+    pe.loadScene({
+      id: 's1',
+      title: 's',
+      type: 'lecture',
+      actions: [{ type: 'speech', agentId: 'a1', text: 'one' }],
+    } as any);
+
+    Object.defineProperty(document, 'hidden', {
+      value: true,
+      configurable: true,
+      writable: true,
+    });
+    document.dispatchEvent(new Event('visibilitychange'));
+
+    // Idle stays idle — pause() guards on mode === 'playing'.
+    expect(pe.getState()).toBe('idle');
+    // Mutation-test the guard: with the `mode === 'playing'` check removed,
+    // pauseCurrentAudio fires here. The guard's job is to keep this at zero.
+    expect(pauseAudioSpy).not.toHaveBeenCalled();
+  });
+
+  test('return-to-visible does NOT auto-resume — leaves it to user gesture', () => {
+    const ae = new MAICActionEngine({ ttsEndpoint: '/tts', token: 't' });
+    vi.spyOn(ae, 'execute').mockImplementation(() => Promise.resolve());
+    vi.spyOn(ae, 'prefetchSpeech').mockImplementation(() => undefined);
+    vi.spyOn(ae, 'pauseCurrentAudio').mockImplementation(() => undefined);
+    const pe = new MAICPlaybackEngine(ae);
+
+    pe.loadScene({
+      id: 's1',
+      title: 's',
+      type: 'lecture',
+      actions: [{ type: 'speech', agentId: 'a1', text: 'one' }],
+    } as any);
+
+    // Force playing → hide → engine flips to paused (asserted by previous test).
+    // @ts-expect-error private test-only access
+    pe.mode = 'playing';
+    Object.defineProperty(document, 'hidden', {
+      value: true,
+      configurable: true,
+      writable: true,
+    });
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(pe.getState()).toBe('paused');
+
+    // Return to visible.
+    Object.defineProperty(document, 'hidden', {
+      value: false,
+      configurable: true,
+      writable: true,
+    });
+    document.dispatchEvent(new Event('visibilitychange'));
+
+    // Engine must STAY paused — auto-resume would be rejected by autoplay
+    // policy on iOS, and the user's Play button is the right place to
+    // re-engage the unlock pipeline (action engine F11 listener already
+    // reset its latches on hide).
+    expect(pe.getState()).toBe('paused');
+  });
+
+  test('dispose() detaches the visibility listener — no leak across engine recreations', () => {
+    const removeSpy = vi.spyOn(document, 'removeEventListener');
+    const ae = new MAICActionEngine({ ttsEndpoint: '/tts', token: 't' });
+    vi.spyOn(ae, 'execute').mockImplementation(() => Promise.resolve());
+    vi.spyOn(ae, 'prefetchSpeech').mockImplementation(() => undefined);
+    const pe = new MAICPlaybackEngine(ae);
+    pe.dispose();
+
+    const removed = removeSpy.mock.calls.some(
+      (c) => c[0] === 'visibilitychange',
+    );
+    expect(removed).toBe(true);
+    removeSpy.mockRestore();
   });
 });

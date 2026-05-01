@@ -23,7 +23,7 @@ import hashlib
 import uuid
 
 import pytest
-from django.test import Client, override_settings
+from django.test import Client
 from django.urls import reverse
 
 from apps.tenants.models import Tenant
@@ -35,9 +35,6 @@ pytestmark = pytest.mark.django_db
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-ALLOWED_HOST_SETTINGS = dict(ALLOWED_HOSTS=["*"], PLATFORM_DOMAIN="lms.test")
-
 
 def _make_tenant(subdomain: str = None) -> Tenant:
     subdomain = subdomain or uuid.uuid4().hex[:8]
@@ -142,12 +139,36 @@ class TestSCIMTokenModel:
         assert all(c not in raw_token for c in ("+", "/", "="))
         assert len(raw_token) >= 32
 
+    def test_verify_rejected_when_tenant_is_inactive(self):
+        """SCIMToken.verify() returns None when the tenant is deactivated.
+
+        An inactive tenant must not accept SCIM provisioning — returning the
+        token would allow IdPs to create/modify users on a suspended account.
+
+        M6 fix (TASK-023-followup): ``SCIMToken.verify`` must check
+        ``scim_token.tenant.is_active`` and reject requests to suspended tenants.
+        """
+        from apps.users.scim_models import SCIMToken
+
+        tenant = _make_tenant()
+        admin = _make_admin(tenant)
+        raw_token, _ = SCIMToken.generate(tenant=tenant, name="Okta", created_by=admin)
+
+        # Suspend the tenant (e.g., payment failed, admin deactivated account)
+        tenant.is_active = False
+        tenant.save(update_fields=["is_active"])
+
+        result = SCIMToken.verify(raw_token)
+        assert result is None, (
+            "SCIMToken.verify() must return None when tenant.is_active=False. "
+            "M6: suspended tenants must not accept SCIM provisioning."
+        )
+
 
 # ---------------------------------------------------------------------------
 # 2. SCIM Authentication middleware
 # ---------------------------------------------------------------------------
 
-@override_settings(**ALLOWED_HOST_SETTINGS)
 class TestSCIMAuthentication:
     """All SCIM endpoints require a valid Bearer token."""
 
@@ -195,12 +216,37 @@ class TestSCIMAuthentication:
         resp = c.get("/scim/v2/Users", **_scim_headers(raw_token))
         assert resp.status_code == 401
 
+    def test_inactive_tenant_token_returns_401(self):
+        """Valid token for a deactivated tenant → 401.
+
+        Verifies that the tenant.is_active check in SCIMToken.verify() flows
+        through to the HTTP layer: an IdP cannot provision users on a suspended
+        tenant even if it holds a valid (not-revoked) token.
+
+        M6 fix (TASK-023-followup): guards SCIM provisioning on suspended accounts.
+        """
+        from apps.users.scim_models import SCIMToken
+
+        tenant = _make_tenant()
+        admin = _make_admin(tenant)
+        raw_token, _ = SCIMToken.generate(tenant=tenant, name="Okta", created_by=admin)
+
+        # Suspend the tenant (e.g., account suspended, payment failed)
+        tenant.is_active = False
+        tenant.save(update_fields=["is_active"])
+
+        c = Client()
+        resp = c.get("/scim/v2/Users", **_scim_headers(raw_token))
+        assert resp.status_code == 401, (
+            f"Expected 401 for inactive tenant, got {resp.status_code}. "
+            "M6: suspended tenants must not accept SCIM provisioning."
+        )
+
 
 # ---------------------------------------------------------------------------
 # 3. GET /scim/v2/Users — list
 # ---------------------------------------------------------------------------
 
-@override_settings(**ALLOWED_HOST_SETTINGS)
 class TestSCIMListUsers:
     """Tests for SCIM user list endpoint."""
 
@@ -297,12 +343,84 @@ class TestSCIMListUsers:
         assert "meta" in user
         assert user["meta"]["resourceType"] == "User"
 
+    def test_list_users_sortby_username_ascending(self):
+        """?sortBy=userName returns users ordered by email ascending (the
+        SCIM userName maps to User.email in this implementation)."""
+        tenant, raw_token = self._setup()
+        _make_teacher(tenant, email="zebra@test.com")
+        _make_teacher(tenant, email="apple@test.com")
+        _make_teacher(tenant, email="mango@test.com")
+
+        c = Client()
+        resp = c.get("/scim/v2/Users?sortBy=userName", **_scim_headers(raw_token))
+        data = resp.json()
+
+        assert resp.status_code == 200
+        emails = [r["userName"] for r in data["Resources"]]
+        assert emails == sorted(emails), (
+            f"Expected ascending order, got: {emails}"
+        )
+
+    def test_list_users_sortby_email_is_synonym_for_username(self):
+        """?sortBy=email (case-insensitive) is treated as a synonym for
+        sortBy=userName (both map to the email column)."""
+        tenant, raw_token = self._setup()
+        _make_teacher(tenant, email="z@test.com")
+        _make_teacher(tenant, email="a@test.com")
+
+        c = Client()
+        resp = c.get("/scim/v2/Users?sortBy=email", **_scim_headers(raw_token))
+        data = resp.json()
+
+        assert resp.status_code == 200
+        emails = [r["userName"] for r in data["Resources"]]
+        assert emails == sorted(emails)
+
+    def test_list_users_sortby_descending_order(self):
+        """?sortBy=userName&sortOrder=descending returns users in reverse email order."""
+        tenant, raw_token = self._setup()
+        _make_teacher(tenant, email="alpha@test.com")
+        _make_teacher(tenant, email="zeta@test.com")
+        _make_teacher(tenant, email="mu@test.com")
+
+        c = Client()
+        resp = c.get(
+            "/scim/v2/Users?sortBy=userName&sortOrder=descending",
+            **_scim_headers(raw_token),
+        )
+        data = resp.json()
+
+        assert resp.status_code == 200
+        emails = [r["userName"] for r in data["Resources"]]
+        assert emails == sorted(emails, reverse=True), (
+            f"Expected descending order, got: {emails}"
+        )
+
+    def test_list_users_unknown_sortby_returns_400(self):
+        """?sortBy=<unsupported-attr> must return 400 (invalidValue) per RFC 7644.
+
+        This prevents IdP test-suites from silently receiving unsorted
+        results when they request an attribute the implementation does not
+        support — they get an explicit error instead.
+        """
+        tenant, raw_token = self._setup()
+
+        c = Client()
+        resp = c.get("/scim/v2/Users?sortBy=phoneNumber", **_scim_headers(raw_token))
+        data = resp.json()
+
+        assert resp.status_code == 400, (
+            f"Expected 400 for unsupported sortBy, got {resp.status_code}"
+        )
+        assert data.get("scimType") == "invalidValue", (
+            f"Expected scimType='invalidValue', got: {data}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # 4. POST /scim/v2/Users — provision
 # ---------------------------------------------------------------------------
 
-@override_settings(**ALLOWED_HOST_SETTINGS)
 class TestSCIMCreateUser:
     """Tests for SCIM user provisioning (POST)."""
 
@@ -434,7 +552,6 @@ class TestSCIMCreateUser:
 # 5. GET /scim/v2/Users/{id}
 # ---------------------------------------------------------------------------
 
-@override_settings(**ALLOWED_HOST_SETTINGS)
 class TestSCIMGetUser:
     """Tests for SCIM GET single user."""
 
@@ -487,7 +604,6 @@ class TestSCIMGetUser:
 # 6. PUT /scim/v2/Users/{id} — full replace
 # ---------------------------------------------------------------------------
 
-@override_settings(**ALLOWED_HOST_SETTINGS)
 class TestSCIMPutUser:
     """Tests for SCIM PUT (full replace)."""
 
@@ -568,12 +684,65 @@ class TestSCIMPutUser:
         )
         assert resp.status_code == 404
 
+    # -- SCIM-POLISH-2026-04-27: PUT replace semantics -----------------------
+
+    def test_put_user_clears_first_name_when_given_name_is_empty_string(self):
+        """
+        PUT with name.givenName="" should clear first_name (replace semantics).
+
+        Previously the handler used `or user.first_name` fallback, retaining
+        the old value on empty string.  After the polish fix the `"givenName" in
+        name_obj` branch overwrites unconditionally, so givenName="" → first_name="".
+        """
+        _, raw_token, teacher = self._setup()
+        assert teacher.first_name != "", "pre-condition: teacher has a non-empty first name"
+
+        c = Client()
+        resp = c.put(
+            f"/scim/v2/Users/{teacher.id}",
+            data={
+                "schemas": ["urn:ietf:params:scim:schemas:core:2.0:User"],
+                "userName": teacher.email,
+                "name": {"givenName": "", "familyName": teacher.last_name},
+            },
+            content_type="application/scim+json",
+            **_scim_headers(raw_token),
+        )
+        assert resp.status_code == 200
+        teacher.refresh_from_db()
+        assert teacher.first_name == ""
+
+    def test_put_user_retains_first_name_when_given_name_absent(self):
+        """
+        PUT body that omits the name.givenName key entirely should retain the
+        existing first_name value.
+
+        RFC 7644 §3.5.1 allows partial-PUT bodies; the `"givenName" in name_obj`
+        check ensures absent keys are treated as "no change".
+        """
+        _, raw_token, teacher = self._setup()
+        original_first_name = teacher.first_name
+
+        c = Client()
+        resp = c.put(
+            f"/scim/v2/Users/{teacher.id}",
+            data={
+                "schemas": ["urn:ietf:params:scim:schemas:core:2.0:User"],
+                "userName": teacher.email,
+                # name key absent entirely — givenName should be retained
+            },
+            content_type="application/scim+json",
+            **_scim_headers(raw_token),
+        )
+        assert resp.status_code == 200
+        teacher.refresh_from_db()
+        assert teacher.first_name == original_first_name
+
 
 # ---------------------------------------------------------------------------
 # 7. PATCH /scim/v2/Users/{id} — partial update via Operations
 # ---------------------------------------------------------------------------
 
-@override_settings(**ALLOWED_HOST_SETTINGS)
 class TestSCIMPatchUser:
     """Tests for SCIM PATCH (partial update via Operations array)."""
 
@@ -789,12 +958,136 @@ class TestSCIMPatchUser:
             if record.levelno == logging.DEBUG
         )
 
+    # -- _coerce_scim_str: null-givenName regression --------------------------
+
+    def test_patch_null_given_name_via_pathless_replace_stores_empty_string(self):
+        """
+        PATCH path-less replace with null givenName must store "" not "None".
+
+        Some IdPs (e.g. WorkDay) send null for attributes they wish to clear:
+            {"op": "replace", "value": {"name": {"givenName": null}}}
+
+        Before _coerce_scim_str, _apply_scim_replace_dict called str(None).strip()
+        which persisted the literal string "None" to the database.
+        """
+        _, raw_token, teacher = self._setup()
+        teacher.first_name = "Jane"
+        teacher.save(update_fields=["first_name"])
+
+        payload = {
+            "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+            "Operations": [
+                {
+                    "op": "replace",
+                    "value": {"name": {"givenName": None}},
+                }
+            ],
+        }
+        c = Client()
+        resp = c.patch(
+            f"/scim/v2/Users/{teacher.id}",
+            data=payload,
+            content_type="application/scim+json",
+            **_scim_headers(raw_token),
+        )
+        assert resp.status_code == 200
+        teacher.refresh_from_db()
+        assert teacher.first_name == "", (
+            f"Expected first_name='' after null givenName patch, got {teacher.first_name!r}. "
+            "Regression: _coerce_scim_str must return '' not 'None' for null input."
+        )
+
+    def test_patch_null_given_name_via_pathed_replace_stores_empty_string(self):
+        """
+        PATCH pathed replace with null value must also store "" not "None".
+
+        Covers the _apply_scim_replace_path branch:
+            {"op": "replace", "path": "name.givenName", "value": null}
+        """
+        _, raw_token, teacher = self._setup()
+        teacher.first_name = "John"
+        teacher.save(update_fields=["first_name"])
+
+        payload = {
+            "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+            "Operations": [
+                {
+                    "op": "replace",
+                    "path": "name.givenName",
+                    "value": None,
+                }
+            ],
+        }
+        c = Client()
+        resp = c.patch(
+            f"/scim/v2/Users/{teacher.id}",
+            data=payload,
+            content_type="application/scim+json",
+            **_scim_headers(raw_token),
+        )
+        assert resp.status_code == 200
+        teacher.refresh_from_db()
+        assert teacher.first_name == "", (
+            f"Expected first_name='' after null pathed givenName patch, got {teacher.first_name!r}. "
+            "Regression: _coerce_scim_str must return '' not 'None' for null input."
+        )
+
+    # -- SCIM-POLISH-2026-04-27: PATCH conditional save ----------------------
+
+    def test_patch_unknown_ops_only_does_not_write_to_db(self):
+        """
+        PATCH whose Operations array contains only unrecognised op types must
+        NOT issue a DB save.
+
+        The optimisation introduced in the SCIM polish sprint sets _user_changed=True
+        only when a recognised 'replace' op is processed.  All-unknown batches
+        leave _user_changed=False and skip user.save(), so updated_at should not
+        advance.
+
+        Note: if the DB or test harness flushes sub-millisecond timestamps this
+        assertion may be fragile — skip rather than xfail if it proves flaky in CI.
+        """
+        import time
+
+        _, raw_token, teacher = self._setup()
+
+        # Capture the timestamp BEFORE the PATCH — refresh ensures we read the
+        # DB-persisted value, not a stale Python object.
+        teacher.refresh_from_db()
+        before_updated_at = teacher.updated_at
+
+        # Small sleep so that any accidental save() would produce a strictly
+        # later timestamp (auto_now=True uses timezone.now() at save time).
+        time.sleep(0.05)
+
+        payload = {
+            "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+            "Operations": [
+                # "add members" is an unrecognised op type in LearnPuddle SCIM
+                {"op": "add", "path": "members", "value": []},
+            ],
+        }
+        c = Client()
+        resp = c.patch(
+            f"/scim/v2/Users/{teacher.id}",
+            data=payload,
+            content_type="application/scim+json",
+            **_scim_headers(raw_token),
+        )
+        assert resp.status_code == 200
+
+        teacher.refresh_from_db()
+        # updated_at must NOT have advanced (no save should have fired)
+        assert teacher.updated_at == before_updated_at, (
+            f"updated_at advanced from {before_updated_at} to {teacher.updated_at} "
+            "— user.save() must have been called for all-unknown-op PATCH (regression)"
+        )
+
 
 # ---------------------------------------------------------------------------
 # 8. DELETE /scim/v2/Users/{id} — deprovision
 # ---------------------------------------------------------------------------
 
-@override_settings(**ALLOWED_HOST_SETTINGS)
 class TestSCIMDeleteUser:
     """Tests for SCIM DELETE (soft deprovision)."""
 
@@ -855,7 +1148,6 @@ class TestSCIMDeleteUser:
 # 9. GET /scim/v2/ServiceProviderConfig
 # ---------------------------------------------------------------------------
 
-@override_settings(**ALLOWED_HOST_SETTINGS)
 class TestSCIMServiceProviderConfig:
     """Tests for the SCIM ServiceProviderConfig endpoint."""
 

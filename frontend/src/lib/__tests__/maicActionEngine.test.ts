@@ -753,7 +753,13 @@ describe('MAICActionEngine — AV-P0-1 live playbackSpeed + audioVolume sync', (
     expect(audio.volume).toBe(0);
   });
 
-  test('subscription is cleaned up on audio end — post-end store changes do not mutate revoked audio', async () => {
+  test('subscription is cleaned up on dispose — post-dispose store changes do not mutate the audio element', async () => {
+    // F5 (2026-04-28): the settings subscription is now ENGINE-LIFETIME,
+    // not per-play. The shared audio element keeps tracking store changes
+    // between speeches (that's the point — instant slider response). The
+    // teardown contract therefore moves from "audio.onended unsubscribes"
+    // to "engine.dispose() unsubscribes". Post-dispose store mutations
+    // must NOT reach the shared element (which is null'd on dispose).
     const engine = new MAICActionEngine({ ttsEndpoint: '/tts', token: 't' });
     const promise = engine.execute({
       type: 'speech',
@@ -768,9 +774,18 @@ describe('MAICActionEngine — AV-P0-1 live playbackSpeed + audioVolume sync', (
     audio.endNow();
     await promise;
 
+    // Between speeches, the engine-lifetime subscription IS still wired —
+    // a store change here SHOULD update the shared audio's playbackRate.
+    // That's the F5 contract: instant slider response.
+    useMAICSettingsStore.setState({ playbackSpeed: 1.7 } as any);
+    await new Promise((r) => setTimeout(r, 5));
+    expect(audio.playbackRate).toBe(1.7);
+
+    // Now dispose — the subscription must detach. Subsequent store
+    // changes must NOT reach `audio` (whose `_sharedAudio` reference
+    // is nulled by dispose).
+    engine.dispose();
     const rateBeforeStoreChange = audio.playbackRate;
-    // Subscription must be gone — mutating store should NOT touch this audio
-    // element anymore (it's already resolved and the engine cleared the ref).
     useMAICSettingsStore.setState({ playbackSpeed: 3 } as any);
     await new Promise((r) => setTimeout(r, 5));
     expect(audio.playbackRate).toBe(rateBeforeStoreChange);
@@ -1138,5 +1153,645 @@ describe('getPrefetchConcurrency (MOB-P0-6)', () => {
       configurable: true,
     });
     expect(getPrefetchConcurrency()).toBe(3);
+  });
+});
+
+// ─── F11 — Visibility-driven unlock retry (iOS audio re-suspend) ────────────
+//
+// On iOS Safari, backgrounding the tab for >30s causes AudioContext to
+// re-suspend. The next play attempt fails silently because unlockAudio()
+// early-returns: `_audioUnlocked` is still true (latched from initial unlock)
+// and `_unlockInFlightPromise` may also be non-null from a prior round.
+//
+// Fix: a `document.visibilitychange` listener. When `document.hidden === true`,
+// reset `_audioUnlocked = false` and clear `_unlockInFlightPromise` so that on
+// resume + next gesture, unlockAudio() runs the full unlock pipeline again.
+//
+// These tests assert the engine attaches a single listener at construction,
+// resets the latch on hide, and detaches on dispose() (no leak).
+
+describe('MAICActionEngine — F11 visibility-driven unlock retry', () => {
+  let originalHidden: PropertyDescriptor | undefined;
+
+  beforeEach(() => {
+    originalHidden = Object.getOwnPropertyDescriptor(document, 'hidden');
+  });
+
+  afterEach(() => {
+    if (originalHidden) {
+      Object.defineProperty(document, 'hidden', originalHidden);
+    } else {
+      // Restore default behaviour.
+      Object.defineProperty(document, 'hidden', {
+        value: false,
+        configurable: true,
+        writable: true,
+      });
+    }
+  });
+
+  test('document hidden=true resets _audioUnlocked so next unlockAudio re-runs', async () => {
+    // First, unlock successfully so _audioUnlocked = true.
+    const resumeImpl = vi.fn(() => Promise.resolve());
+    const MockCtx = vi.fn().mockImplementation(function (this: any) {
+      this.state = 'suspended';
+      this.destination = {};
+      this.resume = vi.fn(resumeImpl);
+      this.createBuffer = vi.fn(() => ({}));
+      this.createBufferSource = vi.fn(() => ({
+        buffer: null,
+        connect: vi.fn(),
+        start: vi.fn(),
+      }));
+    });
+    (globalThis as any).AudioContext = MockCtx;
+    if (typeof window !== 'undefined') (window as any).AudioContext = MockCtx;
+
+    const engine = new MAICActionEngine({ ttsEndpoint: '/tts', token: 't' });
+    engine.unlockAudio();
+    await new Promise((r) => setTimeout(r, 0));
+
+    // Sanity: latched.
+    // @ts-expect-error private field access for test
+    expect(engine._audioUnlocked).toBe(true);
+
+    // Simulate iOS tab backgrounding.
+    Object.defineProperty(document, 'hidden', {
+      value: true,
+      configurable: true,
+      writable: true,
+    });
+    document.dispatchEvent(new Event('visibilitychange'));
+
+    // Latch must reset so unlockAudio() retries on the next gesture.
+    // @ts-expect-error private field access for test
+    expect(engine._audioUnlocked).toBe(false);
+    // @ts-expect-error private field access for test
+    expect(engine._unlockInFlightPromise).toBeNull();
+
+    // Returning to foreground + next unlockAudio() must construct a fresh
+    // resume() round.
+    Object.defineProperty(document, 'hidden', {
+      value: false,
+      configurable: true,
+      writable: true,
+    });
+    document.dispatchEvent(new Event('visibilitychange'));
+
+    const resumeCallsBefore = resumeImpl.mock.calls.length;
+    engine.unlockAudio();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(resumeImpl.mock.calls.length).toBeGreaterThan(resumeCallsBefore);
+
+    engine.dispose();
+  });
+
+  test('dispose() detaches the visibility listener — no leak after engine is gone', async () => {
+    // Build a fresh engine and dispose it; subsequent visibilitychange events
+    // must NOT throw and must NOT touch a disposed engine's internals.
+    const removeSpy = vi.spyOn(document, 'removeEventListener');
+    const engine = new MAICActionEngine({ ttsEndpoint: '/tts', token: 't' });
+    engine.dispose();
+
+    // The engine should have requested removal of its visibilitychange
+    // listener as part of dispose().
+    const removed = removeSpy.mock.calls.some(
+      (c) => c[0] === 'visibilitychange',
+    );
+    expect(removed).toBe(true);
+
+    removeSpy.mockRestore();
+  });
+});
+
+// ─── F12 — Prefetch LRU eviction must not revoke in-flight URLs ─────────────
+//
+// `prefetchCache.keys().next().value` returns the OLDEST cache key. If that key
+// happens to still be in flight (controller present in `prefetchControllers`),
+// evicting + revoking its URL races the in-flight `.then()` that is about to
+// write its blob URL. Fix: skip in-flight keys during eviction; if all keys
+// are in-flight, allow the cache to grow temporarily.
+
+describe('MAICActionEngine — F12 LRU eviction skips in-flight entries', () => {
+  test('LRU eviction does NOT delete an entry whose controller is still in flight', () => {
+    const engine = new MAICActionEngine({ ttsEndpoint: '/tts', token: 't' });
+
+    // Reach into private state via cast — same pattern other tests use.
+    const e = engine as any;
+
+    // Seed the cache up to the limit. Mark the OLDEST key as in-flight by
+    // pushing a controller into prefetchControllers.
+    const LIMIT = 24; // mirrors PREFETCH_CACHE_LIMIT in maicActionEngine.ts
+    for (let i = 0; i < LIMIT; i++) {
+      e.prefetchCache.set(`k${i}`, `blob:url-${i}`);
+    }
+    // k0 is the oldest. Pretend its fetch is still pending.
+    const inFlightController = new AbortController();
+    e.prefetchControllers.set('k0', inFlightController);
+
+    // Trigger the eviction path by calling prefetchSpeech with a NEW key —
+    // because prefetchCache is at the limit, the LRU evict-oldest branch fires.
+    // We bypass the network by stubbing fetch to a never-resolving promise so
+    // we observe ONLY the eviction step (no later .then mutating the cache).
+    (global as any).fetch = vi.fn(() => new Promise(() => { /* never */ }));
+
+    engine.prefetchSpeech({
+      type: 'speech',
+      agentId: 'a1',
+      text: 'fresh line not in cache',
+    } as any);
+
+    // The oldest key (k0) was in-flight — eviction must have skipped it.
+    expect(e.prefetchCache.has('k0')).toBe(true);
+
+    // A non-in-flight key must have been chosen instead.
+    expect(e.prefetchCache.has('k1')).toBe(false);
+
+    engine.dispose();
+  });
+
+  test('when ALL cached entries are in-flight, eviction is skipped — cache grows temporarily', () => {
+    const engine = new MAICActionEngine({ ttsEndpoint: '/tts', token: 't' });
+    const e = engine as any;
+    const LIMIT = 24;
+
+    // Seed limit entries AND mark every one of them as in-flight.
+    for (let i = 0; i < LIMIT; i++) {
+      e.prefetchCache.set(`k${i}`, `blob:url-${i}`);
+      e.prefetchControllers.set(`k${i}`, new AbortController());
+    }
+
+    (global as any).fetch = vi.fn(() => new Promise(() => { /* never */ }));
+
+    engine.prefetchSpeech({
+      type: 'speech',
+      agentId: 'a1',
+      text: 'all in flight no eviction possible',
+    } as any);
+
+    // Every original key must still be there — none evicted.
+    for (let i = 0; i < LIMIT; i++) {
+      expect(e.prefetchCache.has(`k${i}`)).toBe(true);
+    }
+
+    engine.dispose();
+  });
+});
+
+// ─── F9 — abortCurrentAction must not double-fire a stale audioResolve ──────
+//
+// Bug shape: `audio.play().catch(...)` inside `playAudioSynced` is a Promise
+// reaction whose handler cannot be detached. Both that reaction and the abort
+// path can call resolve() on the same promise. Today the play().catch
+// reaction's token check (line ~1232) prevents the catch from clearing
+// `audioResolve` when stale, so abort still fires it once — single net
+// resolve. Fragile: any future bug that lands `audioResolve` non-null with
+// a stale token (e.g. a path that forgets to clear after firing) would have
+// abort double-fire on top of whatever already ran.
+//
+// Fix shape: capture `myToken = this.generationToken` BEFORE bumping inside
+// abortCurrentAction; track an `audioResolveToken` alongside `audioResolve`;
+// only call `audioResolve()` when the planted token matches the captured
+// pre-bump token. A stale resolve is left untouched and silently dropped.
+//
+// Mutation test: removing the `audioResolveToken === myToken` guard makes the
+// stale-token test below fail (the planted spy fires).
+describe('MAICActionEngine — F9 abort path resolve guard', () => {
+  test('abortCurrentAction skips audioResolve when its token is stale', () => {
+    const engine = new MAICActionEngine({ ttsEndpoint: '/tts', token: 't' });
+    const e = engine as any;
+
+    const stalePromiseSpy = vi.fn();
+    // Plant a resolve that belongs to an OLDER generation: simulates the
+    // race shape where a play().catch reaction has already nulled+called
+    // its own resolve, but for some reason the engine field is non-null
+    // (or a future bug leaves it dangling). The captured pre-bump token
+    // must NOT match the planted token, so abort skips the call.
+    e.audioResolve = stalePromiseSpy;
+    e.audioResolveToken = e.generationToken - 1; // stale by one generation
+
+    engine.abortCurrentAction();
+
+    // The stale resolve must NOT be invoked from the abort path.
+    expect(stalePromiseSpy).not.toHaveBeenCalled();
+    // And the abort path must still null the field so any future
+    // ressurection of state doesn't keep the stale closure alive.
+    expect(e.audioResolve).toBeNull();
+  });
+
+  test('abortCurrentAction fires audioResolve exactly once when token matches', () => {
+    const engine = new MAICActionEngine({ ttsEndpoint: '/tts', token: 't' });
+    const e = engine as any;
+
+    const liveSpy = vi.fn();
+    // Plant a resolve under the CURRENT generation — represents an in-flight
+    // speech whose play().catch hasn't fired yet. abortCurrentAction must
+    // resolve it (so the awaiting promise unblocks) and null the field.
+    e.audioResolve = liveSpy;
+    e.audioResolveToken = e.generationToken;
+
+    engine.abortCurrentAction();
+
+    expect(liveSpy).toHaveBeenCalledTimes(1);
+    expect(e.audioResolve).toBeNull();
+  });
+
+  test('after a real-speech abort, engine state is clean and the awaiting promise fires exactly once', async () => {
+    // WAVE-2-F9-F1 (2026-04-28): retitled — this is a state-cleanliness
+    // regression, not a direct mutation test of the token guard (the two
+    // tests above cover the guard with planted resolves). What this proves:
+    // drive a real speech through executeSpeech to populate audioElement
+    // and audioResolve through the production code path, then abort. After
+    // the abort settles, audioElement and audioResolve must both be null
+    // and the awaiting promise must have fired exactly once. A buffered
+    // play().catch reaction firing after the token bump is tolerated.
+    const engine = new MAICActionEngine({ ttsEndpoint: '/tts', token: 't' });
+
+    let speechResolveCount = 0;
+    const wrapped = engine.execute({
+      type: 'speech',
+      agentId: 'a1',
+      text: 'one',
+      audioUrl: 'https://example.com/one.mp3',
+    } as any).then(() => {
+      speechResolveCount++;
+    });
+
+    // Wait for play() to be invoked and the audio element to be tracked.
+    await new Promise((r) => setTimeout(r, 0));
+
+    // Abort mid-flight — bumps token and (under the new guard) resolves
+    // the live audioResolve exactly once.
+    engine.abortCurrentAction();
+    await wrapped;
+    expect(speechResolveCount).toBe(1);
+
+    // Simulate the buffered play().catch reaction running AFTER abort.
+    // It would call resolve() if its token check at line 1232 didn't fire.
+    // The promise has already settled — Promise.resolve() is a no-op — but
+    // the engine state must still be clean (audioElement === null, no
+    // resurrected audioResolve).
+    // @ts-expect-error testing internal
+    expect(engine.audioElement).toBeNull();
+    // @ts-expect-error testing internal
+    expect(engine.audioResolve).toBeNull();
+    expect(speechResolveCount).toBe(1); // still exactly one
+  });
+});
+
+// ─── F7 — explicit `pause` action is a no-op ───────────────────────────────
+//
+// Wave-3 cleanup: OpenMAIC's reference engine has no `pause` action, yet our
+// generator's prompt still emits `{type: "pause", duration: …}` between
+// speaker handoffs. Earlier we clamped to 100ms (CG-P1-3) but that still
+// leaves a measurable gap that compounds with audio-decode latency. The fix
+// is to make `pause` a true no-op in the engine while keeping the case in
+// the dispatch switch and the type in the union, so older classrooms whose
+// stored JSON contains pause actions still match the switch (no "unknown
+// action" warnings) and deserialization keeps working.
+//
+// Mutation test: reverting executePause to `await delay(...)` makes the
+// test below fail because setTimeout would be scheduled by `delay`.
+describe('MAICActionEngine — F7 pause action is a no-op', () => {
+  test('execute({type:"pause",duration:1000}) returns synchronously without scheduling any timer', async () => {
+    const engine = new MAICActionEngine({ ttsEndpoint: '/tts', token: 't' });
+
+    // Spy on setTimeout — the no-op path must NOT call it. The `delay`
+    // helper inside executePause is the only thing pause used to schedule;
+    // a no-op never calls delay() and therefore never calls setTimeout.
+    const setTimeoutSpy = vi.spyOn(global, 'setTimeout');
+    const callsBefore = setTimeoutSpy.mock.calls.length;
+
+    const start = performance.now();
+    await engine.execute({ type: 'pause', duration: 1000 } as any);
+    const elapsed = performance.now() - start;
+
+    // Microtask round-trip is sub-millisecond; a real `delay(100)` would
+    // show ≥80ms even with playbackSpeed=1. Threshold is generous to
+    // tolerate slow CI.
+    expect(elapsed).toBeLessThan(20);
+
+    // No timers were scheduled by the pause path.
+    expect(setTimeoutSpy.mock.calls.length).toBe(callsBefore);
+
+    setTimeoutSpy.mockRestore();
+    engine.dispose();
+  });
+});
+
+// ─── F5 — Single shared HTMLAudioElement (vs `new Audio()` per speech) ─────
+//
+// Bug shape: `playAudioSynced` allocates `new Audio()` for every speech
+// action, wires onended/onerror/play().catch, subscribes to settingsStore
+// for live speed/volume, and tears it all down at the terminal handler.
+// 50-200 ms of decode/setup overhead per speaker handoff. Compounds over
+// scenes with many speech actions.
+//
+// Fix shape: lazily allocate one `_sharedAudio: HTMLAudioElement` per
+// engine instance and reuse it across all speech actions. The settings-
+// store subscription is wired ONCE (in the constructor) and lives for the
+// lifetime of the engine, not per-speech. Per-speech terminal cleanup
+// detaches handlers but does NOT null `_sharedAudio` — only `dispose()`
+// nulls it (and removes the settings sub + visibility listener).
+//
+// Mutation test: removing the shared-element invariant (going back to
+// `new Audio()` per speech) makes the constructor-count test below fail
+// because a fresh MockAudio appears in `mockAudios[]` for each speech.
+describe('MAICActionEngine — F5 shared audio element', () => {
+  test('only ONE HTMLAudioElement is constructed across N speech plays', async () => {
+    const engine = new MAICActionEngine({ ttsEndpoint: '/tts', token: 't' });
+
+    // Run 5 sequential speech actions back-to-back. Each one resolves on
+    // mockAudios[i].endNow() — but with the shared element invariant we
+    // expect mockAudios.length to stay at 1 (or at most 2 — one for the
+    // unlock silent-WAV fallback, which is allowed since unlockAudio is a
+    // separate path).
+    const N = 5;
+    for (let i = 0; i < N; i++) {
+      const p = engine.execute({
+        type: 'speech',
+        agentId: 'a1',
+        text: `line ${i}`,
+        audioUrl: `https://example.com/${i}.mp3`,
+      } as any);
+      // Let microtasks settle, then drive the audio to completion.
+      await new Promise((r) => setTimeout(r, 0));
+      // The active audio element is the shared one — fire its onended.
+      const last = mockAudios[mockAudios.length - 1];
+      last?.endNow();
+      await p;
+    }
+
+    // The shared-element invariant: NO MORE than one Audio constructed
+    // per engine. (We tolerate zero-or-one extra from unrelated paths,
+    // but for these N speech plays the count must equal 1.)
+    expect(mockAudios.length).toBe(1);
+
+    engine.dispose();
+  });
+
+  test('settings-store subscription is wired once (constructor) and survives multiple speech plays', async () => {
+    // The audio element's playbackRate/volume must always reflect the
+    // current settings store, even mid-speech. With a shared element +
+    // a single constructor-time subscription, this is automatic. Test:
+    // change settings store between two speech plays; the SECOND play's
+    // initial state must read the new value (not the constructor-time
+    // value cached on the engine).
+    useMAICSettingsStore.setState({ audioVolume: 1, playbackSpeed: 1 } as any);
+    const engine = new MAICActionEngine({ ttsEndpoint: '/tts', token: 't' });
+
+    // First play
+    const p1 = engine.execute({
+      type: 'speech',
+      agentId: 'a1',
+      text: 'first',
+      audioUrl: 'https://example.com/1.mp3',
+    } as any);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mockAudios[0].playbackRate).toBe(1);
+    mockAudios[0].endNow();
+    await p1;
+
+    // Change settings BEFORE the second play kicks off.
+    useMAICSettingsStore.setState({ audioVolume: 0.5, playbackSpeed: 1.5 } as any);
+
+    // Second play — must use the SAME shared element AND must read the
+    // updated playbackSpeed. (The constructor-time subscription pushes
+    // the new value into the shared element on store change; the play
+    // path's `audio.playbackRate = playbackSpeed` also catches it.)
+    const p2 = engine.execute({
+      type: 'speech',
+      agentId: 'a1',
+      text: 'second',
+      audioUrl: 'https://example.com/2.mp3',
+    } as any);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mockAudios.length).toBe(1); // STILL just one element
+    expect(mockAudios[0].playbackRate).toBe(1.5);
+    expect(mockAudios[0].volume).toBe(0.5);
+    mockAudios[0].endNow();
+    await p2;
+
+    engine.dispose();
+  });
+
+  test('mid-speech settings change live-syncs the shared audio element', async () => {
+    // AV-P0-1 / AV-P0-3 contract: dragging the speed slider mid-speech
+    // applies immediately. With the lifetime subscription + shared
+    // element, this works automatically.
+    useMAICSettingsStore.setState({ audioVolume: 1, playbackSpeed: 1 } as any);
+    const engine = new MAICActionEngine({ ttsEndpoint: '/tts', token: 't' });
+
+    const p = engine.execute({
+      type: 'speech',
+      agentId: 'a1',
+      text: 'mid',
+      audioUrl: 'https://example.com/mid.mp3',
+    } as any);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mockAudios[0].playbackRate).toBe(1);
+
+    // Slider moves to 2x mid-speech.
+    useMAICSettingsStore.setState({ audioVolume: 0.7, playbackSpeed: 2 } as any);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mockAudios[0].playbackRate).toBe(2);
+    expect(mockAudios[0].volume).toBe(0.7);
+
+    mockAudios[0].endNow();
+    await p;
+    engine.dispose();
+  });
+
+  test('dispose() detaches the settings subscription and visibility listener', () => {
+    // After dispose, mutating settings must NOT crash and must not
+    // reach the (now-null) shared audio element.
+    const engine = new MAICActionEngine({ ttsEndpoint: '/tts', token: 't' });
+    const e = engine as any;
+
+    // Mock removeEventListener to assert the visibilitychange listener
+    // is detached on dispose.
+    const removeSpy = vi.spyOn(document, 'removeEventListener');
+
+    engine.dispose();
+
+    expect(removeSpy).toHaveBeenCalledWith('visibilitychange', expect.any(Function));
+    expect(e._sharedAudio).toBeNull();
+    expect(e._settingsUnsub).toBeNull();
+    removeSpy.mockRestore();
+  });
+});
+
+// ─── F6 — Pause-mid-fetch race causes random "pause fails" ─────────────────
+//
+// Bug shape: user clicks Play → speech action starts → `await fetchTtsBlob`
+// is in flight (network call). User clicks Pause during the fetch.
+// `pauseCurrentAudio` is a no-op (no audio element yet). Fetch completes,
+// `playAudioSynced` runs, audio.play() fires despite UI saying "paused".
+//
+// Fix shape: action engine exposes `pauseMidFetch()` (called by the
+// playback engine's `pause()` path INSTEAD of `abortInFlightFetch()` +
+// rewind). pauseMidFetch:
+//   1. Aborts the in-flight fetch controller (if any).
+//   2. Sets `_pausedMidFetch = true` WITHOUT bumping the generation token.
+// `executeSpeech` notices the abort (fetchTtsBlob returns null) and the
+// `_pausedMidFetch` flag, and instead of falling into readingTimeFallback,
+// awaits a `_resumeWaiter` promise. `resumeFromPauseMidFetch()` resolves
+// the waiter; executeSpeech then re-fetches the SAME speech and proceeds.
+//
+// abortCurrentAction() resolves the resume-waiter too (so a scene change
+// during a paused-mid-fetch state cleanly drops the pending speech).
+//
+// Mutation test: replacing the resume-waiter await with a direct
+// readingTimeFallback (the old fix-shape) makes the "after resume, audio
+// IS played" test fail because the fallback path never calls audio.play().
+describe('MAICActionEngine — F6 pause-mid-fetch race', () => {
+  test('pause during fetch then resume continues the same speech', async () => {
+    // Install a fetch mock that listens to the AbortSignal so abort() on
+    // the controller correctly rejects the in-flight promise (mirrors
+    // real fetch). Without this, AbortError never reaches the engine and
+    // executeSpeech hangs forever.
+    let resolveFetch: ((res: Response) => void) | undefined;
+    let rejectFetch: ((err: unknown) => void) | undefined;
+    const fetchMock = vi.fn().mockImplementation(
+      (_url: string, init?: RequestInit) => new Promise<Response>((resolve, reject) => {
+        resolveFetch = resolve;
+        rejectFetch = reject;
+        const sig = init?.signal as AbortSignal | undefined;
+        if (sig) {
+          sig.addEventListener('abort', () => {
+            const err = new DOMException('aborted', 'AbortError');
+            reject(err);
+          });
+        }
+      }),
+    );
+    // @ts-expect-error browser global
+    global.fetch = fetchMock;
+
+    const engine = new MAICActionEngine({ ttsEndpoint: '/tts', token: 't' });
+
+    // Kick off a speech without audioUrl — forces fetch path.
+    const playPromise = engine.execute({
+      type: 'speech',
+      agentId: 'a1',
+      text: 'paused mid fetch',
+    } as any);
+
+    // Wait a tick so fetch is in flight.
+    await new Promise((r) => setTimeout(r, 5));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // PAUSE — pauseMidFetch aborts the controller and sets the
+    // _pausedMidFetch flag. Critically, NO audio.play() should fire even
+    // after the (aborted) fetch settles.
+    expect(typeof engine.pauseMidFetch).toBe('function');
+    const aborted = engine.pauseMidFetch();
+    expect(aborted).toBe(true);
+
+    // Let the AbortError propagate through the engine and the resume-waiter
+    // promise install on `_resumeWaiter`.
+    await new Promise((r) => setTimeout(r, 10));
+
+    // No audio element was bound during the pause window (no play was made).
+    expect(mockAudios.length).toBe(0);
+
+    // RESUME — resolves the resume-waiter; executeSpeech re-fetches.
+    // We need a NEW fetch mock now because the resumed path will call
+    // fetch again with the same args.
+    let resolveFetch2: ((res: Response) => void) | undefined;
+    fetchMock.mockImplementation(
+      (_url: string, init?: RequestInit) => new Promise<Response>((resolve, reject) => {
+        resolveFetch2 = resolve;
+        const sig = init?.signal as AbortSignal | undefined;
+        if (sig) {
+          sig.addEventListener('abort', () => {
+            reject(new DOMException('aborted', 'AbortError'));
+          });
+        }
+      }),
+    );
+
+    expect(typeof engine.resumeFromPauseMidFetch).toBe('function');
+    engine.resumeFromPauseMidFetch();
+    await new Promise((r) => setTimeout(r, 5));
+
+    // The resume path must have triggered a SECOND fetch.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    // Settle the second fetch with a real-shaped Response so the engine
+    // creates a blob URL and binds the shared audio element.
+    resolveFetch2!(
+      new Response(new Blob([new Uint8Array([0xff, 0xfb])], { type: 'audio/mpeg' }), {
+        status: 200,
+      }),
+    );
+    await new Promise((r) => setTimeout(r, 20));
+
+    // After resume + fetch, audio.play() WAS called (one element bound).
+    expect(mockAudios.length).toBe(1);
+    expect(mockAudios[0].play).toHaveBeenCalled();
+
+    // Drive the audio to completion to release the engine.
+    mockAudios[0].endNow();
+    await playPromise;
+
+    // Suppress unused-warning lint for the captured resolvers.
+    void resolveFetch;
+    void rejectFetch;
+    engine.dispose();
+  });
+
+  test('abortCurrentAction during paused-mid-fetch resolves the waiter and drops the speech cleanly', async () => {
+    // Scene change while paused-mid-fetch must NOT leak the speech promise.
+    let resolveFetch: ((res: Response) => void) | undefined;
+    const fetchMock = vi.fn().mockImplementation(
+      (_url: string, init?: RequestInit) => new Promise<Response>((resolve, reject) => {
+        resolveFetch = resolve;
+        const sig = init?.signal as AbortSignal | undefined;
+        if (sig) {
+          sig.addEventListener('abort', () => {
+            reject(new DOMException('aborted', 'AbortError'));
+          });
+        }
+      }),
+    );
+    // @ts-expect-error browser global
+    global.fetch = fetchMock;
+
+    const engine = new MAICActionEngine({ ttsEndpoint: '/tts', token: 't' });
+
+    const playPromise = engine.execute({
+      type: 'speech',
+      agentId: 'a1',
+      text: 'will be aborted',
+    } as any);
+    await new Promise((r) => setTimeout(r, 5));
+
+    // Pause mid-fetch — engine enters resume-waiter state.
+    engine.pauseMidFetch();
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Now scene-change abort: bumps token + clears resume-waiter.
+    engine.abortCurrentAction();
+
+    // The speech promise must resolve (the resume-waiter resolves and
+    // executeSpeech bails on the post-resume token check).
+    await playPromise; // would hang forever without the abort-clears-waiter wire.
+
+    // Engine state clean: no audio bound, no resume-waiter pending.
+    const e = engine as any;
+    expect(e._resumeWaiter).toBeNull();
+    expect(e._pausedMidFetch).toBe(false);
+    expect(mockAudios.length).toBe(0);
+
+    void resolveFetch;
+    engine.dispose();
+  });
+
+  test('pauseMidFetch returns false when no fetch is in flight (audio already playing case)', () => {
+    const engine = new MAICActionEngine({ ttsEndpoint: '/tts', token: 't' });
+    // No fetch was started — pauseMidFetch should report "nothing to abort".
+    expect(engine.pauseMidFetch()).toBe(false);
+    engine.dispose();
   });
 });

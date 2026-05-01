@@ -11,7 +11,7 @@
 #
 # Or via docker compose:
 #   docker compose -f docker-compose.prod.yml exec -T db \
-#     pg_dump -U postgres lms_db | gzip > /backups/lms_$(date +%Y%m%d_%H%M%S).sql.gz
+#     pg_dump -U learnpuddle learnpuddle_db | gzip > /backups/lms_$(date +%Y%m%d_%H%M%S).sql.gz
 
 set -euo pipefail
 

@@ -1,8 +1,11 @@
 # apps/courses/serializers.py
 
-from rest_framework import serializers
+import logging
+
 from django.db import transaction
 from django.db.models import Q
+from rest_framework import serializers
+
 from .models import Course, Module, Content, TeacherGroup
 from apps.academics.models import Section
 from apps.users.models import User
@@ -11,6 +14,14 @@ from utils.rich_text import (
     rewrite_rich_text_for_serializer,
     sanitize_rich_text_html,
 )
+
+logger = logging.getLogger(__name__)
+
+# Shared predicate for "active teacher" filtering used in both:
+#   • views.py: the nested Prefetch that loads group members for the N+1 fix
+#   • serializers.py: the DB-fallback COUNT query in get_assigned_teacher_count
+# Keep these in sync by referencing this single constant.
+ACTIVE_TEACHER_FILTERS = {"role": "TEACHER", "is_active": True}
 
 
 class ContentSerializer(serializers.ModelSerializer):
@@ -61,8 +72,11 @@ class ContentSerializer(serializers.ModelSerializer):
             try:
                 from .video_models import VideoAsset
                 asset = VideoAsset.objects.filter(content=obj).first()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "serializer: failed to look up VideoAsset for content=%s: %s",
+                    obj.id, exc,
+                )
         return asset.status if asset else None
 
     def validate_text_content(self, value):
@@ -165,7 +179,8 @@ class CourseListSerializer(serializers.ModelSerializer):
             ).count()
 
         # Use the prefetched M2M sets so we don't issue extra queries per course.
-        # The view prefetches 'assigned_teachers' and 'assigned_groups'.
+        # The view prefetches 'assigned_teachers' and 'assigned_groups' (the latter
+        # with a nested Prefetch that attaches '_active_teachers' to each group).
         individual_ids = {t.id for t in obj.assigned_teachers.all()}
         groups = list(obj.assigned_groups.all())
 
@@ -177,13 +192,23 @@ class CourseListSerializer(serializers.ModelSerializer):
         if not groups:
             return len(individual_ids)
 
-        group_ids = [g.id for g in groups]
+        # Prefer the prefetched group-member lists (_active_teachers) attached by
+        # the view's nested Prefetch — zero extra queries per group-assigned course.
+        # Fall back to a single DB COUNT when the serializer is used outside the
+        # list view (e.g. admin tooling or direct tests without the full view qs).
+        if all(hasattr(g, '_active_teachers') for g in groups):
+            all_teacher_ids = set(individual_ids)
+            for g in groups:
+                all_teacher_ids.update(m.id for m in g._active_teachers)
+            return len(all_teacher_ids)
 
+        # Fallback: single DB query combining groups + individually-assigned ids.
+        # Uses ACTIVE_TEACHER_FILTERS so the predicate stays in sync with views.py.
+        group_ids = [g.id for g in groups]
         return (
             User.objects.filter(
                 tenant=obj.tenant,
-                role="TEACHER",
-                is_active=True,
+                **ACTIVE_TEACHER_FILTERS,
             )
             .filter(Q(teacher_groups__in=group_ids) | Q(id__in=individual_ids))
             .distinct()

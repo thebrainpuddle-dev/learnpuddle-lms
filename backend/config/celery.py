@@ -50,15 +50,30 @@ app.conf.result_expires = 3600  # seconds — 1 hour
 
 
 # ── Periodic (beat) schedule ───────────────────────────────────────────────
+#
+# IMPORTANT: This is the SINGLE authoritative source for all Celery beat tasks.
+#
+# Do NOT add tasks to CELERY_BEAT_SCHEDULE in settings.py — that key is
+# processed by Celery's config_from_object() layer, which is overridden by
+# this explicit app.conf.beat_schedule assignment.  Any task registered only
+# in CELERY_BEAT_SCHEDULE will be silently ignored.
+#
+# All tasks from the former settings.py CELERY_BEAT_SCHEDULE have been
+# merged here to fix the silent-drop bug (2026-04-28).
 app.conf.beat_schedule = {
+    # ── Tenant / subscription lifecycle ──────────────────────────────────
     "check-trial-expirations-daily": {
         "task": "tenants.check_trial_expirations",
         "schedule": crontab(hour=6, minute=0),  # every day at 06:00 UTC
     },
+
+    # ── Reminders ─────────────────────────────────────────────────────────
     "send-automated-course-deadline-reminders-daily": {
         "task": "reminders.send_automated_course_deadline_reminders",
         "schedule": crontab(hour=6, minute=30),  # every day at 06:30 UTC
     },
+
+    # ── Ops / SRE synthetic probes and maintenance ─────────────────────────
     "ops-synthetic-probes-30s": {
         "task": "apps.ops.tasks.ops_run_synthetic_probes",
         "schedule": 30.0,
@@ -79,21 +94,61 @@ app.conf.beat_schedule = {
         "task": "apps.ops.tasks.ops_cleanup_data",
         "schedule": crontab(hour=2, minute=30),
     },
+
+    # ── Progress / certifications ──────────────────────────────────────────
     "check-certification-expiry-daily": {
         "task": "progress.check_certification_expiry_and_autorenew",
         "schedule": crontab(hour=7, minute=0),  # every day at 07:00 UTC
     },
-    # TASK-053 — Custom Report Builder: hourly scheduled report scanner
-    "report-builder-run-scheduled-reports-hourly": {
-        "task": "reports_builder.run_scheduled_reports",
-        "schedule": crontab(minute=0),  # top of every hour
+
+    # ── Gamification: streaks and leaderboards ─────────────────────────────
+    # TASK-016 — Process streak breaks and freeze resets — daily at 00:05 UTC.
+    "process-daily-streaks": {
+        "task": "progress.process_daily_streaks",
+        "schedule": crontab(hour=0, minute=5),
     },
-    # TASK-016 — 10-tier League Leaderboards: weekly reset Mondays 00:00 UTC
+    # Compute leaderboard rankings — every 15 minutes.
+    "compute-leaderboard-snapshots": {
+        "task": "progress.compute_leaderboard_snapshots",
+        "schedule": crontab(minute="*/15"),
+    },
+    # TASK-016 — 10-tier League Leaderboards: weekly reset Mondays 00:00 UTC.
     "progress-close-league-week-weekly": {
         "task": "progress.close_league_week",
         "schedule": crontab(hour=0, minute=0, day_of_week="mon"),
     },
-    # Notification archival — 90-day TTL
+
+    # ── TASK-053 — Custom Report Builder ──────────────────────────────────
+    "report-builder-run-scheduled-reports-hourly": {
+        "task": "reports_builder.run_scheduled_reports",
+        "schedule": crontab(minute=0),  # top of every hour
+    },
+
+    # ── Billing ───────────────────────────────────────────────────────────
+    # Flag subscriptions past_due for >7 days — daily at 08:00 UTC.
+    "billing-check-past-due-daily": {
+        "task": "billing.check_past_due_subscriptions",
+        "schedule": crontab(hour=8, minute=0),
+    },
+    # Clean up webhook events older than 90 days — weekly Saturday 03:00 UTC.
+    "billing-cleanup-webhook-events-weekly": {
+        "task": "billing.cleanup_stale_webhook_events",
+        "schedule": crontab(hour=3, minute=0, day_of_week=6),
+    },
+
+    # ── Integrations ──────────────────────────────────────────────────────
+    # Chat: prune terminal delivery rows older than 30 days — daily 02:00 UTC.
+    "prune-chat-deliveries-daily": {
+        "task": "integrations_chat.prune_chat_deliveries",
+        "schedule": crontab(hour=2, minute=0),
+    },
+    # Calendar: push LMS deadlines to Google/Outlook — every 15 min.
+    "sync-all-calendar-connections": {
+        "task": "integrations_calendar.sync_all_calendar_connections",
+        "schedule": crontab(minute="*/15"),
+    },
+
+    # ── Notification archival — 90-day TTL ────────────────────────────────
     # Archive notifications older than 90 days daily at 03:00 UTC.
     # Archived rows are hidden from the active manager but preserved for audit.
     "notifications-archive-old-daily": {
@@ -107,8 +162,9 @@ app.conf.beat_schedule = {
         "task": "notifications.delete_archived_notifications",
         "schedule": crontab(hour=4, minute=0, day_of_week="sun"),  # weekly Sun 04:00 UTC
     },
-    # TASK-059 — AI Chatbot Tutor: purge ChatQuery rows older than 30 days.
-    # Runs daily at 01:00 UTC (low-traffic window).
+
+    # ── TASK-059 — AI Chatbot Tutor ───────────────────────────────────────
+    # Purge ChatQuery rows older than 30 days — daily 01:00 UTC.
     "chatbot-purge-old-chat-queries-daily": {
         "task": "chatbot.purge_old_chat_queries",
         "schedule": crontab(hour=1, minute=0),  # daily 01:00 UTC

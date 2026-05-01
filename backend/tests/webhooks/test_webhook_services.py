@@ -145,7 +145,7 @@ class TriggerWebhookTestCase(TestCase):
             self.tenant, self.admin, events=["course.created"]
         )
 
-    @patch("apps.webhooks.services.deliver_webhook")
+    @patch("apps.webhooks.tasks.deliver_webhook")
     def test_trigger_creates_delivery_record(self, mock_deliver):
         """trigger_webhook must create a WebhookDelivery for each subscribed endpoint."""
         mock_deliver.delay = MagicMock()
@@ -155,7 +155,7 @@ class TriggerWebhookTestCase(TestCase):
         )
         self.assertEqual(WebhookDelivery.objects.count(), initial_count + 1)
 
-    @patch("apps.webhooks.services.deliver_webhook")
+    @patch("apps.webhooks.tasks.deliver_webhook")
     def test_trigger_returns_delivery_id_list(self, mock_deliver):
         """Return value must be a non-empty list of UUID strings."""
         mock_deliver.delay = MagicMock()
@@ -166,7 +166,7 @@ class TriggerWebhookTestCase(TestCase):
         # Should be a valid UUID string
         uuid.UUID(delivery_ids[0])
 
-    @patch("apps.webhooks.services.deliver_webhook")
+    @patch("apps.webhooks.tasks.deliver_webhook")
     def test_trigger_queues_async_delivery_task(self, mock_deliver):
         """When delay=True (default), trigger_webhook must enqueue a Celery task."""
         mock_task = MagicMock()
@@ -183,7 +183,7 @@ class TriggerWebhookTestCase(TestCase):
             )
             mock_exec.assert_called_once()
 
-    @patch("apps.webhooks.services.deliver_webhook")
+    @patch("apps.webhooks.tasks.deliver_webhook")
     def test_trigger_returns_empty_list_when_no_subscribed_endpoints(self, mock_deliver):
         """No endpoints subscribed to this event → returns empty list, no deliveries."""
         mock_deliver.delay = MagicMock()
@@ -192,14 +192,14 @@ class TriggerWebhookTestCase(TestCase):
         )
         self.assertEqual(delivery_ids, [])
 
-    @patch("apps.webhooks.services.deliver_webhook")
+    @patch("apps.webhooks.tasks.deliver_webhook")
     def test_trigger_returns_empty_for_nonexistent_tenant(self, mock_deliver):
         """A non-existent tenant_id must return [] without creating records."""
         mock_deliver.delay = MagicMock()
         result = trigger_webhook(str(uuid.uuid4()), "course.created", {})
         self.assertEqual(result, [])
 
-    @patch("apps.webhooks.services.deliver_webhook")
+    @patch("apps.webhooks.tasks.deliver_webhook")
     def test_trigger_skips_inactive_endpoints(self, mock_deliver):
         """Inactive endpoints must NOT receive deliveries."""
         mock_deliver.delay = MagicMock()
@@ -210,7 +210,7 @@ class TriggerWebhookTestCase(TestCase):
         )
         self.assertEqual(delivery_ids, [])
 
-    @patch("apps.webhooks.services.deliver_webhook")
+    @patch("apps.webhooks.tasks.deliver_webhook")
     def test_trigger_wildcard_endpoint_receives_all_events(self, mock_deliver):
         """An endpoint subscribed to '*' must receive any event type."""
         mock_deliver.delay = MagicMock()
@@ -222,7 +222,7 @@ class TriggerWebhookTestCase(TestCase):
         )
         self.assertEqual(len(delivery_ids), 1)
 
-    @patch("apps.webhooks.services.deliver_webhook")
+    @patch("apps.webhooks.tasks.deliver_webhook")
     def test_trigger_updates_endpoint_total_deliveries_count(self, mock_deliver):
         """trigger_webhook must increment total_deliveries on the endpoint."""
         mock_deliver.delay = MagicMock()
@@ -231,7 +231,7 @@ class TriggerWebhookTestCase(TestCase):
         self.endpoint.refresh_from_db()
         self.assertEqual(self.endpoint.total_deliveries, initial + 1)
 
-    @patch("apps.webhooks.services.deliver_webhook")
+    @patch("apps.webhooks.tasks.deliver_webhook")
     def test_trigger_updates_last_triggered_at(self, mock_deliver):
         """trigger_webhook must set last_triggered_at on the endpoint."""
         mock_deliver.delay = MagicMock()
@@ -240,7 +240,7 @@ class TriggerWebhookTestCase(TestCase):
         self.endpoint.refresh_from_db()
         self.assertIsNotNone(self.endpoint.last_triggered_at)
 
-    @patch("apps.webhooks.services.deliver_webhook")
+    @patch("apps.webhooks.tasks.deliver_webhook")
     def test_trigger_creates_delivery_with_correct_event_type(self, mock_deliver):
         """The delivery record must have the correct event_type."""
         mock_deliver.delay = MagicMock()
@@ -248,7 +248,7 @@ class TriggerWebhookTestCase(TestCase):
         delivery = WebhookDelivery.objects.filter(endpoint=self.endpoint).last()
         self.assertEqual(delivery.event_type, "course.created")
 
-    @patch("apps.webhooks.services.deliver_webhook")
+    @patch("apps.webhooks.tasks.deliver_webhook")
     def test_trigger_stores_payload_in_delivery(self, mock_deliver):
         """The delivery record must store the event payload."""
         mock_deliver.delay = MagicMock()
@@ -264,7 +264,13 @@ class TriggerWebhookTestCase(TestCase):
 
 @pytest.mark.django_db
 class ExecuteDeliveryTestCase(TestCase):
-    """Tests for execute_delivery() — mocking requests.post."""
+    """Tests for execute_delivery() — mocking _dispatch_webhook_post.
+
+    Tests patch ``apps.webhooks.services._dispatch_webhook_post`` rather than
+    ``requests.post`` directly because real delivery is now SSRF-guarded
+    (DNS validation + IP pinning + redirect refusal).  The helper takes
+    keyword arguments ``data``, ``headers``, ``timeout`` and returns a
+    response-like object with ``status_code`` and ``text``."""
 
     def setUp(self):
         self.tenant = _make_tenant("Exec School", "exec")
@@ -285,14 +291,14 @@ class ExecuteDeliveryTestCase(TestCase):
         mock_resp.text = text
         return mock_resp
 
-    @patch("apps.webhooks.services.requests.post")
+    @patch("apps.webhooks.services._dispatch_webhook_post")
     def test_successful_delivery_returns_true(self, mock_post):
         """200 response must return True and mark delivery as success."""
         mock_post.return_value = self._mock_response(200)
         result = execute_delivery(self.delivery)
         self.assertTrue(result)
 
-    @patch("apps.webhooks.services.requests.post")
+    @patch("apps.webhooks.services._dispatch_webhook_post")
     def test_successful_delivery_marks_status_success(self, mock_post):
         """After 200, delivery.status must be 'success'."""
         mock_post.return_value = self._mock_response(200)
@@ -300,7 +306,7 @@ class ExecuteDeliveryTestCase(TestCase):
         self.delivery.refresh_from_db()
         self.assertEqual(self.delivery.status, "success")
 
-    @patch("apps.webhooks.services.requests.post")
+    @patch("apps.webhooks.services._dispatch_webhook_post")
     def test_successful_delivery_sets_response_code(self, mock_post):
         """The response status code must be stored on the delivery."""
         mock_post.return_value = self._mock_response(201)
@@ -308,7 +314,7 @@ class ExecuteDeliveryTestCase(TestCase):
         self.delivery.refresh_from_db()
         self.assertEqual(self.delivery.response_status_code, 201)
 
-    @patch("apps.webhooks.services.requests.post")
+    @patch("apps.webhooks.services._dispatch_webhook_post")
     def test_successful_delivery_increments_endpoint_successful_count(self, mock_post):
         """Successful delivery must increment successful_deliveries on endpoint."""
         mock_post.return_value = self._mock_response(200)
@@ -317,14 +323,14 @@ class ExecuteDeliveryTestCase(TestCase):
         self.endpoint.refresh_from_db()
         self.assertEqual(self.endpoint.successful_deliveries, initial + 1)
 
-    @patch("apps.webhooks.services.requests.post")
+    @patch("apps.webhooks.services._dispatch_webhook_post")
     def test_failed_http_response_returns_false(self, mock_post):
         """Non-2xx response must return False."""
         mock_post.return_value = self._mock_response(500, "Server Error")
         result = execute_delivery(self.delivery)
         self.assertFalse(result)
 
-    @patch("apps.webhooks.services.requests.post")
+    @patch("apps.webhooks.services._dispatch_webhook_post")
     def test_failed_delivery_marks_status_failed_on_last_attempt(self, mock_post):
         """When max_attempts is reached, status must be 'failed'."""
         mock_post.return_value = self._mock_response(500)
@@ -335,7 +341,7 @@ class ExecuteDeliveryTestCase(TestCase):
         self.delivery.refresh_from_db()
         self.assertEqual(self.delivery.status, "failed")
 
-    @patch("apps.webhooks.services.requests.post")
+    @patch("apps.webhooks.services._dispatch_webhook_post")
     def test_not_last_attempt_marks_status_retrying(self, mock_post):
         """Before hitting max_attempts, a failed delivery should be 'retrying'."""
         mock_post.return_value = self._mock_response(500)
@@ -345,7 +351,7 @@ class ExecuteDeliveryTestCase(TestCase):
         if self.delivery.attempt_count < self.delivery.max_attempts:
             self.assertEqual(self.delivery.status, "retrying")
 
-    @patch("apps.webhooks.services.requests.post")
+    @patch("apps.webhooks.services._dispatch_webhook_post")
     def test_timeout_exception_marks_delivery_as_failed_or_retrying(self, mock_post):
         """Timeout exception must be caught and delivery marked failed/retrying."""
         import requests as req_lib
@@ -355,7 +361,7 @@ class ExecuteDeliveryTestCase(TestCase):
         self.assertIn(self.delivery.status, ["failed", "retrying"])
         self.assertIn("timed out", self.delivery.error_message.lower())
 
-    @patch("apps.webhooks.services.requests.post")
+    @patch("apps.webhooks.services._dispatch_webhook_post")
     def test_connection_error_exception_is_handled(self, mock_post):
         """ConnectionError must be caught and delivery marked failed/retrying."""
         import requests as req_lib
@@ -364,7 +370,7 @@ class ExecuteDeliveryTestCase(TestCase):
         self.delivery.refresh_from_db()
         self.assertIn(self.delivery.status, ["failed", "retrying"])
 
-    @patch("apps.webhooks.services.requests.post")
+    @patch("apps.webhooks.services._dispatch_webhook_post")
     def test_request_includes_signature_header(self, mock_post):
         """HTTP request must include X-Webhook-Signature header."""
         mock_post.return_value = self._mock_response(200)
@@ -385,7 +391,7 @@ class ExecuteDeliveryTestCase(TestCase):
             f"X-Webhook-Signature must start with 'sha256=', got: {sig_header!r}",
         )
 
-    @patch("apps.webhooks.services.requests.post")
+    @patch("apps.webhooks.services._dispatch_webhook_post")
     def test_request_includes_event_type_header(self, mock_post):
         """HTTP request must include X-Webhook-Event header."""
         mock_post.return_value = self._mock_response(200)
@@ -394,7 +400,7 @@ class ExecuteDeliveryTestCase(TestCase):
         event_header = call_kw.get("headers", {}).get("X-Webhook-Event", "")
         self.assertEqual(event_header, "course.created")
 
-    @patch("apps.webhooks.services.requests.post")
+    @patch("apps.webhooks.services._dispatch_webhook_post")
     def test_retry_sets_next_retry_at(self, mock_post):
         """When retrying, next_retry_at must be set to a future time."""
         mock_post.return_value = self._mock_response(500)
@@ -408,6 +414,111 @@ class ExecuteDeliveryTestCase(TestCase):
                 self.delivery.next_retry_at,
                 timezone.now() - timedelta(seconds=5),
             )
+
+
+# ===========================================================================
+# 3b. SSRF defence at delivery time
+# ===========================================================================
+# Even though ``apps/webhooks/views.py:_validate_webhook_url`` rejects obviously
+# internal hostnames at create time, that is a literal-hostname check and does
+# NOT survive to delivery time:
+#   • DNS rebind — between create and deliver, the attacker can flip DNS
+#     from a public IP to ``169.254.169.254`` (AWS IMDS) or ``127.0.0.1``.
+#   • Redirects — a legitimate external server can return ``302`` to an
+#     internal URL.
+# ``_dispatch_webhook_post`` closes both gaps by validating + pinning the
+# resolved IP and refusing redirects.  These tests lock those guarantees in.
+
+@pytest.mark.django_db
+class WebhookSSRFDefenceTestCase(TestCase):
+    """Regression tests: webhook delivery is SSRF-guarded.
+
+    Files under test:
+      * ``apps/webhooks/services.py:_dispatch_webhook_post``
+      * ``apps/webhooks/services.py:execute_delivery`` (SSRFError handler)
+    """
+
+    def setUp(self):
+        self.tenant = _make_tenant("SSRF School", "ssrf")
+        self.admin = _make_user("admin@ssrf.com", self.tenant)
+        self.endpoint = _make_endpoint(
+            self.tenant, self.admin,
+            url="https://internal.attacker.example/hook",
+            events=["course.created"],
+        )
+        self.delivery = WebhookDelivery.objects.create(
+            endpoint=self.endpoint,
+            event_type="course.created",
+            payload={"test": True},
+            status="pending",
+        )
+
+    @patch("apps.integrations_chat.ssrf_guard.socket.getaddrinfo")
+    def test_dns_rebind_to_loopback_blocked(self, mock_getaddrinfo):
+        """If DNS resolves the webhook host to 127.0.0.1, delivery must fail
+        without ever opening a TCP connection."""
+        # Simulate DNS rebind: hostname now resolves to loopback.
+        mock_getaddrinfo.return_value = [
+            (2, 1, 6, "", ("127.0.0.1", 0)),  # AF_INET, SOCK_STREAM, TCP
+        ]
+        result = execute_delivery(self.delivery)
+        self.assertFalse(result)
+        self.delivery.refresh_from_db()
+        self.assertIn("SSRF", self.delivery.error_message or "")
+        # Body of any internal target MUST NOT be surfaced to admins.
+        self.assertEqual(self.delivery.response_body or "", "")
+
+    @patch("apps.integrations_chat.ssrf_guard.socket.getaddrinfo")
+    def test_dns_rebind_to_aws_imds_blocked(self, mock_getaddrinfo):
+        """169.254.169.254 (AWS instance metadata) must be rejected."""
+        mock_getaddrinfo.return_value = [
+            (2, 1, 6, "", ("169.254.169.254", 0)),
+        ]
+        result = execute_delivery(self.delivery)
+        self.assertFalse(result)
+        self.delivery.refresh_from_db()
+        self.assertIn("SSRF", self.delivery.error_message or "")
+
+    @patch("apps.integrations_chat.ssrf_guard.socket.getaddrinfo")
+    def test_dns_rebind_to_rfc1918_blocked(self, mock_getaddrinfo):
+        """RFC1918 private addresses (10.0.0.0/8) must be rejected."""
+        mock_getaddrinfo.return_value = [
+            (2, 1, 6, "", ("10.0.0.5", 0)),
+        ]
+        result = execute_delivery(self.delivery)
+        self.assertFalse(result)
+
+    def test_dispatch_helper_disables_redirects(self):
+        """``_dispatch_webhook_post`` must call ``session.post`` with
+        ``allow_redirects=False`` so a 302 cannot pivot to an internal host."""
+        from apps.webhooks import services as webhook_services
+        captured = {}
+
+        class _FakeSession:
+            def mount(self, _scheme, _adapter):
+                pass
+
+            def post(self, _url, **kwargs):
+                captured.update(kwargs)
+                resp = MagicMock()
+                resp.status_code = 200
+                resp.text = "ok"
+                return resp
+
+        with patch.object(webhook_services.requests, "Session", return_value=_FakeSession()), \
+             patch("apps.webhooks.services.validate_external_url",
+                   return_value=("hooks.example.com", "203.0.113.10")):
+            webhook_services._dispatch_webhook_post(
+                "https://hooks.example.com/x",
+                data="{}",
+                headers={"Content-Type": "application/json"},
+                timeout=30,
+            )
+
+        self.assertFalse(captured.get("allow_redirects", True),
+                         "allow_redirects must be False to prevent redirect-based SSRF")
+        self.assertTrue(captured.get("verify", False),
+                        "TLS cert validation must be enforced")
 
 
 # ===========================================================================
@@ -505,7 +616,7 @@ class WebhookServiceCrossTenantTestCase(TestCase):
             url="https://example.com/b", events=["course.created"],
         )
 
-    @patch("apps.webhooks.services.deliver_webhook")
+    @patch("apps.webhooks.tasks.deliver_webhook")
     def test_triggering_tenant_a_event_only_fires_tenant_a_endpoints(self, mock_deliver):
         """Events for tenant A must only create deliveries for tenant A's endpoints."""
         mock_deliver.delay = MagicMock()
@@ -518,7 +629,7 @@ class WebhookServiceCrossTenantTestCase(TestCase):
         self.assertEqual(a_deliveries.count(), 1)
         self.assertEqual(b_deliveries.count(), 0)
 
-    @patch("apps.webhooks.services.deliver_webhook")
+    @patch("apps.webhooks.tasks.deliver_webhook")
     def test_triggering_tenant_b_event_only_fires_tenant_b_endpoints(self, mock_deliver):
         """Events for tenant B must only create deliveries for tenant B's endpoints."""
         mock_deliver.delay = MagicMock()

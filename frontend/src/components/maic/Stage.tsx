@@ -100,24 +100,54 @@ export const Stage: React.FC<StageProps> = ({ role, imagesPending }) => {
   // user enters fullscreen the toolbar + bottom navigator fade out
   // after 3 s of inactivity and reappear on any mouse move, key press,
   // or touch. Outside fullscreen we force them visible.
+  //
+  // R3 (WAVE-9 deferred) — the timer handle lives in a `useRef` rather
+  // than a closure-local `let`. The original `let timer` worked for the
+  // common case but had two latent footguns:
+  //   1. Under React 18 strict-mode double-invoke each effect pass got
+  //      its own closure, so a setTimeout scheduled in pass A could
+  //      survive cleanup of pass B if any future edit accidentally
+  //      moved the schedule call out of the effect body.
+  //   2. The post-cleanup `setControlsVisible(false)` callback could
+  //      still fire between an `isFullscreen=false` toggle and
+  //      cleanup-completion if a future edit deferred any cleanup work.
+  // A ref-tracked handle plus an `unmounted` flag make both cases
+  // explicit and unit-testable (see Stage.revealTimer.test.tsx).
   const [controlsVisible, setControlsVisible] = useState(true);
+  const revealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (!isFullscreen) {
+      // Always clear any pending hide-timer when leaving fullscreen so
+      // the controls don't get yanked invisible a moment after the
+      // user exits.
+      if (revealTimerRef.current) {
+        clearTimeout(revealTimerRef.current);
+        revealTimerRef.current = null;
+      }
       setControlsVisible(true);
       return;
     }
-    let timer: ReturnType<typeof setTimeout> | null = null;
+    let cancelled = false;
     const reveal = () => {
+      if (cancelled) return;
       setControlsVisible(true);
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(() => setControlsVisible(false), 3000);
+      if (revealTimerRef.current) clearTimeout(revealTimerRef.current);
+      revealTimerRef.current = setTimeout(() => {
+        if (cancelled) return;
+        setControlsVisible(false);
+        revealTimerRef.current = null;
+      }, 3000);
     };
     reveal();
     window.addEventListener('mousemove', reveal);
     window.addEventListener('keydown', reveal);
     window.addEventListener('touchstart', reveal, { passive: true });
     return () => {
-      if (timer) clearTimeout(timer);
+      cancelled = true;
+      if (revealTimerRef.current) {
+        clearTimeout(revealTimerRef.current);
+        revealTimerRef.current = null;
+      }
       window.removeEventListener('mousemove', reveal);
       window.removeEventListener('keydown', reveal);
       window.removeEventListener('touchstart', reveal);
@@ -302,8 +332,16 @@ export const Stage: React.FC<StageProps> = ({ role, imagesPending }) => {
   // `discussion` action during playback. There's no manual toggle button
   // anymore — the handler below just ends the current discussion and
   // resumes playback from the checkpoint.
-  const [discussionTopic] = useState('');
-  const [discussionAgentIds] = useState<string[]>([]);
+  // Topic + participant ids fed into RoundtablePanel. Two writers:
+  //   1. ProactiveCardManager → enterDiscussionFromProactiveCard wrapper
+  //      (suggestion text + scene's multiAgent.agentIds, see below).
+  //   2. handleDiscussionJoin (engine-driven gate) → values lifted from
+  //      `discussionPending` BEFORE we clear it.
+  // Without this the panel always fell back to the scene title and to
+  // every agent in the classroom — unrelated to whatever the prompt
+  // actually said.
+  const [discussionTopic, setDiscussionTopic] = useState('');
+  const [discussionAgentIds, setDiscussionAgentIds] = useState<string[]>([]);
 
   const toast = useToast();
 
@@ -349,6 +387,10 @@ export const Stage: React.FC<StageProps> = ({ role, imagesPending }) => {
   const handleDiscussionJoin = useCallback(() => {
     if (!discussionPending) return;
     const sessionType = discussionPending.sessionType;
+    // Capture topic + agentIds from the engine's pending payload BEFORE
+    // we clear it; otherwise RoundtablePanel falls back to scene title.
+    setDiscussionTopic(discussionPending.topic ?? '');
+    setDiscussionAgentIds(discussionPending.agentIds ?? []);
     setDiscussionPending(null);
     setDiscussionMode(sessionType);
   }, [discussionPending, setDiscussionPending, setDiscussionMode]);
@@ -356,6 +398,18 @@ export const Stage: React.FC<StageProps> = ({ role, imagesPending }) => {
     setDiscussionPending(null);
     resumeAfterDiscussion();
   }, [setDiscussionPending, resumeAfterDiscussion]);
+
+  // Wrapper for the proactive-card flow: capture the suggestion text +
+  // scene agents into local state so RoundtablePanel reflects what was
+  // actually clicked, then drop into the engine's discussion-pause path.
+  const enterDiscussionFromProactiveCard = useCallback(
+    (topic: string, agentIds: string[]) => {
+      setDiscussionTopic(topic);
+      setDiscussionAgentIds(agentIds);
+      enterDiscussionFromUI();
+    },
+    [enterDiscussionFromUI],
+  );
 
   // T6 — gate all scene-switch attempts on active discussion. When the
   // user clicks a scene chip or sidebar tile while a discussion is open,
@@ -822,7 +876,7 @@ export const Stage: React.FC<StageProps> = ({ role, imagesPending }) => {
             <div className="absolute inset-x-0 bottom-3 z-20 flex justify-center px-4 pointer-events-none max-h-[40%]">
               <ProactiveCardManager
                 enabled={isClassPlaying && !discussionMode && !discussionPending}
-                onBeforeDiscussion={enterDiscussionFromUI}
+                onBeforeDiscussion={enterDiscussionFromProactiveCard}
               />
             </div>
           </div>

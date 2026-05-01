@@ -247,6 +247,17 @@ export const SecuritySettings: React.FC = () => {
     },
   });
 
+  // Unlink SSO provider
+  const unlinkProviderMutation = useMutation({
+    mutationFn: async (provider: string) => {
+      const response = await api.post('/users/auth/sso/unlink/', { provider });
+      return response.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['sso-status'] });
+    },
+  });
+
   if (loadingTwoFA || loadingSSO) {
     return <Loading />;
   }
@@ -446,7 +457,12 @@ export const SecuritySettings: React.FC = () => {
 
                   {isLinked ? (
                     ssoStatus?.can_unlink && (
-                      <Button variant="outline" size="sm">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => unlinkProviderMutation.mutate(provider.id)}
+                        loading={unlinkProviderMutation.isPending}
+                      >
                         Unlink
                       </Button>
                     )

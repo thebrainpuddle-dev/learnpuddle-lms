@@ -24,8 +24,13 @@ interface ProactiveCardManagerProps {
    *  Stage wires this to `engine.enterDiscussionFromUI()` so the engine
    *  pauses and saves a checkpoint BEFORE the discussion panel opens.
    *  Without this, opening the panel from a natural-break suggestion
-   *  left the engine playing audio underneath the panel. */
-  onBeforeDiscussion?: () => void;
+   *  left the engine playing audio underneath the panel.
+   *
+   *  The `topic` and `agentIds` are forwarded so the RoundtablePanel
+   *  actually discusses the card's prompt instead of falling back to the
+   *  scene title. Stage stores these and threads them into the panel.
+   */
+  onBeforeDiscussion?: (topic: string, agentIds: string[]) => void;
 }
 
 interface Suggestion {
@@ -44,7 +49,7 @@ const SUGGESTION_TEMPLATES: { type: ProactiveCardType; template: (title: string)
   },
   {
     type: 'discussion',
-    template: (title) => `How does this concept apply in real-world scenarios?`,
+    template: (title) => `How does ${title} apply in real-world scenarios?`,
   },
   {
     type: 'activity',
@@ -222,6 +227,17 @@ export const ProactiveCardManager: React.FC<ProactiveCardManagerProps> = ({ enab
 
   // ─── Handlers ─────────────────────────────────────────────────────────
   const handleAccept = useCallback(() => {
+    // Capture the suggestion text + scene agents BEFORE clearing state so
+    // they can be forwarded to onBeforeDiscussion. The panel uses these as
+    // its `topic` and `agentIds` props.
+    const suggestionText = activeSuggestion?.text ?? '';
+    const scene = scenes[currentSceneIndex];
+    const sceneAgentIds = scene?.multiAgent?.agentIds;
+    const agentIdsForPanel =
+      sceneAgentIds && sceneAgentIds.length > 0
+        ? sceneAgentIds
+        : agents.map((a) => a.id);
+
     setCardVisible(false);
     setActiveSuggestion(null);
     speechCountRef.current = 0;
@@ -229,9 +245,16 @@ export const ProactiveCardManager: React.FC<ProactiveCardManagerProps> = ({ enab
     // panel. Without this the scripted action loop keeps running audio
     // under the discussion overlay and the close-handler's
     // resumeAfterDiscussion() has no checkpoint to restore to.
-    onBeforeDiscussion?.();
+    onBeforeDiscussion?.(suggestionText, agentIdsForPanel);
     setDiscussionMode('qa');
-  }, [setDiscussionMode, onBeforeDiscussion]);
+  }, [
+    activeSuggestion,
+    agents,
+    currentSceneIndex,
+    onBeforeDiscussion,
+    scenes,
+    setDiscussionMode,
+  ]);
 
   const handleDismiss = useCallback(() => {
     setCardVisible(false);

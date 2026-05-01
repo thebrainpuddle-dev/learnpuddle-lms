@@ -187,6 +187,41 @@ class TranscodeToHlsTestCase(VideoTaskTestBase):
         self.assertEqual(self.asset.status, "FAILED")
         self.assertIn("ffmpeg failed", self.asset.error_message)
 
+    @patch("apps.courses.tasks._download_to_tempfile")
+    def test_retries_instead_of_failing_when_ffmpeg_times_out(self, mock_dl):
+        """
+        subprocess.TimeoutExpired → task calls self.retry(), NOT _mark_failed().
+
+        This is the 3rd subprocess failure branch.  A timed-out transcode is
+        transient (slow machine, big file) — Celery will re-queue the task up
+        to max_retries=3 times, giving the worker another chance to succeed.
+
+        We assert the key invariant: TimeoutExpired must NOT flip the asset
+        to FAILED status.  The Retry exception raised by self.retry() is
+        expected and caught here; the asset row must be left in its original
+        UPLOADED state so that the re-queued attempt can pick up from there.
+        """
+        mock_dl.return_value = "/tmp/fake.mp4"
+        timeout_exc = subprocess.TimeoutExpired(cmd="ffmpeg", timeout=300)
+
+        with patch(
+            "apps.courses.tasks.subprocess.check_output",
+            side_effect=timeout_exc,
+        ):
+            try:
+                transcode_to_hls.run(str(self.asset.id))
+            except Exception:
+                # celery.exceptions.Retry is raised by self.retry(); swallow it.
+                pass
+
+        self.asset.refresh_from_db()
+        self.assertNotEqual(
+            self.asset.status,
+            "FAILED",
+            "TimeoutExpired must trigger self.retry(), not _mark_failed(). "
+            "Status must not be FAILED.",
+        )
+
 
 # ---------------------------------------------------------------------------
 # generate_thumbnail
@@ -275,6 +310,36 @@ class GenerateThumbnailTestCase(VideoTaskTestBase):
         self.asset.refresh_from_db()
         self.assertEqual(self.asset.status, "FAILED")
         self.assertIn("ffmpeg thumbnail failed", self.asset.error_message)
+
+    @patch("apps.courses.tasks._download_to_tempfile")
+    def test_retries_instead_of_failing_when_ffmpeg_times_out(self, mock_dl):
+        """
+        subprocess.TimeoutExpired → task calls self.retry(), NOT _mark_failed().
+
+        Thumbnail generation timing out is transient (slow disk I/O, big source
+        video).  Celery will re-queue the task; the asset must NOT be marked
+        FAILED so that the retry can attempt the thumbnail again.
+        """
+        mock_dl.return_value = "/tmp/fake.mp4"
+        timeout_exc = subprocess.TimeoutExpired(cmd="ffmpeg", timeout=180)
+
+        with patch(
+            "apps.courses.tasks.subprocess.check_output",
+            side_effect=timeout_exc,
+        ):
+            try:
+                generate_thumbnail.run(str(self.asset.id))
+            except Exception:
+                # celery.exceptions.Retry is raised by self.retry(); swallow it.
+                pass
+
+        self.asset.refresh_from_db()
+        self.assertNotEqual(
+            self.asset.status,
+            "FAILED",
+            "TimeoutExpired must trigger self.retry(), not _mark_failed(). "
+            "Status must not be FAILED.",
+        )
 
 
 # ---------------------------------------------------------------------------

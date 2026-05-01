@@ -139,7 +139,7 @@ export const TranslatePage: React.FC = () => {
       }
       toast.error(
         'Failed to start translation',
-        err?.response?.data?.detail ?? 'Please try again.'
+        err?.response?.data?.error ?? err?.response?.data?.detail ?? 'Please try again.'
       );
     } finally {
       setSubmitting(false);

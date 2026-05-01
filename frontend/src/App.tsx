@@ -49,6 +49,9 @@ const VerifyEmailPage = React.lazy(() =>
 const SSOCallbackPage = React.lazy(() =>
   import('./pages/auth/SSOCallbackPage').then((m) => ({ default: m.SSOCallbackPage }))
 );
+const SAMLCallbackPage = React.lazy(() =>
+  import('./pages/auth/SAMLCallbackPage').then((m) => ({ default: m.SAMLCallbackPage }))
+);
 const AcceptInvitationPage = React.lazy(() =>
   import('./pages/auth/AcceptInvitationPage').then((m) => ({ default: m.AcceptInvitationPage }))
 );
@@ -436,8 +439,12 @@ function AppContent() {
       <Route path="/reset-password" element={<RoutePage><ResetPasswordPage /></RoutePage>} />
       <Route path="/verify-email" element={<RoutePage><VerifyEmailPage /></RoutePage>} />
 
-      {/* Public Routes — SSO Callback */}
+      {/* Public Routes — SSO Callback (OAuth + SAML)
+          AUDIT-2026-04-26-PHASE3-10: SAML ACS now redirects with `?code=`
+          (no JWT-in-fragment).  Both pages POST the code to the same
+          /sso/token-exchange/ endpoint. */}
       <Route path="/auth/sso-callback" element={<RoutePage><SSOCallbackPage /></RoutePage>} />
+      <Route path="/auth/saml-callback" element={<RoutePage><SAMLCallbackPage /></RoutePage>} />
 
       {/* Public Routes — Tenant Self-Service Signup */}
       <Route

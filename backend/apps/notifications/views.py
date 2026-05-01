@@ -167,6 +167,9 @@ def notification_archive(request, notification_id):
     Sets is_archived=True and archived_at to the current time.
     """
     try:
+        # all_objects: need to see already-archived rows so re-archival is idempotent
+        # (the is_archived check below handles the fast-path, tenant isolation
+        # preserved by explicit tenant=request.tenant filter).
         notification = Notification.all_objects.get(
             id=notification_id,
             teacher=request.user,
@@ -199,6 +202,9 @@ def notification_bulk_archive(request):
         return error_response('ids must be a non-empty list', status_code=status.HTTP_400_BAD_REQUEST)
 
     now = timezone.now()
+    # all_objects: bulk-archive across all lifecycle states; is_archived=False
+    # filter below ensures already-archived rows are skipped (idempotent).
+    # Tenant isolation preserved by explicit tenant=request.tenant filter.
     updated = Notification.all_objects.filter(
         id__in=ids,
         teacher=request.user,
@@ -349,6 +355,9 @@ def announcement_delete(request, announcement_id):
     except Notification.DoesNotExist:
         return error_response('Announcement not found', status_code=status.HTTP_404_NOT_FOUND)
     
+    # all_objects: announcement delete must purge all fan-out copies including any
+    # that have already been archived — partial deletion would leave orphaned rows.
+    # Tenant isolation preserved by explicit tenant=tenant filter.
     # Delete all notifications with same title, message, and exact creation time
     # bulk_create sets the same auto_now_add timestamp for all notifications in a batch
     deleted_count, _ = Notification.all_objects.filter(

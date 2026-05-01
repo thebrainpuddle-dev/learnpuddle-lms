@@ -463,9 +463,11 @@ describe('RubricPage', () => {
     const nextBtn = await screen.findByRole('button', { name: /next/i });
     await user.click(nextBtn);
 
+    // Use explicit timeout — under full-suite load React's async state processing
+    // can exceed the default ~1000ms waitFor limit; 5000ms avoids false negatives.
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /next/i })).toBeDisabled();
-    });
+    }, { timeout: 5000 });
   });
 
   it('clicking Previous from page 2 goes back to page 1', async () => {

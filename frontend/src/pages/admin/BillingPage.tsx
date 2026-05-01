@@ -589,7 +589,8 @@ export function BillingPage() {
       razorpay.open();
     } catch (err: any) {
       setError(
-        err?.response?.data?.detail ??
+        err?.response?.data?.error ??
+          err?.response?.data?.detail ??
           err.message ??
           'Failed to initiate payment. Please try again.'
       );

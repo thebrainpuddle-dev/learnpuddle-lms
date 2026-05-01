@@ -32,6 +32,10 @@ class Notification(models.Model):
         ('ASSIGNMENT_DUE', 'Assignment Due'),
         ('ANNOUNCEMENT', 'Announcement'),
         ('SYSTEM', 'System'),
+        # Added 2026-04-28: discussions/views.py creates notifications of this
+        # type on every reply — was previously missing, storing invalid choice
+        # data in the DB on each discussion reply notification.
+        ('DISCUSSION_REPLY', 'Discussion Reply'),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

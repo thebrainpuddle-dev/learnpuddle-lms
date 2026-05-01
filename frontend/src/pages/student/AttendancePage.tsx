@@ -166,6 +166,7 @@ export const StudentAttendancePage: React.FC = () => {
             <div className="flex items-center justify-between mb-5">
               <button
                 onClick={goToPrev}
+                aria-label="Previous month"
                 className="p-1.5 rounded-lg hover:bg-slate-100 transition-colors"
               >
                 <ChevronLeft className="h-4 w-4 text-slate-500" />
@@ -176,6 +177,7 @@ export const StudentAttendancePage: React.FC = () => {
               <button
                 onClick={goToNext}
                 disabled={isCurrentMonth}
+                aria-label="Next month"
                 className="p-1.5 rounded-lg hover:bg-slate-100 transition-colors disabled:opacity-30"
               >
                 <ChevronRight className="h-4 w-4 text-slate-500" />

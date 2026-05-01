@@ -47,6 +47,10 @@ export const SceneRenderer = React.memo<SceneRendererProps>(function SceneRender
   const content = scene.content;
   const slides = useMAICStageStore((s) => s.slides);
   const currentSlideIndex = useMAICStageStore((s) => s.currentSlideIndex);
+  // F2 (P0): scene index drives the per-element_key suffix the SlideRenderer
+  // consumes. Read the live value from the store so we don't have to thread
+  // it as a prop through every caller.
+  const currentSceneIndex = useMAICStageStore((s) => s.currentSceneIndex);
   const totalSlides = slides.length;
 
   const rendered = useMemo(() => {
@@ -64,6 +68,8 @@ export const SceneRenderer = React.memo<SceneRendererProps>(function SceneRender
               slideNumber={currentSlideIndex + 1}
               totalSlides={totalSlides}
               imagesPending={imagesPending}
+              sceneIndex={currentSceneIndex}
+              slideIndex={currentSlideIndex}
             />
           );
         }
@@ -81,6 +87,8 @@ export const SceneRenderer = React.memo<SceneRendererProps>(function SceneRender
               audioUrl: slideContent.audioUrl,
             }}
             imagesPending={imagesPending}
+            sceneIndex={currentSceneIndex}
+            slideIndex={currentSlideIndex}
           />
         );
       }
@@ -126,7 +134,7 @@ export const SceneRenderer = React.memo<SceneRendererProps>(function SceneRender
           </div>
         );
     }
-  }, [content, scene.id, scene.title, mode, slides, currentSlideIndex, totalSlides]);
+  }, [content, scene.id, scene.title, mode, slides, currentSlideIndex, currentSceneIndex, totalSlides, imagesPending, role]);
 
   // Quiz scenes can have lots of questions — let them scroll within the
   // 16:9 viewport. All other scene types stay overflow-hidden so animations

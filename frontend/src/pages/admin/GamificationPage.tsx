@@ -98,7 +98,8 @@ const MEDAL: Record<number, string> = { 1: '🥇', 2: '🥈', 3: '🥉' };
 /** Narrow an unknown mutation error into a user-facing message. */
 function getErrorMessage(err: unknown, fallback: string): string {
   if (axios.isAxiosError(err)) {
-    const data = err.response?.data as { detail?: string } | undefined;
+    const data = err.response?.data as { detail?: string; error?: string } | undefined;
+    if (data?.error) return data.error;
     if (data?.detail) return data.detail;
     if (err.message) return err.message;
   }

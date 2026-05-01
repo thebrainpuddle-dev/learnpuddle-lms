@@ -54,6 +54,17 @@ vi.mock('../../../stores/maicStageStore', () => {
     selector(store);
   // getState is called directly (not as a hook) inside the component.
   useMAICStageStore.getState = () => store;
+  // setState is called by the R6 position-preservation effect to restore
+  // currentSceneIndex/currentSlideIndex after the slides+scenes reset.
+  // The flipDetection suite doesn't assert on the position write, but the
+  // call must not throw — provide a no-op shim that mutates the local
+  // mock store so downstream getState() reads stay coherent.
+  useMAICStageStore.setState = (
+    patch: Partial<typeof store> | ((s: typeof store) => Partial<typeof store>),
+  ) => {
+    const next = typeof patch === 'function' ? patch(store) : patch;
+    Object.assign(store, next);
+  };
   return { useMAICStageStore };
 });
 

@@ -5,7 +5,8 @@ rows, all within a single transaction.atomic().
 
 Key rules:
 - Course is created with is_published=False (draft — invisible to teachers).
-- quiz-type contents → LINK with meta_json comment about TASK-043.
+- quiz-type contents → QUIZ (TASK-043); a QuizConfig is created lazily on
+  first admin access via GET /api/v1/assessments/quiz-config/<content_id>/.
 - assignment-type contents → TEXT placeholder.
 - Never auto-publishes.
 """
@@ -23,6 +24,9 @@ logger = logging.getLogger(__name__)
 # Content type constants (mirrors courses.models.Content.CONTENT_TYPE_CHOICES)
 CONTENT_TYPE_TEXT = "TEXT"
 CONTENT_TYPE_LINK = "LINK"
+# TASK-043 (2026-04-28): QUIZ type backed by QuizConfig + QuestionBank.
+# QuizConfig is created lazily on first admin access.
+CONTENT_TYPE_QUIZ = "QUIZ"
 
 
 @transaction.atomic
@@ -96,19 +100,21 @@ def _resolve_content_type(content_bp) -> tuple[str, str, dict]:
 
     Mapping per spec:
     - "text"       → TEXT, description as text_content.
-    - "quiz"       → LINK placeholder, meta notes TASK-043.
+    - "quiz"       → QUIZ (TASK-043). QuizConfig is created lazily on first
+                     admin access via GET /api/v1/assessments/quiz-config/<id>/.
+                     Description is stored in meta_json for display until
+                     the admin configures the quiz.
     - "assignment" → TEXT placeholder, meta notes future work.
     """
     ctype = content_bp.type
 
     if ctype == "quiz":
         meta = {
-            "is_placeholder": True,
-            "placeholder_type": "quiz",
-            "note": "TODO: attach quiz config via TASK-043",
+            "generated_from_blueprint": True,
             "description": content_bp.description,
+            # Configure questions via: GET/PATCH /api/v1/assessments/quiz-config/<content_id>/
         }
-        return CONTENT_TYPE_LINK, "", meta
+        return CONTENT_TYPE_QUIZ, "", meta
 
     if ctype == "assignment":
         text = (

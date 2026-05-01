@@ -94,7 +94,7 @@ class ChatQuery(models.Model):
         indexes = [
             models.Index(
                 fields=["tenant", "user", "created_at"],
-                name="chatquery_tenant_user_created_idx",
+                name="chq_tenant_user_created_idx",
             ),
             models.Index(
                 fields=["tenant", "created_at"],

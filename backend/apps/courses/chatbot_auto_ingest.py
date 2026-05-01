@@ -158,6 +158,12 @@ def _create_knowledge_for_content(
             return None
         c_hash = _content_hash(file_url)
 
+    elif content.content_type == "QUIZ":
+        # QUIZ content is intentionally skipped for chatbot RAG indexing.
+        # Quiz questions are configured separately via QuizConfig / QuestionBank
+        # and are not suitable for free-text retrieval augmentation.
+        return None
+
     knowledge = AIChatbotKnowledge.all_objects.create(
         chatbot=chatbot,
         tenant=chatbot.tenant,

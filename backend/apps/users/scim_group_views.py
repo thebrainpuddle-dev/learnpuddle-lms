@@ -36,6 +36,7 @@ from django.views.decorators.csrf import csrf_exempt
 
 from apps.courses.models import TeacherGroup
 from apps.users.models import User
+from apps.users.scim_throttles import check_token_throttle, check_unauth_throttle
 from utils.audit import log_audit
 
 # ---------------------------------------------------------------------------
@@ -161,7 +162,14 @@ def scim_groups_view(request):
     """List groups (GET) or provision a new group (POST)."""
     scim_token = _authenticate_scim(request)
     if scim_token is None:
+        throttled = check_unauth_throttle(request)
+        if throttled is not None:
+            return throttled
         return _scim_401()
+
+    throttled = check_token_throttle(request)
+    if throttled is not None:
+        return throttled
 
     tenant = scim_token.tenant
 
@@ -177,6 +185,28 @@ def scim_groups_view(request):
                 groups = groups.filter(name__iexact=m.group(1))
             # Unknown filter → return empty per spec (don't 400)
 
+        # RFC 7644 §3.4.2.3 — honour sortBy/sortOrder with an allowlist.
+        # Allowlisted attributes: displayName (maps to name).
+        # Unknown sortBy → 400 (invalidValue).
+        _GROUPS_SORT_ALLOWLIST = {"displayname": "name", "name": "name"}
+        sort_by_param = request.GET.get("sortBy", "").strip().lower()
+        sort_order_param = request.GET.get("sortOrder", "ascending").strip().lower()
+
+        if sort_by_param:
+            if sort_by_param not in _GROUPS_SORT_ALLOWLIST:
+                return _scim_error(
+                    400,
+                    f"sortBy attribute '{request.GET.get('sortBy')}' is not supported. "
+                    "Supported values: displayName.",
+                    "invalidValue",
+                )
+            sort_field = _GROUPS_SORT_ALLOWLIST[sort_by_param]
+            if sort_order_param == "descending":
+                sort_field = f"-{sort_field}"
+        else:
+            # Implicit default: ascending name (unchanged pre-PHASE3-6 behaviour)
+            sort_field = "name"
+
         total = groups.count()
 
         # Pagination (1-indexed per RFC 7644 §3.4.2.4)
@@ -187,7 +217,7 @@ def scim_groups_view(request):
             start_index, count = 1, 100
 
         offset = start_index - 1
-        page_groups = groups.prefetch_related("members").order_by("name")[offset: offset + count]
+        page_groups = groups.prefetch_related("members").order_by(sort_field)[offset: offset + count]
 
         return _json_resp({
             "schemas": [_SCHEMA_LIST],
@@ -264,7 +294,14 @@ def scim_group_detail_view(request, group_id):
     """Retrieve, replace, patch, or delete a single group."""
     scim_token = _authenticate_scim(request)
     if scim_token is None:
+        throttled = check_unauth_throttle(request)
+        if throttled is not None:
+            return throttled
         return _scim_401()
+
+    throttled = check_token_throttle(request)
+    if throttled is not None:
+        return throttled
 
     tenant = scim_token.tenant
 

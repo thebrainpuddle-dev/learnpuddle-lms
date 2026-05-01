@@ -129,6 +129,27 @@ class TestSCIMGroupAuthentication:
         resp = c.get(f"/scim/v2/Groups/{group.id}")
         assert resp.status_code == 401
 
+    def test_inactive_tenant_token_returns_401_on_groups(self):
+        """Valid token for a deactivated tenant → 401 on Groups endpoint.
+
+        Confirms that the M6 tenant.is_active guard in SCIMToken.verify()
+        protects Groups endpoints too (not just Users).
+        """
+        tenant = _make_tenant()
+        admin = _make_admin(tenant)
+        raw_token, _ = _scim_token_for(tenant, admin)
+
+        # Suspend the tenant
+        tenant.is_active = False
+        tenant.save(update_fields=["is_active"])
+
+        c = Client()
+        resp = c.get("/scim/v2/Groups", **_scim_headers(raw_token))
+        assert resp.status_code == 401, (
+            f"Expected 401 for inactive tenant on Groups, got {resp.status_code}. "
+            "M6: suspended tenants must not accept SCIM provisioning on any endpoint."
+        )
+
 
 # ---------------------------------------------------------------------------
 # 2. GET /scim/v2/Groups — list

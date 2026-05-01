@@ -1,15 +1,16 @@
 """
 apps/reports_builder/tasks.py
 -------------------------------
-Celery tasks for the Custom Report Builder (TASK-053).
+Celery tasks for the Custom Report Builder (TASK-053 / TASK-065).
 
 Tasks:
   * build_csv_export(run_id)         — build CSV artifact for an export run.
+  * build_xlsx_export(run_id)        — build XLSX artifact for an export run (TASK-065).
   * run_scheduled_reports()          — Celery Beat hourly scanner.
   * execute_scheduled_report(schedule_id) — execute one scheduled run + email.
 
 Security:
-  * Scheduled report emails contain signed-URL link ONLY (never CSV attachment).
+  * Scheduled report emails contain signed-URL link ONLY (never CSV/XLSX attachment).
   * Errors are captured into ReportRun.error + ReportSchedule.last_run_status.
   * No silent failures.
 """
@@ -31,15 +32,21 @@ from django.utils import timezone
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# CSV artifact storage
+# Artifact storage helpers
 # ---------------------------------------------------------------------------
 
 ARTIFACT_DIR = pathlib.Path(settings.MEDIA_ROOT) / "report_artifacts"
 
 
-def _artifact_path(run_id: str) -> pathlib.Path:
+def _artifact_path(run_id: str, fmt: str = "csv") -> pathlib.Path:
+    """Return the filesystem path for a report artifact.
+
+    Args:
+        run_id: The ReportRun UUID (str).
+        fmt:    "csv" (default) or "xlsx".
+    """
     ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
-    return ARTIFACT_DIR / f"report_{run_id}.csv"
+    return ARTIFACT_DIR / f"report_{run_id}.{fmt}"
 
 
 # ---------------------------------------------------------------------------
@@ -371,7 +378,12 @@ def execute_scheduled_report(self, schedule_id: str) -> None:
 
     if delivery_successes == 0 and len(recipients) > 0:
         # Total delivery failure — escalate run and schedule statuses.
-        run.status = "failed"
+        # run.status must be a valid STATUS_CHOICES value; "error" is the only
+        # available failure status for ReportRun.  The delivery-failure detail
+        # is recorded in run.error (above) and separately in
+        # schedule.last_run_status = "delivery_failed" (which has its own
+        # STATUS_CHOICES that includes "delivery_failed").
+        run.status = "error"
         run.save(update_fields=["status"])
         schedule.last_run_status = "delivery_failed"
         schedule.save(update_fields=["last_run_status", "updated_at"])

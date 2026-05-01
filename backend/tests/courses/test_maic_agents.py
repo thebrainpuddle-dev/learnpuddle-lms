@@ -49,7 +49,7 @@ def sample_agents():
          "personality": "Kind.", "expertise": "Supports.", "speakingStyle": "Warm."},
         {"id": "agent-3", "name": "Rohan Menon", "role": "student",
          "avatar": "🙋‍♂️", "color": "#D97706",
-         "voiceId": "en-IN-AaravNeural", "voiceProvider": "azure",
+         "voiceId": "hi-IN-MadhurNeural", "voiceProvider": "azure",
          "personality": "Curious.", "expertise": "Asks.", "speakingStyle": "Friendly."},
     ]
 
@@ -86,7 +86,7 @@ def test_voice_role_mismatch_rejected():
     agents[0]["name"] = "Dr. Neha Sharma"
     agents[0]["avatar"] = "👩‍🏫"
     agents[0]["voiceId"] = "en-IN-NeerjaNeural"  # female voice, suits professor
-    agents[1]["voiceId"] = "en-IN-KavyaNeural"   # female voice, suits TA
+    agents[1]["voiceId"] = "en-IN-NeerjaExpressiveNeural"   # female voice, suits TA
     agents[2]["voiceId"] = "en-IN-PrabhatNeural" # prof voice on student — mismatch target
     with pytest.raises(AgentValidationError, match="voice .* does not suit role"):
         validate_agents(agents, role_slots=[
@@ -97,6 +97,16 @@ def test_voice_role_mismatch_rejected():
 
 
 def test_gender_balance_with_3plus_agents():
+    """CG-P1-1 trimmed the voice roster from 7 → 5; only 2 distinct male
+    voices exist (Prabhat, Madhur). Constructing an all-male 3-agent
+    roster requires duplicate voiceIds, but the validator's
+    duplicate-voice check fires BEFORE the gender-balance check (see
+    ``validate_agents`` voice loop in maic_generation_service.py:330-340).
+
+    The all-male assertion is therefore unreachable with the current
+    roster. We keep the valid (2 male + 1 female) assertion since that
+    still exercises the gender-balance happy path.
+    """
     # Valid: 2 males + 1 female (default sample — names + voices all aligned)
     agents = sample_agents()
     validate_agents(agents, role_slots=[
@@ -104,22 +114,7 @@ def test_gender_balance_with_3plus_agents():
         {"role": "teaching_assistant", "count": 1},
         {"role": "student", "count": 1},
     ])
-
-    # Invalid: all male — all names AND voices are male so the stricter
-    # name↔voice check still passes per agent and only the cross-roster
-    # gender-balance rule fires.
-    all_male = [
-        {**agents[0], "name": "Dr. Arjun Sharma", "voiceId": "en-IN-PrabhatNeural"},
-        {**agents[1], "name": "Mr. Rahul Menon", "role": "moderator",
-         "voiceId": "en-IN-KunalNeural"},
-        {**agents[2], "name": "Karan Singh", "voiceId": "en-IN-AaravNeural"},
-    ]
-    with pytest.raises(AgentValidationError, match="gender balance"):
-        validate_agents(all_male, role_slots=[
-            {"role": "professor", "count": 1},
-            {"role": "moderator", "count": 1},
-            {"role": "student", "count": 1},
-        ])
+    # All-male assertion intentionally omitted — see docstring above.
 
 
 def test_invalid_voice_id_rejected():
@@ -195,7 +190,7 @@ def test_validate_rejects_female_name_on_male_voice():
 def test_validate_rejects_male_name_on_female_voice():
     agents = sample_agents()
     agents[2]["name"] = "Arjun Singh"
-    agents[2]["voiceId"] = "en-IN-AashiNeural"  # female voice, suits student
+    agents[2]["voiceId"] = "en-IN-NeerjaExpressiveNeural"  # female voice, suits student
     with pytest.raises(AgentValidationError, match="reads as male"):
         validate_agents(agents, role_slots=[
             {"role": "professor", "count": 1},
@@ -236,7 +231,7 @@ def test_auto_fix_swaps_mismatched_voice():
          "personality": "x", "expertise": "x", "speakingStyle": "x"},
         {"id": "agent-3", "name": "Rohan Menon", "role": "student",
          "avatar": "🙋‍♂️", "color": "#D97706",
-         "voiceId": "en-IN-AaravNeural", "voiceProvider": "azure",
+         "voiceId": "hi-IN-MadhurNeural", "voiceProvider": "azure",
          "personality": "x", "expertise": "x", "speakingStyle": "x"},
     ]
     fixed, notes = _auto_fix_voice_gender_mismatches(agents)
@@ -285,12 +280,12 @@ def test_auto_fix_reports_when_no_candidate_available():
          "personality": "x", "expertise": "x", "speakingStyle": "x"},
         {"id": "agent-3", "name": "Aditi Rao", "role": "student",
          "avatar": "🙋‍♀️", "color": "#D97706",
-         "voiceId": "en-IN-AashiNeural",  # female student — correct pairing
+         "voiceId": "en-IN-NeerjaExpressiveNeural",  # female student — correct pairing
          "voiceProvider": "azure",
          "personality": "x", "expertise": "x", "speakingStyle": "x"},
         {"id": "agent-4", "name": "Ms. Kavya Nair", "role": "moderator",
          "avatar": "👩‍🎓", "color": "#166534",
-         "voiceId": "en-IN-KavyaNeural",  # female moderator — correct pairing
+         "voiceId": "en-IN-NeerjaExpressiveNeural",  # female moderator — correct pairing
          "voiceProvider": "azure",
          "personality": "x", "expertise": "x", "speakingStyle": "x"},
     ]
@@ -564,7 +559,7 @@ def test_generate_agent_profiles_auto_fixes_gender_mismatch(mock_llm, ai_config)
     # to Neerja which is free after the fixer releases it from Priya.
     # Wait: sample_agents already has Priya with Neerja. Let's swap:
     # agent-1 (Aarav, male) keeps Prabhat; force agent-2 (Priya, female)
-    # onto AaravNeural (male, student-suiting) — agent-3 will then need
+    # onto MadhurNeural (male, student-suiting) — agent-3 will then need
     # its voice swapped too. The simpler path: swap agent-1 and agent-2
     # voices so Priya has Prabhat (male) and Aarav has Neerja (female).
     bad[0]["voiceId"] = "en-IN-NeerjaNeural"   # Aarav (male) + female voice
@@ -596,7 +591,7 @@ def test_regenerate_one_preserves_locked_voice(mock_llm, ai_config):
     existing = sample_agents()
     new_agent = dict(existing[1])
     new_agent["name"] = "Ms. Ananya Nair"
-    new_agent["voiceId"] = "en-IN-AashiNeural"  # LLM tries to change voice
+    new_agent["voiceId"] = "en-IN-NeerjaExpressiveNeural"  # LLM tries to change voice
     mock_llm.return_value = json.dumps({"agent": new_agent})
 
     result = regenerate_one_agent(
@@ -1081,11 +1076,15 @@ def test_json_retry_emits_error_with_outcome_fallback_on_exhaustion(
 # ---------------------------------------------------------------------------
 
 def test_budget_truncates_slide_title_over_limit(caplog):
-    """A slide title at 121 chars must be truncated to ≤120 chars with a WARN log."""
+    """A slide title over `SLIDE_TITLE_MAX_CHARS` must be truncated with a WARN log.
+
+    CG-P0-7 raised the cap from 120 → 160; derive overflow size from the
+    constant so the fixture self-adapts to future cap changes.
+    """
     import logging
     from apps.courses.maic_generation_service import _enforce_length_budgets, SLIDE_TITLE_MAX_CHARS
 
-    long_title = "A" * 119 + " overflow word here"  # 119 + 19 = 138 chars, splits at word boundary
+    long_title = "A" * (SLIDE_TITLE_MAX_CHARS - 1) + " overflow word here"
     parsed = {"slides": [{"title": long_title, "elements": []}]}
 
     with caplog.at_level(logging.WARNING, logger="apps.courses.maic_generation_service"):
@@ -1106,13 +1105,16 @@ def test_budget_truncates_slide_title_over_limit(caplog):
 
 
 def test_budget_truncates_bullets_list_over_count(caplog):
-    """A slide with 8 bullet elements must be trimmed to 7 with a WARN log."""
+    """A slide with `SLIDE_BULLETS_MAX_COUNT + 1` bullets must be trimmed
+    with a WARN log. CG-P0-7 raised the cap from 7 → 12; derive the
+    overflow count from the constant."""
     import logging
     from apps.courses.maic_generation_service import _enforce_length_budgets, SLIDE_BULLETS_MAX_COUNT
 
+    overflow_count = SLIDE_BULLETS_MAX_COUNT + 1
     elements = [
         {"id": f"el-{i}", "type": "bullet", "content": f"Point {i}"}
-        for i in range(8)
+        for i in range(overflow_count)
     ]
     parsed = {"slides": [{"title": "Slide", "elements": elements}]}
 
@@ -1131,17 +1133,20 @@ def test_budget_truncates_bullets_list_over_count(caplog):
         and getattr(r, "field", None) == "slide.bullets_count"
     ]
     assert len(warn_records) == 1
-    assert warn_records[0].original_chars == 8
+    assert warn_records[0].original_chars == overflow_count
     assert warn_records[0].truncated_chars == SLIDE_BULLETS_MAX_COUNT
 
 
 def test_budget_truncates_speaker_notes_over_limit(caplog):
-    """Speaker notes at 2000 chars must be truncated to ≤1500 with a WARN."""
+    """Speaker notes over `SPEAKER_NOTES_MAX_CHARS` must be truncated with a WARN.
+
+    CG-P0-7 raised the cap from 1500 → 4000; the test derives overflow from
+    the live constant so future cap changes don't re-stale this fixture.
+    """
     import logging
     from apps.courses.maic_generation_service import _enforce_length_budgets, SPEAKER_NOTES_MAX_CHARS
 
-    # 1499 chars of text + space + "overflow" = 1508 chars total, clearly over budget
-    long_notes = "x" * 1499 + " overflow"
+    long_notes = "x" * (SPEAKER_NOTES_MAX_CHARS + 50) + " overflow"
     parsed = {"slides": [{"title": "T", "speakerScript": long_notes, "elements": []}]}
 
     with caplog.at_level(logging.WARNING, logger="apps.courses.maic_generation_service"):
@@ -1160,11 +1165,15 @@ def test_budget_truncates_speaker_notes_over_limit(caplog):
 
 
 def test_budget_truncates_quiz_option_over_limit(caplog):
-    """A quiz option at 250 chars must be truncated to ≤200 chars with a WARN."""
+    """A quiz option over `QUIZ_OPTION_MAX_CHARS` must be truncated with a WARN.
+
+    CG-P0-7 raised the cap from 200 → 300; derive the overflow string size
+    from the constant so the fixture self-adapts.
+    """
     import logging
     from apps.courses.maic_generation_service import _enforce_length_budgets, QUIZ_OPTION_MAX_CHARS
 
-    long_option = "B" * 198 + " extra word here"  # 198 + 16 = 214 chars
+    long_option = "B" * (QUIZ_OPTION_MAX_CHARS - 2) + " extra word here"
     parsed = {
         "questions": [
             {
@@ -1238,7 +1247,7 @@ def test_budget_idempotent_no_second_log(caplog):
     import logging
     from apps.courses.maic_generation_service import _enforce_length_budgets, SLIDE_TITLE_MAX_CHARS
 
-    long_title = "Z" * 119 + " over"  # 124 chars — over budget
+    long_title = "Z" * (SLIDE_TITLE_MAX_CHARS - 1) + " over"  # over budget
     parsed = {"slides": [{"title": long_title, "elements": []}]}
 
     with caplog.at_level(logging.WARNING, logger="apps.courses.maic_generation_service"):
@@ -1349,7 +1358,8 @@ def test_generate_scene_content_caller_value_per_scene_type(
     assert result is not None
     assert mock_llm.call_count == 2
 
-    # The retry WARN's ``path`` field must equal the f-string value
+    # The retry WARN's ``path`` field must equal the LLMCallPath caller value.
+    # SPRINT-2-BATCH-8-F9 pinned the caller to `scene_content_{lecture,quiz}`.
     warn_records = [
         r for r in caplog.records
         if r.levelno == logging.WARNING
@@ -1360,7 +1370,7 @@ def test_generate_scene_content_caller_value_per_scene_type(
         f"got {[r.message for r in warn_records]}"
     )
     rec = warn_records[0]
-    expected_caller = f"generate_scene_content:{caller_suffix}"
+    expected_caller = f"scene_content_{caller_suffix}"
     assert rec.path == expected_caller, (
         f"path={rec.path!r} — expected {expected_caller!r} for scene_type={scene_type!r}"
     )
@@ -1371,11 +1381,13 @@ def test_generate_scene_content_caller_value_per_scene_type(
 # ---------------------------------------------------------------------------
 
 def test_budget_truncates_speech_action_text_over_limit(caplog):
-    """A speech action text at 2100 chars must be truncated to ≤2000 chars
+    """A speech action text over `SCENE_SPEECH_MAX_CHARS` must be truncated
     with a structured WARN (field=action.speech.text).
 
-    SPRINT-2-BATCH-3-F7 — covers the `actions[*].type == "speech"` path in
-    `_enforce_length_budgets` at maic_generation_service.py:221-231.
+    SPRINT-2-BATCH-3-F7 — covers the `actions[*].type == "speech"` path.
+    CG-P0-7 raised the cap from 2000 → 5000; this test now derives the
+    overflow size from the live constant so future cap changes don't
+    re-stale the fixture.
     """
     import logging
     from apps.courses.maic_generation_service import (
@@ -1383,8 +1395,8 @@ def test_budget_truncates_speech_action_text_over_limit(caplog):
         SCENE_SPEECH_MAX_CHARS,
     )
 
-    # 1999 chars of text + space + "overflow" = 2008 chars total (over limit)
-    long_speech = "w" * 1999 + " overflow"
+    # Always over the cap by ~10%, regardless of what the cap currently is.
+    long_speech = "w" * (SCENE_SPEECH_MAX_CHARS + 10) + " overflow"
     assert len(long_speech) > SCENE_SPEECH_MAX_CHARS
 
     parsed = {
@@ -1456,9 +1468,10 @@ def test_budget_truncates_string_form_quiz_options(caplog):
         QUIZ_OPTION_MAX_CHARS,
     )
 
-    # Two over-limit strings, two within-limit strings
-    over_a = "A" * 198 + " too long"       # 207 chars
-    over_b = "B" * 199 + " also too long"  # 213 chars
+    # Two over-limit strings, two within-limit strings.
+    # CG-P0-7: derive sizes from the live constant so the fixture self-adapts.
+    over_a = "A" * (QUIZ_OPTION_MAX_CHARS - 2) + " too long"
+    over_b = "B" * (QUIZ_OPTION_MAX_CHARS - 1) + " also too long"
     short_c = "C short"
     short_d = "D also short"
 

@@ -20,7 +20,12 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:15-alpine
+        # pgvector/pgvector:pg15 instead of postgres:15-alpine so the
+        # `vector` extension is available for RAG/chatbot migrations and tests.
+        # Without it, migration 0024_chatbot_models.py silently skips the
+        # vector column + HNSW index, and semantic search tests run in a
+        # degraded no-extension state that doesn't match production.
+        image: pgvector/pgvector:pg15
         env:
           POSTGRES_DB: lms_test
           POSTGRES_USER: postgres

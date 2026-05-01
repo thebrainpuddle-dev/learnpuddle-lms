@@ -253,6 +253,26 @@ class MAICClassroom(models.Model):
         help_text="PERF-P0-4 shard: audioManifest + miscellaneous top-level keys",
     )
 
+    # ─── F2 (P0): per-element image task state ───────────────────────────────
+    # Keyed by stable per-element string
+    # ``"<scene_idx>:<slide_idx>:<element_idx>:<element_id_or_synth>"``.
+    # Each entry shape:
+    #     {"status": "pending"|"generating"|"done"|"failed",
+    #      "src":   "<url>",          # present on done
+    #      "error_code": "...",       # present on failed
+    #      "updated_at": "<iso8601>"}
+    # Coexists with the global ``images_pending`` boolean (CG-P0-3) — F3
+    # will eventually move the gating signal here, but until then the
+    # boolean is still the milestone trigger that the player reads.
+    content_image_tasks = models.JSONField(
+        default=dict, blank=True,
+        help_text=(
+            "F2 (P0): per-element image generation task state, keyed by "
+            "``<scene_idx>:<slide_idx>:<element_idx>:<element_id>``. "
+            "Status states: pending|generating|done|failed."
+        ),
+    )
+
     # Scene/slide count (cached from client for listing)
     scene_count = models.PositiveIntegerField(default=0)
     estimated_minutes = models.PositiveIntegerField(default=0)
@@ -360,10 +380,12 @@ class MAICClassroom(models.Model):
         """Write a single content section to its shard and optionally save.
 
         Args:
-            section:  One of ``"scenes"``, ``"agents"``, or ``"meta"``.
-                      For ``"meta"`` the *data* dict is merged (not replaced)
-                      into ``content_meta`` so individual keys can be updated
-                      without clobbering sibling keys.
+            section:  One of ``"scenes"``, ``"agents"``, ``"meta"``, or
+                      ``"image_tasks"``.
+                      For ``"meta"`` and ``"image_tasks"`` the *data* dict is
+                      merged (not replaced) so individual keys can be updated
+                      without clobbering siblings (F2 — per-element image
+                      task transitions).
             data:     The value to store (list for scenes/agents, dict for meta).
             save:     When True (default) immediately saves with update_fields
                       targeting only the changed shard + ``updated_at``.
@@ -425,10 +447,23 @@ class MAICClassroom(models.Model):
             meta.update(data)
             self.content_meta = meta
             changed = ["content_meta"]
+        elif section == "image_tasks":
+            # F2 (P0): merge per-element image-task transitions. Same
+            # single-level dict.update() semantics as ``meta`` — each
+            # element_key entry is replaced wholesale, but unrelated
+            # keys are preserved.
+            if not isinstance(data, dict):
+                raise ValueError(
+                    "update_content_section('image_tasks', ...) requires a dict"
+                )
+            tasks = dict(self.content_image_tasks or {})
+            tasks.update(data)
+            self.content_image_tasks = tasks
+            changed = ["content_image_tasks"]
         else:
             raise ValueError(
                 f"Unknown content section {section!r}. "
-                "Must be one of: 'scenes', 'agents', 'meta'."
+                "Must be one of: 'scenes', 'agents', 'meta', 'image_tasks'."
             )
 
         if save:

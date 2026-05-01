@@ -82,3 +82,29 @@ vi.mock('@tiptap/extension-code-block-lowlight', () => {
 });
 
 vi.mock('lowlight', () => ({ createLowlight: () => ({}) }));
+
+// @xyflow/react (React Flow) accesses the DOM and registers ResizeObserver
+// at module-load time which hangs in happy-dom. Mock it globally so any test
+// file that transitively imports MindMapTab (or any React-Flow-using component)
+// doesn't stall the Vitest worker.
+vi.mock('@xyflow/react', () => ({
+  ReactFlow: () => null,
+  MiniMap: () => null,
+  Controls: () => null,
+  Background: () => null,
+  Panel: () => null,
+  Handle: () => null,
+  useNodesState: () => [[], () => {}],
+  useEdgesState: () => [[], () => {}],
+  Position: { Top: 'top', Bottom: 'bottom', Left: 'left', Right: 'right' },
+  MarkerType: { ArrowClosed: 'arrowclosed' },
+  BackgroundVariant: { Dots: 'dots', Lines: 'lines', Cross: 'cross' },
+}));
+
+// dagre graph layout library — not needed in unit tests.
+vi.mock('@dagrejs/dagre', () => ({
+  default: {
+    graphlib: { Graph: class { setDefaultEdgeLabel() {} setGraph() {} setNode() {} setEdge() {} nodes() { return []; } edges() { return []; } node() { return { x: 0, y: 0, width: 100, height: 50 }; } } },
+    layout: () => {},
+  },
+}));

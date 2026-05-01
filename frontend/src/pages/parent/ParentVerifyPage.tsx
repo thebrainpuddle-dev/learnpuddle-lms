@@ -50,9 +50,9 @@ export function ParentVerifyPage() {
         setStatus('error');
         const message =
           (err as { response?: { data?: { detail?: string; error?: string } } })
-            ?.response?.data?.detail ||
-          (err as { response?: { data?: { detail?: string; error?: string } } })
             ?.response?.data?.error ||
+          (err as { response?: { data?: { detail?: string; error?: string } } })
+            ?.response?.data?.detail ||
           'Verification failed. The link may have expired.';
         setErrorMessage(message);
       }

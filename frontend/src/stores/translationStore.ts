@@ -147,7 +147,7 @@ function handleReviewApiError(
   } else {
     toastFn.error(
       'Action failed',
-      err?.response?.data?.detail ?? 'Please try again.'
+      err?.response?.data?.error ?? err?.response?.data?.detail ?? 'Please try again.'
     );
   }
 }

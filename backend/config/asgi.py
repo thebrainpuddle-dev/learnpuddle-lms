@@ -3,7 +3,10 @@
 ASGI config for LMS project.
 
 Supports both HTTP (Django) and WebSocket (Channels) protocols.
-WebSocket endpoint: /ws/notifications/ for real-time notification delivery.
+WebSocket endpoints:
+  - /ws/notifications/                              real-time notifications
+  - /ws/maic/classrooms/<uuid>/                     F2 (P0) per-element MAIC
+                                                    image-task state stream
 """
 
 import os
@@ -18,13 +21,19 @@ django_asgi_app = get_asgi_application()
 from channels.routing import ProtocolTypeRouter, URLRouter
 from channels.security.websocket import AllowedHostsOriginValidator
 from apps.notifications.middleware import JWTAuthMiddleware
-from apps.notifications.routing import websocket_urlpatterns
+from apps.notifications.routing import websocket_urlpatterns as notification_ws
+from apps.courses.routing import websocket_urlpatterns as courses_ws
+
+
+# Compose all WebSocket routes from the apps that own them. Order is
+# irrelevant because each ``re_path`` carries a distinct prefix.
+websocket_urlpatterns = list(notification_ws) + list(courses_ws)
 
 
 application = ProtocolTypeRouter({
     # HTTP requests handled by Django
     "http": django_asgi_app,
-    
+
     # WebSocket requests handled by Channels
     "websocket": AllowedHostsOriginValidator(
         JWTAuthMiddleware(

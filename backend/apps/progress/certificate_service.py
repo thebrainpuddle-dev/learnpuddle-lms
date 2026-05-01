@@ -7,6 +7,8 @@ Includes tenant branding (logo, colors) and completion details.
 """
 
 import io
+import logging
+import os
 from datetime import datetime
 from typing import Optional
 
@@ -17,6 +19,9 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch, mm
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle
 from reportlab.lib.enums import TA_CENTER
+
+
+logger = logging.getLogger(__name__)
 
 
 def hex_to_rgb(hex_color: str) -> tuple:
@@ -143,14 +148,32 @@ def generate_certificate_pdf(
     elements.append(Spacer(1, 20))
     
     # Tenant logo (if available)
+    # Pre-validate the path with os.path.isfile BEFORE constructing Image(...).
+    # ReportLab's Image() constructor only stores the path; the OS-level open
+    # happens later inside doc.build(elements), which is OUTSIDE any try/except
+    # we could put here. A try/except around the constructor alone does not
+    # catch OSError raised at build time, so a stale tenant_logo_path would
+    # surface as a 500 to the caller. Pre-validating up-front means doc.build
+    # never sees a bad path; the logo is silently skipped instead.
     if tenant_logo_path:
-        try:
-            logo = Image(tenant_logo_path, width=1.5*inch, height=1.5*inch)
-            logo.hAlign = 'CENTER'
-            elements.append(logo)
-            elements.append(Spacer(1, 20))
-        except Exception:
-            pass  # Skip logo if there's an error loading it
+        if os.path.isfile(tenant_logo_path):
+            try:
+                logo = Image(tenant_logo_path, width=1.5*inch, height=1.5*inch)
+                logo.hAlign = 'CENTER'
+                elements.append(logo)
+                elements.append(Spacer(1, 20))
+            except Exception:
+                logger.warning(
+                    "certificate logo skipped: image_load_failed path=%s tenant=%s",
+                    tenant_logo_path,
+                    tenant_name,
+                )
+        else:
+            logger.warning(
+                "certificate logo skipped: file_missing path=%s tenant=%s",
+                tenant_logo_path,
+                tenant_name,
+            )
     
     # Certificate title
     elements.append(Paragraph("Certificate of Completion", title_style))

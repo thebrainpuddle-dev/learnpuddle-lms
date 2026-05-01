@@ -262,20 +262,35 @@ class TestMaterialiser(TestCase):
         # 5 contents total (1+2+1+1... wait: 3+1+1 = 5)
         self.assertEqual(mock_content_cls.objects.create.call_count, 5)
 
+        # TASK-043: assert that the quiz blueprint produced a QUIZ content_type call.
+        all_create_kwargs = [
+            call.kwargs for call in mock_content_cls.objects.create.call_args_list
+        ]
+        quiz_calls = [kw for kw in all_create_kwargs if kw.get("content_type") == "QUIZ"]
+        self.assertEqual(len(quiz_calls), 1, "Expected exactly one Content.create with content_type='QUIZ'")
+        self.assertEqual(quiz_calls[0].get("text_content"), "")
+        self.assertTrue(quiz_calls[0].get("meta_json", {}).get("generated_from_blueprint"))
 
-class TestMaterialiserQuizIsLinkPlaceholder(TestCase):
-    """Test 9: quiz-type content → LINK with TASK-043 comment in meta_json."""
 
-    def test_quiz_becomes_link(self):
+class TestMaterialiserQuizEmitsQuizContentType(TestCase):
+    """TASK-043: quiz-type blueprint → QUIZ content_type, lazy QuizConfig."""
+
+    def test_quiz_becomes_quiz(self):
         from apps.course_generator.materialiser import _resolve_content_type
         from apps.course_generator.outline_service import ContentBlueprint
 
-        content_bp = ContentBlueprint(type="quiz", title="Quiz 1", description="Check knowledge.")
+        content_bp = ContentBlueprint(
+            type="quiz", title="Quiz 1", description="Check knowledge."
+        )
         ctype, text_content, meta = _resolve_content_type(content_bp)
 
-        self.assertEqual(ctype, "LINK")
-        self.assertIn("TASK-043", meta["note"])
-        self.assertTrue(meta.get("is_placeholder"))
+        self.assertEqual(ctype, "QUIZ")
+        self.assertEqual(text_content, "")
+        self.assertTrue(meta["generated_from_blueprint"])
+        self.assertEqual(meta["description"], "Check knowledge.")
+        # Old placeholder fields must be gone
+        self.assertNotIn("is_placeholder", meta)
+        self.assertNotIn("note", meta)
 
 
 class TestMaterialiserAssignmentIsText(TestCase):

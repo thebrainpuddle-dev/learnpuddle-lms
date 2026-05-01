@@ -131,7 +131,7 @@ class CreateNotificationTestCase(TestCase):
         notif = services.create_notification(
             tenant=self.tenant,
             teacher=self.teacher,
-            notification_type="GENERAL",
+            notification_type="SYSTEM",
             title="Info",
             message="General info",
         )

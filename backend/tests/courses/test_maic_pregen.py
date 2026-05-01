@@ -69,40 +69,43 @@ def make_student(db, maic_enabled_tenant):
 
 @pytest.fixture
 def classroom_with_content(maic_enabled_tenant, teacher_user, ai_config):
-    """DRAFT classroom with 1 agent + 1 scene + 2 speech actions."""
+    """DRAFT classroom with 1 agent + 1 scene + 2 speech actions.
+
+    PERF-P0-4 cutover 2026-04-26: writes to the sharded content fields
+    (``content_scenes`` / ``content_agents``) instead of the legacy
+    ``content`` JSONField, which is no longer populated post-cutover.
+    """
     return MAICClassroom.objects.create(
         tenant=maic_enabled_tenant,
         creator=teacher_user,
         title="Test",
         topic="Test topic",
         status="DRAFT",
-        content={
-            "agents": [
-                {
-                    "id": "agent-1",
-                    "name": "Dr. X",
-                    "role": "professor",
-                    "voiceId": "en-IN-PrabhatNeural",
-                    "voiceProvider": "azure",
-                    "avatar": "👨‍🏫",
-                    "color": "#4338CA",
-                    "personality": "P",
-                    "expertise": "E",
-                    "speakingStyle": "S",
-                },
-            ],
-            "scenes": [
-                {
-                    "id": "scene-1",
-                    "title": "Intro",
-                    "type": "introduction",
-                    "actions": [
-                        {"type": "speech", "agentId": "agent-1", "text": "Hello"},
-                        {"type": "speech", "agentId": "agent-1", "text": "Welcome"},
-                    ],
-                },
-            ],
-        },
+        content_agents=[
+            {
+                "id": "agent-1",
+                "name": "Dr. X",
+                "role": "professor",
+                "voiceId": "en-IN-PrabhatNeural",
+                "voiceProvider": "azure",
+                "avatar": "👨‍🏫",
+                "color": "#4338CA",
+                "personality": "P",
+                "expertise": "E",
+                "speakingStyle": "S",
+            },
+        ],
+        content_scenes=[
+            {
+                "id": "scene-1",
+                "title": "Intro",
+                "type": "introduction",
+                "actions": [
+                    {"type": "speech", "agentId": "agent-1", "text": "Hello"},
+                    {"type": "speech", "agentId": "agent-1", "text": "Welcome"},
+                ],
+            },
+        ],
     ), teacher_user
 
 
@@ -130,10 +133,11 @@ def test_publish_transitions_status_and_enqueues(
     mock_delay.assert_called_once_with(str(classroom.id))
     classroom.refresh_from_db()
     assert classroom.status == "GENERATING"
-    assert classroom.content["audioManifest"]["status"] == "generating"
-    assert classroom.content["audioManifest"]["totalActions"] == 2
-    # Each speech action gets audioId + voiceId stamped
-    for action in classroom.content["scenes"][0]["actions"]:
+    # PERF-P0-4 cutover 2026-04-26: audioManifest lives in content_meta shard,
+    # scenes (with stamped audioId/voiceId) live in content_scenes.
+    assert classroom.content_meta["audioManifest"]["status"] == "generating"
+    assert classroom.content_meta["audioManifest"]["totalActions"] == 2
+    for action in classroom.content_scenes[0]["actions"]:
         assert "audioId" in action
         assert len(action["audioId"]) == 12
         assert action["voiceId"] == "en-IN-PrabhatNeural"
@@ -156,21 +160,27 @@ def test_publish_rejects_while_generating(
 # ---------------------------------------------------------------------------
 
 def test_pregen_stamps_audio_urls_and_marks_ready(classroom_with_content):
+    """PERF-P0-4 cutover 2026-04-26: setup writes to content_scenes /
+    content_meta shards; assertions read from the same shards."""
     from apps.courses.maic_tasks import pre_generate_classroom_tts
 
     classroom, _ = classroom_with_content
     classroom.status = "GENERATING"
-    classroom.content["audioManifest"] = {
-        "status": "generating",
-        "progress": 0,
-        "totalActions": 2,
-        "completedActions": 0,
-        "failedAudioIds": [],
-        "generatedAt": None,
-    }
-    for i, action in enumerate(classroom.content["scenes"][0]["actions"]):
+    scenes = list(classroom.content_scenes)
+    for i, action in enumerate(scenes[0]["actions"]):
         action["audioId"] = f"hash{i:08x}"
         action["voiceId"] = "en-IN-PrabhatNeural"
+    classroom.content_scenes = scenes
+    classroom.content_meta = {
+        "audioManifest": {
+            "status": "generating",
+            "progress": 0,
+            "totalActions": 2,
+            "completedActions": 0,
+            "failedAudioIds": [],
+            "generatedAt": None,
+        }
+    }
     classroom.save()
 
     with patch(
@@ -184,30 +194,33 @@ def test_pregen_stamps_audio_urls_and_marks_ready(classroom_with_content):
 
     classroom.refresh_from_db()
     assert classroom.status == "READY"
-    assert classroom.content["audioManifest"]["status"] == "ready"
-    assert classroom.content["audioManifest"]["completedActions"] == 2
-    for action in classroom.content["scenes"][0]["actions"]:
+    assert classroom.content_meta["audioManifest"]["status"] == "ready"
+    assert classroom.content_meta["audioManifest"]["completedActions"] == 2
+    for action in classroom.content_scenes[0]["actions"]:
         assert action["audioUrl"] == "/media/foo.mp3"
 
 
 def test_pregen_retries_transient_failure(classroom_with_content):
+    """PERF-P0-4 cutover 2026-04-26: setup + assertions go through shards."""
     from apps.courses.maic_tasks import pre_generate_classroom_tts
 
     classroom, _ = classroom_with_content
     classroom.status = "GENERATING"
-    classroom.content["audioManifest"] = {
-        "status": "generating",
-        "progress": 0,
-        "totalActions": 1,
-        "completedActions": 0,
-        "failedAudioIds": [],
-        "generatedAt": None,
+    scenes = list(classroom.content_scenes)
+    scenes[0]["actions"] = [scenes[0]["actions"][0]]
+    scenes[0]["actions"][0]["audioId"] = "abc"
+    scenes[0]["actions"][0]["voiceId"] = "en-IN-PrabhatNeural"
+    classroom.content_scenes = scenes
+    classroom.content_meta = {
+        "audioManifest": {
+            "status": "generating",
+            "progress": 0,
+            "totalActions": 1,
+            "completedActions": 0,
+            "failedAudioIds": [],
+            "generatedAt": None,
+        }
     }
-    classroom.content["scenes"][0]["actions"] = [
-        classroom.content["scenes"][0]["actions"][0]
-    ]
-    classroom.content["scenes"][0]["actions"][0]["audioId"] = "abc"
-    classroom.content["scenes"][0]["actions"][0]["voiceId"] = "en-IN-PrabhatNeural"
     classroom.save()
 
     calls = [0]
@@ -226,26 +239,31 @@ def test_pregen_retries_transient_failure(classroom_with_content):
         pre_generate_classroom_tts(str(classroom.id))
 
     classroom.refresh_from_db()
-    assert classroom.content["scenes"][0]["actions"][0]["audioUrl"] == "/media/x.mp3"
+    assert classroom.content_scenes[0]["actions"][0]["audioUrl"] == "/media/x.mp3"
     assert calls[0] == 2  # first attempt failed, second succeeded
 
 
 def test_pregen_partial_status_on_some_failures(classroom_with_content):
+    """PERF-P0-4 cutover 2026-04-26: setup + assertions via shards."""
     from apps.courses.maic_tasks import pre_generate_classroom_tts
 
     classroom, _ = classroom_with_content
     classroom.status = "GENERATING"
-    classroom.content["audioManifest"] = {
-        "status": "generating",
-        "progress": 0,
-        "totalActions": 2,
-        "completedActions": 0,
-        "failedAudioIds": [],
-        "generatedAt": None,
-    }
-    for i, action in enumerate(classroom.content["scenes"][0]["actions"]):
+    scenes = list(classroom.content_scenes)
+    for i, action in enumerate(scenes[0]["actions"]):
         action["audioId"] = f"hash{i}"
         action["voiceId"] = "en-IN-PrabhatNeural"
+    classroom.content_scenes = scenes
+    classroom.content_meta = {
+        "audioManifest": {
+            "status": "generating",
+            "progress": 0,
+            "totalActions": 2,
+            "completedActions": 0,
+            "failedAudioIds": [],
+            "generatedAt": None,
+        }
+    }
     classroom.save()
 
     results = [b"ok", None]  # second returns empty -> failure
@@ -262,8 +280,8 @@ def test_pregen_partial_status_on_some_failures(classroom_with_content):
 
     classroom.refresh_from_db()
     assert classroom.status == "READY"  # still playable
-    assert classroom.content["audioManifest"]["status"] == "partial"
-    assert len(classroom.content["audioManifest"]["failedAudioIds"]) == 1
+    assert classroom.content_meta["audioManifest"]["status"] == "partial"
+    assert len(classroom.content_meta["audioManifest"]["failedAudioIds"]) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -273,16 +291,20 @@ def test_pregen_partial_status_on_some_failures(classroom_with_content):
 def test_student_cannot_see_classroom_mid_generation(
     classroom_with_content, maic_enabled_tenant, make_student,
 ):
+    """PERF-P0-4 cutover 2026-04-26: audioManifest gate read from
+    ``content_meta`` shard (composed_content), not legacy ``content``."""
     classroom, _ = classroom_with_content
     classroom.status = "READY"
     classroom.is_public = True
-    classroom.content["audioManifest"] = {
-        "status": "generating",
-        "progress": 50,
-        "totalActions": 2,
-        "completedActions": 1,
-        "failedAudioIds": [],
-        "generatedAt": None,
+    classroom.content_meta = {
+        "audioManifest": {
+            "status": "generating",
+            "progress": 50,
+            "totalActions": 2,
+            "completedActions": 1,
+            "failedAudioIds": [],
+            "generatedAt": None,
+        }
     }
     classroom.save()
 
@@ -297,7 +319,11 @@ def test_student_cannot_see_classroom_mid_generation(
     assert str(classroom.id) not in ids
 
     # Flip to ready → now visible
-    classroom.content["audioManifest"]["status"] = "ready"
+    meta = dict(classroom.content_meta)
+    manifest = dict(meta["audioManifest"])
+    manifest["status"] = "ready"
+    meta["audioManifest"] = manifest
+    classroom.content_meta = meta
     classroom.save()
     r = client.get("/api/v1/student/maic/classrooms/")
     ids = [c["id"] for c in r.json()]
@@ -307,11 +333,15 @@ def test_student_cannot_see_classroom_mid_generation(
 def test_republish_skips_unchanged_audio(classroom_with_content):
     """Re-publish with identical text+voice must not re-run TTS — the audioId
     hash is deterministic, the audioUrl is preserved, and the storage file
-    still exists, so the task's idempotency guard short-circuits."""
+    still exists, so the task's idempotency guard short-circuits.
+
+    PERF-P0-4 cutover 2026-04-26: setup + assertions via shards.
+    """
     classroom, _ = classroom_with_content
 
     # Seed state as if a previous publish already completed successfully.
-    scene = classroom.content["scenes"][0]
+    scenes = list(classroom.content_scenes)
+    scene = scenes[0]
     for idx, action in enumerate(scene["actions"]):
         action["voiceId"] = "en-IN-PrabhatNeural"
         # Matching deterministic hash from the publish endpoint's formula.
@@ -319,11 +349,14 @@ def test_republish_skips_unchanged_audio(classroom_with_content):
         payload = f"{scene['id']}|{idx}|{action['text']}|{action['voiceId']}"
         action["audioId"] = hashlib.sha256(payload.encode()).hexdigest()[:12]
         action["audioUrl"] = f"/media/tts/{action['audioId']}.mp3"
+    classroom.content_scenes = scenes
     classroom.status = "GENERATING"
-    classroom.content["audioManifest"] = {
-        "status": "generating", "progress": 0,
-        "totalActions": 2, "completedActions": 0,
-        "failedAudioIds": [], "generatedAt": None,
+    classroom.content_meta = {
+        "audioManifest": {
+            "status": "generating", "progress": 0,
+            "totalActions": 2, "completedActions": 0,
+            "failedAudioIds": [], "generatedAt": None,
+        }
     }
     classroom.save()
 
@@ -340,5 +373,5 @@ def test_republish_skips_unchanged_audio(classroom_with_content):
     assert upload.call_count == 0
 
     classroom.refresh_from_db()
-    assert classroom.content["audioManifest"]["status"] == "ready"
+    assert classroom.content_meta["audioManifest"]["status"] == "ready"
     assert classroom.status == "READY"

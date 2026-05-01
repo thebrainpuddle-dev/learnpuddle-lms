@@ -318,6 +318,7 @@ export function StaffPDTrackerTab() {
     },
     onError: (err: any) => {
       const detail =
+        err?.response?.data?.error ||
         err?.response?.data?.detail ||
         Object.values(err?.response?.data || {}).flat().join('. ') ||
         'Failed to create certification';
@@ -335,6 +336,7 @@ export function StaffPDTrackerTab() {
     },
     onError: (err: any) => {
       const detail =
+        err?.response?.data?.error ||
         err?.response?.data?.detail ||
         Object.values(err?.response?.data || {}).flat().join('. ') ||
         'Failed to update certification';

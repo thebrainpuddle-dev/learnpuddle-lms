@@ -327,6 +327,10 @@ REST_FRAMEWORK = {
     ],
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
+        # AUDIT-2026-04-26-PHASE3-12: enforce must_change_password flag globally.
+        # Users with the flag set can only reach the password-change / login /
+        # logout / token-refresh / health allowlist until they complete the reset.
+        'apps.users.permissions.MustNotRequirePasswordChange',
     ],
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 20,
@@ -383,6 +387,14 @@ REST_FRAMEWORK = {
         # SAML Assertion Consumer Service — per-IP rate limit deters
         # signature-spam / replay attempts.
         'saml_acs': config('THROTTLE_SAML_ACS', default='30/minute'),
+        # SCIM 2.0 protocol endpoints (AUDIT-2026-04-26-PHASE3-5):
+        # ``scim-unauth`` is per-IP and protects against bearer-token guess
+        # attacks (each guess is an unauth request); 30/min keeps it tight.
+        # ``scim-token`` is per-token-hash steady-state — Okta/Azure can hit
+        # ~100/min during a sync, 600/min gives ample headroom while still
+        # containing a runaway IdP loop or a leaked-token scraper.
+        'scim-unauth': config('SCIM_UNAUTH_RATE', default='30/min'),
+        'scim-token': config('SCIM_TOKEN_RATE', default='600/min'),
         # Chat integration /test/ endpoint — prevent webhook spam / abuse.
         'chat_integration_test': config('THROTTLE_CHAT_INTEGRATION_TEST', default='5/hour'),
         # Semantic search query endpoint (TASK-057) — 60/min/user.
@@ -642,50 +654,16 @@ CELERY_TASK_SOFT_TIME_LIMIT = config("CELERY_TASK_SOFT_TIME_LIMIT", default=60 *
 CELERY_RESULT_EXPIRES = config("CELERY_RESULT_EXPIRES", default=60 * 60 * 24, cast=int)  # 24h
 
 # Celery Beat periodic task schedule
-from celery.schedules import crontab  # noqa: E402
-
-CELERY_BEAT_SCHEDULE = {
-    # Archive notifications older than 90 days — daily at 03:00 UTC.
-    "archive-old-notifications": {
-        "task": "notifications.archive_old_notifications",
-        "schedule": crontab(hour=3, minute=0),
-    },
-    # Hard-delete notifications archived > 30 days ago — weekly Sunday 04:00 UTC.
-    "delete-archived-notifications": {
-        "task": "notifications.delete_archived_notifications",
-        "schedule": crontab(hour=4, minute=0, day_of_week=0),
-    },
-    # Gamification: process streak breaks and freeze resets — daily at 00:05.
-    "process-daily-streaks": {
-        "task": "progress.process_daily_streaks",
-        "schedule": crontab(hour=0, minute=5),
-    },
-    # Gamification: compute leaderboard rankings — every 15 minutes.
-    "compute-leaderboard-snapshots": {
-        "task": "progress.compute_leaderboard_snapshots",
-        "schedule": crontab(minute="*/15"),
-    },
-    # Billing: flag subscriptions past_due for >7 days — daily at 08:00.
-    "billing-check-past-due-daily": {
-        "task": "billing.check_past_due_subscriptions",
-        "schedule": crontab(hour=8, minute=0),
-    },
-    # Billing: clean up webhook events older than 90 days — weekly Saturday 03:00.
-    "billing-cleanup-webhook-events-weekly": {
-        "task": "billing.cleanup_stale_webhook_events",
-        "schedule": crontab(hour=3, minute=0, day_of_week=6),
-    },
-    # Chat integrations: prune terminal delivery rows older than 30 days — daily 02:00.
-    "prune-chat-deliveries-daily": {
-        "task": "integrations_chat.prune_chat_deliveries",
-        "schedule": crontab(hour=2, minute=0),
-    },
-    # Calendar integrations: push LMS deadlines to Google/Outlook — every 15 min.
-    "sync-all-calendar-connections": {
-        "task": "integrations_calendar.sync_all_calendar_connections",
-        "schedule": crontab(minute="*/15"),
-    },
-}
+#
+# DO NOT add tasks here.  Celery's config_from_object() layer (namespace="CELERY")
+# is overridden by the explicit app.conf.beat_schedule assignment in
+# config/celery.py, making any entry here a silent no-op.
+#
+# → Add all periodic tasks to the beat_schedule dict in config/celery.py instead.
+#
+# This CELERY_BEAT_SCHEDULE key is intentionally left absent so that Django's
+# check framework does not flag an "unused setting" warning, and so that no
+# developer is misled into thinking entries here take effect.
 
 # -----------------------------------------------------------------------------
 # Django Channels (WebSocket) - real-time notifications

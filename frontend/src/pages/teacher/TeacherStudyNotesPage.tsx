@@ -4,7 +4,7 @@
 // right panel shows the AI StudySummaryPanel for the selected content.
 // Mirrors student StudyNotesPage but uses teacher APIs and orange accent.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   Search, BookOpen, FileText, Video, Type, ChevronDown, ChevronRight,
   Sparkles, Check,
@@ -86,7 +86,6 @@ export function TeacherStudyNotesPage() {
   const [courseDetails, setCourseDetails] = useState<Map<string, TeacherCourse>>(new Map());
   const [loadingCourses, setLoadingCourses] = useState<Set<string>>(new Set());
   const [selectedContent, setSelectedContent] = useState<SelectedContent | null>(null);
-  const [summaryExistsMap, setSummaryExistsMap] = useState<Set<string>>(new Set());
   const [isMobileBrowserOpen, setIsMobileBrowserOpen] = useState(true);
 
   // Fetch course list
@@ -107,14 +106,21 @@ export function TeacherStudyNotesPage() {
     },
   });
 
-  useEffect(() => {
-    const readyIds = new Set(
-      summaries
-        .filter((s) => s.status === 'READY')
-        .map((s) => s.content_id),
-    );
-    setSummaryExistsMap(readyIds);
-  }, [summaries]);
+  // Derive the set of content IDs that have a READY summary directly via useMemo.
+  // Do NOT use useState + useEffect here: the `= []` default in the useQuery
+  // destructuring creates a new array reference on every render while data is
+  // undefined (loading), which would make useEffect([summaries]) fire every
+  // render and call setSummaryExistsMap(new Set()) → re-render → new [] →
+  // effect again → infinite loop that blocks React 19's act() in tests.
+  const summaryExistsMap = useMemo(
+    () =>
+      new Set(
+        summaries
+          .filter((s) => s.status === 'READY')
+          .map((s) => s.content_id),
+      ),
+    [summaries],
+  );
 
   // Build course items grouped by course
   const courseItems = useMemo(() => {

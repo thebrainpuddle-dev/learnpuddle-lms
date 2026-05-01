@@ -89,15 +89,25 @@ def _extract_text_from_url(url: str) -> str:
     """
     Fetch a web page and extract clean text from HTML.
     Uses requests + BeautifulSoup for robust HTML-to-text conversion.
+
+    SSRF-hardened: the URL is validated against the SSRF guard
+    (:func:`apps.integrations_chat.ssrf_guard.safe_get`) which rejects
+    non-http(s) schemes, private/loopback/link-local IPs (incl.
+    ``169.254.169.254`` cloud metadata), pins the resolved IP to
+    defeat DNS rebind, disables redirects (a redirect target may
+    point at a private host), and caps the response body size.
     """
-    import requests as http_requests
     from bs4 import BeautifulSoup
+    from apps.integrations_chat.ssrf_guard import safe_get
 
     headers = {
         'User-Agent': 'LearnPuddle-Bot/1.0 (knowledge ingestion)',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
     }
-    resp = http_requests.get(url, headers=headers, timeout=30, allow_redirects=True)
+    # safe_get raises SSRFError on private-IP / non-http(s) / redirect /
+    # size-cap violation; let those propagate so the Celery task fails
+    # the ingest with a clear error message rather than silently fetching.
+    resp = safe_get(url, headers=headers, timeout=(5, 30))
     resp.raise_for_status()
 
     soup = BeautifulSoup(resp.text, 'html.parser')

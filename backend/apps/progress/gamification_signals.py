@@ -147,10 +147,22 @@ def on_quiz_submission(sender, instance, created, **kwargs):
     # out an expired in-progress row by setting time_expired=True, score=0.
     # The teacher did not submit answers — do not award XP.  Guard runs BEFORE
     # dedup lookup so we don't record a zero-XP transaction either.
+    # NOTE: only the XP-engine side-effects in THIS receiver are skipped
+    # (award_xp / update_streak / mastery bonus).  Notification, leaderboard,
+    # and admin-grade side-effects live in other signals/handlers and still
+    # fire — the QuizSubmission row itself is real and persisted.
     if getattr(instance, 'time_expired', False) and instance.score in (None, 0):
         logger.info(
             "Skipping XP for abandoned timed quiz attempt id=%s",
             instance.pk,
+            extra={
+                "metric": "quiz_xp_skipped_on_timeout",
+                "attempt_id": str(instance.pk),
+                "quiz_id": str(getattr(instance, 'quiz_id', '') or ''),
+                "teacher_id": str(getattr(instance, 'teacher_id', '') or ''),
+                "tenant_id": str(getattr(instance, 'tenant_id', '') or ''),
+                "attempt_number": getattr(instance, 'attempt_number', None),
+            },
         )
         return
 

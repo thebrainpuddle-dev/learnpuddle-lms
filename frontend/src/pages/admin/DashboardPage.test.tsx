@@ -123,7 +123,9 @@ describe('DashboardPage', () => {
 
   it('renders the hero heading', async () => {
     renderPage();
-    expect(await screen.findByText(/Welcome back, Admin/)).toBeInTheDocument();
+    // Use explicit timeout — under full-suite load this async assertion can exceed the
+    // default ~5000ms limit; 10000ms gives enough headroom on slower CI machines.
+    expect(await screen.findByText(/Welcome back, Admin/, {}, { timeout: 10000 })).toBeInTheDocument();
   });
 
   it('displays the school name from tenant store', async () => {

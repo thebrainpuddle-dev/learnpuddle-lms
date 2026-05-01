@@ -529,3 +529,291 @@ class NotificationSerializerFieldsTestCase(TestCase):
             f"Expected ≤10 queries for 5 notifications, got {len(ctx.captured_queries)}. "
             "Possible N+1 regression in notification_list.",
         )
+
+
+# ===========================================================================
+# 7. Bulk Mark-Read
+# ===========================================================================
+
+@override_settings(
+    ALLOWED_HOSTS=["*"],
+    PLATFORM_DOMAIN="lms.com",
+    SECURE_SSL_REDIRECT=False,
+)
+class NotificationBulkMarkReadTestCase(TestCase):
+    """
+    Tests for POST /api/v1/notifications/mark-read/ — bulk mark-read.
+
+    POST body: {"ids": ["uuid", ...]}
+    """
+
+    def setUp(self):
+        self.tenant = _make_tenant("Bulk Read School", "bulkread")
+        self.teacher = _make_user("teacher@bulkread.com", self.tenant)
+        self.notif1 = _make_notification(self.tenant, self.teacher, title="Bulk 1", is_read=False)
+        self.notif2 = _make_notification(self.tenant, self.teacher, title="Bulk 2", is_read=False)
+        self.notif3 = _make_notification(self.tenant, self.teacher, title="Bulk 3", is_read=False)
+
+    def test_bulk_mark_read_returns_200(self):
+        """Bulk mark-read with valid IDs returns 200."""
+        c = _client_for(self.teacher, "bulkread")
+        r = c.post(
+            "/api/v1/notifications/mark-read/",
+            {"ids": [str(self.notif1.id), str(self.notif2.id)]},
+            format="json",
+        )
+        self.assertEqual(r.status_code, 200)
+
+    def test_bulk_mark_read_sets_is_read_on_all_specified_notifications(self):
+        """All specified notifications must be marked read."""
+        c = _client_for(self.teacher, "bulkread")
+        c.post(
+            "/api/v1/notifications/mark-read/",
+            {"ids": [str(self.notif1.id), str(self.notif2.id)]},
+            format="json",
+        )
+        self.notif1.refresh_from_db()
+        self.notif2.refresh_from_db()
+        self.notif3.refresh_from_db()
+        self.assertTrue(self.notif1.is_read, "notif1 must be marked read")
+        self.assertTrue(self.notif2.is_read, "notif2 must be marked read")
+        self.assertFalse(self.notif3.is_read, "notif3 (not in list) must remain unread")
+
+    def test_bulk_mark_read_returns_count_of_marked(self):
+        """Response body must include marked_read count."""
+        c = _client_for(self.teacher, "bulkread")
+        r = c.post(
+            "/api/v1/notifications/mark-read/",
+            {"ids": [str(self.notif1.id), str(self.notif2.id)]},
+            format="json",
+        )
+        self.assertEqual(r.data["marked_read"], 2)
+
+    def test_bulk_mark_read_requires_authentication(self):
+        """Unauthenticated request must return 401."""
+        c = _anon_client("bulkread")
+        r = c.post(
+            "/api/v1/notifications/mark-read/",
+            {"ids": [str(self.notif1.id)]},
+            format="json",
+        )
+        self.assertEqual(r.status_code, 401)
+
+    def test_bulk_mark_read_with_empty_ids_returns_400(self):
+        """Empty ids list must return 400 (invalid input)."""
+        c = _client_for(self.teacher, "bulkread")
+        r = c.post(
+            "/api/v1/notifications/mark-read/",
+            {"ids": []},
+            format="json",
+        )
+        self.assertEqual(r.status_code, 400)
+
+    def test_bulk_mark_read_with_missing_ids_key_returns_400(self):
+        """Missing ids key in body must return 400."""
+        c = _client_for(self.teacher, "bulkread")
+        r = c.post(
+            "/api/v1/notifications/mark-read/",
+            {},
+            format="json",
+        )
+        self.assertEqual(r.status_code, 400)
+
+    def test_bulk_mark_read_does_not_affect_other_teachers_notifications(self):
+        """
+        Cross-teacher isolation (same tenant): another teacher's notification in
+        the same IDs list must NOT be marked read (the view filters by
+        teacher=request.user).
+        """
+        other_teacher = _make_user("other@bulkread.com", self.tenant)
+        other_notif = _make_notification(self.tenant, other_teacher, is_read=False)
+        c = _client_for(self.teacher, "bulkread")
+        c.post(
+            "/api/v1/notifications/mark-read/",
+            # Include other teacher's notification ID — should be silently ignored
+            {"ids": [str(self.notif1.id), str(other_notif.id)]},
+            format="json",
+        )
+        other_notif.refresh_from_db()
+        self.assertFalse(other_notif.is_read,
+                         "Another teacher's notification must not be marked read via bulk endpoint")
+
+    def test_bulk_mark_read_is_idempotent(self):
+        """
+        Marking an already-read notification a second time must not raise an
+        error and must return 0 for marked_read (the view filters is_read=False,
+        so already-read rows are silently skipped).
+        """
+        c = _client_for(self.teacher, "bulkread")
+        # First call — notif1 is unread, should be marked
+        r1 = c.post(
+            "/api/v1/notifications/mark-read/",
+            {"ids": [str(self.notif1.id)]},
+            format="json",
+        )
+        self.assertEqual(r1.status_code, 200)
+        self.assertEqual(r1.data["marked_read"], 1)
+
+        # Second call with the same ID — already read, must return 0
+        r2 = c.post(
+            "/api/v1/notifications/mark-read/",
+            {"ids": [str(self.notif1.id)]},
+            format="json",
+        )
+        self.assertEqual(r2.status_code, 200)
+        self.assertEqual(r2.data["marked_read"], 0,
+                         "Already-read notification must not increment marked_read count")
+
+        # Notification must still be read (no regression)
+        self.notif1.refresh_from_db()
+        self.assertTrue(self.notif1.is_read)
+
+    def test_bulk_mark_read_does_not_affect_other_tenant_notifications(self):
+        """
+        True cross-tenant isolation: a notification belonging to a different tenant
+        must NOT be marked read, even if its UUID is submitted in the IDs list.
+        The view filters by tenant=request.tenant.
+        """
+        tenant_b = _make_tenant("Cross Tenant B", "bulkreadtenantb")
+        teacher_b = _make_user("teacher@bulkreadtenantb.com", tenant_b)
+        cross_tenant_notif = _make_notification(tenant_b, teacher_b, is_read=False)
+
+        c = _client_for(self.teacher, "bulkread")
+        r = c.post(
+            "/api/v1/notifications/mark-read/",
+            {"ids": [str(self.notif1.id), str(cross_tenant_notif.id)]},
+            format="json",
+        )
+        self.assertEqual(r.status_code, 200)
+        # Only notif1 (same tenant) should be counted — cross_tenant_notif silently ignored
+        self.assertEqual(r.data["marked_read"], 1)
+
+        # The cross-tenant notification must remain unread
+        cross_tenant_notif.refresh_from_db()
+        self.assertFalse(cross_tenant_notif.is_read,
+                         "Cross-tenant notification must not be marked read")
+
+
+# ===========================================================================
+# 8. Bulk Archive
+# ===========================================================================
+
+@override_settings(
+    ALLOWED_HOSTS=["*"],
+    PLATFORM_DOMAIN="lms.com",
+    SECURE_SSL_REDIRECT=False,
+)
+class NotificationBulkArchiveTestCase(TestCase):
+    """
+    Tests for POST /api/v1/notifications/bulk-archive/ — bulk archive.
+
+    POST body: {"ids": ["uuid", ...]}
+    """
+
+    def setUp(self):
+        self.tenant = _make_tenant("Bulk Archive School", "bulkarchive")
+        self.teacher = _make_user("teacher@bulkarchive.com", self.tenant)
+        self.notif1 = _make_notification(self.tenant, self.teacher, title="Archive 1")
+        self.notif2 = _make_notification(self.tenant, self.teacher, title="Archive 2")
+        self.notif3 = _make_notification(self.tenant, self.teacher, title="Archive 3")
+
+    def test_bulk_archive_returns_200(self):
+        """Bulk archive with valid IDs returns 200."""
+        c = _client_for(self.teacher, "bulkarchive")
+        r = c.post(
+            "/api/v1/notifications/bulk-archive/",
+            {"ids": [str(self.notif1.id), str(self.notif2.id)]},
+            format="json",
+        )
+        self.assertEqual(r.status_code, 200)
+
+    def test_bulk_archive_sets_is_archived_on_all_specified_notifications(self):
+        """All specified notifications must be archived."""
+        c = _client_for(self.teacher, "bulkarchive")
+        c.post(
+            "/api/v1/notifications/bulk-archive/",
+            {"ids": [str(self.notif1.id), str(self.notif2.id)]},
+            format="json",
+        )
+        self.notif1.refresh_from_db()
+        self.notif2.refresh_from_db()
+        self.notif3.refresh_from_db()
+        self.assertTrue(self.notif1.is_archived, "notif1 must be archived")
+        self.assertTrue(self.notif2.is_archived, "notif2 must be archived")
+        self.assertFalse(self.notif3.is_archived, "notif3 (not in list) must not be archived")
+
+    def test_bulk_archive_returns_count_of_archived(self):
+        """Response body must include archived count."""
+        c = _client_for(self.teacher, "bulkarchive")
+        r = c.post(
+            "/api/v1/notifications/bulk-archive/",
+            {"ids": [str(self.notif1.id), str(self.notif2.id)]},
+            format="json",
+        )
+        self.assertEqual(r.data["archived"], 2)
+
+    def test_bulk_archive_requires_authentication(self):
+        """Unauthenticated request must return 401."""
+        c = _anon_client("bulkarchive")
+        r = c.post(
+            "/api/v1/notifications/bulk-archive/",
+            {"ids": [str(self.notif1.id)]},
+            format="json",
+        )
+        self.assertEqual(r.status_code, 401)
+
+    def test_bulk_archive_with_empty_ids_returns_400(self):
+        """Empty ids list must return 400 (invalid input)."""
+        c = _client_for(self.teacher, "bulkarchive")
+        r = c.post(
+            "/api/v1/notifications/bulk-archive/",
+            {"ids": []},
+            format="json",
+        )
+        self.assertEqual(r.status_code, 400)
+
+    def test_bulk_archive_with_missing_ids_key_returns_400(self):
+        """Missing ids key in body must return 400."""
+        c = _client_for(self.teacher, "bulkarchive")
+        r = c.post(
+            "/api/v1/notifications/bulk-archive/",
+            {},
+            format="json",
+        )
+        self.assertEqual(r.status_code, 400)
+
+    def test_bulk_archive_is_idempotent(self):
+        """
+        Archiving an already-archived notification a second time must
+        not raise an error and must return 0 for the archived count.
+        The view filters is_archived=False, so already-archived rows are silently skipped.
+        """
+        self.notif1.is_archived = True
+        self.notif1.save()
+
+        c = _client_for(self.teacher, "bulkarchive")
+        r = c.post(
+            "/api/v1/notifications/bulk-archive/",
+            {"ids": [str(self.notif1.id)]},
+            format="json",
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data["archived"], 0,
+                         "Already-archived notification must not increment archived count")
+
+    def test_bulk_archive_does_not_affect_other_teachers_notifications(self):
+        """
+        Another teacher's notification in the IDs list must NOT be archived
+        (the view filters by teacher=request.user).
+        """
+        other_teacher = _make_user("other@bulkarchive.com", self.tenant)
+        other_notif = _make_notification(self.tenant, other_teacher)
+        c = _client_for(self.teacher, "bulkarchive")
+        c.post(
+            "/api/v1/notifications/bulk-archive/",
+            {"ids": [str(self.notif1.id), str(other_notif.id)]},
+            format="json",
+        )
+        other_notif.refresh_from_db()
+        self.assertFalse(other_notif.is_archived,
+                         "Another teacher's notification must not be archived via bulk endpoint")

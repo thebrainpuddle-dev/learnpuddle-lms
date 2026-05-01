@@ -154,6 +154,10 @@ class ReportRun(models.Model):
         ("success", "Success"),
         ("error", "Error"),
     ]
+    ARTIFACT_FORMAT_CHOICES = [
+        ("csv", "CSV"),
+        ("xlsx", "Excel"),
+    ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     # Belt-and-braces tenant FK (spec requirement — do NOT rely on definition only).
@@ -181,9 +185,16 @@ class ReportRun(models.Model):
     started_at = models.DateTimeField(default=timezone.now)
     finished_at = models.DateTimeField(null=True, blank=True)
     row_count = models.IntegerField(default=0)
-    # Storage key for the generated CSV (local path or S3 key).
+    # Storage key for the generated artifact (local path or S3 key).
     artifact_path = models.TextField(blank=True, default="")
     artifact_sha256 = models.CharField(max_length=64, blank=True, default="")
+    # Format of the generated artifact (TASK-065: xlsx support added).
+    artifact_format = models.CharField(
+        max_length=4,
+        choices=ARTIFACT_FORMAT_CHOICES,
+        default="csv",
+        blank=True,
+    )
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
     error = models.TextField(blank=True, default="")
 

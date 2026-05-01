@@ -79,7 +79,7 @@ export const useGamificationStore = create<GamificationState>((set, get) => ({
       const config = await gamificationService.admin.getConfig();
       set({ config, loading: false });
     } catch (err: any) {
-      set({ error: err?.response?.data?.detail ?? err.message ?? 'Failed to fetch config', loading: false });
+      set({ error: err?.response?.data?.error ?? err?.response?.data?.detail ?? err.message ?? 'Failed to fetch config', loading: false });
     }
   },
 
@@ -89,7 +89,7 @@ export const useGamificationStore = create<GamificationState>((set, get) => ({
       const config = await gamificationService.admin.updateConfig(data);
       set({ config, loading: false });
     } catch (err: any) {
-      set({ error: err?.response?.data?.detail ?? err.message ?? 'Failed to update config', loading: false });
+      set({ error: err?.response?.data?.error ?? err?.response?.data?.detail ?? err.message ?? 'Failed to update config', loading: false });
     }
   },
 
@@ -99,7 +99,7 @@ export const useGamificationStore = create<GamificationState>((set, get) => ({
       const badges = await gamificationService.admin.listBadges();
       set({ badges, loading: false });
     } catch (err: any) {
-      set({ error: err?.response?.data?.detail ?? err.message ?? 'Failed to fetch badges', loading: false });
+      set({ error: err?.response?.data?.error ?? err?.response?.data?.detail ?? err.message ?? 'Failed to fetch badges', loading: false });
     }
   },
 
@@ -109,7 +109,7 @@ export const useGamificationStore = create<GamificationState>((set, get) => ({
       const badge = await gamificationService.admin.createBadge(data);
       set({ badges: [...get().badges, badge], loading: false });
     } catch (err: any) {
-      set({ error: err?.response?.data?.detail ?? err.message ?? 'Failed to create badge', loading: false });
+      set({ error: err?.response?.data?.error ?? err?.response?.data?.detail ?? err.message ?? 'Failed to create badge', loading: false });
     }
   },
 
@@ -122,7 +122,7 @@ export const useGamificationStore = create<GamificationState>((set, get) => ({
         loading: false,
       });
     } catch (err: any) {
-      set({ error: err?.response?.data?.detail ?? err.message ?? 'Failed to update badge', loading: false });
+      set({ error: err?.response?.data?.error ?? err?.response?.data?.detail ?? err.message ?? 'Failed to update badge', loading: false });
     }
   },
 
@@ -135,7 +135,7 @@ export const useGamificationStore = create<GamificationState>((set, get) => ({
         loading: false,
       });
     } catch (err: any) {
-      set({ error: err?.response?.data?.detail ?? err.message ?? 'Failed to delete badge', loading: false });
+      set({ error: err?.response?.data?.error ?? err?.response?.data?.detail ?? err.message ?? 'Failed to delete badge', loading: false });
     }
   },
 
@@ -145,7 +145,7 @@ export const useGamificationStore = create<GamificationState>((set, get) => ({
       const leaderboard = await gamificationService.admin.getLeaderboard(period);
       set({ leaderboard, loading: false });
     } catch (err: any) {
-      set({ error: err?.response?.data?.detail ?? err.message ?? 'Failed to fetch leaderboard', loading: false });
+      set({ error: err?.response?.data?.error ?? err?.response?.data?.detail ?? err.message ?? 'Failed to fetch leaderboard', loading: false });
     }
   },
 
@@ -155,7 +155,7 @@ export const useGamificationStore = create<GamificationState>((set, get) => ({
       const xpHistory = await gamificationService.admin.getXPHistory(params);
       set({ xpHistory, loading: false });
     } catch (err: any) {
-      set({ error: err?.response?.data?.detail ?? err.message ?? 'Failed to fetch XP history', loading: false });
+      set({ error: err?.response?.data?.error ?? err?.response?.data?.detail ?? err.message ?? 'Failed to fetch XP history', loading: false });
     }
   },
 
@@ -165,7 +165,7 @@ export const useGamificationStore = create<GamificationState>((set, get) => ({
       const transaction = await gamificationService.admin.adjustXP(data);
       set({ xpHistory: [transaction, ...get().xpHistory], loading: false });
     } catch (err: any) {
-      set({ error: err?.response?.data?.detail ?? err.message ?? 'Failed to adjust XP', loading: false });
+      set({ error: err?.response?.data?.error ?? err?.response?.data?.detail ?? err.message ?? 'Failed to adjust XP', loading: false });
     }
   },
 
@@ -177,7 +177,7 @@ export const useGamificationStore = create<GamificationState>((set, get) => ({
       const summary = await gamificationService.getSummary();
       set({ summary, loading: false });
     } catch (err: any) {
-      set({ error: err?.response?.data?.detail ?? err.message ?? 'Failed to fetch summary', loading: false });
+      set({ error: err?.response?.data?.error ?? err?.response?.data?.detail ?? err.message ?? 'Failed to fetch summary', loading: false });
     }
   },
 
@@ -187,7 +187,7 @@ export const useGamificationStore = create<GamificationState>((set, get) => ({
       const teacherLeaderboard = await gamificationService.getLeaderboard(period);
       set({ teacherLeaderboard, loading: false });
     } catch (err: any) {
-      set({ error: err?.response?.data?.detail ?? err.message ?? 'Failed to fetch leaderboard', loading: false });
+      set({ error: err?.response?.data?.error ?? err?.response?.data?.detail ?? err.message ?? 'Failed to fetch leaderboard', loading: false });
     }
   },
 
@@ -197,7 +197,7 @@ export const useGamificationStore = create<GamificationState>((set, get) => ({
       const myBadges = await gamificationService.getMyBadges();
       set({ myBadges, loading: false });
     } catch (err: any) {
-      set({ error: err?.response?.data?.detail ?? err.message ?? 'Failed to fetch badges', loading: false });
+      set({ error: err?.response?.data?.error ?? err?.response?.data?.detail ?? err.message ?? 'Failed to fetch badges', loading: false });
     }
   },
 
@@ -207,7 +207,7 @@ export const useGamificationStore = create<GamificationState>((set, get) => ({
       const badgeDefinitions = await gamificationService.getBadgeDefinitions();
       set({ badgeDefinitions, loading: false });
     } catch (err: any) {
-      set({ error: err?.response?.data?.detail ?? err.message ?? 'Failed to fetch badge definitions', loading: false });
+      set({ error: err?.response?.data?.error ?? err?.response?.data?.detail ?? err.message ?? 'Failed to fetch badge definitions', loading: false });
     }
   },
 
@@ -217,7 +217,7 @@ export const useGamificationStore = create<GamificationState>((set, get) => ({
       const teacherXPHistory = await gamificationService.getXPHistory();
       set({ teacherXPHistory, loading: false });
     } catch (err: any) {
-      set({ error: err?.response?.data?.detail ?? err.message ?? 'Failed to fetch XP history', loading: false });
+      set({ error: err?.response?.data?.error ?? err?.response?.data?.detail ?? err.message ?? 'Failed to fetch XP history', loading: false });
     }
   },
 
@@ -234,7 +234,7 @@ export const useGamificationStore = create<GamificationState>((set, get) => ({
       const summary = await gamificationService.getSummary();
       set({ summary, loading: false });
     } catch (err: any) {
-      set({ error: err?.response?.data?.detail ?? err.message ?? 'Failed to toggle opt-out', loading: false });
+      set({ error: err?.response?.data?.error ?? err?.response?.data?.detail ?? err.message ?? 'Failed to toggle opt-out', loading: false });
     }
   },
 
@@ -246,7 +246,7 @@ export const useGamificationStore = create<GamificationState>((set, get) => ({
       const summary = await gamificationService.getSummary();
       set({ summary, loading: false });
     } catch (err: any) {
-      set({ error: err?.response?.data?.detail ?? err.message ?? 'Failed to use streak freeze', loading: false });
+      set({ error: err?.response?.data?.error ?? err?.response?.data?.detail ?? err.message ?? 'Failed to use streak freeze', loading: false });
     }
   },
 

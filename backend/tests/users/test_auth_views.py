@@ -12,7 +12,10 @@ Covers:
 - POST /api/v1/users/auth/confirm-password-reset/
 - GET/PATCH /api/v1/users/auth/preferences/
 - POST /api/v1/users/auth/register-teacher/  — admin endpoint
+- Password-history recording failure logging (change_password + confirm_reset)
 """
+
+from unittest.mock import patch
 
 from django.test import TestCase, override_settings
 from django.core import mail
@@ -811,3 +814,294 @@ class RegisterTeacherViewTestCase(TestCase):
             format="json",
         )
         self.assertEqual(r.status_code, 400)
+
+
+# ===========================================================================
+# Password History Recording — Failure Resilience
+#
+# Backend-engineer hardened two callsites on 2026-04-27: both
+# change_password_view and confirm_password_reset_view now log a WARNING
+# instead of silently swallowing exceptions from record_password_history.
+#
+# These tests verify:
+#   1. A broken record_password_history does NOT prevent the view from
+#      returning 200 (failure is non-fatal — reuse-history breaks, but
+#      the password IS still changed).
+#   2. The WARNING log is emitted with the correct logger + message prefix,
+#      including the user's ID, so ops can correlate failures.
+# ===========================================================================
+
+_PW_HISTORY_PATCH = "apps.users.password_validators.record_password_history"
+
+_THROTTLE_OVERRIDE = override_settings(
+    ALLOWED_HOSTS=["*"],
+    PLATFORM_DOMAIN="lms.com",
+    SECURE_SSL_REDIRECT=False,
+    REST_FRAMEWORK={
+        "DEFAULT_AUTHENTICATION_CLASSES": [
+            "rest_framework_simplejwt.authentication.JWTAuthentication",
+        ],
+        "DEFAULT_PERMISSION_CLASSES": [
+            "rest_framework.permissions.IsAuthenticated",
+        ],
+        "DEFAULT_THROTTLE_RATES": {
+            "login": None,
+            "password_reset": None,
+            "register": None,
+            "email_verify": None,
+            "resend_verify": None,
+        },
+    },
+)
+
+
+@_THROTTLE_OVERRIDE
+class ChangePasswordHistoryFailureTestCase(TestCase):
+    """
+    Tests for change_password_view resilience when record_password_history
+    raises an exception (added 2026-04-27 hardening).
+
+    Endpoint: POST /api/v1/users/auth/change-password/
+    """
+
+    def setUp(self):
+        self.tenant = _make_tenant("Hist School", "hist")
+        self.user = _make_user(
+            "histuser@hist.com", self.tenant, password="OldPass!123"
+        )
+
+    def _change_pw_payload(self):
+        return {
+            "old_password": "OldPass!123",
+            "new_password": "NewHistPass!456",
+            "new_password_confirm": "NewHistPass!456",
+        }
+
+    def test_change_password_still_returns_200_when_history_recording_fails(self):
+        """
+        A DB error in record_password_history must NOT turn a successful
+        password change into a 500.  The view should return 200 because the
+        password change itself succeeded; only the history-recording side-effect
+        failed.
+        """
+        c = _auth_client(self.user, "hist")
+        with patch(_PW_HISTORY_PATCH, side_effect=Exception("DB error")):
+            r = c.post(
+                "/api/v1/users/auth/change-password/",
+                self._change_pw_payload(),
+                format="json",
+            )
+        self.assertEqual(r.status_code, 200)
+
+    def test_change_password_still_updates_password_when_history_recording_fails(self):
+        """
+        The user's password must actually be changed even if history recording
+        fails — the primary operation must succeed.
+        """
+        c = _auth_client(self.user, "hist")
+        with patch(_PW_HISTORY_PATCH, side_effect=Exception("Constraint violation")):
+            c.post(
+                "/api/v1/users/auth/change-password/",
+                self._change_pw_payload(),
+                format="json",
+            )
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password("NewHistPass!456"))
+        self.assertFalse(self.user.check_password("OldPass!123"))
+
+    def test_change_password_logs_warning_when_history_recording_fails(self):
+        """
+        A WARNING with prefix 'password_change: failed to record password
+        history' must be emitted so ops can detect silently-broken
+        password-reuse-prevention.
+        """
+        c = _auth_client(self.user, "hist")
+        with patch(_PW_HISTORY_PATCH, side_effect=Exception("connection reset")):
+            with self.assertLogs("apps.users.views", level="WARNING") as log_ctx:
+                r = c.post(
+                    "/api/v1/users/auth/change-password/",
+                    self._change_pw_payload(),
+                    format="json",
+                )
+        self.assertEqual(r.status_code, 200)
+        # Exactly one warning, containing the right prefix
+        matching = [
+            line for line in log_ctx.output
+            if "password_change: failed to record password history" in line
+        ]
+        self.assertEqual(len(matching), 1)
+
+    def test_change_password_warning_contains_user_id(self):
+        """
+        The WARNING log must include the user's ID so ops can correlate
+        the failure to a specific account.
+        """
+        c = _auth_client(self.user, "hist")
+        with patch(_PW_HISTORY_PATCH, side_effect=Exception("timeout")):
+            with self.assertLogs("apps.users.views", level="WARNING") as log_ctx:
+                c.post(
+                    "/api/v1/users/auth/change-password/",
+                    self._change_pw_payload(),
+                    format="json",
+                )
+        matching = [
+            line for line in log_ctx.output
+            if "password_change: failed to record password history" in line
+        ]
+        self.assertTrue(
+            any(str(self.user.id) in line for line in matching),
+            f"Expected user ID {self.user.id!r} in log: {matching}",
+        )
+
+    def test_change_password_clears_must_change_flag_despite_history_failure(self):
+        """
+        The must_change_password flag should still be cleared even if history
+        recording fails (flag-clearing precedes the try/except block).
+        """
+        self.user.must_change_password = True
+        self.user.save(update_fields=["must_change_password"])
+
+        c = _auth_client(self.user, "hist")
+        with patch(_PW_HISTORY_PATCH, side_effect=Exception("disk full")):
+            r = c.post(
+                "/api/v1/users/auth/change-password/",
+                self._change_pw_payload(),
+                format="json",
+            )
+        self.assertEqual(r.status_code, 200)
+        self.user.refresh_from_db()
+        self.assertFalse(self.user.must_change_password)
+
+
+@override_settings(
+    ALLOWED_HOSTS=["*"],
+    PLATFORM_DOMAIN="lms.com",
+    SECURE_SSL_REDIRECT=False,
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    REST_FRAMEWORK={
+        "DEFAULT_THROTTLE_RATES": {
+            "login": None,
+            "password_reset": None,
+            "register": None,
+            "email_verify": None,
+            "resend_verify": None,
+        },
+    },
+)
+class ConfirmPasswordResetHistoryFailureTestCase(TestCase):
+    """
+    Tests for confirm_password_reset_view resilience when
+    record_password_history raises an exception (added 2026-04-27 hardening).
+
+    Endpoint: POST /api/v1/users/auth/confirm-password-reset/
+    """
+
+    def setUp(self):
+        self.tenant = _make_tenant("ResetHist School", "resethist")
+        self.user = _make_user("user@resethist.com", self.tenant)
+        self.client = _anon_client("resethist")
+
+    def _make_reset_payload(self, new_password="NewResetPass!789"):
+        """Generate a valid uid+token payload for the current self.user."""
+        from django.contrib.auth.tokens import default_token_generator
+        from django.utils.http import urlsafe_base64_encode
+        from django.utils.encoding import force_bytes
+
+        uid = urlsafe_base64_encode(force_bytes(self.user.pk))
+        token = default_token_generator.make_token(self.user)
+        return {"uid": uid, "token": token, "new_password": new_password}
+
+    def test_confirm_reset_still_returns_200_when_history_recording_fails(self):
+        """
+        A broken record_password_history must not prevent a successful reset.
+        The view must return 200 because the password change itself succeeded.
+        """
+        payload = self._make_reset_payload()
+        with patch(_PW_HISTORY_PATCH, side_effect=Exception("DB down")):
+            r = self.client.post(
+                "/api/v1/users/auth/confirm-password-reset/",
+                payload,
+                format="json",
+            )
+        self.assertEqual(r.status_code, 200)
+
+    def test_confirm_reset_actually_changes_password_when_history_fails(self):
+        """
+        The password must be updated in the DB even if history recording fails.
+        """
+        new_pw = "HistFailPass!111"
+        payload = self._make_reset_payload(new_password=new_pw)
+        with patch(_PW_HISTORY_PATCH, side_effect=Exception("import error")):
+            self.client.post(
+                "/api/v1/users/auth/confirm-password-reset/",
+                payload,
+                format="json",
+            )
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password(new_pw))
+
+    def test_confirm_reset_logs_warning_when_history_recording_fails(self):
+        """
+        A WARNING with prefix 'password_reset: failed to record password
+        history' must be emitted on record_password_history failure.
+        """
+        payload = self._make_reset_payload()
+        with patch(_PW_HISTORY_PATCH, side_effect=Exception("IntegrityError")):
+            with self.assertLogs("apps.users.views", level="WARNING") as log_ctx:
+                r = self.client.post(
+                    "/api/v1/users/auth/confirm-password-reset/",
+                    payload,
+                    format="json",
+                )
+        self.assertEqual(r.status_code, 200)
+        matching = [
+            line for line in log_ctx.output
+            if "password_reset: failed to record password history" in line
+        ]
+        self.assertEqual(len(matching), 1)
+
+    def test_confirm_reset_warning_contains_user_id(self):
+        """
+        The WARNING log must include the user's primary key for correlation.
+        """
+        payload = self._make_reset_payload()
+        with patch(_PW_HISTORY_PATCH, side_effect=Exception("timeout")):
+            with self.assertLogs("apps.users.views", level="WARNING") as log_ctx:
+                self.client.post(
+                    "/api/v1/users/auth/confirm-password-reset/",
+                    payload,
+                    format="json",
+                )
+        matching = [
+            line for line in log_ctx.output
+            if "password_reset: failed to record password history" in line
+        ]
+        self.assertTrue(
+            any(str(self.user.id) in line for line in matching),
+            f"Expected user ID {self.user.id!r} in log: {matching}",
+        )
+
+    def test_confirm_reset_distinct_logger_prefix_from_change_password(self):
+        """
+        The two callsites use different message prefixes
+        ('password_reset:' vs 'password_change:') so log aggregation can
+        distinguish them.  Verify the reset prefix is correct.
+        """
+        payload = self._make_reset_payload()
+        with patch(_PW_HISTORY_PATCH, side_effect=Exception("network error")):
+            with self.assertLogs("apps.users.views", level="WARNING") as log_ctx:
+                self.client.post(
+                    "/api/v1/users/auth/confirm-password-reset/",
+                    payload,
+                    format="json",
+                )
+        # Must NOT use the change-password prefix
+        change_pw_log = [
+            line for line in log_ctx.output
+            if "password_change: failed" in line
+        ]
+        self.assertEqual(
+            len(change_pw_log), 0,
+            "confirm_password_reset_view must use 'password_reset:' prefix, "
+            f"not 'password_change:'. Logs: {log_ctx.output}",
+        )

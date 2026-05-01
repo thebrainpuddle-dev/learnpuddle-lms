@@ -419,3 +419,71 @@ def rows_to_csv(rows: list[dict]) -> tuple[bytes, str]:
     csv_bytes = buf.getvalue().encode("utf-8")
     sha256 = hashlib.sha256(csv_bytes).hexdigest()
     return csv_bytes, sha256
+
+
+def rows_to_xlsx(rows: list[dict]) -> tuple[bytes, str]:
+    """Serialise *rows* to Excel .xlsx bytes using openpyxl.
+
+    Produces a workbook with a single sheet ("Report") containing:
+      - A bold header row derived from the first row's keys.
+      - All data rows (values coerced to str/None so openpyxl never encounters
+        unexpected Python types such as UUID or Decimal).
+
+    Returns:
+        (xlsx_bytes, sha256_hex)
+
+    Notes:
+        * Empty *rows* → single-sheet workbook with no rows (header-only when
+          fieldnames cannot be inferred, or truly empty). Callers must handle
+          this case gracefully.
+        * openpyxl is an optional dependency (TASK-065). The import is deferred
+          to the call site so the rest of the reports-builder pipeline does not
+          break when openpyxl is absent.
+    """
+    try:
+        import openpyxl  # noqa: PLC0415 — deferred import for optional dep
+        from openpyxl.styles import Font
+    except ImportError as exc:
+        raise ImportError(
+            "openpyxl is required for Excel export. "
+            "Run: pip install 'openpyxl>=3.1.0,<4'"
+        ) from exc
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Report"
+
+    if not rows:
+        # Return empty (header-less) workbook — callers receive valid xlsx.
+        buf = io.BytesIO()
+        wb.save(buf)
+        xlsx_bytes = buf.getvalue()
+        return xlsx_bytes, hashlib.sha256(xlsx_bytes).hexdigest()
+
+    headers = list(rows[0].keys())
+
+    # Write header row (bold)
+    ws.append(headers)
+    header_font = Font(bold=True)
+    for cell in ws[1]:
+        cell.font = header_font
+
+    # Write data rows — coerce values to types openpyxl understands
+    for row in rows:
+        ws.append([_xlsx_coerce(row[h]) for h in headers])
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    xlsx_bytes = buf.getvalue()
+    return xlsx_bytes, hashlib.sha256(xlsx_bytes).hexdigest()
+
+
+def _xlsx_coerce(value: Any) -> Any:
+    """Coerce *value* to a type safe for openpyxl cells.
+
+    openpyxl supports None, bool, int, float, str, and datetime.  All other
+    Python types (UUID, Decimal, date, Enum, …) are converted to str.
+    """
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    return str(value)

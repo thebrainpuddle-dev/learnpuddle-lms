@@ -28,9 +28,48 @@ export interface MAICSlideElement {
   };
 }
 
+// ─── F4 (P0): Typed slide schema with role discriminator ──────────────────
+//
+// The frontend renderer accepts an OPTIONAL `template` discriminator + a
+// matching `slots` payload as a forward-compatible alternative to the
+// legacy free-form `elements[]` layout. Backward compatibility is the
+// safety net: slides emitted WITHOUT `template`/`slots` continue to render
+// via the free-form absolute-positioned `elements[]` path UNCHANGED.
+//
+// Renderer rule (see SlideRenderer.tsx):
+//   - if `slide.template === 'body-image-right'` AND `slide.slots` is
+//     populated, render via the slot-aware CSS-grid template.
+//   - otherwise fall through to the existing `elements[]` renderer.
+//
+// Backend mirror: `apps/courses/maic_generation_service.py` validator
+// accepts the same OPTIONAL fields; LLM prompts may emit the new shape
+// but are never required to. Today only `body-image-right` is shipped.
+
+/** Identifier for the slide layout template. `free-form` is implicit and
+ *  represented by the absence of `template` (legacy `elements[]` path). */
+export type SlideTemplateId = 'body-image-right' | 'free-form';
+
+/** Structured content slots used by template-aware layouts. Each slot is
+ *  optional — a template renderer simply omits the corresponding grid row
+ *  when its slot is absent. */
+export interface SlideSlots {
+  /** Top-row title slot. */
+  title?: { text: string };
+  /** Body slot — short paragraph, bullets, or both. */
+  body?: { text?: string; bullets?: string[] };
+  /** Image slot — `src` may be empty while the Celery image-fill task is
+   *  still running (CG-P0-3); renderer shows the fetching skeleton in that
+   *  case and falls back to placeholder/Unsplash policy when not pending. */
+  image?: { src?: string; alt?: string; meta?: Record<string, unknown> };
+  /** Bottom-row footer caption. */
+  footer?: { text: string };
+}
+
 export interface MAICSlide {
   id: string;
   title: string;
+  /** Legacy/free-form rendering canvas. Always present; rendered when no
+   *  `template` is set OR when the chosen template doesn't apply. */
   elements: MAICSlideElement[];
   background?: string;
   notes?: string;
@@ -38,6 +77,13 @@ export interface MAICSlide {
   audioUrl?: string;
   duration?: number;
   transition?: MAICSlideTransition;
+  /** F4 (P0): optional layout discriminator. When set to a known template
+   *  id AND `slots` is populated, the renderer uses the slot-aware path
+   *  instead of `elements[]`. Absent on legacy slides. */
+  template?: SlideTemplateId;
+  /** F4 (P0): structured content for template-aware layouts. Ignored when
+   *  `template` is missing or unknown. */
+  slots?: SlideSlots;
 }
 
 // ─── Agent Types ──────────────────────────────────────────────────────────

@@ -26,6 +26,7 @@ import re
 from django.http import HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 
+from apps.users.scim_throttles import check_token_throttle, check_unauth_throttle
 from utils.audit import log_audit
 
 logger = logging.getLogger(__name__)
@@ -132,7 +133,18 @@ def scim_users_view(request):
     """List users (GET) or provision a new user (POST)."""
     scim_token = _authenticate_scim(request)
     if scim_token is None:
+        # Per-IP throttle on token-guess attempts BEFORE returning 401,
+        # so an attacker rotating fake tokens hits 429 quickly.
+        throttled = check_unauth_throttle(request)
+        if throttled is not None:
+            return throttled
         return _scim_401()
+
+    # Per-token-hash throttle for authenticated traffic — high steady-state
+    # rate that still contains a runaway IdP loop.
+    throttled = check_token_throttle(request)
+    if throttled is not None:
+        return throttled
 
     tenant = scim_token.tenant
 
@@ -148,6 +160,29 @@ def scim_users_view(request):
                 users = users.filter(email__iexact=m.group(1))
             # Unknown filter → return empty per spec (don't 400)
 
+        # RFC 7644 §3.4.2.3 — honour sortBy/sortOrder with an allowlist.
+        # Allowlisted attributes: userName (maps to email), email (synonym).
+        # Unknown sortBy → 400 (invalidValue) so IdP test-suites surface the
+        # error rather than silently receiving unsorted results.
+        _USERS_SORT_ALLOWLIST = {"username": "email", "email": "email"}
+        sort_by_param = request.GET.get("sortBy", "").strip().lower()
+        sort_order_param = request.GET.get("sortOrder", "ascending").strip().lower()
+
+        if sort_by_param:
+            if sort_by_param not in _USERS_SORT_ALLOWLIST:
+                return _scim_error(
+                    400,
+                    f"sortBy attribute '{request.GET.get('sortBy')}' is not supported. "
+                    "Supported values: userName, email.",
+                    "invalidValue",
+                )
+            sort_field = _USERS_SORT_ALLOWLIST[sort_by_param]
+            if sort_order_param == "descending":
+                sort_field = f"-{sort_field}"
+        else:
+            # Implicit default: ascending email (unchanged pre-PHASE3-6 behaviour)
+            sort_field = "email"
+
         total = users.count()
 
         # Pagination (1-indexed per RFC 7644 §3.4.2.4)
@@ -158,7 +193,7 @@ def scim_users_view(request):
             start_index, count = 1, 100
 
         offset = start_index - 1
-        page_users = users.order_by("email")[offset: offset + count]
+        page_users = users.order_by(sort_field)[offset: offset + count]
 
         return _json_resp({
             "schemas": [_SCHEMA_LIST],
@@ -253,6 +288,28 @@ def scim_users_view(request):
 # PATCH helpers — shared by scim_user_detail_view
 # ---------------------------------------------------------------------------
 
+def _coerce_scim_str(value) -> str:
+    """
+    Safely coerce a SCIM string attribute to ``str``.
+
+    SCIM allows IdPs to send ``null`` (JSON null → Python ``None``) for
+    string attributes they intend to clear.  A plain ``str(None)`` call
+    would produce the literal string ``"None"`` which would be persisted
+    to the database — almost certainly unintentional.  This helper treats
+    ``None`` and other falsy values as an empty string, consistent with the
+    PUT handler that uses the ``or ""`` pattern.
+
+    Usage::
+
+        user.first_name = _coerce_scim_str(value)
+        # None  → ""
+        # ""    → ""
+        # "Alice" → "Alice"
+        # 0     → ""   (edge case; numeric SCIM attributes use bool/int helpers)
+    """
+    return str(value or "").strip()
+
+
 def _apply_scim_replace_path(user, path: str, value) -> None:
     """
     Apply a single SCIM PATCH 'replace' operation that carries an explicit path.
@@ -269,13 +326,13 @@ def _apply_scim_replace_path(user, path: str, value) -> None:
     if path == "active":
         user.is_active = bool(value)
     elif path == "name.givenName":
-        user.first_name = str(value).strip()
+        user.first_name = _coerce_scim_str(value)
     elif path == "name.familyName":
-        user.last_name = str(value).strip()
+        user.last_name = _coerce_scim_str(value)
     elif path == "externalId":
-        user.employee_id = (str(value) if value else "").strip()
+        user.employee_id = _coerce_scim_str(value)
     elif path == f"{_EXT_USER}:department":
-        user.department = (str(value) if value else "").strip()
+        user.department = _coerce_scim_str(value)
     # Unrecognised paths are silently ignored (RFC 7644 §3.5.2)
 
 
@@ -299,16 +356,16 @@ def _apply_scim_replace_dict(user, value_dict: dict) -> None:
     name_obj = value_dict.get("name")
     if isinstance(name_obj, dict):
         if "givenName" in name_obj:
-            user.first_name = str(name_obj["givenName"]).strip()
+            user.first_name = _coerce_scim_str(name_obj["givenName"])
         if "familyName" in name_obj:
-            user.last_name = str(name_obj["familyName"]).strip()
+            user.last_name = _coerce_scim_str(name_obj["familyName"])
 
     if "externalId" in value_dict:
-        user.employee_id = (str(value_dict["externalId"]) if value_dict["externalId"] else "").strip()
+        user.employee_id = _coerce_scim_str(value_dict["externalId"])
 
     ext_obj = value_dict.get(_EXT_USER)
     if isinstance(ext_obj, dict) and "department" in ext_obj:
-        user.department = (str(ext_obj["department"]) if ext_obj["department"] else "").strip()
+        user.department = _coerce_scim_str(ext_obj["department"])
 
 
 # ---------------------------------------------------------------------------
@@ -320,7 +377,14 @@ def scim_user_detail_view(request, user_id):
     """Retrieve, replace, patch, or deprovision a single user."""
     scim_token = _authenticate_scim(request)
     if scim_token is None:
+        throttled = check_unauth_throttle(request)
+        if throttled is not None:
+            return throttled
         return _scim_401()
+
+    throttled = check_token_throttle(request)
+    if throttled is not None:
+        return throttled
 
     tenant = scim_token.tenant
 
@@ -342,8 +406,15 @@ def scim_user_detail_view(request, user_id):
             return _scim_error(400, "Invalid JSON body.", "invalidSyntax")
 
         name_obj = data.get("name") or {}
-        user.first_name = (name_obj.get("givenName") or user.first_name).strip()
-        user.last_name = (name_obj.get("familyName") or user.last_name).strip()
+        # RFC 7644 §3.5.1 — PUT is a full replace.  Use "key in dict" semantics:
+        # if givenName/familyName is present in the payload (even as null/empty),
+        # overwrite the stored value; if absent entirely, retain the existing value.
+        # This is slightly more lenient than strict RFC but matches Okta/Azure AD
+        # behaviour and avoids silently blanking names on partial PUT bodies.
+        if "givenName" in name_obj:
+            user.first_name = str(name_obj.get("givenName") or "").strip()
+        if "familyName" in name_obj:
+            user.last_name = str(name_obj.get("familyName") or "").strip()
 
         if "active" in data:
             user.is_active = bool(data["active"])
@@ -379,6 +450,12 @@ def scim_user_detail_view(request, user_id):
         if not operations:
             return _scim_error(400, "Operations array is required.", "invalidValue")
 
+        # Track whether any recognized operation modified the user object.
+        # Only call user.save() when something actually changed — avoids a
+        # wasted UPDATE when every op in the batch is an unrecognised type
+        # (e.g. an IdP sends an "add" op that LearnPuddle does not support).
+        _user_changed = False
+
         for op in operations:
             op_type = (op.get("op") or "").lower()
             path = (op.get("path") or "")
@@ -392,6 +469,7 @@ def scim_user_detail_view(request, user_id):
                     _apply_scim_replace_dict(user, value)
                 else:
                     _apply_scim_replace_path(user, path, value)
+                _user_changed = True
             else:
                 # M4: log unrecognised op types at DEBUG so IdP quirks are
                 # visible without flooding info/warning logs.
@@ -401,7 +479,8 @@ def scim_user_detail_view(request, user_id):
                         op_type, user.id,
                     )
 
-        user.save()
+        if _user_changed:
+            user.save()
 
         log_audit(
             action="SCIM_PATCH",
@@ -466,7 +545,10 @@ def scim_service_provider_config_view(request):
             "maxResults": 200,
         },
         "changePassword": {"supported": False},
-        "sort": {"supported": False},
+        # PHASE3-6: sort IS supported (sortBy=userName/email for Users,
+        # sortBy=displayName for Groups).  Flip to True so IdP test-suites
+        # (Okta SCIM certification) see consistent advertised + actual behaviour.
+        "sort": {"supported": True},
         "etag": {"supported": False},
         # TASK-024: Groups provisioning is now supported.
         "groups": {"supported": True},

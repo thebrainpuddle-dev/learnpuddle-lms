@@ -430,6 +430,38 @@ class QuizSubmissionSignalTest(TestCase):
             teacher=self.teacher, reason="quiz_submission",
         ).count() == 1
 
+    def test_earned_zero_score_not_timed_out_still_awards(self):
+        # Honest zero — teacher submitted answers, all wrong.  Policy targets
+        # force-closes (time_expired=True, score=0), not earned zeros, so XP
+        # for completion is still awarded.
+        self._submission(score=Decimal("0"), time_expired=False)
+        assert XPTransaction.all_objects.filter(
+            teacher=self.teacher, reason="quiz_submission",
+        ).count() == 1
+
+    def test_abandoned_timed_attempt_emits_structured_log(self):
+        # The skip path emits a `metric=quiz_xp_skipped_on_timeout` log line
+        # so observability can detect force-close volume.
+        import logging as _logging
+
+        with self.assertLogs(
+            "apps.progress.gamification_signals", level=_logging.INFO,
+        ) as cap:
+            sub = self._submission(score=Decimal("0"), time_expired=True)
+        assert any(
+            "Skipping XP for abandoned timed quiz attempt" in m
+            for m in cap.output
+        )
+        # The structured `extra={"metric": ...}` is attached to the LogRecord
+        # via assertLogs.records — confirm the metric key is set.
+        records_with_metric = [
+            r for r in cap.records
+            if getattr(r, "metric", None) == "quiz_xp_skipped_on_timeout"
+        ]
+        assert len(records_with_metric) == 1
+        rec = records_with_metric[0]
+        assert rec.attempt_id == str(sub.pk)
+
     def test_each_attempt_awards_its_own_xp(self):
         self._submission(score=Decimal("50"), attempt=1)
         self._submission(score=Decimal("70"), attempt=2)

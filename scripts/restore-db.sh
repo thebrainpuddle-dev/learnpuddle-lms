@@ -16,8 +16,8 @@
 #
 # Environment Variables:
 #   DB_CONTAINER    - Docker container name (default: db)
-#   DB_USER         - PostgreSQL user (default: postgres)
-#   DB_NAME         - Database name (default: lms_db)
+#   DB_USER         - PostgreSQL user (default: learnpuddle)
+#   DB_NAME         - Database name (default: learnpuddle_db)
 #   BACKUP_DIR      - Local backup directory (default: /opt/lms/backups)
 #   BACKUP_S3_BUCKET - S3 bucket for backups (optional)
 #   COMPOSE_FILE    - Docker compose file (default: docker-compose.prod.yml)
@@ -34,8 +34,8 @@ NC='\033[0m' # No Color
 
 # Configuration (override via environment)
 DB_CONTAINER="${DB_CONTAINER:-db}"
-DB_USER="${DB_USER:-postgres}"
-DB_NAME="${DB_NAME:-lms_db}"
+DB_USER="${DB_USER:-learnpuddle}"
+DB_NAME="${DB_NAME:-learnpuddle_db}"
 BACKUP_DIR="${BACKUP_DIR:-/opt/lms/backups}"
 BACKUP_S3_BUCKET="${BACKUP_S3_BUCKET:-}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
@@ -85,8 +85,8 @@ Examples:
 
 Environment Variables:
   DB_CONTAINER      Docker container name (default: db)
-  DB_USER           PostgreSQL user (default: postgres)
-  DB_NAME           Database name (default: lms_db)
+  DB_USER           PostgreSQL user (default: learnpuddle)
+  DB_NAME           Database name (default: learnpuddle_db)
   BACKUP_DIR        Local backup directory (default: /opt/lms/backups)
   BACKUP_S3_BUCKET  S3 bucket for backups
   COMPOSE_FILE      Docker compose file (default: docker-compose.prod.yml)

@@ -132,8 +132,9 @@ def test_enforce_budgets_warn_carries_phase_field(caplog):
         SLIDE_TITLE_MAX_CHARS,
     )
 
-    # A title clearly over the 120-char limit.
-    long_title = "A" * 115 + " over budget here"  # 115+17=132 chars
+    # A title clearly over the SLIDE_TITLE_MAX_CHARS limit (was 120, raised to
+    # 160 in CG-P0-7). Pad to 1.5x cap so this stays over-budget if caps shift.
+    long_title = "A" * (SLIDE_TITLE_MAX_CHARS + 50) + " over budget here"
     parsed = {"slides": [{"title": long_title, "elements": []}]}
 
     with caplog.at_level(logging.WARNING, logger="apps.courses.maic_generation_service"):
