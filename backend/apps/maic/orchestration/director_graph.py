@@ -417,6 +417,43 @@ async def _agent_generate_node(
         logger.exception("agent_generate: provider error")
         write({"type": "error", "data": {"message": str(exc)}})
 
+    # ── TTS: synthesize the agent's spoken text into a speech_audio frame ──
+    # Phase 1 contract: one audio per agent turn (concatenated text).
+    # MAIC-501.2. Phase 5 (VoxCPM2) may split per text-item for better
+    # interleaving with actions in long turns.
+    if full_text.strip():
+        try:
+            from apps.maic.tts import SpeechSynthesisError, synthesize_speech
+
+            voice_id = (
+                agent.voiceConfig.voiceId
+                if agent.voiceConfig is not None
+                else None
+            )
+            audio_id = f"speech-{uuid.uuid4().hex[:12]}"
+            speech = await synthesize_speech(
+                full_text,
+                audio_id=audio_id,
+                voice=voice_id,
+            )
+            write({
+                "type": "speech_audio",
+                "data": {
+                    "audioId": speech.audio_id,
+                    "audioB64": speech.audio_b64,
+                    "format": speech.format,
+                    "messageId": message_id,
+                    "agentId": agent_id,
+                },
+            })
+        except SpeechSynthesisError as exc:
+            # TTS failure should NOT abort the agent's turn — the
+            # frontend can still render text, just without audio.
+            logger.warning(
+                "agent_generate: TTS failed for agent %s: %s",
+                agent.name, exc,
+            )
+
     write({
         "type": "agent_end",
         "data": {"messageId": message_id, "agentId": agent_id},

@@ -1,10 +1,14 @@
-"""Tests for apps.maic.orchestration.director_graph (Phase-0 stub).
+"""Tests for apps.maic.orchestration.director_graph.
 
 Coverage targets:
   - apps/maic/orchestration/director_graph.py  ≥ 90% lines
   - apps/maic/exceptions.py  100% (just class declarations)
 """
 from __future__ import annotations
+
+import sys
+import types
+from typing import Any
 
 import pytest
 
@@ -21,6 +25,27 @@ from apps.maic.orchestration.director_graph import (
     create_orchestration_graph,
     stream_classroom,
 )
+
+
+# ── Autouse fixture: stub edge_tts so director_graph tests don't hit
+#    the real Microsoft TTS endpoint (was making the suite take ~9s).
+#    Dedicated TTS tests live in tests_tts_service.py +
+#    tests_director_graph_tts.py and provide their own fixtures.
+
+
+class _AutostubCommunicate:
+    def __init__(self, *_a, **_kw):
+        pass
+
+    async def stream(self):
+        yield {"type": "audio", "data": b"\xff\xfb\x90autostub-audio"}
+
+
+@pytest.fixture(autouse=True)
+def _stub_edge_tts(monkeypatch):
+    fake = types.ModuleType("edge_tts")
+    fake.Communicate = _AutostubCommunicate  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "edge_tts", fake)
 
 
 # ── _validate_event ────────────────────────────────────────────────────
