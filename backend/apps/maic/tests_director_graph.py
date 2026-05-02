@@ -128,16 +128,69 @@ def test_initial_state_propagates_inputs():
 
 
 @pytest.mark.asyncio
-async def test_stream_emits_exactly_three_events_in_order():
-    """Phase-0 contract: agent_start → text_delta → agent_end. This is
-    the regression net: any later phase that changes the stub output
-    must update this assertion intentionally (and the MAIC-003 manual
-    smoke at the same time)."""
+async def test_stream_phase1_default_maxturns1_emits_4_events():
+    """Phase-1 single-agent with the typical maxTurns=1 contract (one
+    director→agent cycle per request, mirroring upstream
+    `buildInitialState` line 533: `maxTurns: turnCount + 1`):
+
+        thinking{stage:agent_loading,agentId}   (director dispatch)
+      → agent_start
+      → text_delta
+      → agent_end
+        (director runs again, turnCount(1) ≥ maxTurns(1) → end without
+         emitting cue_user)
+
+    cue_user fires only when maxTurns ≥ 2 (a multi-turn session) — see
+    test_cue_user_fires_when_maxturns_allows_followup below.
+    """
     events = []
     async for event in stream_classroom(build_initial_state()):
         events.append(event)
     types = [e["type"] for e in events]
-    assert types == ["agent_start", "text_delta", "agent_end"], events
+    assert types == [
+        "thinking", "agent_start", "text_delta", "agent_end",
+    ], events
+    assert events[0]["data"]["stage"] == "agent_loading"
+    assert events[0]["data"]["agentId"] == _PHASE0_MESSAGE_ID
+
+
+@pytest.mark.asyncio
+async def test_cue_user_fires_when_maxturns_allows_followup():
+    """maxTurns=2 → director gets a second pass after the agent
+    responds, emits cue_user, then ends."""
+    state = build_initial_state(max_turns=2)
+    events = [e async for e in stream_classroom(state)]
+    types = [e["type"] for e in events]
+    assert types == [
+        "thinking", "agent_start", "text_delta", "agent_end", "cue_user",
+    ], events
+    cue = events[-1]
+    assert cue["data"]["fromAgentId"] == _PHASE0_MESSAGE_ID
+
+
+@pytest.mark.asyncio
+async def test_stream_dispatches_first_available_agent_id():
+    """Director uses availableAgentIds[0] for single-agent dispatch
+    (matches upstream director-graph.ts:121)."""
+    state = build_initial_state(
+        available_agent_ids=["my-custom-agent"],
+        max_turns=2,
+    )
+    events = [e async for e in stream_classroom(state)]
+    thinking = next(e for e in events if e["type"] == "thinking")
+    assert thinking["data"]["agentId"] == "my-custom-agent"
+    cue = next(e for e in events if e["type"] == "cue_user")
+    assert cue["data"]["fromAgentId"] == "my-custom-agent"
+
+
+@pytest.mark.asyncio
+async def test_stream_falls_back_to_default_1_when_no_agent_ids():
+    """Empty availableAgentIds → fallback to 'default-1' (matches upstream
+    `state.availableAgentIds[0] || 'default-1'` at director-graph.ts:122)."""
+    state = build_initial_state(available_agent_ids=[])
+    events = [e async for e in stream_classroom(state)]
+    thinking = next(e for e in events if e["type"] == "thinking")
+    assert thinking["data"]["agentId"] == "default-1"
 
 
 @pytest.mark.asyncio

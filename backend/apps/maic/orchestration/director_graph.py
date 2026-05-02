@@ -111,29 +111,58 @@ def _make_safe_writer(raw_writer: StreamWriter | None) -> StreamWriter:
     return write
 
 
-# ── Nodes (Phase-0 stubs) ──────────────────────────────────────────────
+# ── Nodes ─────────────────────────────────────────────────────────────
 
 
 async def _director_node(
     state: OrchestratorState,
-    writer: StreamWriter,  # noqa: ARG001 — kept for parity with upstream signature
+    writer: StreamWriter,
 ) -> dict[str, Any]:
-    """Phase-0 stub. Real body in MAIC-103 (single agent) / MAIC-104 (multi).
+    """Director — chooses which agent speaks next.
 
-    Returns partial state update. Exits after one turn; this is enough
-    to drive the conditional edge to agent_generate exactly once and
-    then back to END.
+    Phase-1 single-agent path (this ticket, MAIC-103). Mirrors upstream
+    director-graph.ts:120-135:
 
-    Mirrors upstream director-graph.ts:115-118 — turn-limit check returns
-    `shouldEnd: True` WITHOUT emitting a stream event. The director only
-    emits when actively dispatching an agent (Phase 1 multi-agent path
-    will emit `thinking { stage: "director" | "agent_loading" }` from
-    MAIC-104).
+      - turn 0: dispatch the single available agent (or 'default-1' if
+        none provided). Emit `thinking{stage:"agent_loading", agentId}`
+        so the client can show a loading state for the right avatar.
+      - turn 1+: that agent has now responded. Emit a `cue_user` event
+        so the frontend playback engine knows to enter live mode for
+        a follow-up question, then end the graph.
+      - turnCount >= maxTurns at any time: ends without emitting (the
+        loop is exhausted; no UX signal needed). Mirrors
+        director-graph.ts:114-118.
+
+    Multi-agent (LLM-based decision) lands in Phase 3, MAIC-104.
     """
+    write = _make_safe_writer(writer)
     turn = state.get("turnCount", 0)
-    if turn >= state.get("maxTurns", 1):
+    max_turns = state.get("maxTurns", 1)
+
+    # Turn-limit check (applies to single + multi)
+    if turn >= max_turns:
+        logger.info(
+            "director: turn limit reached (%d/%d), ending",
+            turn, max_turns,
+        )
         return {"shouldEnd": True}
-    return {"currentAgentId": _PHASE0_MESSAGE_ID, "shouldEnd": False}
+
+    # Single-agent dispatch
+    available = state.get("availableAgentIds") or []
+    agent_id = available[0] if available else "default-1"
+
+    if turn == 0:
+        logger.info("director: dispatching single agent %r", agent_id)
+        write({"type": "thinking", "data": {
+            "stage": "agent_loading",
+            "agentId": agent_id,
+        }})
+        return {"currentAgentId": agent_id, "shouldEnd": False}
+
+    # Agent already responded — cue user for follow-up, then end
+    logger.info("director: cueing user after %r", agent_id)
+    write({"type": "cue_user", "data": {"fromAgentId": agent_id}})
+    return {"shouldEnd": True}
 
 
 def _director_condition(state: OrchestratorState) -> str:
@@ -214,13 +243,21 @@ def build_initial_state(
 ) -> OrchestratorState:
     """Mirror of upstream buildInitialState at director-graph.ts:500-547.
 
-    All inputs are optional in Phase 0; Phase 1's MAIC-103 will tighten
-    this to require non-empty messages + agent_ids.
+    Distinction in `available_agent_ids` semantics:
+      - `None`  → caller didn't specify; we fill in [_PHASE0_MESSAGE_ID]
+        as a development convenience (zero-config probe page works).
+      - `[]`    → caller explicitly specified no agents; preserve the
+        empty list. The director then applies its `'default-1'` fallback
+        rule from upstream director-graph.ts:122 — never overwrite
+        caller intent here.
     """
+    if available_agent_ids is None:
+        available_agent_ids = [_PHASE0_MESSAGE_ID]
+
     return {
         "messages": messages or [],
         "storeState": {"currentSceneId": None, "scenes": [], "whiteboardOpen": False},
-        "availableAgentIds": available_agent_ids or [_PHASE0_MESSAGE_ID],
+        "availableAgentIds": available_agent_ids,
         "maxTurns": max_turns,
         "languageModelId": "stub",
         "thinkingConfig": None,
