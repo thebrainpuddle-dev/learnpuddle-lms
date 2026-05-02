@@ -31,6 +31,8 @@ import 'katex/dist/katex.min.css';
 // ─── Static imports (keep for fast initial load) ────────────────────────────
 import { LoginPage } from './pages/auth/LoginPage';
 import { PageLoader } from './components/PageLoader';
+import { featureFlags } from './config/featureFlags';
+import MaicV2Probe from './pages/dev/MaicV2Probe';
 
 // ─── Lazy-loaded page components ────────────────────────────────────────────
 // Auth
@@ -460,6 +462,14 @@ function AppContent() {
 
       {/* Public Routes — Teacher Invitation Acceptance */}
       <Route path="/accept-invitation/:token" element={<RoutePage><AcceptInvitationPage /></RoutePage>} />
+
+      {/* Dev-only — MAIC v2 probe page, gated by featureFlags.maicV2Enabled
+          (mirror of backend settings.MAIC_V2_ENABLED).  See
+          docs/AI_CLASSROOM_BLUEPRINT.md and the project brain at
+          obsidian-vault/.../maic-rebuild/. Removed in Phase 8. */}
+      {featureFlags.maicV2Enabled && (
+        <Route path="/dev/maic-v2" element={<RoutePage><MaicV2Probe /></RoutePage>} />
+      )}
 
       {/* Public Routes — Super Admin login (platform admin) */}
       <Route
