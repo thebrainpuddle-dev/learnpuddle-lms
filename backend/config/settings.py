@@ -899,3 +899,13 @@ CHATBOT_OPENROUTER_MODEL = config(
     default='meta-llama/llama-3.1-70b-instruct',
 )
 CHATBOT_OLLAMA_MODEL = config('CHATBOT_OLLAMA_MODEL', default='llama3')
+
+# AI Classroom v2 (MAIC v2)
+# -----------------------------------------------------------------------------
+# Master kill-switch for the new MAIC stack added in apps/maic/. When False,
+# the V2 WS route (/ws/maic/v2/classroom/<session_id>/) is NOT mounted in
+# config/asgi.py and (in MAIC-007) the V2 HTTP routes + frontend probe page
+# are unreachable.  V1 (apps/courses/maic_*) is unaffected by this flag.
+# See docs/AI_CLASSROOM_BLUEPRINT.md and the project brain at
+# obsidian-vault/agent-hq/projects/learnpuddle-lms/maic-rebuild/.
+MAIC_V2_ENABLED = config('MAIC_V2_ENABLED', default=False, cast=bool)
