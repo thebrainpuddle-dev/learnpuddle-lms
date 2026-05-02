@@ -88,6 +88,7 @@ INSTALLED_APPS = [
     'apps.billing',
     'apps.users',
     'apps.courses',
+    'apps.maic',                    # AI Classroom v2 (MAIC) — Phase 0+, see docs/AI_CLASSROOM_BLUEPRINT.md
     'apps.progress',
     'apps.uploads',
     'apps.media',

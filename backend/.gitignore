@@ -39,3 +39,6 @@ htmlcov/
 
 # Logs
 logs/*.log
+
+# MAIC v2 cert venv (do not commit)
+.venv-maic/
