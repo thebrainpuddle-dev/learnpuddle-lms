@@ -53,18 +53,18 @@ _DEFAULT_OPENAI_MODEL: Final = "gpt-4.1"
 # tests exercise the chunk-by-chunk parser, not just one shot.
 _STUB_CHUNK_SIZE: Final = 30
 
-# The stub's structured-output payload. Mirrors the exact shape an LLM
-# would emit per upstream `stateless-generate.ts:4-5` documentation —
-# JSON array of {"type":"text"|"action", ...} items. Edit cautiously:
-# the parser tests in tests_stateless_parser.py do not depend on this,
-# but the agent_generate end-to-end smoke (MAIC-105.4) does.
+# The stub's structured-output payload. Mirrors what an upstream live
+# agent's LLM emits: text items become `text_delta` events (TTS handled
+# downstream by the playback engine), action items become `action`
+# events.  Live upstream agents do NOT emit explicit "speech" actions —
+# the spoken content is the `text` item itself.  We include one wb_open
+# action so the validation + whiteboard-ledger paths in agent_generate
+# fire under the stub.
 STUB_OUTPUT: Final[str] = (
     '[\n'
     '  {"type":"text","content":"Hello students. Today we will learn '
     'about the topic at hand."},\n'
-    '  {"type":"action","name":"speech","params":{'
-    '"text":"Hello students. Today we will learn about the topic at hand."}'
-    '}\n'
+    '  {"type":"action","name":"wb_open","params":{}}\n'
     ']'
 )
 

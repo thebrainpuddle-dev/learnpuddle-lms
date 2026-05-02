@@ -45,15 +45,17 @@ async def test_stub_stream_yields_more_than_one_chunk():
 @pytest.mark.asyncio
 async def test_stub_output_is_valid_structured_json():
     """STUB_OUTPUT must be parseable by parse_structured_chunk so
-    agent_generate end-to-end (MAIC-105.4) gets a deterministic
-    sequence: one text item + one speech action."""
+    agent_generate end-to-end (MAIC-105.3+) gets a deterministic
+    sequence: one text item + one wb_open action.  The action MUST be
+    in the teacher's allowedActions (whiteboard family) so validation
+    passes."""
     import json
     parsed = json.loads(STUB_OUTPUT)
     assert isinstance(parsed, list)
     assert len(parsed) == 2
     assert parsed[0]["type"] == "text"
     assert parsed[1]["type"] == "action"
-    assert parsed[1]["name"] == "speech"
+    assert parsed[1]["name"] == "wb_open"
 
 
 # ── resolve_chat_model — real-model resolver ──────────────────────────

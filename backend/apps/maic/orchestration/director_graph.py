@@ -177,39 +177,268 @@ async def _agent_generate_node(
     state: OrchestratorState,
     writer: StreamWriter,
 ) -> dict[str, Any]:
-    """Phase-0 stub. Real body in MAIC-105.
+    """Run one agent's generation turn.
 
-    Emits a StatelessEvent triplet (agent_start → text_delta → agent_end)
-    through the injected writer. Increments turnCount so the next director
-    call ends the loop.
+    Direct port of upstream director-graph.ts:238-432. Streams the LLM's
+    structured-JSON output through parse_structured_chunk to extract
+    text deltas + actions in original interleaved order, validates each
+    action against the agent's allowed_actions (scene-filtered), and
+    emits StatelessEvent frames (`agent_start`, `text_delta`, `action`,
+    `agent_end`) through the injected StreamWriter.
+
+    Action validation:
+      - Filter by scene type (slide-only actions stripped on non-slide).
+      - Drop disallowed actions (logged at warn).
+      - Pydantic validate via apps.maic.protocol.validate_action;
+        invalid payloads dropped with logger.warning.
+
+    Whiteboard ledger accumulation:
+      - All wb_* actions are appended to whiteboardLedger via the
+        OrchestratorState reducer.
+      - Used by the director's prompt (Phase 3 MAIC-415) to summarize
+        what's been drawn so far.
+
+    Returns partial state update:
+      turnCount += 1
+      agentResponses += [AgentTurnSummary(...)]   (reducer)
+      whiteboardLedger += [...]                   (reducer)
+      totalActions += action_count
+      currentAgentId = None                        (clear for next director call)
     """
+    import time
+    import uuid
+
+    from apps.maic.exceptions import MaicConfigError, MaicGraphError, MaicProviderError
+    from apps.maic.orchestration.ai_adapter import stream_text
+    from apps.maic.orchestration.prompt_builder import build_structured_prompt
+    from apps.maic.orchestration.registry import resolve_agent
+    from apps.maic.orchestration.stateless_parser import (
+        create_parser_state,
+        finalize_parser,
+        parse_structured_chunk,
+    )
+    from apps.maic.orchestration.tool_schemas import get_effective_actions
+    from apps.maic.protocol import validate_action
+    from apps.maic.exceptions import MaicProtocolError
+    from langchain_core.messages import HumanMessage, SystemMessage
+
     write = _make_safe_writer(writer)
 
+    agent_id = state.get("currentAgentId")
+    if not agent_id:
+        logger.warning("agent_generate called without currentAgentId; ending")
+        return {"shouldEnd": True}
+
+    overrides = state.get("agentConfigOverrides") or {}
+    agent = resolve_agent(agent_id, overrides)
+    if agent is None:
+        logger.error("agent_generate: agent_id=%r not in registry or overrides", agent_id)
+        write({"type": "error", "data": {"message": f"unknown agent_id: {agent_id}"}})
+        # Increment turnCount so the director's turn-limit branch fires
+        # next pass and ends the loop. Without this the director would
+        # re-dispatch the unknown agent forever (a node's `shouldEnd`
+        # is overwritten when director runs and ignores incoming flags).
+        return {
+            "shouldEnd": True,
+            "currentAgentId": None,
+            "turnCount": state.get("turnCount", 0) + 1,
+        }
+
+    message_id = f"assistant-{agent_id}-{int(time.time() * 1000)}-{uuid.uuid4().hex[:6]}"
+
+    # Determine effective allowed actions for this scene
+    store_state = state.get("storeState") or {}
+    scene_type: str | None = None
+    current_id = store_state.get("currentSceneId")
+    if current_id:
+        scenes = store_state.get("scenes") or []
+        scene = next((s for s in scenes if s.get("id") == current_id), None)
+        if scene:
+            scene_type = scene.get("type")
+    effective_actions = get_effective_actions(agent.allowedActions, scene_type)
+
+    # Emit agent_start so the frontend can show this agent's avatar/colour
     write({
         "type": "agent_start",
         "data": {
-            "messageId": _PHASE0_MESSAGE_ID,
-            "agentId": _PHASE0_MESSAGE_ID,
-            "agentName": "MAIC v2 (Phase 0 stub)",
-            "agentAvatar": None,
-            "agentColor": "#5b9bd5",
+            "messageId": message_id,
+            "agentId": agent_id,
+            "agentName": agent.name,
+            "agentAvatar": agent.avatar,
+            "agentColor": agent.color,
         },
     })
-    write({
-        "type": "text_delta",
-        "data": {
-            "content": "Phase 0 graph wired. Real agents in Phase 1.",
-            "messageId": _PHASE0_MESSAGE_ID,
-        },
-    })
+
+    # Build the prompt + LLM message list
+    try:
+        system_prompt = build_structured_prompt(
+            agent,
+            store_state=store_state,
+            discussion_context=state.get("discussionContext"),
+            whiteboard_ledger=state.get("whiteboardLedger"),
+            user_profile=state.get("userProfile"),
+            agent_responses=state.get("agentResponses"),
+        )
+    except MaicConfigError as exc:
+        logger.exception("agent_generate: prompt build failed")
+        write({"type": "error", "data": {"message": str(exc)}})
+        write({"type": "agent_end", "data": {"messageId": message_id, "agentId": agent_id}})
+        return {"shouldEnd": True, "currentAgentId": None}
+
+    # Convert state.messages (subset of OpenAI shape) to LangChain BaseMessages.
+    # Phase 1 single-agent: append a "Please begin." trigger if no human turn
+    # is present yet (mirrors upstream director-graph.ts:304-309).
+    lc_messages = [SystemMessage(content=system_prompt)]
+    history = state.get("messages") or []
+    has_human = any(m.get("role") == "user" for m in history)
+    if not has_human:
+        lc_messages.append(HumanMessage(content="Please begin."))
+    else:
+        from langchain_core.messages import AIMessage
+        for m in history:
+            content = str(m.get("content", ""))
+            role = m.get("role")
+            if role == "user":
+                lc_messages.append(HumanMessage(content=content))
+            elif role == "assistant":
+                lc_messages.append(AIMessage(content=content))
+            elif role == "system":
+                lc_messages.append(SystemMessage(content=content))
+        # Ensure the trailing message is a HumanMessage (LLMs require it
+        # for completion). If it isn't, append the upstream cue.
+        if not isinstance(lc_messages[-1], HumanMessage):
+            lc_messages.append(
+                HumanMessage(content="It's your turn to speak. Respond from your perspective.")
+            )
+
+    # Stream the LLM response, parse structured chunks, emit events
+    parser_state = create_parser_state()
+    full_text = ""
+    action_count = 0
+    whiteboard_actions: list[dict[str, Any]] = []
+    language_model_id = state.get("languageModelId") or "stub"
+
+    try:
+        async for chunk in stream_text(lc_messages, language_model_id):
+            result = parse_structured_chunk(chunk, parser_state)
+            for entry in result.ordered:
+                if entry["type"] == "text":
+                    text = result.textChunks[entry["index"]]
+                    full_text += text
+                    write({
+                        "type": "text_delta",
+                        "data": {"content": text, "messageId": message_id},
+                    })
+                elif entry["type"] == "action":
+                    parsed = result.actions[entry["index"]]
+                    if parsed["actionName"] not in effective_actions:
+                        logger.warning(
+                            "agent %s emitted disallowed action %r; skipping",
+                            agent.name, parsed["actionName"],
+                        )
+                        continue
+                    payload = {
+                        "id": parsed["actionId"],
+                        "type": parsed["actionName"],
+                        **parsed["params"],
+                    }
+                    try:
+                        validated = validate_action(payload)
+                    except MaicProtocolError as exc:
+                        logger.warning(
+                            "agent %s emitted invalid action: %s",
+                            agent.name, exc,
+                        )
+                        continue
+                    action_count += 1
+                    if parsed["actionName"].startswith("wb_"):
+                        whiteboard_actions.append({
+                            "actionName": parsed["actionName"],
+                            "agentId": agent_id,
+                            "agentName": agent.name,
+                            "params": parsed["params"],
+                        })
+                    write({
+                        "type": "action",
+                        "data": {
+                            "actionId": parsed["actionId"],
+                            "actionName": parsed["actionName"],
+                            "params": parsed["params"],
+                            "agentId": agent_id,
+                            "messageId": message_id,
+                        },
+                    })
+
+        # Drain any trailing partial text the model didn't close cleanly
+        final = finalize_parser(parser_state)
+        for entry in final.ordered:
+            if entry["type"] == "text":
+                text = final.textChunks[entry["index"]]
+                full_text += text
+                write({
+                    "type": "text_delta",
+                    "data": {"content": text, "messageId": message_id},
+                })
+            elif entry["type"] == "action":
+                # finalize emits actions only when partial parse completed late;
+                # validation path identical to streaming branch
+                parsed = final.actions[entry["index"]]
+                if parsed["actionName"] not in effective_actions:
+                    continue
+                payload = {
+                    "id": parsed["actionId"],
+                    "type": parsed["actionName"],
+                    **parsed["params"],
+                }
+                try:
+                    validate_action(payload)
+                except MaicProtocolError:
+                    continue
+                action_count += 1
+                if parsed["actionName"].startswith("wb_"):
+                    whiteboard_actions.append({
+                        "actionName": parsed["actionName"],
+                        "agentId": agent_id,
+                        "agentName": agent.name,
+                        "params": parsed["params"],
+                    })
+                write({
+                    "type": "action",
+                    "data": {
+                        "actionId": parsed["actionId"],
+                        "actionName": parsed["actionName"],
+                        "params": parsed["params"],
+                        "agentId": agent_id,
+                        "messageId": message_id,
+                    },
+                })
+
+    except MaicProviderError as exc:
+        logger.exception("agent_generate: provider error")
+        write({"type": "error", "data": {"message": str(exc)}})
+
     write({
         "type": "agent_end",
-        "data": {"messageId": _PHASE0_MESSAGE_ID, "agentId": _PHASE0_MESSAGE_ID},
+        "data": {"messageId": message_id, "agentId": agent_id},
     })
+
+    if not full_text and action_count == 0:
+        logger.warning(
+            "agent %s produced empty response (no text, no actions)", agent.name,
+        )
 
     return {
         "turnCount": state.get("turnCount", 0) + 1,
         "currentAgentId": None,
+        "totalActions": state.get("totalActions", 0) + action_count,
+        "agentResponses": [{
+            "agentId": agent_id,
+            "agentName": agent.name,
+            "contentPreview": full_text[:300],
+            "actionCount": action_count,
+            "whiteboardActions": whiteboard_actions,
+        }],
+        "whiteboardLedger": whiteboard_actions,
     }
 
 
@@ -244,15 +473,16 @@ def build_initial_state(
     """Mirror of upstream buildInitialState at director-graph.ts:500-547.
 
     Distinction in `available_agent_ids` semantics:
-      - `None`  → caller didn't specify; we fill in [_PHASE0_MESSAGE_ID]
-        as a development convenience (zero-config probe page works).
+      - `None`  → caller didn't specify; default to ["default-1"] (the
+        built-in teacher agent). agent_generate resolves this through
+        the registry to a real, well-personaed AgentConfig.
       - `[]`    → caller explicitly specified no agents; preserve the
         empty list. The director then applies its `'default-1'` fallback
         rule from upstream director-graph.ts:122 — never overwrite
         caller intent here.
     """
     if available_agent_ids is None:
-        available_agent_ids = [_PHASE0_MESSAGE_ID]
+        available_agent_ids = ["default-1"]
 
     return {
         "messages": messages or [],
