@@ -1,0 +1,36 @@
+MAIC v2 prompt templates + snippets — provenance
+==================================================
+
+All files under templates/ and snippets/ are ported VERBATIM from
+THU-MAIC/OpenMAIC under the license agreement that grants us full code
+use rights (see [[reference/decisions]] ADR-001a in the project brain).
+
+Upstream:           https://github.com/THU-MAIC/OpenMAIC
+Upstream path:      lib/prompts/{templates,snippets}/
+Ported at:          2026-05-02
+Upstream commit:    10b1fc83cf77c769e8acac7b6c0569122b764bfd
+                    (HEAD on `main` at port time — `release: v0.2.1`
+                    plus a few post-release fixes; verifiable via
+                    `git -C /Volumes/CrucialX9/OpenMAIC log 10b1fc83`).
+
+Templates ported (21 directories under templates/):
+  agent-system                  agent-system-wb-assistant
+  agent-system-wb-student       agent-system-wb-teacher
+  code-content                  diagram-content
+  director                      game-content
+  interactive-actions           interactive-outlines
+  pbl-actions                   pbl-design
+  quiz-actions                  quiz-content
+  requirements-to-outlines      simulation-content
+  slide-actions                 slide-content
+  visualization3d-content       web-search-query-rewrite
+  widget-teacher-actions
+
+Resync from upstream:
+  diff -ruN /Volumes/CrucialX9/OpenMAIC/lib/prompts/{templates,snippets} \
+            /Volumes/CrucialX9/learnpuddle-lms/backend/apps/maic/prompts/{templates,snippets}
+
+Editing rule: prefer keeping our copies byte-identical to upstream.
+When a real divergence is required (e.g. a learnpuddle-specific tenant
+variable we add), document it in CHANGES.md beside this file and call
+it out in the commit message. Drift without a CHANGES entry is a bug.
