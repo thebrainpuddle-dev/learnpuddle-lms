@@ -79,34 +79,34 @@ class ClassroomConsumer(AsyncJsonWebsocketConsumer):
         action = content.get("action")
 
         if action == "start":
-            # Phase-0 stub. MAIC-005 replaces this branch with:
-            #   from .orchestration.director_graph import stream_classroom, build_initial_state
-            #   async for evt in stream_classroom(build_initial_state(...)):
-            #       await self.send_json(evt)
-            await self.send_json({
-                "type": "agent_start",
-                "data": {
-                    "messageId": _PHASE0_MESSAGE_ID,
-                    "agentId": _PHASE0_MESSAGE_ID,
-                    "agentName": "MAIC v2 (Phase 0 stub)",
-                    "agentAvatar": None,
-                    "agentColor": "#5b9bd5",
-                },
-            })
-            await self.send_json({
-                "type": "text_delta",
-                "data": {
-                    "content": "Phase 0 WS wired. Real graph in MAIC-005.",
-                    "messageId": _PHASE0_MESSAGE_ID,
-                },
-            })
-            await self.send_json({
-                "type": "agent_end",
-                "data": {
-                    "messageId": _PHASE0_MESSAGE_ID,
-                    "agentId": _PHASE0_MESSAGE_ID,
-                },
-            })
+            # MAIC-005: streams events from the LangGraph director.  The
+            # graph's Phase-0 stub emits the same agent_start → text_delta
+            # → agent_end triplet the placeholder did, so this swap is
+            # invisible to clients.
+            from .orchestration.director_graph import (
+                build_initial_state,
+                stream_classroom,
+            )
+            from apps.maic.exceptions import MaicGraphError
+
+            data = content.get("data") or {}
+            initial_state = build_initial_state(
+                messages=data.get("messages"),
+                available_agent_ids=data.get("agentIds"),
+                max_turns=int(data.get("maxTurns", 1)),
+            )
+            try:
+                async for event in stream_classroom(initial_state):
+                    await self.send_json(event)
+            except MaicGraphError as exc:
+                logger.exception(
+                    "MAIC v2 graph error session=%s",
+                    getattr(self, "session_id", "?"),
+                )
+                await self.send_json({
+                    "type": "error",
+                    "data": {"message": str(exc)},
+                })
             return
 
         # Unknown action — non-fatal; future-compat for client iterations
