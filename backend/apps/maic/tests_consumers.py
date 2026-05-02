@@ -83,3 +83,116 @@ def test_routing_module_publishes_one_pattern():
     pattern = websocket_urlpatterns[0]
     # Pattern is a URLPattern; pattern.pattern is a RoutePattern
     assert "ws/maic/v2/classroom" in str(pattern.pattern)
+
+
+# ── MAIC-101: tenant-gate tests (mock the DB helper) ───────────────────
+
+
+@pytest.mark.asyncio
+@override_settings(ALLOWED_HOSTS=["*"])
+async def test_no_tenant_id_user_rejected_with_4004(monkeypatch):
+    """Authenticated user with tenant_id=None (corrupt-state scenario) is
+    rejected with close code 4004 — distinct from anonymous (4001) and
+    cross-tenant (4003) so we can monitor each path separately."""
+    from types import SimpleNamespace
+
+    # Patch the JWT auth middleware to inject a synthetic user
+    async def _fake_call(self, scope, receive, send):
+        scope["user"] = SimpleNamespace(
+            is_anonymous=False, id=999, tenant_id=None,
+        )
+        scope["accepted_subprotocol"] = None
+        return await self.inner(scope, receive, send)
+
+    from apps.notifications.middleware import JWTAuthMiddleware
+    monkeypatch.setattr(JWTAuthMiddleware, "__call__", _fake_call)
+
+    # Re-import application after patch so middleware change takes effect
+    import importlib
+    from config import asgi as asgi_mod
+    importlib.reload(asgi_mod)
+
+    communicator = WebsocketCommunicator(
+        asgi_mod.application, "/ws/maic/v2/classroom/no-tenant-test/",
+    )
+    connected, code = await communicator.connect()
+    assert connected is False
+    assert code == 4004
+
+
+@pytest.mark.asyncio
+@override_settings(ALLOWED_HOSTS=["*"])
+async def test_cross_tenant_session_rejected_with_4003(monkeypatch):
+    """Session exists for tenant A; user from tenant B connects → 4003.
+    Mocks _resolve_or_create_session to simulate the tenant mismatch
+    (avoids pytest-django test-DB build which fails on a pre-existing
+    repo migration issue, see MAIC-002 cert)."""
+    from types import SimpleNamespace
+
+    async def _fake_call(self, scope, receive, send):
+        scope["user"] = SimpleNamespace(
+            is_anonymous=False, id=42, tenant_id=999,  # user is tenant 999
+        )
+        scope["accepted_subprotocol"] = None
+        return await self.inner(scope, receive, send)
+
+    from apps.notifications.middleware import JWTAuthMiddleware
+    monkeypatch.setattr(JWTAuthMiddleware, "__call__", _fake_call)
+
+    # Mock the helper to return cross_tenant=True
+    async def _fake_resolve(session_id, user):
+        return SimpleNamespace(id=session_id, tenant_id=111), True
+
+    monkeypatch.setattr(
+        "apps.maic.consumers._resolve_or_create_session", _fake_resolve,
+    )
+
+    import importlib
+    from config import asgi as asgi_mod
+    importlib.reload(asgi_mod)
+
+    communicator = WebsocketCommunicator(
+        asgi_mod.application, "/ws/maic/v2/classroom/cross-tenant-test/",
+    )
+    connected, code = await communicator.connect()
+    assert connected is False
+    assert code == 4003
+
+
+@pytest.mark.asyncio
+@override_settings(ALLOWED_HOSTS=["*"])
+async def test_authenticated_same_tenant_connects_successfully(monkeypatch):
+    """Same-tenant happy path — user's tenant matches session's tenant
+    (or session is created on the fly), connection accepts."""
+    from types import SimpleNamespace
+
+    async def _fake_call(self, scope, receive, send):
+        scope["user"] = SimpleNamespace(
+            is_anonymous=False, id=42, tenant_id=222,
+        )
+        scope["accepted_subprotocol"] = "Bearer.fake-token"
+        return await self.inner(scope, receive, send)
+
+    from apps.notifications.middleware import JWTAuthMiddleware
+    monkeypatch.setattr(JWTAuthMiddleware, "__call__", _fake_call)
+
+    async def _fake_resolve(session_id, user):
+        # Same-tenant — return a session with matching tenant
+        return SimpleNamespace(id=session_id, tenant_id=user.tenant_id), False
+
+    monkeypatch.setattr(
+        "apps.maic.consumers._resolve_or_create_session", _fake_resolve,
+    )
+
+    import importlib
+    from config import asgi as asgi_mod
+    importlib.reload(asgi_mod)
+
+    communicator = WebsocketCommunicator(
+        asgi_mod.application,
+        "/ws/maic/v2/classroom/happy-path-test/",
+        subprotocols=["Bearer.fake", "Bearer"],
+    )
+    connected, _ = await communicator.connect()
+    assert connected is True
+    await communicator.disconnect()

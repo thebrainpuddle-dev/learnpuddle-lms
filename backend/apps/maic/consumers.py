@@ -11,38 +11,97 @@ Wire format (matches OpenMAIC StatelessEvent — `lib/types/chat.ts`):
 
 Auth: JWT in `Sec-WebSocket-Protocol: Bearer.<jwt>` subprotocol, parsed
 by `apps/notifications/middleware.py::JWTAuthMiddleware` (already in the
-global Channels middleware chain via `config/asgi.py`). Anonymous
-connections close with code 4001 — exact pattern mirrored from
-`apps/notifications/consumers.py:46-50`.
+global Channels middleware chain via `config/asgi.py`).
 
-Phase 0: emits a hardcoded StatelessEvent triplet on receipt of
-`{"action":"start"}`. Real LangGraph integration arrives in MAIC-005
-(replaces the `if action == "start"` body with `async for event in
-stream_classroom(initial_state): await self.send_json(event)`).
+Close codes:
+  4001 — anonymous (no JWT or invalid JWT)
+  4003 — authenticated but session_id belongs to a different tenant
+         (cross-tenant access attempt)
+  4004 — authenticated user has no tenant_id (system error / corrupt user)
+
+Tenant binding (MAIC-101):
+  On connect we look up MaicSessionV2 by session_id. If the row exists
+  and tenant_id matches the user's tenant, accept. If the row exists
+  with a DIFFERENT tenant, close 4003. If the row does NOT exist, we
+  create it on the fly bound to the user's tenant — Phase 1 lets the
+  WS open ad-hoc so the dev probe and future "join this classroom by
+  link" flows work without an explicit HTTP-create step. MAIC-301 will
+  add the explicit POST /api/maic/v2/sessions/ route for the regular
+  flow; both write the same `maic_session_v2` row.
 """
 from __future__ import annotations
 
 import logging
 from typing import Any
 
+from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from django.contrib.auth.models import AnonymousUser
 
 logger = logging.getLogger(__name__)
 
-# Phase-0 hardcoded message id — also used by MAIC-005's StateGraph stub.
-# Keeping the value identical so the regression test for this consumer
-# survives the MAIC-005 implementation swap unchanged.
-_PHASE0_MESSAGE_ID = "phase0-stub"
+
+@database_sync_to_async
+def _resolve_or_create_session(session_id: str, user) -> tuple[Any, bool]:
+    """Look up `MaicSessionV2` for this session_id; create on miss.
+
+    Returns (session, cross_tenant) where cross_tenant is True when the
+    session exists for a DIFFERENT tenant than the user's. The caller
+    closes 4003 in that case and does NOT create.
+    """
+    from .models import MaicSessionV2
+
+    user_tenant_id = getattr(user, "tenant_id", None)
+
+    # Explicit query bypasses TenantManager so we can detect cross-tenant
+    # mismatches by comparing tenant_ids ourselves (TenantManager would
+    # silently filter out the foreign-tenant row).
+    existing = (
+        MaicSessionV2.objects
+        .all_tenants()
+        .filter(id=session_id)
+        .select_related("tenant")
+        .first()
+    )
+
+    if existing is not None:
+        if existing.tenant_id != user_tenant_id:
+            logger.warning(
+                "MAIC v2 WS: cross-tenant session access attempt "
+                "(session=%s session_tenant=%s user_tenant=%s user=%s)",
+                session_id, existing.tenant_id, user_tenant_id, user.id,
+            )
+            return existing, True
+        return existing, False
+
+    # No row → create one bound to the user's tenant.
+    from apps.tenants.models import Tenant
+    tenant = Tenant.objects.filter(id=user_tenant_id).first()
+    if tenant is None:
+        # User has tenant_id pointing at a deleted/missing tenant — this is
+        # a corrupt-state scenario, not a normal cross-tenant attempt.
+        return None, True
+
+    session = MaicSessionV2.objects.create(
+        id=session_id,
+        tenant=tenant,
+        opened_by=user,
+    )
+    logger.info(
+        "MAIC v2 WS: created ad-hoc session_id=%s tenant=%s user=%s",
+        session_id, tenant.id, user.id,
+    )
+    return session, False
 
 
 class ClassroomConsumer(AsyncJsonWebsocketConsumer):
     """WebSocket consumer for an AI Classroom session.
 
     Lifecycle:
-      connect()      — auth check, accept with echoed subprotocol
-      receive_json() — dispatch on `action` field; Phase-0 emits stub frames
-      disconnect()   — log only (no group cleanup needed in Phase 0)
+      connect()      — auth check, tenant gate, session resolve/create
+      receive_json() — dispatch on `action` field; streams from the
+                       LangGraph director (MAIC-005)
+      disconnect()   — log only (no group cleanup in Phase 1)
     """
 
     async def connect(self) -> None:
@@ -54,6 +113,22 @@ class ClassroomConsumer(AsyncJsonWebsocketConsumer):
 
         self.session_id: str = self.scope["url_route"]["kwargs"]["session_id"]
         self.tenant_id = getattr(self.user, "tenant_id", None)
+
+        if self.tenant_id is None:
+            logger.warning(
+                "MAIC v2 WS: user %s has no tenant_id; rejecting", self.user.id,
+            )
+            await self.close(code=4004)
+            return
+
+        # MAIC-101: resolve / create the MaicSessionV2 row + cross-tenant gate
+        session, cross_tenant = await _resolve_or_create_session(
+            self.session_id, self.user,
+        )
+        if cross_tenant:
+            await self.close(code=4003)
+            return
+        self.session = session
 
         # Echo the JWT-bearing subprotocol — the WebSocket spec requires the
         # server to choose one of the client's offered subprotocols for the
