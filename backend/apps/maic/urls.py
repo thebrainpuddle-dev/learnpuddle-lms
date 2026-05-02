@@ -1,8 +1,13 @@
 """HTTP routes for MAIC v2.
 
-Empty in Phase 0. Populated by MAIC-301 (POST /api/maic/v2/sessions/)
-and Phase 4's MAIC-428 (POST /api/maic/v2/generate/).
+Mounted into the project URL config under /api/maic/v2/.
 """
 from django.urls import path
 
-urlpatterns: list = []
+from .views import MaicSessionCreateView
+
+app_name = "maic_v2"
+
+urlpatterns = [
+    path("sessions/", MaicSessionCreateView.as_view(), name="session-create"),
+]

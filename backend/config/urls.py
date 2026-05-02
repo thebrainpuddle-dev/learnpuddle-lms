@@ -44,6 +44,9 @@ _api_patterns = [
     path('', include('apps.users.admin_urls')),
     path('courses/', include('apps.courses.urls')),
     path('', include('apps.courses.group_urls')),
+    # MAIC v2 sessions endpoint (Phase 1 MAIC-301).  WS routes are
+    # mounted separately in config/asgi.py via apps.maic.routing.
+    path('maic/v2/', include('apps.maic.urls', namespace='maic_v2')),
     # Content versioning (TASK-048) — admin-only revisions/restore endpoints.
     path('admin/', include('apps.courses.versioning_urls')),
     # SCORM 1.2 export (TASK-052) — admin-only export endpoints.
