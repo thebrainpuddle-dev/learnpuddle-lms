@@ -121,5 +121,19 @@ google-auth-oauthlib>=1.2
 google-api-python-client>=2.120
 msal>=1.28
 
+# AI Classroom (MAIC v2). See:
+#   docs/AI_CLASSROOM_BLUEPRINT.md
+#   obsidian-vault/agent-hq/projects/learnpuddle-lms/maic-rebuild/00-MAP.md
+# Versions verified 2026-05-02 against PyPI (langgraph 1.1.10 latest;
+# langchain-anthropic 1.0.0 and langchain-openai 1.2.1 both require
+# langchain-core>=1.3.2,<2). Activated only when MAIC_V2_ENABLED=true.
+# urllib3 floor-pin above (>=2,<3) MUST hold — verify after install.
+langgraph>=1.1.10,<2
+langchain-core>=1.3.2,<2
+langchain-anthropic>=1.0.0,<2
+langchain-openai>=1.2.1,<2
+litellm>=1.50,<2
+json-repair>=0.30,<1
+
 # Dev dependencies moved to requirements-dev.txt
 # Install with: pip install -r requirements-dev.txt

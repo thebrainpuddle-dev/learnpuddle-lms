@@ -16,6 +16,13 @@ pytest==7.4.4
 pytest-django==4.7.0
 pytest-cov==4.1.0
 
+# MAIC v2 testing — async LangGraph nodes + WebSocket consumers + httpx mocks
+# (existing V1 async tests use asgiref.sync.async_to_sync; MAIC v2
+# standardizes on pytest-asyncio for new tests — see
+# obsidian-vault/.../maic-rebuild/phase-0-foundation/READINESS-AUDIT.md §Issue-2)
+pytest-asyncio>=0.24,<1
+respx>=0.21,<1
+
 # Security auditing
 pip-audit
 
