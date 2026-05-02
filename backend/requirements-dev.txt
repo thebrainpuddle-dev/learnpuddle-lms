@@ -20,7 +20,10 @@ pytest-cov==4.1.0
 # (existing V1 async tests use asgiref.sync.async_to_sync; MAIC v2
 # standardizes on pytest-asyncio for new tests — see
 # obsidian-vault/.../maic-rebuild/phase-0-foundation/READINESS-AUDIT.md §Issue-2)
-pytest-asyncio>=0.24,<1
+# Pinned to 0.23.x (the last series compatible with pytest==7.4.4 above);
+# 0.24+ requires pytest>=8.2, which would force a project-wide pytest
+# upgrade and is out of scope for Phase 0.
+pytest-asyncio>=0.23,<0.24
 respx>=0.21,<1
 
 # Security auditing
