@@ -48,6 +48,7 @@ const WB_DELETE_MS = 300;  // upstream:645
 const WB_CLEAR_BASE_MS = 380;
 const WB_CLEAR_PER_ELEMENT_MS = 55;
 const WB_CLEAR_CAP_MS = 1400;
+const WB_DRAW_COMPONENT_MS = 800;  // upstream:371,396,512,545 — fade-in for text/shape/line/table
 
 
 // ── Options ────────────────────────────────────────────────────────
@@ -112,18 +113,25 @@ export class ActionEngine {
         await this.executeWbDelete(action.elementId);
         return;
 
-      // The remaining wb_draw_* + wb_edit_code land in MAIC-211.2 →
-      // MAIC-214.2.  For now they fall through to the safe-resolve
-      // branch below (logged at debug; playback engine still advances).
+      // Component-only renderers — MAIC-211.2 (text/shape/line/table).
+      // The handler adds the action to the registry and waits for the
+      // upstream fade-in (800 ms — engine.ts:371, 396, 512, 545).
       case 'wb_draw_text':
       case 'wb_draw_shape':
+      case 'wb_draw_line':
+      case 'wb_draw_table':
+        await this.executeWbDrawComponent(action);
+        return;
+
+      // Lib-dependent renderers + line-level edits land in MAIC-212 /
+      // 213 / 214.x. For now they resolve immediately so the playback
+      // loop advances; the action still flows through the registry
+      // once those handlers ship.
       case 'wb_draw_chart':
       case 'wb_draw_latex':
-      case 'wb_draw_table':
-      case 'wb_draw_line':
       case 'wb_draw_code':
       case 'wb_edit_code':
-        // DEFERRED: renderer hand-off — MAIC-211.2 / 212 / 213 / 214.x
+        // DEFERRED: renderer hand-off — MAIC-212 / 213 / 214.x
         return;
 
       // Phase 6 deferrals — left as no-ops with a debug log.
@@ -184,6 +192,31 @@ export class ActionEngine {
     }
     this.whiteboard.deleteElement(elementId);
     await this.delay(WB_DELETE_MS);
+  }
+
+  /**
+   * Add a component-only element (text / shape / line / table) to the
+   * registry and wait for the upstream fade-in. Mirrors upstream
+   * engine.ts:341-371 (text), 373-397 (shape), 459-513 (table),
+   * 515-546 (line) — all share the same 800 ms post-add wait.
+   *
+   * The action itself is the "element" stored in the registry; the
+   * Whiteboard's switch on element.type routes to the right renderer.
+   */
+  private async executeWbDrawComponent(
+    action: Action & {
+      type: 'wb_draw_text' | 'wb_draw_shape' | 'wb_draw_line' | 'wb_draw_table';
+    },
+  ): Promise<void> {
+    if (!this.whiteboard) {
+      console.warn(`[ActionEngine] ${action.type}: no whiteboard controller — skipping`);
+      await this.delay(WB_DRAW_COMPONENT_MS);
+      return;
+    }
+    // The action is already typed as a WhiteboardElement-compatible
+    // shape (the WhiteboardElement union mirrors these action types).
+    this.whiteboard.addElement(action as unknown as WhiteboardElement);
+    await this.delay(WB_DRAW_COMPONENT_MS);
   }
 
   /**

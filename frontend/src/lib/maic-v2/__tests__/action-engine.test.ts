@@ -186,12 +186,82 @@ describe('ActionEngine — without controller', () => {
 // ── Deferred actions still resolve ─────────────────────────────────
 
 
+describe('ActionEngine — wb_draw_* component renderers (211.2)', () => {
+  test('wb_draw_text adds element + waits 800 ms', async () => {
+    const ctl = makeController();
+    const { delay, recorded } = recordingDelay();
+    const engine = new ActionEngine({ whiteboard: ctl, delay });
+    const action: Action = { id: 'a1', type: 'wb_draw_text', content: 'hi', x: 0, y: 0 };
+
+    await engine.execute(action);
+
+    expect(ctl.calls).toEqual([{ method: 'addElement', args: [action] }]);
+    expect(recorded).toEqual([800]);
+  });
+
+  test('wb_draw_shape adds element + waits 800 ms', async () => {
+    const ctl = makeController();
+    const { delay, recorded } = recordingDelay();
+    const engine = new ActionEngine({ whiteboard: ctl, delay });
+    const action: Action = {
+      id: 'a1', type: 'wb_draw_shape', shape: 'rectangle',
+      x: 0, y: 0, width: 100, height: 50,
+    };
+
+    await engine.execute(action);
+
+    expect(ctl.calls).toEqual([{ method: 'addElement', args: [action] }]);
+    expect(recorded).toEqual([800]);
+  });
+
+  test('wb_draw_line adds element + waits 800 ms', async () => {
+    const ctl = makeController();
+    const { delay, recorded } = recordingDelay();
+    const engine = new ActionEngine({ whiteboard: ctl, delay });
+    const action: Action = {
+      id: 'a1', type: 'wb_draw_line', startX: 0, startY: 0, endX: 100, endY: 100,
+    };
+
+    await engine.execute(action);
+
+    expect(ctl.calls).toEqual([{ method: 'addElement', args: [action] }]);
+    expect(recorded).toEqual([800]);
+  });
+
+  test('wb_draw_table adds element + waits 800 ms', async () => {
+    const ctl = makeController();
+    const { delay, recorded } = recordingDelay();
+    const engine = new ActionEngine({ whiteboard: ctl, delay });
+    const action: Action = {
+      id: 'a1', type: 'wb_draw_table',
+      x: 0, y: 0, width: 200, height: 100,
+      data: [['a', 'b'], ['1', '2']],
+    };
+
+    await engine.execute(action);
+
+    expect(ctl.calls).toEqual([{ method: 'addElement', args: [action] }]);
+    expect(recorded).toEqual([800]);
+  });
+
+  test('wb_draw_text without controller warns + still waits', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { delay, recorded } = recordingDelay();
+    const engine = new ActionEngine({ delay });
+
+    await engine.execute({ id: '1', type: 'wb_draw_text', content: 'x', x: 0, y: 0 });
+
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('wb_draw_text'));
+    expect(recorded).toEqual([800]);
+    warnSpy.mockRestore();
+  });
+});
+
+
 describe('ActionEngine — deferred actions resolve immediately', () => {
-  test('wb_draw_* actions resolve without renderer (Phase 2 later sub-chunks fill these)', async () => {
+  test('wb_draw_chart/latex/code + wb_edit_code resolve without renderer (MAIC-212/213/214)', async () => {
     const engine = new ActionEngine({ delay: noDelay() });
     const drawActions: Action[] = [
-      { id: '1', type: 'wb_draw_text', content: 'x', x: 0, y: 0 },
-      { id: '2', type: 'wb_draw_shape', shape: 'rectangle', x: 0, y: 0, width: 1, height: 1 },
       {
         id: '3',
         type: 'wb_draw_chart',
@@ -200,8 +270,6 @@ describe('ActionEngine — deferred actions resolve immediately', () => {
         data: { labels: [], legends: [], series: [] },
       },
       { id: '4', type: 'wb_draw_latex', latex: 'x', x: 0, y: 0 },
-      { id: '5', type: 'wb_draw_table', x: 0, y: 0, width: 100, height: 50, data: [['a']] },
-      { id: '6', type: 'wb_draw_line', startX: 0, startY: 0, endX: 1, endY: 1 },
       { id: '7', type: 'wb_draw_code', language: 'js', code: 'x', x: 0, y: 0 },
       {
         id: '8',
