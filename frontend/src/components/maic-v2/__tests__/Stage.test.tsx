@@ -305,6 +305,89 @@ describe('Stage — engine auto-construction after agent_end', () => {
 });
 
 
+describe('Stage — MAIC-217 Whiteboard + onEffectFire wiring', () => {
+  test('mounts the Whiteboard surface (closed by default until wb_open)', () => {
+    render(
+      <Stage
+        sessionId="s1"
+        baseUrl="ws://test"
+        actionEngineOptions={FAST_ACTION_ENGINE}
+      />,
+    );
+    // Whiteboard is closed initially → renders nothing in the DOM.
+    expect(screen.queryByTestId('maic-v2-whiteboard')).toBeNull();
+  });
+
+  test('Stage exposes data-active-effect=none when no spotlight/laser fired', () => {
+    render(
+      <Stage
+        sessionId="s1"
+        baseUrl="ws://test"
+        actionEngineOptions={FAST_ACTION_ENGINE}
+      />,
+    );
+    expect(screen.getByTestId('maic-v2-stage')).toHaveAttribute(
+      'data-active-effect',
+      'none',
+    );
+  });
+
+  test('mounts WhiteboardProvider — children can read state via the hook', async () => {
+    // Driving an actual wb_open through the full pipeline requires a
+    // backend-emitted `action(wb_open)` event. We construct the minimal
+    // synthetic flow by streaming a wb_open action event directly.
+    render(
+      <Stage
+        sessionId="s1"
+        baseUrl="ws://test"
+        actionEngineOptions={FAST_ACTION_ENGINE}
+      />,
+    );
+    const ws = MockWebSocket.instances[0];
+    act(() => ws.open());
+    fireEvent.click(screen.getByTestId('maic-v2-control-start'));
+
+    // Stream a turn that includes wb_open → expect Whiteboard surface
+    // to mount once ActionEngine processes it.
+    const turnWithWbOpen = [
+      { type: 'thinking', data: { stage: 'agent_loading' } },
+      {
+        type: 'agent_start',
+        data: {
+          messageId: 'm1', agentId: 'default-1', agentName: 'AI Teacher',
+          agentAvatar: '🎓', agentColor: '#3b82f6',
+        },
+      },
+      { type: 'text_delta', data: { content: 'Opening whiteboard.', messageId: 'm1' } },
+      {
+        type: 'action',
+        data: {
+          actionId: 'a-wb-open', actionName: 'wb_open', params: {},
+          agentId: 'default-1', messageId: 'm1',
+        },
+      },
+      { type: 'agent_end', data: { messageId: 'm1', agentId: 'default-1' } },
+    ];
+    act(() => {
+      for (const ev of turnWithWbOpen) ws.receive(ev);
+    });
+
+    // Engine constructs and starts. wb_open dispatch flows through
+    // ActionEngine → controller.setOpen(true) → Whiteboard mounts.
+    // Drain microtasks so the FAST_ACTION_ENGINE delay (no-op) +
+    // PlaybackEngine's processNext chain settle.
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Whiteboard now mounted (state.isOpen=true via the controller).
+    expect(screen.getByTestId('maic-v2-whiteboard')).toBeInTheDocument();
+  });
+});
+
+
 describe('Stage — error surfacing', () => {
   test('renders the lastError line when an error frame arrives', () => {
     render(<Stage sessionId="s1" baseUrl="ws://test" />);
