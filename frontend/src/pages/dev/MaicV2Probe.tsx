@@ -12,8 +12,18 @@ import { useEffect, useState } from 'react';
 import { useMaicClassroomChannelV2 } from '../../hooks/useMaicClassroomChannelV2';
 import { Stage } from '../../components/maic-v2/Stage';
 import { useAuthStore } from '../../stores/authStore';
+import Phase2StaticDemo from './Phase2StaticDemo';
 
 export default function MaicV2Probe() {
+  // Dev sub-routes via ?scene= query param. phase2-static bypasses
+  // the WS round-trip + auth entirely — useful for stress-testing the
+  // renderers in a real browser without needing the backend.
+  const sceneParam =
+    typeof window !== 'undefined'
+      ? new URLSearchParams(window.location.search).get('scene')
+      : null;
+  const isStaticDemo = sceneParam === 'phase2-static';
+
   const [sessionId] = useState(() => `dev-${Math.random().toString(36).slice(2, 10)}`);
   const accessToken = useAuthStore((s) => s.accessToken);
   const [tokenReady, setTokenReady] = useState<boolean>(!!accessToken);
@@ -23,6 +33,10 @@ export default function MaicV2Probe() {
   // of these three is sufficient.  Production builds never set the env
   // var, so this short-circuit is dev-only by construction.
   useEffect(() => {
+    // Static demo bypasses Stage entirely — skip token injection so
+    // the App's tenant-config/auth-me side effects never fire and
+    // can't 401-cascade us to /login.
+    if (isStaticDemo) return;
     if (accessToken) {
       setTokenReady(true);
       return;
@@ -49,7 +63,7 @@ export default function MaicV2Probe() {
       } as never);
       setTokenReady(true);
     }
-  }, [accessToken]);
+  }, [accessToken, isStaticDemo]);
 
   // Raw event log — second WS connection so the Stage's hook owns its
   // own state.  Cheap (one extra WS, dev-only).
@@ -57,6 +71,10 @@ export default function MaicV2Probe() {
     sessionId: `${sessionId}-log`,
     autoConnect: false,  // probe panel is observation-only; Stage drives the real session
   });
+
+  if (isStaticDemo) {
+    return <Phase2StaticDemo />;
+  }
 
   return (
     <div style={{ fontFamily: 'system-ui, sans-serif', padding: 24, maxWidth: 1024 }}>
