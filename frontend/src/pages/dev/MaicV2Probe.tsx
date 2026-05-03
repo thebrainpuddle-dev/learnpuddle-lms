@@ -8,12 +8,48 @@
  *
  * Routed in MAIC-007 behind featureFlags.maicV2Enabled at /dev/maic-v2.
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMaicClassroomChannelV2 } from '../../hooks/useMaicClassroomChannelV2';
 import { Stage } from '../../components/maic-v2/Stage';
+import { useAuthStore } from '../../stores/authStore';
 
 export default function MaicV2Probe() {
   const [sessionId] = useState(() => `dev-${Math.random().toString(36).slice(2, 10)}`);
+  const accessToken = useAuthStore((s) => s.accessToken);
+  const [tokenReady, setTokenReady] = useState<boolean>(!!accessToken);
+
+  // Dev convenience: pull a JWT from (in order) the existing auth store,
+  // a `?token=<jwt>` URL param, or the VITE_MAIC_DEV_TOKEN env var.  Any
+  // of these three is sufficient.  Production builds never set the env
+  // var, so this short-circuit is dev-only by construction.
+  useEffect(() => {
+    if (accessToken) {
+      setTokenReady(true);
+      return;
+    }
+    const params = new URLSearchParams(window.location.search);
+    const t = params.get('token') || (import.meta.env.VITE_MAIC_DEV_TOKEN as string | undefined);
+    if (t) {
+      const refresh = params.get('refresh') || t;
+      // Axios reads access_token directly from sessionStorage/localStorage
+      // via getAccessToken(); without this write the response interceptor
+      // would 401 → terminateSession() → /login redirect.
+      try {
+        sessionStorage.setItem('access_token', t);
+        sessionStorage.setItem('refresh_token', refresh);
+        sessionStorage.setItem('tenant_subdomain', 'dev');
+        localStorage.setItem('access_token', t);
+        localStorage.setItem('refresh_token', refresh);
+        localStorage.setItem('tenant_subdomain', 'dev');
+      } catch { /* storage may be disabled in some sandboxes */ }
+      useAuthStore.setState({
+        accessToken: t,
+        refreshToken: refresh,
+        isAuthenticated: true,
+      } as never);
+      setTokenReady(true);
+    }
+  }, [accessToken]);
 
   // Raw event log — second WS connection so the Stage's hook owns its
   // own state.  Cheap (one extra WS, dev-only).
@@ -30,7 +66,14 @@ export default function MaicV2Probe() {
         {closeCode !== null && <span style={{ marginLeft: 8 }}>(close: {closeCode})</span>}
       </div>
 
-      <Stage sessionId={sessionId} />
+      {tokenReady ? (
+        <Stage sessionId={sessionId} />
+      ) : (
+        <div style={{ padding: 16, border: '1px dashed #999', borderRadius: 8, background: '#fff8e1' }}>
+          <b>No auth token.</b> Append <code>?token=&lt;jwt&gt;</code> to the URL or log in via the
+          regular flow first. The Stage WebSocket needs a Bearer token in the subprotocol.
+        </div>
+      )}
 
       <details style={{ marginTop: 24 }}>
         <summary style={{ cursor: 'pointer', fontSize: 13, color: '#666' }}>
