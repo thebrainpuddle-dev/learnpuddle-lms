@@ -110,6 +110,20 @@ npm run e2e                             # playwright (config: playwright.config.
 
 CI runs both; deploy on push to `develop` (staging) and `main` (prod). Workflows: `.github/workflows/{ci,e2e}.yml`.
 
+## Hard rule — production-real only (no mocks, no fakes, no synthetic shortcuts)
+
+**This is a SaaS product, not a vibe-coded prototype.** Tests, demos, and dev probes must exercise the real production code path end-to-end. Specifically:
+
+1. **No mocks of internal libraries** in `setupTests.ts` or anywhere else. If `lowlight`, `katex`, `recharts`, or any production dep doesn't run cleanly in jsdom/happy-dom, **find a way to make it run for real** (un-mock it, run the test in Playwright/real browser, or skip the test entirely with a TODO pointing to the e2e that covers it). Do **NOT** mock the dep just to make a unit test pass.
+2. **No synthetic data shortcuts.** When a feature plays audio, sync agent state with audio, generate lessons via real LangGraph + edge_tts, etc. — the test must drive the real pipeline. Hand-crafting fixtures is fine for *input* (e.g., a hand-built scene), but the *processing* must be production code.
+3. **No fake timers, fake delays, fake network.** If a test needs to wait 2 s for `wb_open`, the test waits 2 s (or runs as an e2e where waiting is acceptable). Don't inject a `delay: () => Promise.resolve()` to "skip" production timing — that hides bugs.
+4. **No fake audio.** Audio is part of the product. Tests that touch audio playback run in Playwright with real Chromium.
+5. **No fake WebSockets.** WS tests run against a real `daphne` + real LangGraph + real `edge_tts`. Phase 1's live-smoke at the close of the phase is the model: real backend, real WS, real audio, in a real browser.
+6. **Test doubles are allowed only for I/O at the system boundary that can't physically run** in the test environment (e.g., a third-party HTTP service that's not deployed in dev). Even then, prefer recording a real response and replaying it (VCR-style) over hand-rolling a stub.
+7. **Demos = real product.** The `/dev/maic-v2` probe page and any demo route must drive the real LangGraph + real edge_tts + real audio. Static demos are acceptable ONLY as a real-browser regression smoke (real renderers + hand-crafted state), not as a substitute for the live playback flow.
+
+If a test can't run real, it doesn't ship in unit-test form — it becomes a Playwright e2e or a documented manual-QA step. Accountability matters: the user inspects this and reviews PRs against this rule.
+
 ## Conventions you MUST respect
 
 1. **Multi-tenancy is a security boundary.** Models use `TenantManager` which auto-filters via thread-local set in `utils/tenant_middleware.py`. Never call `.objects.all_tenants()` casually — it bypasses isolation.
