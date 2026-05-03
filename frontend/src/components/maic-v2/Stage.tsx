@@ -35,7 +35,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { ActionEngine } from '../../lib/maic-v2/action-engine';
+import { ActionEngine, type ActionEngineOptions } from '../../lib/maic-v2/action-engine';
 import { AudioPlayer } from '../../lib/maic-v2/audio-player';
 import {
   PlaybackEngine,
@@ -57,10 +57,22 @@ export interface StageProps {
   baseUrl?: string;
   /** Default true; set false to gate WS open behind a parent flag. */
   autoConnect?: boolean;
+  /**
+   * Test-only injection point for the ActionEngine constructor — most
+   * notably `delay`, which Stage tests pass as `() => Promise.resolve()`
+   * to skip the 2 s wb_open spring-in. Production callers leave this
+   * unset and get the real setTimeout-based delay.
+   */
+  actionEngineOptions?: ActionEngineOptions;
 }
 
 
-export function Stage({ sessionId, baseUrl, autoConnect = true }: StageProps) {
+export function Stage({
+  sessionId,
+  baseUrl,
+  autoConnect = true,
+  actionEngineOptions,
+}: StageProps) {
   // ── Channel + buffered state ───────────────────────────────────
   const { status: channelStatus, events, send } = useMaicClassroomChannelV2({
     sessionId,
@@ -89,7 +101,7 @@ export function Stage({ sessionId, baseUrl, autoConnect = true }: StageProps) {
   // Initialise singleton dependencies once.
   useEffect(() => {
     if (!audioPlayerRef.current) audioPlayerRef.current = new AudioPlayer();
-    if (!actionEngineRef.current) actionEngineRef.current = new ActionEngine();
+    if (!actionEngineRef.current) actionEngineRef.current = new ActionEngine(actionEngineOptions);
     return () => {
       audioPlayerRef.current?.destroy();
       audioPlayerRef.current = null;

@@ -226,9 +226,22 @@ describe('Stage — buffered render', () => {
 });
 
 
+// MAIC-211.1 introduced real wb_* lifecycle waits in ActionEngine
+// (wb_open: 2000 ms spring-in). Stage tests pass a no-op delay via the
+// actionEngineOptions prop so the auto-constructed engine doesn't stall
+// the turn for two seconds. Production callers leave the prop unset
+// and get the real setTimeout-based delay.
+const FAST_ACTION_ENGINE = { delay: () => Promise.resolve() };
+
 describe('Stage — engine auto-construction after agent_end', () => {
   test('drives the full Phase-1 turn end-to-end (Start → buffered → engine plays)', async () => {
-    const { container } = render(<Stage sessionId="s1" baseUrl="ws://test" />);
+    const { container } = render(
+      <Stage
+        sessionId="s1"
+        baseUrl="ws://test"
+        actionEngineOptions={FAST_ACTION_ENGINE}
+      />,
+    );
     const ws = MockWebSocket.instances[0];
     act(() => ws.open());
 
@@ -263,7 +276,13 @@ describe('Stage — engine auto-construction after agent_end', () => {
   });
 
   test('Stop tears down the engine and returns to idle', async () => {
-    render(<Stage sessionId="s1" baseUrl="ws://test" />);
+    render(
+      <Stage
+        sessionId="s1"
+        baseUrl="ws://test"
+        actionEngineOptions={FAST_ACTION_ENGINE}
+      />,
+    );
     const ws = MockWebSocket.instances[0];
     act(() => ws.open());
     fireEvent.click(screen.getByTestId('maic-v2-control-start'));

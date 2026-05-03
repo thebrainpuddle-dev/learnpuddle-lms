@@ -78,7 +78,11 @@ function makeEngine(
   player?: FakeAudioPlayer,
 ): { engine: PlaybackEngine; player: FakeAudioPlayer; engineActions: ActionEngine } {
   const audioPlayer = player ?? new FakeAudioPlayer();
-  const engineActions = new ActionEngine();
+  // No-op delay so the wb_* lifecycle handlers (MAIC-211.1) don't
+  // stall tests for 2000ms+ on each wb_open. PlaybackEngine tests
+  // don't care about whiteboard state — only that ActionEngine.execute
+  // resolves so the playback loop advances.
+  const engineActions = new ActionEngine({ delay: () => Promise.resolve() });
   const engine = new PlaybackEngine(scenes, engineActions, audioPlayer, callbacks);
   return { engine, player: audioPlayer, engineActions };
 }

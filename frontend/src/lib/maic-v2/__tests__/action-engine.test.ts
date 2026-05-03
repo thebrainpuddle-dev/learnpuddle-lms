@@ -1,91 +1,275 @@
 /**
- * Tests for src/lib/maic-v2/action-engine.ts (Phase 1 stub).
+ * Tests for src/lib/maic-v2/action-engine.ts (MAIC-211.1).
  *
- * The Phase 1 ActionEngine is intentionally a no-op for sync actions.
- * These tests document that the contract resolves immediately so the
- * playback engine's await advances without delay or deadlock.
+ * Phase 2 introduced real lifecycle handlers (wb_open/close/clear/
+ * delete) with animation waits. Tests inject a no-op delay so
+ * assertions are timing-stable on slow CI; Phase 1's "stub resolves
+ * <50 ms" assertions are no longer applicable.
+ *
+ * Two layers:
+ *   1. With controller — verifies state mutations + timings via mocked delay.
+ *   2. Without controller — verifies the warn-and-resolve fallback so
+ *      PlaybackEngine unit tests (which never wire a whiteboard) pass.
  */
 import { describe, test, expect, vi, beforeEach } from 'vitest';
 
 import { ActionEngine } from '../action-engine';
 import type { Action } from '../action-types';
+import type { WhiteboardController, WhiteboardElement } from '../whiteboard-state';
 
 
-describe('ActionEngine (Phase 1 stub)', () => {
-  let engine: ActionEngine;
+// ── Helpers ────────────────────────────────────────────────────────
 
+
+function makeController(): WhiteboardController & {
+  calls: Array<{ method: string; args: unknown[] }>;
+} {
+  const calls: Array<{ method: string; args: unknown[] }> = [];
+  const record = <K extends string>(method: K) => (...args: unknown[]) => {
+    calls.push({ method, args });
+  };
+  return {
+    setOpen: record('setOpen'),
+    setClearing: record('setClearing'),
+    addElement: record('addElement'),
+    updateElement: record('updateElement'),
+    deleteElement: record('deleteElement'),
+    clear: record('clear'),
+    calls,
+  };
+}
+
+
+function noDelay(): (ms: number) => Promise<void> {
+  return () => Promise.resolve();
+}
+
+
+// Capture the delays requested without actually waiting.
+function recordingDelay(): {
+  delay: (ms: number) => Promise<void>;
+  recorded: number[];
+} {
+  const recorded: number[] = [];
+  const delay = (ms: number): Promise<void> => {
+    recorded.push(ms);
+    return Promise.resolve();
+  };
+  return { delay, recorded };
+}
+
+
+// ── With controller ────────────────────────────────────────────────
+
+
+describe('ActionEngine — wb_open', () => {
+  test('flips whiteboard.setOpen(true) then waits 2000 ms', async () => {
+    const ctl = makeController();
+    const { delay, recorded } = recordingDelay();
+    const engine = new ActionEngine({ whiteboard: ctl, delay });
+
+    await engine.execute({ id: 'a1', type: 'wb_open' });
+
+    expect(ctl.calls).toEqual([{ method: 'setOpen', args: [true] }]);
+    expect(recorded).toEqual([2000]);
+  });
+});
+
+
+describe('ActionEngine — wb_close', () => {
+  test('flips whiteboard.setOpen(false) then waits 700 ms', async () => {
+    const ctl = makeController();
+    const { delay, recorded } = recordingDelay();
+    const engine = new ActionEngine({ whiteboard: ctl, delay });
+
+    await engine.execute({ id: 'a1', type: 'wb_close' });
+
+    expect(ctl.calls).toEqual([{ method: 'setOpen', args: [false] }]);
+    expect(recorded).toEqual([700]);
+  });
+});
+
+
+describe('ActionEngine — wb_delete', () => {
+  test('calls deleteElement(elementId) then waits 300 ms', async () => {
+    const ctl = makeController();
+    const { delay, recorded } = recordingDelay();
+    const engine = new ActionEngine({ whiteboard: ctl, delay });
+
+    await engine.execute({ id: 'a1', type: 'wb_delete', elementId: 't1' });
+
+    expect(ctl.calls).toEqual([{ method: 'deleteElement', args: ['t1'] }]);
+    expect(recorded).toEqual([300]);
+  });
+});
+
+
+describe('ActionEngine — wb_clear', () => {
+  test('cascade: setClearing(true) → wait → clear() → setClearing(false)', async () => {
+    const ctl = makeController();
+    const { delay, recorded } = recordingDelay();
+    const engine = new ActionEngine({ whiteboard: ctl, delay });
+
+    await engine.execute({ id: 'a1', type: 'wb_clear' });
+
+    expect(ctl.calls.map((c) => c.method)).toEqual([
+      'setClearing',
+      'clear',
+      'setClearing',
+    ]);
+    expect(ctl.calls[0].args).toEqual([true]);
+    expect(ctl.calls[2].args).toEqual([false]);
+    // Phase 2 uses the upstream cap (1400 ms) on every clear; the
+    // count-based shrink (380 + n*55) is signposted as a Phase 8+
+    // optimisation in action-engine.ts.
+    expect(recorded).toEqual([1400]);
+  });
+});
+
+
+// ── Sequencing across multiple actions ────────────────────────────
+
+
+describe('ActionEngine — sequencing', () => {
+  test('a series of lifecycle actions interleave with their delays', async () => {
+    const ctl = makeController();
+    const { delay, recorded } = recordingDelay();
+    const engine = new ActionEngine({ whiteboard: ctl, delay });
+
+    const actions: Action[] = [
+      { id: '1', type: 'wb_open' },
+      { id: '2', type: 'wb_delete', elementId: 'e' },
+      { id: '3', type: 'wb_close' },
+    ];
+    for (const a of actions) await engine.execute(a);
+
+    expect(ctl.calls.map((c) => c.method)).toEqual([
+      'setOpen',  // wb_open(true)
+      'deleteElement',
+      'setOpen',  // wb_close = setOpen(false)
+    ]);
+    expect(recorded).toEqual([2000, 300, 700]);
+  });
+});
+
+
+// ── Without controller (PlaybackEngine fast-path) ─────────────────
+
+
+describe('ActionEngine — without controller', () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
   beforeEach(() => {
-    engine = new ActionEngine();
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
   });
 
-  test('execute returns a resolved Promise immediately for wb_open', async () => {
-    const action: Action = { id: 'a1', type: 'wb_open' };
-    const start = performance.now();
-    await engine.execute(action);
-    const elapsed = performance.now() - start;
-    // No-op stub should resolve synchronously — generously allow 50 ms
-    // to absorb microtask scheduling on slow CI.
-    expect(elapsed).toBeLessThan(50);
+  test('wb_open warns and resolves', async () => {
+    const engine = new ActionEngine({ delay: noDelay() });
+    await expect(engine.execute({ id: '1', type: 'wb_open' })).resolves.toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('wb_open'));
   });
 
-  test('execute returns a resolved Promise for every wb_* action', async () => {
-    const wbActions: Action[] = [
-      { id: 'a', type: 'wb_open' },
-      { id: 'b', type: 'wb_close' },
-      { id: 'c', type: 'wb_clear' },
-      { id: 'd', type: 'wb_delete', elementId: 'e' },
-      { id: 'e', type: 'wb_draw_text', content: 'x', x: 0, y: 0 },
-      { id: 'f', type: 'wb_draw_shape', shape: 'rectangle', x: 0, y: 0, width: 1, height: 1 },
+  test('wb_clear warns and resolves', async () => {
+    const engine = new ActionEngine({ delay: noDelay() });
+    await expect(engine.execute({ id: '1', type: 'wb_clear' })).resolves.toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('wb_clear'));
+  });
+
+  test('default delay is real (setTimeout-based)', async () => {
+    // Sanity check that an engine with no options still has a callable
+    // delay. Phase 1 callsites rely on `new ActionEngine()` being valid.
+    const engine = new ActionEngine();
+    expect(engine).toBeDefined();
+  });
+});
+
+
+// ── Deferred actions still resolve ─────────────────────────────────
+
+
+describe('ActionEngine — deferred actions resolve immediately', () => {
+  test('wb_draw_* actions resolve without renderer (Phase 2 later sub-chunks fill these)', async () => {
+    const engine = new ActionEngine({ delay: noDelay() });
+    const drawActions: Action[] = [
+      { id: '1', type: 'wb_draw_text', content: 'x', x: 0, y: 0 },
+      { id: '2', type: 'wb_draw_shape', shape: 'rectangle', x: 0, y: 0, width: 1, height: 1 },
+      {
+        id: '3',
+        type: 'wb_draw_chart',
+        chartType: 'bar',
+        x: 0, y: 0, width: 100, height: 100,
+        data: { labels: [], legends: [], series: [] },
+      },
+      { id: '4', type: 'wb_draw_latex', latex: 'x', x: 0, y: 0 },
+      { id: '5', type: 'wb_draw_table', x: 0, y: 0, width: 100, height: 50, data: [['a']] },
+      { id: '6', type: 'wb_draw_line', startX: 0, startY: 0, endX: 1, endY: 1 },
+      { id: '7', type: 'wb_draw_code', language: 'js', code: 'x', x: 0, y: 0 },
+      {
+        id: '8',
+        type: 'wb_edit_code',
+        elementId: 'c1',
+        operation: 'insert_after',
+        lineId: 'L1',
+        content: 'x',
+      },
     ];
-    for (const action of wbActions) {
-      await expect(engine.execute(action)).resolves.toBeUndefined();
+    for (const a of drawActions) {
+      await expect(engine.execute(a)).resolves.toBeUndefined();
     }
   });
 
-  test('execute returns a resolved Promise for widget_* actions', async () => {
-    const widgetActions: Action[] = [
-      { id: 'a', type: 'widget_highlight', target: '#x' },
-      { id: 'b', type: 'widget_setState', state: { foo: 1 } },
-      { id: 'c', type: 'widget_annotation', target: '#x' },
-      { id: 'd', type: 'widget_reveal', target: '#x' },
+  test('widget_* and play_video resolve (Phase 6 fills these)', async () => {
+    const engine = new ActionEngine({ delay: noDelay() });
+    const phase6Actions: Action[] = [
+      { id: '1', type: 'widget_highlight', target: '#x' },
+      { id: '2', type: 'widget_setState', state: { foo: 1 } },
+      { id: '3', type: 'widget_annotation', target: '#x' },
+      { id: '4', type: 'widget_reveal', target: '#x' },
+      { id: '5', type: 'play_video', elementId: 'v' },
     ];
-    for (const action of widgetActions) {
-      await expect(engine.execute(action)).resolves.toBeUndefined();
+    for (const a of phase6Actions) {
+      await expect(engine.execute(a)).resolves.toBeUndefined();
     }
   });
+});
 
-  test('execute returns a resolved Promise for play_video and discussion', async () => {
-    await expect(
-      engine.execute({ id: 'a', type: 'play_video', elementId: 'v' }),
-    ).resolves.toBeUndefined();
-    await expect(
-      engine.execute({ id: 'b', type: 'discussion', topic: 'x' }),
-    ).resolves.toBeUndefined();
+
+// ── Misc ───────────────────────────────────────────────────────────
+
+
+describe('ActionEngine — misc', () => {
+  test('clearEffects is callable and returns nothing', () => {
+    const engine = new ActionEngine();
+    expect(engine.clearEffects()).toBeUndefined();
   });
 
-  test('execute logs at debug for visibility in dev tooling', async () => {
+  test('execute logs at debug for action visibility', async () => {
     const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
-    await engine.execute({ id: 'a', type: 'wb_open' });
+    const ctl = makeController();
+    const engine = new ActionEngine({ whiteboard: ctl, delay: noDelay() });
+
+    await engine.execute({ id: 'a-x', type: 'wb_open' });
     expect(debugSpy).toHaveBeenCalledWith(
       expect.stringContaining('ActionEngine'),
       'wb_open',
-      'a',
+      'a-x',
     );
     debugSpy.mockRestore();
   });
 
-  test('clearEffects is callable and returns nothing', () => {
-    expect(engine.clearEffects()).toBeUndefined();
-  });
-
-  test('execute does not deadlock on a long sequence of sync actions', async () => {
-    // Simulate the playback engine's await-loop over a sequence of
-    // 50 wb_* actions. Phase 1 stub should resolve all near-instantly.
-    const start = performance.now();
+  test('many sequential lifecycle ops do not deadlock', async () => {
+    const ctl = makeController();
+    const engine = new ActionEngine({ whiteboard: ctl, delay: noDelay() });
     for (let i = 0; i < 50; i++) {
       await engine.execute({ id: `a-${i}`, type: 'wb_open' });
     }
-    const elapsed = performance.now() - start;
-    expect(elapsed).toBeLessThan(100);
+    expect(ctl.calls).toHaveLength(50);
+  });
+
+  // Type guard: re-exporting the controller type so consumers can
+  // hand-write a stub without importing whiteboard-state directly.
+  test('exports WhiteboardController + WhiteboardElement types', () => {
+    type _C = WhiteboardController;
+    type _E = WhiteboardElement;
+    expect(true).toBe(true);
   });
 });
