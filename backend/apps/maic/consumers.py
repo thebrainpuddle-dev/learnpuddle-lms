@@ -316,8 +316,80 @@ class ClassroomConsumer(AsyncJsonWebsocketConsumer):
             })
             return
 
+        if action == "user_message":
+            # MAIC-110.5: append the user's reply to state.messages and
+            # restart the LangGraph stream with a small live-mode
+            # budget. Used after `interrupt` to enter the live-mode
+            # discussion loop. Client flow:
+            #   start → ... → interrupt → user_message → ... → resume
+            data = content.get("data") or {}
+            text = (data.get("text") or "").strip()
+            if not text:
+                await self._safe_send_json({
+                    "type": "error",
+                    "data": {"message": "user_message requires non-empty data.text"},
+                })
+                return
+            if self._state is None:
+                await self._safe_send_json({
+                    "type": "error",
+                    "data": {"message": "user_message requires a prior start"},
+                })
+                return
+
+            # Defensive: cancel any stream still running (e.g. client
+            # forgot to interrupt first). Cleanly tears down before we
+            # mutate the shared state.
+            await self._cancel_in_flight()
+
+            self._state.setdefault("messages", []).append({
+                "role": "user",
+                "content": text,
+            })
+            # Reset director scaffolding so the next graph run treats
+            # this as a fresh routing decision, but preserve all the
+            # accumulated history (agentResponses + whiteboardLedger
+            # are reducer-merged lists — never blow them away).
+            self._state["currentAgentId"] = None
+            self._state["turnCount"] = 0
+            self._state["shouldEnd"] = False
+            # Live-mode budget: small by default (2 turns ≈ one
+            # round-trip), overridable per request.
+            self._state["maxTurns"] = int(data.get("maxTurns", 2))
+
+            self._classroom_task = asyncio.create_task(
+                self._run_classroom_stream(self._state)
+            )
+            return
+
+        if action == "resume":
+            # MAIC-110.5: restart the stream from the saved state
+            # without appending a user message. Useful for "continue
+            # the lecture from where you stopped" UX.
+            if self._state is None:
+                await self._safe_send_json({
+                    "type": "error",
+                    "data": {"message": "resume requires a prior start"},
+                })
+                return
+
+            await self._cancel_in_flight()
+
+            data = content.get("data") or {}
+            self._state["currentAgentId"] = None
+            self._state["turnCount"] = 0
+            self._state["shouldEnd"] = False
+            # Caller can override maxTurns; otherwise reuse the
+            # last-known budget so a long lecture can keep going.
+            if "maxTurns" in data:
+                self._state["maxTurns"] = int(data["maxTurns"])
+
+            self._classroom_task = asyncio.create_task(
+                self._run_classroom_stream(self._state)
+            )
+            return
+
         # Unknown action — non-fatal; future-compat for client iterations.
-        # MAIC-110.5 will add `resume` and `user_message` branches.
         logger.warning(
             "MAIC v2 WS: unknown action=%r session=%s",
             action,

@@ -615,3 +615,273 @@ async def test_interrupt_safe_at_every_event_boundary(monkeypatch, event_type):
     )
 
     await communicator.disconnect()
+
+
+# ── MAIC-110.5: user_message + resume action handlers ─────────────────
+
+
+@pytest.mark.asyncio
+@override_settings(ALLOWED_HOSTS=["*"])
+async def test_user_message_appends_to_state_and_restarts_stream(monkeypatch):
+    """`user_message` appends the user's text to state.messages and
+    spawns a fresh stream task. The new task must observe the
+    appended message — that's the whole point of the live-discussion
+    flow."""
+    import asyncio
+    from types import SimpleNamespace
+
+    async def _fake_call(self, scope, receive, send):
+        scope["user"] = SimpleNamespace(
+            is_anonymous=False, id=42, tenant_id=222,
+        )
+        scope["accepted_subprotocol"] = None
+        return await self.inner(scope, receive, send)
+
+    from apps.notifications.middleware import JWTAuthMiddleware
+    monkeypatch.setattr(JWTAuthMiddleware, "__call__", _fake_call)
+
+    async def _fake_resolve(session_id, user):
+        return SimpleNamespace(id=session_id, tenant_id=user.tenant_id), False
+
+    monkeypatch.setattr(
+        "apps.maic.consumers._resolve_or_create_session", _fake_resolve,
+    )
+
+    # Capture the state passed to each stream invocation so we can
+    # assert the user's message landed in state.messages on the
+    # *second* call (the one triggered by user_message).
+    observed_states: list[dict] = []
+
+    async def _fake_stream(initial_state):
+        observed_states.append({
+            "messages": list(initial_state.get("messages") or []),
+            "maxTurns": initial_state.get("maxTurns"),
+            "turnCount": initial_state.get("turnCount"),
+        })
+        yield {"type": "agent_start", "data": {"agentId": "default-1"}}
+        await asyncio.sleep(60)
+
+    monkeypatch.setattr(
+        "apps.maic.orchestration.director_graph.stream_classroom",
+        _fake_stream,
+    )
+
+    import importlib
+    from config import asgi as asgi_mod
+    importlib.reload(asgi_mod)
+
+    communicator = WebsocketCommunicator(
+        asgi_mod.application, "/ws/maic/v2/classroom/user-msg-test/",
+    )
+    connected, _ = await communicator.connect()
+    assert connected is True
+
+    await communicator.send_json_to({
+        "action": "start",
+        "data": {
+            "agentIds": ["default-1"],
+            "maxTurns": 4,
+            "messages": [{"role": "user", "content": "what are fractions?"}],
+        },
+    })
+    first = await communicator.receive_json_from(timeout=2)
+    assert first["type"] == "agent_start"
+
+    # Interrupt then send a user message
+    await communicator.send_json_to({"action": "interrupt"})
+    await asyncio.sleep(0.05)
+
+    await communicator.send_json_to({
+        "action": "user_message",
+        "data": {"text": "what about the edge case?"},
+    })
+
+    # Second stream invocation must see the appended user message
+    second = await communicator.receive_json_from(timeout=2)
+    assert second["type"] == "agent_start"
+
+    # Two stream invocations should have been recorded
+    assert len(observed_states) == 2
+    msgs_second = observed_states[1]["messages"]
+    assert msgs_second[-1] == {
+        "role": "user",
+        "content": "what about the edge case?",
+    }
+    # Live-mode budget defaults to 2
+    assert observed_states[1]["maxTurns"] == 2
+    # turnCount reset for the fresh director run
+    assert observed_states[1]["turnCount"] == 0
+
+    await communicator.disconnect()
+
+
+@pytest.mark.asyncio
+@override_settings(ALLOWED_HOSTS=["*"])
+async def test_user_message_rejects_empty_text(monkeypatch):
+    """Sending `user_message` with no text or whitespace-only text
+    returns a wire-format error rather than appending a junk message
+    to state.messages."""
+    _make_long_stream_monkeypatches(monkeypatch)
+
+    import importlib
+    from config import asgi as asgi_mod
+    importlib.reload(asgi_mod)
+
+    communicator = WebsocketCommunicator(
+        asgi_mod.application, "/ws/maic/v2/classroom/empty-msg/",
+    )
+    connected, _ = await communicator.connect()
+    assert connected is True
+
+    # Set up state with a prior start
+    await communicator.send_json_to({
+        "action": "start",
+        "data": {"agentIds": ["default-1"], "maxTurns": 1},
+    })
+    first = await communicator.receive_json_from(timeout=2)
+    assert first["type"] == "agent_start"
+    await communicator.send_json_to({"action": "interrupt"})
+
+    # Empty text → error frame
+    await communicator.send_json_to({
+        "action": "user_message",
+        "data": {"text": "   "},
+    })
+    err = await communicator.receive_json_from(timeout=2)
+    assert err["type"] == "error"
+    assert "non-empty" in err["data"]["message"].lower()
+
+    await communicator.disconnect()
+
+
+@pytest.mark.asyncio
+@override_settings(ALLOWED_HOSTS=["*"])
+async def test_user_message_without_prior_start_returns_error(monkeypatch):
+    """`user_message` cold (no prior `start`) has nothing to resume
+    against — the consumer surfaces an error frame instead of
+    silently spawning a stream with default state."""
+    _make_long_stream_monkeypatches(monkeypatch)
+
+    import importlib
+    from config import asgi as asgi_mod
+    importlib.reload(asgi_mod)
+
+    communicator = WebsocketCommunicator(
+        asgi_mod.application, "/ws/maic/v2/classroom/cold-user-msg/",
+    )
+    connected, _ = await communicator.connect()
+    assert connected is True
+
+    await communicator.send_json_to({
+        "action": "user_message",
+        "data": {"text": "hello"},
+    })
+    err = await communicator.receive_json_from(timeout=2)
+    assert err["type"] == "error"
+    assert "prior start" in err["data"]["message"].lower()
+
+    await communicator.disconnect()
+
+
+@pytest.mark.asyncio
+@override_settings(ALLOWED_HOSTS=["*"])
+async def test_resume_restarts_stream_from_saved_state(monkeypatch):
+    """`resume` cancels any in-flight task and respawns the stream
+    with the saved state — without appending a new user message.
+    Used for the "continue lecture" UX after a stop or natural end."""
+    import asyncio
+    from types import SimpleNamespace
+
+    async def _fake_call(self, scope, receive, send):
+        scope["user"] = SimpleNamespace(
+            is_anonymous=False, id=42, tenant_id=222,
+        )
+        scope["accepted_subprotocol"] = None
+        return await self.inner(scope, receive, send)
+
+    from apps.notifications.middleware import JWTAuthMiddleware
+    monkeypatch.setattr(JWTAuthMiddleware, "__call__", _fake_call)
+
+    async def _fake_resolve(session_id, user):
+        return SimpleNamespace(id=session_id, tenant_id=user.tenant_id), False
+
+    monkeypatch.setattr(
+        "apps.maic.consumers._resolve_or_create_session", _fake_resolve,
+    )
+
+    observed_states: list[dict] = []
+
+    async def _fake_stream(initial_state):
+        observed_states.append({
+            "messages": list(initial_state.get("messages") or []),
+            "maxTurns": initial_state.get("maxTurns"),
+            "turnCount": initial_state.get("turnCount"),
+            "currentAgentId": initial_state.get("currentAgentId"),
+        })
+        yield {"type": "agent_start", "data": {"agentId": "default-1"}}
+        await asyncio.sleep(60)
+
+    monkeypatch.setattr(
+        "apps.maic.orchestration.director_graph.stream_classroom",
+        _fake_stream,
+    )
+
+    import importlib
+    from config import asgi as asgi_mod
+    importlib.reload(asgi_mod)
+
+    communicator = WebsocketCommunicator(
+        asgi_mod.application, "/ws/maic/v2/classroom/resume-test/",
+    )
+    connected, _ = await communicator.connect()
+    assert connected is True
+
+    await communicator.send_json_to({
+        "action": "start",
+        "data": {"agentIds": ["default-1"], "maxTurns": 5},
+    })
+    first = await communicator.receive_json_from(timeout=2)
+    assert first["type"] == "agent_start"
+
+    await communicator.send_json_to({"action": "interrupt"})
+    await asyncio.sleep(0.05)
+
+    await communicator.send_json_to({"action": "resume"})
+    second = await communicator.receive_json_from(timeout=2)
+    assert second["type"] == "agent_start"
+
+    assert len(observed_states) == 2
+    # No appended message — messages list is unchanged across the two runs
+    assert observed_states[0]["messages"] == observed_states[1]["messages"]
+    # maxTurns preserved from the original start
+    assert observed_states[1]["maxTurns"] == 5
+    # turnCount + currentAgentId reset for a fresh director run
+    assert observed_states[1]["turnCount"] == 0
+    assert observed_states[1]["currentAgentId"] is None
+
+    await communicator.disconnect()
+
+
+@pytest.mark.asyncio
+@override_settings(ALLOWED_HOSTS=["*"])
+async def test_resume_without_prior_start_returns_error(monkeypatch):
+    """`resume` cold has no saved state to resume from — surface an
+    error frame, don't spawn a stream with built-from-thin-air state."""
+    _make_long_stream_monkeypatches(monkeypatch)
+
+    import importlib
+    from config import asgi as asgi_mod
+    importlib.reload(asgi_mod)
+
+    communicator = WebsocketCommunicator(
+        asgi_mod.application, "/ws/maic/v2/classroom/cold-resume/",
+    )
+    connected, _ = await communicator.connect()
+    assert connected is True
+
+    await communicator.send_json_to({"action": "resume"})
+    err = await communicator.receive_json_from(timeout=2)
+    assert err["type"] == "error"
+    assert "prior start" in err["data"]["message"].lower()
+
+    await communicator.disconnect()
