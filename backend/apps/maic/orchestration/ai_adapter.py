@@ -68,6 +68,36 @@ STUB_OUTPUT: Final[str] = (
     ']'
 )
 
+# Director-stub output (Phase 3 / MAIC-104.1).  The director_node's
+# LLM call expects a JSON decision; the regular STUB_OUTPUT is shaped
+# for agent_generate. This second stub returns a deterministic
+# next_agent decision so dev runs + tests can exercise the
+# multi-agent director without burning real LLM credits. Cycles
+# through agents based on a counter so successive calls return
+# different next_agent values (lets tests verify multi-turn dispatch).
+DIRECTOR_STUB_OUTPUTS: Final[tuple[str, ...]] = (
+    '{"next_agent": "default-1"}',
+    '{"next_agent": "default-3"}',
+    '{"next_agent": "default-4"}',
+    '{"next_agent": "END"}',
+)
+_director_stub_counter = 0
+
+
+def _next_director_stub_output() -> str:
+    """Round-robin pick from DIRECTOR_STUB_OUTPUTS so back-to-back
+    calls return distinct decisions."""
+    global _director_stub_counter
+    out = DIRECTOR_STUB_OUTPUTS[_director_stub_counter % len(DIRECTOR_STUB_OUTPUTS)]
+    _director_stub_counter += 1
+    return out
+
+
+def reset_director_stub_counter() -> None:
+    """Test helper — reset the round-robin counter between tests."""
+    global _director_stub_counter
+    _director_stub_counter = 0
+
 
 def resolve_chat_model(language_model_id: str):
     """Build a langchain BaseChatModel for the given id.
@@ -173,6 +203,12 @@ async def stream_text(
     if language_model_id == "stub":
         async for chunk in _stub_stream():
             yield chunk
+        return
+
+    if language_model_id == "stub-director":
+        # Director-stub: returns a JSON decision consumable by
+        # parse_director_decision. Cycles deterministically.
+        yield _next_director_stub_output()
         return
 
     try:

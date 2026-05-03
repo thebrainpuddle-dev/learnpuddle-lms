@@ -35,6 +35,15 @@ from langgraph.types import StreamWriter
 from apps.maic.exceptions import MaicGraphError, MaicProtocolError
 from .state import OrchestratorState
 
+# Director LLM decision (MAIC-104.1). Imported at module top so tests
+# can patch the symbol cleanly; the build_director_prompt + stream_text
+# are real, no fakes per CLAUDE.md "Hard rule".
+from apps.maic.orchestration.director_prompt import (
+    DirectorDecision,
+    build_director_prompt,
+    parse_director_decision,
+)
+
 logger = logging.getLogger(__name__)
 
 # ── Wire-format constants — keep in sync with upstream lib/types/chat.ts ──
@@ -109,6 +118,172 @@ def _make_safe_writer(raw_writer: StreamWriter | None) -> StreamWriter:
                 exc_info=True,
             )
     return write
+
+
+# ── LLM-based director decision (MAIC-104.1) ──────────────────────────
+
+
+async def _director_llm_decide(state: OrchestratorState) -> DirectorDecision:
+    """Ask the LLM which agent should speak next.
+
+    Mirrors upstream lib/orchestration/director-graph.ts:153-225 — the
+    "director chooses next agent" path. Builds a director prompt from
+    state, streams the LLM response, parses the JSON decision.
+
+    On any provider failure or parse failure we return a deterministic
+    round-robin fallback (next in `availableAgentIds` after the most
+    recent agent in `agentResponses`). This keeps the loop alive even
+    when the LLM is misbehaving — the director_node caller can always
+    rely on getting a valid decision back.
+    """
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    from apps.maic.orchestration.ai_adapter import stream_text
+    from apps.maic.orchestration.registry import resolve_agent
+
+    overrides = state.get("agentConfigOverrides") or {}
+    available_ids = state.get("availableAgentIds") or []
+    agents = []
+    for agent_id in available_ids:
+        agent = resolve_agent(agent_id, overrides)
+        if agent is not None:
+            agents.append(agent)
+
+    if not agents:
+        # No agents to pick from — end the round
+        logger.warning("director_llm_decide: no resolvable agents in availableAgentIds")
+        return DirectorDecision(next_agent_id=None, should_end=True)
+
+    store_state = state.get("storeState") or {}
+    whiteboard_open = bool(store_state.get("whiteboardOpen", False))
+
+    try:
+        system_prompt = build_director_prompt(
+            agents=agents,
+            conversation_summary=_build_conversation_summary(state),
+            agent_responses=state.get("agentResponses") or [],
+            turn_count=state.get("turnCount", 0),
+            discussion_context=state.get("discussionContext"),
+            trigger_agent_id=state.get("triggerAgentId"),
+            whiteboard_ledger=state.get("whiteboardLedger"),
+            user_profile=state.get("userProfile"),
+            whiteboard_open=whiteboard_open,
+        )
+    except Exception:  # noqa: BLE001 — re-raised as fallback below
+        logger.exception("director_llm_decide: prompt build failed; falling back")
+        return _round_robin_fallback(state)
+
+    # Build LLM messages: system prompt + a tight user message asking
+    # for the JSON decision. Upstream uses a single HumanMessage prompt
+    # ("Choose the next agent.") at lib/orchestration/director-graph.ts:188.
+    messages = [
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=(
+            "Based on the rules above, decide who should speak next.\n"
+            'Reply with ONLY a JSON object: {"next_agent": "<agent_id>"} '
+            'or {"next_agent": "END"} when the round should end.'
+        )),
+    ]
+
+    language_model_id = state.get("languageModelId") or "stub"
+
+    try:
+        chunks: list[str] = []
+        async for chunk in stream_text(messages, language_model_id):
+            chunks.append(chunk)
+        full_text = "".join(chunks)
+    except Exception:  # noqa: BLE001 — provider failure → safe fallback
+        logger.exception("director_llm_decide: stream_text failed; falling back")
+        return _round_robin_fallback(state)
+
+    decision = parse_director_decision(full_text)
+
+    # If the LLM parser failed but we have agents available, fall back
+    # to round-robin instead of ending the round prematurely. parse_
+    # director_decision returns should_end=True on failure; we
+    # distinguish "parse failed" from "LLM said END" by checking whether
+    # the raw text contained the word END.
+    if decision.should_end and not _looks_like_explicit_end(full_text):
+        logger.warning(
+            "director_llm_decide: parse failed (text=%r); using round-robin",
+            full_text[:200],
+        )
+        return _round_robin_fallback(state)
+
+    # Sanity-check the chosen agent is actually in the available pool
+    if decision.next_agent_id is not None:
+        if decision.next_agent_id not in available_ids:
+            logger.warning(
+                "director_llm_decide: LLM picked %r but it's not in "
+                "availableAgentIds=%s; using round-robin",
+                decision.next_agent_id, available_ids,
+            )
+            return _round_robin_fallback(state)
+
+    return decision
+
+
+def _looks_like_explicit_end(text: str) -> bool:
+    """Heuristic: did the LLM explicitly say to end the round?
+
+    Used to distinguish "LLM said END" (decision is right; honor it)
+    from "JSON parse failed" (decision is bogus; round-robin instead).
+    """
+    if not text:
+        return False
+    lowered = text.lower()
+    # An explicit `"next_agent": "END"` string OR `"shouldEnd"` style
+    # keyword in the raw output. Conservative: if neither marker is
+    # present, treat the should_end=True as a parse failure.
+    return ('"next_agent": "end"' in lowered) or ('"shouldend": true' in lowered)
+
+
+def _round_robin_fallback(state: OrchestratorState) -> DirectorDecision:
+    """Pick the next-after-last-responder from availableAgentIds.
+
+    Deterministic, never crashes. If no agent has spoken yet, picks
+    `availableAgentIds[0]`. If the most-recent responder is the last
+    in the list, wraps to `[0]`.
+
+    On exhaustion (every agent has spoken `maxTurns / N` times — not
+    tracked precisely; fallback is a degenerate path) the caller's
+    turn-limit check in `_director_node` will end the loop.
+    """
+    available = state.get("availableAgentIds") or []
+    if not available:
+        return DirectorDecision(next_agent_id=None, should_end=True)
+
+    responses = state.get("agentResponses") or []
+    if not responses:
+        return DirectorDecision(next_agent_id=available[0], should_end=False)
+
+    last_responder = responses[-1].get("agentId")
+    if last_responder not in available:
+        return DirectorDecision(next_agent_id=available[0], should_end=False)
+
+    next_idx = (available.index(last_responder) + 1) % len(available)
+    return DirectorDecision(next_agent_id=available[next_idx], should_end=False)
+
+
+def _build_conversation_summary(state: OrchestratorState) -> str:
+    """Build a compact conversation summary for the director prompt.
+
+    Phase-3 placeholder until MAIC-109 (LLM-backed summarizer) lands —
+    for now we render the last 4 messages verbatim with role/content
+    truncation. Good enough for short sessions; long-session
+    truncation is the summarizer's job.
+    """
+    messages = state.get("messages") or []
+    if not messages:
+        return ""
+    recent = messages[-4:]
+    lines = []
+    for m in recent:
+        role = m.get("role", "?")
+        content = (m.get("content") or "")[:200]
+        if content:
+            lines.append(f"- {role}: {content}")
+    return "\n".join(lines) if lines else ""
 
 
 # ── Nodes ─────────────────────────────────────────────────────────────
