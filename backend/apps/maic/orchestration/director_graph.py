@@ -185,11 +185,19 @@ async def _director_llm_decide(state: OrchestratorState) -> DirectorDecision:
         )),
     ]
 
-    language_model_id = state.get("languageModelId") or "stub"
+    # Director gets its own model id (MAIC-104.2) so a 3-agent run
+    # can use stub-director for routing while agents use stub for
+    # generation. Falls back to languageModelId when unset (Phase-1
+    # backward compat for single-agent runs that don't set both).
+    director_model_id = (
+        state.get("directorModelId")
+        or state.get("languageModelId")
+        or "stub"
+    )
 
     try:
         chunks: list[str] = []
-        async for chunk in stream_text(messages, language_model_id):
+        async for chunk in stream_text(messages, director_model_id):
             chunks.append(chunk)
         full_text = "".join(chunks)
     except Exception:  # noqa: BLE001 — provider failure → safe fallback
@@ -295,49 +303,103 @@ async def _director_node(
 ) -> dict[str, Any]:
     """Director — chooses which agent speaks next.
 
-    Phase-1 single-agent path (this ticket, MAIC-103). Mirrors upstream
-    director-graph.ts:120-135:
+    Three branches:
 
-      - turn 0: dispatch the single available agent (or 'default-1' if
-        none provided). Emit `thinking{stage:"agent_loading", agentId}`
-        so the client can show a loading state for the right avatar.
-      - turn 1+: that agent has now responded. Emit a `cue_user` event
-        so the frontend playback engine knows to enter live mode for
-        a follow-up question, then end the graph.
-      - turnCount >= maxTurns at any time: ends without emitting (the
-        loop is exhausted; no UX signal needed). Mirrors
-        director-graph.ts:114-118.
+      1. **Turn-limit exit** (turn >= maxTurns): end without emitting.
+         The loop is exhausted; no UX signal needed. Mirrors upstream
+         director-graph.ts:114-118.
 
-    Multi-agent (LLM-based decision) lands in Phase 3, MAIC-104.
+      2. **Turn-0 fast-path** (no LLM call):
+         - If `triggerAgentId` is set in state AND in availableAgentIds
+           → that agent speaks first
+         - Else → `availableAgentIds[0]` (or 'default-1' if empty)
+         Emit `thinking{stage:"agent_loading", agentId}` and dispatch.
+         Mirrors upstream director-graph.ts:120-135.
+
+      3. **Turn-≥1 dispatch:**
+         - **Single-agent** (len(available) <= 1): preserve Phase-1
+           cue-user-then-end. Keeps the single-agent acceptance criteria
+           working without LLM cost.
+         - **Multi-agent** (len(available) > 1, MAIC-104.2): LLM
+           decides via `_director_llm_decide`. should_end → cue_user
+           and end. Else emit `thinking` for chosen agent + dispatch.
+
+    Logging is verbose at every turn boundary by design (Phase-3 plan
+    §"Highest risk: log every turn boundary so debugging is grep-able").
     """
     write = _make_safe_writer(writer)
     turn = state.get("turnCount", 0)
     max_turns = state.get("maxTurns", 1)
+    available = state.get("availableAgentIds") or []
 
-    # Turn-limit check (applies to single + multi)
+    # Branch 1: turn-limit exit
     if turn >= max_turns:
         logger.info(
-            "director: turn limit reached (%d/%d), ending",
+            "director[turn=%d/%d]: turn limit reached, ending",
             turn, max_turns,
         )
         return {"shouldEnd": True}
 
-    # Single-agent dispatch
-    available = state.get("availableAgentIds") or []
-    agent_id = available[0] if available else "default-1"
-
+    # Branch 2: turn-0 fast-path
     if turn == 0:
-        logger.info("director: dispatching single agent %r", agent_id)
+        trigger_id = state.get("triggerAgentId")
+        if trigger_id and trigger_id in available:
+            agent_id = trigger_id
+            logger.info(
+                "director[turn=0]: fast-path → trigger agent %r",
+                agent_id,
+            )
+        else:
+            agent_id = available[0] if available else "default-1"
+            logger.info(
+                "director[turn=0]: fast-path → first agent %r (no trigger)",
+                agent_id,
+            )
         write({"type": "thinking", "data": {
             "stage": "agent_loading",
             "agentId": agent_id,
         }})
         return {"currentAgentId": agent_id, "shouldEnd": False}
 
-    # Agent already responded — cue user for follow-up, then end
-    logger.info("director: cueing user after %r", agent_id)
-    write({"type": "cue_user", "data": {"fromAgentId": agent_id}})
-    return {"shouldEnd": True}
+    # Branch 3a: single-agent — preserve Phase-1 cue-user-then-end
+    if len(available) <= 1:
+        last_agent_id = available[0] if available else "default-1"
+        logger.info(
+            "director[turn=%d]: single-agent — cueing user after %r",
+            turn, last_agent_id,
+        )
+        write({"type": "cue_user", "data": {"fromAgentId": last_agent_id}})
+        return {"shouldEnd": True}
+
+    # Branch 3b: multi-agent — LLM decides (MAIC-104.2)
+    logger.info(
+        "director[turn=%d/%d]: multi-agent decide (available=%s)",
+        turn, max_turns, available,
+    )
+    decision = await _director_llm_decide(state)
+
+    if decision.should_end or decision.next_agent_id is None:
+        responses = state.get("agentResponses") or []
+        last_agent_id = (
+            responses[-1].get("agentId") if responses else (available[0] if available else None)
+        )
+        logger.info(
+            "director[turn=%d]: LLM said END after %r — emitting cue_user",
+            turn, last_agent_id,
+        )
+        write({"type": "cue_user", "data": {"fromAgentId": last_agent_id}})
+        return {"shouldEnd": True}
+
+    chosen_id = decision.next_agent_id
+    logger.info(
+        "director[turn=%d]: LLM chose %r — dispatching",
+        turn, chosen_id,
+    )
+    write({"type": "thinking", "data": {
+        "stage": "agent_loading",
+        "agentId": chosen_id,
+    }})
+    return {"currentAgentId": chosen_id, "shouldEnd": False}
 
 
 def _director_condition(state: OrchestratorState) -> str:

@@ -25,19 +25,24 @@ from apps.maic.orchestration.state import (
 
 
 def test_orchestrator_state_field_set_locked():
-    """The 16 fields from upstream director-graph.ts:47-74 must all be present.
+    """The 17 fields must all be present.
 
-    If this fails because the spec genuinely changed, sync upstream first,
-    then update this list (and OrchestratorState) in lockstep.  Do NOT
-    relax the assertion to make a stray field pass.
+    Phase 1 had 16 fields. Phase 3 (MAIC-104.2) added `directorModelId`
+    so the multi-agent director can use a separate (faster/cheaper)
+    routing model from the agents' generation model.
+
+    If this fails because the spec genuinely changed, sync the upstream
+    counterpart first, then update this list (and OrchestratorState)
+    in lockstep. Do NOT relax the assertion to make a stray field pass.
     """
     expected = {
-        # 10 inputs
+        # 11 inputs (was 10 in Phase 1; +directorModelId in MAIC-104.2)
         "messages",
         "storeState",
         "availableAgentIds",
         "maxTurns",
         "languageModelId",
+        "directorModelId",
         "thinkingConfig",
         "discussionContext",
         "triggerAgentId",
@@ -59,9 +64,13 @@ def test_orchestrator_state_field_set_locked():
     )
 
 
-def test_total_field_count_is_sixteen():
-    """Sanity check that the count matches upstream — 10 + 4 + 2 = 16."""
-    assert len(OrchestratorState.__annotations__) == 16
+def test_total_field_count_is_seventeen():
+    """Sanity check: 11 inputs + 4 scalars + 2 reducer-lists = 17.
+
+    Phase 3 (MAIC-104.2) bumped the count from 16 → 17 with the
+    addition of `directorModelId`.
+    """
+    assert len(OrchestratorState.__annotations__) == 17
 
 
 # ── Reducer-merge fields use Annotated[..., add] ───────────────────────

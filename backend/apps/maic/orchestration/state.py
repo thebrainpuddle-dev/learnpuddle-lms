@@ -108,6 +108,13 @@ class OrchestratorState(TypedDict, total=False):
     availableAgentIds: list[str]
     maxTurns: int
     languageModelId: str                              # see module docstring deviation
+    directorModelId: str | None                       # MAIC-104.2: optional separate
+                                                      # model for the director's
+                                                      # multi-agent decisions; falls
+                                                      # back to languageModelId when
+                                                      # unset. Useful for picking a
+                                                      # faster/cheaper router model
+                                                      # vs the agent generation model.
     thinkingConfig: dict[str, Any] | None
     discussionContext: dict[str, Any] | None          # shape: {topic, prompt?}
     triggerAgentId: str | None
