@@ -145,6 +145,17 @@ _ACTION_DESCRIPTIONS: dict[str, str] = {
         "blocks until the video finishes playing. Use a speech action before "
         "this to introduce the video. Parameters: { elementId: string }"
     ),
+    "discussion": (
+        "Trigger a roundtable discussion. Use when you want to invite the user "
+        "to share their thoughts before continuing the lecture — for example, "
+        "after introducing a debate topic, posing a thought-provoking question, "
+        "or hitting a natural pause point. The frontend will display a "
+        "ProactiveCard prompting the user to join. If the user accepts, the "
+        "lecture pauses and the classroom enters live mode. "
+        "Parameters: { topic: string (concise label, 1-8 words), "
+        "prompt?: string (the question/framing shown to the user), "
+        "agentId?: string (restrict the discussion to a specific agent) }"
+    ),
 }
 
 
