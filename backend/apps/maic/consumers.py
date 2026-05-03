@@ -116,10 +116,13 @@ class ClassroomConsumer(AsyncJsonWebsocketConsumer):
 
     Lifecycle:
       connect()      — auth check, tenant gate, session resolve/create
-      receive_json() — dispatch on `action` field; spawns the LangGraph
-                       stream as a tracked task (MAIC-110.3) so future
-                       handlers (interrupt/resume/user_message —
-                       MAIC-110.4/.5) can cancel + resume cleanly.
+      receive_json() — dispatch on `action` field:
+                         start      → spawn classroom stream (MAIC-005, 110.3)
+                         interrupt  → cancel in-flight stream, keep
+                                      connection alive (110.4)
+                         stop       → cancel + emit cue_user ack (110.4)
+                         resume     → restart from saved state (110.5)
+                         user_message → append + resume (110.5)
       disconnect()   — cancel any in-flight task, mark writer dead.
     """
 
@@ -291,9 +294,30 @@ class ClassroomConsumer(AsyncJsonWebsocketConsumer):
             )
             return
 
+        if action == "interrupt":
+            # MAIC-110.4: cancel the in-flight stream but keep the
+            # connection open. The client follows up with
+            # `user_message` (110.5) or `resume` (110.5) to continue.
+            # We deliberately do NOT send a terminal frame — the next
+            # action's first frame is the right "I heard you" signal.
+            await self._cancel_in_flight()
+            return
+
+        if action == "stop":
+            # MAIC-110.4: terminal — cancel the stream and emit a
+            # `cue_user` ack so the client knows control has been
+            # returned to the user. The connection stays open; it's
+            # the client's choice whether to disconnect or start a
+            # fresh classroom.
+            await self._cancel_in_flight()
+            await self._safe_send_json({
+                "type": "cue_user",
+                "data": {"reason": "stopped_by_user"},
+            })
+            return
+
         # Unknown action — non-fatal; future-compat for client iterations.
-        # MAIC-110.4 / 110.5 will replace this catch-all with proper
-        # branches for interrupt / stop / resume / user_message.
+        # MAIC-110.5 will add `resume` and `user_message` branches.
         logger.warning(
             "MAIC v2 WS: unknown action=%r session=%s",
             action,

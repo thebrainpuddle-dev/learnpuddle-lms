@@ -377,3 +377,241 @@ async def test_start_action_spawns_tracked_task_and_records_state(monkeypatch):
     # Disconnect cancels the in-flight asyncio.Task — if the cancel
     # path were broken, this would hang past the 2s timeout.
     await communicator.disconnect()
+
+
+# ── MAIC-110.4: interrupt + stop action handlers ──────────────────────
+
+
+def _make_long_stream_monkeypatches(monkeypatch, *, frames: list[dict] | None = None):
+    """Shared monkeypatch helper for 110.4 / 110.5 tests.
+
+    Stubs JWTAuthMiddleware to inject a synthetic same-tenant user,
+    `_resolve_or_create_session` to return a same-tenant session, and
+    `stream_classroom` to yield the given frames then sleep forever
+    (so the test can interrupt at any event-type boundary).
+    """
+    from types import SimpleNamespace
+    import asyncio
+
+    async def _fake_call(self, scope, receive, send):
+        scope["user"] = SimpleNamespace(
+            is_anonymous=False, id=42, tenant_id=222,
+        )
+        scope["accepted_subprotocol"] = None
+        return await self.inner(scope, receive, send)
+
+    from apps.notifications.middleware import JWTAuthMiddleware
+    monkeypatch.setattr(JWTAuthMiddleware, "__call__", _fake_call)
+
+    async def _fake_resolve(session_id, user):
+        return SimpleNamespace(id=session_id, tenant_id=user.tenant_id), False
+
+    monkeypatch.setattr(
+        "apps.maic.consumers._resolve_or_create_session", _fake_resolve,
+    )
+
+    frames = frames or [
+        {"type": "agent_start", "data": {"agentId": "default-1"}},
+    ]
+
+    async def _fake_stream(initial_state):
+        for frame in frames:
+            yield frame
+        await asyncio.sleep(60)  # stays in-flight for the test to interrupt
+
+    monkeypatch.setattr(
+        "apps.maic.orchestration.director_graph.stream_classroom",
+        _fake_stream,
+    )
+
+
+@pytest.mark.asyncio
+@override_settings(ALLOWED_HOSTS=["*"])
+async def test_interrupt_cancels_in_flight_stream_without_terminal_frame(monkeypatch):
+    """`interrupt` must cancel the running task AND keep the connection
+    open without sending any terminal frame — the next user_message /
+    resume frame is what tells the client we heard them.
+
+    If the writer-guard pattern is broken, an `interrupt` landing
+    between two stream frames could either hang or push a frame onto
+    a half-cancelled task. Either failure shows up here."""
+    import asyncio
+    _make_long_stream_monkeypatches(monkeypatch)
+
+    import importlib
+    from config import asgi as asgi_mod
+    importlib.reload(asgi_mod)
+
+    communicator = WebsocketCommunicator(
+        asgi_mod.application, "/ws/maic/v2/classroom/interrupt-test/",
+    )
+    connected, _ = await communicator.connect()
+    assert connected is True
+
+    await communicator.send_json_to({
+        "action": "start",
+        "data": {"agentIds": ["default-1"], "maxTurns": 1},
+    })
+    # Drain the stub's first frame so we know the task is live
+    first = await communicator.receive_json_from(timeout=2)
+    assert first["type"] == "agent_start"
+
+    # Now interrupt — must NOT emit a terminal frame
+    await communicator.send_json_to({"action": "interrupt"})
+
+    # Give the cancel a tick to land
+    await asyncio.sleep(0.05)
+
+    # Confirm no frame was emitted by the interrupt
+    nothing = await communicator.receive_nothing(timeout=0.2)
+    assert nothing is True, "interrupt must NOT send a terminal frame"
+
+    await communicator.disconnect()
+
+
+@pytest.mark.asyncio
+@override_settings(ALLOWED_HOSTS=["*"])
+async def test_stop_cancels_and_emits_cue_user_ack(monkeypatch):
+    """`stop` must cancel the stream AND emit a single `cue_user` ack
+    so the client knows control has returned to the user. Connection
+    stays open."""
+    _make_long_stream_monkeypatches(monkeypatch)
+
+    import importlib
+    from config import asgi as asgi_mod
+    importlib.reload(asgi_mod)
+
+    communicator = WebsocketCommunicator(
+        asgi_mod.application, "/ws/maic/v2/classroom/stop-test/",
+    )
+    connected, _ = await communicator.connect()
+    assert connected is True
+
+    await communicator.send_json_to({
+        "action": "start",
+        "data": {"agentIds": ["default-1"], "maxTurns": 1},
+    })
+    first = await communicator.receive_json_from(timeout=2)
+    assert first["type"] == "agent_start"
+
+    await communicator.send_json_to({"action": "stop"})
+
+    # The stop ack arrives next — `cue_user` with reason
+    ack = await communicator.receive_json_from(timeout=2)
+    assert ack["type"] == "cue_user"
+    assert ack["data"].get("reason") == "stopped_by_user"
+
+    await communicator.disconnect()
+
+
+@pytest.mark.asyncio
+@override_settings(ALLOWED_HOSTS=["*"])
+async def test_interrupt_without_in_flight_task_is_idempotent(monkeypatch):
+    """Defensive: an `interrupt` arriving when no stream is running
+    (e.g. the user clicked the interrupt button after the natural
+    end of a classroom) must be a no-op, not raise."""
+    _make_long_stream_monkeypatches(monkeypatch)
+
+    import importlib
+    from config import asgi as asgi_mod
+    importlib.reload(asgi_mod)
+
+    communicator = WebsocketCommunicator(
+        asgi_mod.application, "/ws/maic/v2/classroom/interrupt-noop/",
+    )
+    connected, _ = await communicator.connect()
+    assert connected is True
+
+    # No prior `start` — interrupt arrives cold
+    await communicator.send_json_to({"action": "interrupt"})
+
+    nothing = await communicator.receive_nothing(timeout=0.2)
+    assert nothing is True
+
+    await communicator.disconnect()
+
+
+@pytest.mark.asyncio
+@override_settings(ALLOWED_HOSTS=["*"])
+async def test_stop_without_in_flight_task_still_emits_ack(monkeypatch):
+    """A `stop` against an idle connection still emits the cue_user
+    ack — the contract is "after stop, client knows control is back",
+    regardless of whether anything was running."""
+    _make_long_stream_monkeypatches(monkeypatch)
+
+    import importlib
+    from config import asgi as asgi_mod
+    importlib.reload(asgi_mod)
+
+    communicator = WebsocketCommunicator(
+        asgi_mod.application, "/ws/maic/v2/classroom/stop-cold/",
+    )
+    connected, _ = await communicator.connect()
+    assert connected is True
+
+    await communicator.send_json_to({"action": "stop"})
+    ack = await communicator.receive_json_from(timeout=2)
+    assert ack["type"] == "cue_user"
+    assert ack["data"].get("reason") == "stopped_by_user"
+
+    await communicator.disconnect()
+
+
+@pytest.mark.asyncio
+@override_settings(ALLOWED_HOSTS=["*"])
+@pytest.mark.parametrize("event_type", [
+    "agent_start", "text_delta", "action", "agent_end",
+    "thinking", "speech_audio",
+])
+async def test_interrupt_safe_at_every_event_boundary(monkeypatch, event_type):
+    """Highest-risk regression net for MAIC-110.4: interrupt the stream
+    immediately after each of the 8 StatelessEvent types and verify
+    the connection survives + no terminal frame leaks.
+
+    The writer-guard race window is exactly between
+    `_safe_send_json(frame)` and the next `async for` yield — this
+    parametrize covers every realistic frame shape that could be
+    in-flight when interrupt arrives."""
+    import asyncio
+
+    frame_data: dict[str, dict] = {
+        "agent_start": {"agentId": "default-1"},
+        "text_delta": {"agentId": "default-1", "delta": "hi"},
+        "action": {"agentId": "default-1", "actionName": "wb_open", "params": {}},
+        "agent_end": {"agentId": "default-1"},
+        "thinking": {"agentId": "default-1"},
+        "speech_audio": {
+            "agentId": "default-1", "audioUrl": "x", "duration": 1.0,
+        },
+    }
+    frame = {"type": event_type, "data": frame_data[event_type]}
+    _make_long_stream_monkeypatches(monkeypatch, frames=[frame])
+
+    import importlib
+    from config import asgi as asgi_mod
+    importlib.reload(asgi_mod)
+
+    communicator = WebsocketCommunicator(
+        asgi_mod.application,
+        f"/ws/maic/v2/classroom/interrupt-{event_type}/",
+    )
+    connected, _ = await communicator.connect()
+    assert connected is True
+
+    await communicator.send_json_to({
+        "action": "start",
+        "data": {"agentIds": ["default-1"], "maxTurns": 1},
+    })
+    received = await communicator.receive_json_from(timeout=2)
+    assert received["type"] == event_type
+
+    await communicator.send_json_to({"action": "interrupt"})
+    await asyncio.sleep(0.05)
+
+    # No terminal frame, no error
+    nothing = await communicator.receive_nothing(timeout=0.2)
+    assert nothing is True, (
+        f"interrupt after {event_type} leaked a frame — writer guard race"
+    )
+
+    await communicator.disconnect()
