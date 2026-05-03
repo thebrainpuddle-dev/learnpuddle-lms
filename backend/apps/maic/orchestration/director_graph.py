@@ -276,22 +276,22 @@ def _round_robin_fallback(state: OrchestratorState) -> DirectorDecision:
 def _build_conversation_summary(state: OrchestratorState) -> str:
     """Build a compact conversation summary for the director prompt.
 
-    Phase-3 placeholder until MAIC-109 (LLM-backed summarizer) lands —
-    for now we render the last 4 messages verbatim with role/content
-    truncation. Good enough for short sessions; long-session
-    truncation is the summarizer's job.
+    Delegates to `summarizers.summarize_conversation` (MAIC-109) — the
+    same pure-function compressor upstream uses. We keep the director's
+    window tighter than the default 10 messages because the director
+    prompt also includes peer-context, whiteboard-ledger, and
+    available-agent blocks; over-quoting history pushes those out.
     """
+    from apps.maic.orchestration.summarizers import summarize_conversation
+
     messages = state.get("messages") or []
-    if not messages:
+    summary = summarize_conversation(messages, max_messages=4, max_content_length=200)
+    # Director prompt expects empty string for "no history" rather than
+    # the summarizer's default sentence — matches the existing template
+    # contract used elsewhere in director_prompt.
+    if summary == "No conversation history yet.":
         return ""
-    recent = messages[-4:]
-    lines = []
-    for m in recent:
-        role = m.get("role", "?")
-        content = (m.get("content") or "")[:200]
-        if content:
-            lines.append(f"- {role}: {content}")
-    return "\n".join(lines) if lines else ""
+    return summary
 
 
 # ── Nodes ─────────────────────────────────────────────────────────────
