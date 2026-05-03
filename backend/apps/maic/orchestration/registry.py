@@ -57,8 +57,13 @@ WHITEBOARD_ACTIONS: Final[list[str]] = [
 SLIDE_ACTIONS: Final[list[str]] = ["spotlight", "laser", "play_video"]
 
 ROLE_ACTIONS: Final[dict[str, list[str]]] = {
-    "teacher": [*SLIDE_ACTIONS, *WHITEBOARD_ACTIONS],
-    "assistant": [*WHITEBOARD_ACTIONS],
+    # `discussion` (MAIC-110.1) is intentionally restricted to teacher
+    # + assistant. Students participate IN discussions but don't
+    # initiate them — the discussion-spawning UX expects an authority
+    # figure to gate the prompt for the user. Mirrors upstream's
+    # role taxonomy.
+    "teacher": [*SLIDE_ACTIONS, *WHITEBOARD_ACTIONS, "discussion"],
+    "assistant": [*WHITEBOARD_ACTIONS, "discussion"],
     "student": [*WHITEBOARD_ACTIONS],
 }
 
@@ -145,7 +150,7 @@ DEFAULT_AGENTS: Final[dict[str, AgentConfig]] = {
         ),
         avatar="/avatars/teacher.png",
         color="#3b82f6",
-        allowedActions=[*SLIDE_ACTIONS, *WHITEBOARD_ACTIONS],
+        allowedActions=[*SLIDE_ACTIONS, *WHITEBOARD_ACTIONS, "discussion"],
         priority=10,
         createdAt=_utcnow(),
         updatedAt=_utcnow(),
@@ -176,7 +181,7 @@ DEFAULT_AGENTS: Final[dict[str, AgentConfig]] = {
         ),
         avatar="/avatars/assist.png",
         color="#10b981",
-        allowedActions=[*WHITEBOARD_ACTIONS],
+        allowedActions=[*WHITEBOARD_ACTIONS, "discussion"],
         priority=7,
         createdAt=_utcnow(),
         updatedAt=_utcnow(),

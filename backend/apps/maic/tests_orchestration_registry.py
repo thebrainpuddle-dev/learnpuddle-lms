@@ -44,22 +44,38 @@ def test_default_teacher_has_slide_actions():
     assert "play_video" in teacher.allowedActions
     # And whiteboard
     assert "wb_draw_text" in teacher.allowedActions
+    # MAIC-110.1: teacher can spawn discussions
+    assert "discussion" in teacher.allowedActions
 
 
-def test_default_assistant_has_whiteboard_only():
+def test_default_assistant_has_whiteboard_and_discussion():
+    """Assistant: no slide actions, but whiteboard + discussion are
+    permitted. MAIC-110.1 added `discussion` so the assistant can spawn
+    user-facing discussion prompts."""
     assistant = DEFAULT_AGENTS["default-2"]
     assert assistant.role == "assistant"
     assert "spotlight" not in assistant.allowedActions
     assert "laser" not in assistant.allowedActions
-    # But whiteboard yes
-    assert all(a.startswith("wb_") for a in assistant.allowedActions)
+    # whiteboard yes
+    wb_actions = [a for a in assistant.allowedActions if a.startswith("wb_")]
+    assert len(wb_actions) > 0
+    # discussion yes (MAIC-110.1)
+    assert "discussion" in assistant.allowedActions
+    # the only non-wb action is `discussion` — no slide privileges leaked
+    non_wb = [a for a in assistant.allowedActions if not a.startswith("wb_")]
+    assert non_wb == ["discussion"]
 
 
 def test_default_students_have_whiteboard_only():
+    """Students participate in discussions but never *initiate* them.
+    MAIC-110.1 explicitly excludes `discussion` from student
+    allowedActions — the discussion-spawning UX is gated to teacher +
+    assistant only."""
     for sid in ("default-3", "default-4", "default-5", "default-6"):
         agent = DEFAULT_AGENTS[sid]
         assert agent.role == "student"
         assert "spotlight" not in agent.allowedActions
+        assert "discussion" not in agent.allowedActions
         assert all(a.startswith("wb_") for a in agent.allowedActions)
 
 
@@ -89,20 +105,36 @@ def test_role_actions_teacher_includes_slide_and_whiteboard():
     actions = ROLE_ACTIONS["teacher"]
     assert set(SLIDE_ACTIONS) <= set(actions)
     assert set(WHITEBOARD_ACTIONS) <= set(actions)
+    # MAIC-110.1
+    assert "discussion" in actions
 
 
 def test_role_actions_assistant_no_slide():
     actions = ROLE_ACTIONS["assistant"]
     assert set(WHITEBOARD_ACTIONS) <= set(actions)
     assert not (set(SLIDE_ACTIONS) & set(actions))
+    # MAIC-110.1
+    assert "discussion" in actions
+
+
+def test_role_actions_student_excludes_discussion():
+    """Students participate in but never spawn discussions —
+    `discussion` is teacher/assistant-only by design (MAIC-110.1)."""
+    actions = ROLE_ACTIONS["student"]
+    assert "discussion" not in actions
+    assert not (set(SLIDE_ACTIONS) & set(actions))
+    # whiteboard is the student's only ability
+    assert set(actions) == set(WHITEBOARD_ACTIONS)
 
 
 def test_get_actions_for_unknown_role_falls_back_to_whiteboard():
     """Unknown role = least-privilege default. Generated agents with
-    weird role labels never escalate to slide control."""
+    weird role labels never escalate to slide control or discussion
+    spawning."""
     result = get_actions_for_role("totally-made-up-role")
     assert result == [*WHITEBOARD_ACTIONS]
     assert not (set(SLIDE_ACTIONS) & set(result))
+    assert "discussion" not in result
 
 
 # ── resolve_agent ─────────────────────────────────────────────────────
