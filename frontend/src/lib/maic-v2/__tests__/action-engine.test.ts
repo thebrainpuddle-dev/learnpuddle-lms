@@ -228,6 +228,21 @@ describe('ActionEngine — wb_draw_* component renderers (211.2)', () => {
     expect(recorded).toEqual([800]);
   });
 
+  test('wb_draw_code adds element + waits 800 ms', async () => {
+    const ctl = makeController();
+    const { delay, recorded } = recordingDelay();
+    const engine = new ActionEngine({ whiteboard: ctl, delay });
+    const action: Action = {
+      id: 'a1', type: 'wb_draw_code', language: 'javascript',
+      code: 'const x = 42;', x: 0, y: 0,
+    };
+
+    await engine.execute(action);
+
+    expect(ctl.calls).toEqual([{ method: 'addElement', args: [action] }]);
+    expect(recorded).toEqual([800]);
+  });
+
   test('wb_draw_chart adds element + waits 800 ms', async () => {
     const ctl = makeController();
     const { delay, recorded } = recordingDelay();
@@ -289,22 +304,18 @@ describe('ActionEngine — wb_draw_* component renderers (211.2)', () => {
 
 
 describe('ActionEngine — deferred actions resolve immediately', () => {
-  test('wb_draw_code + wb_edit_code resolve without renderer (MAIC-214)', async () => {
+  test('wb_edit_code resolves without handler (MAIC-214.2 fills it)', async () => {
     const engine = new ActionEngine({ delay: noDelay() });
-    const drawActions: Action[] = [
-      { id: '7', type: 'wb_draw_code', language: 'js', code: 'x', x: 0, y: 0 },
-      {
+    await expect(
+      engine.execute({
         id: '8',
         type: 'wb_edit_code',
         elementId: 'c1',
         operation: 'insert_after',
         lineId: 'L1',
         content: 'x',
-      },
-    ];
-    for (const a of drawActions) {
-      await expect(engine.execute(a)).resolves.toBeUndefined();
-    }
+      }),
+    ).resolves.toBeUndefined();
   });
 
   test('widget_* and play_video resolve (Phase 6 fills these)', async () => {

@@ -14,7 +14,6 @@ import { Whiteboard } from '../Whiteboard';
 import {
   WhiteboardProvider,
   type WhiteboardState,
-  type WhiteboardElement,
 } from '../../../lib/maic-v2/whiteboard-state';
 
 
@@ -137,12 +136,19 @@ describe('Whiteboard — element-list rendering', () => {
     expect(screen.getByTestId('maic-v2-wb-chart')).toBeInTheDocument();
   });
 
-  test('routes wb_draw_code to placeholder until renderer ships', () => {
-    const elements: WhiteboardElement[] = [
-      { id: 'co1', type: 'wb_draw_code', language: 'js', code: 'x', x: 100, y: 0 },
-    ];
-    mount({ elements });
-    expect(screen.getAllByTestId('maic-v2-wb-placeholder')).toHaveLength(1);
+  test('routes wb_draw_code to CodeElement (MAIC-214.1)', () => {
+    mount({
+      elements: [
+        {
+          id: 'co1',
+          type: 'wb_draw_code',
+          language: 'javascript',
+          code: 'const x = 1;',
+          x: 100, y: 0,
+        },
+      ],
+    });
+    expect(screen.getByTestId('maic-v2-wb-code')).toBeInTheDocument();
   });
 
   test('renders multiple elements in registry order', () => {

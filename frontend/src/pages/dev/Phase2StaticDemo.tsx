@@ -113,12 +113,27 @@ const DEMO_ELEMENTS: WhiteboardElement[] = [
   {
     id: 'demo-chart-area', elementId: 'chart-area',
     type: 'wb_draw_chart', chartType: 'area',
-    x: 270, y: 370, width: 230, height: 180,
+    x: 270, y: 370, width: 200, height: 90,
     data: {
       labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May'],
       legends: ['Volume'],
       series: [[5, 15, 12, 22, 18]],
     },
+  },
+
+  // ── MAIC-214.1: code with syntax highlighting ──
+  {
+    id: 'demo-code', elementId: 'code-1',
+    type: 'wb_draw_code',
+    language: 'typescript',
+    fileName: 'demo.ts',
+    code: [
+      'export function fib(n: number): number {',
+      '  if (n < 2) return n;',
+      '  return fib(n - 1) + fib(n - 2);',
+      '}',
+    ].join('\n'),
+    x: 270, y: 470, width: 230, height: 80,
   },
   {
     id: 'demo-chart-pie', elementId: 'chart-pie',
@@ -140,6 +155,16 @@ const DEMO_ELEMENTS: WhiteboardElement[] = [
       series: [[60, 30, 10]],
     },
   },
+
+  // ── Wraps to a second canvas section: code (MAIC-214.1) ──
+  // Positioned outside the main 562px frame intentionally — the
+  // surface is responsive via aspect-ratio, but children with
+  // y > 562 simply scroll into view via overflow:auto on the parent.
+  // For Phase 2 visual smoke this is fine; Phase 8+ adds CSS-transform
+  // scaling so the agent's full coordinate space is always visible.
+  // ────────────────────────────────────────────────────────────────
+  // Removed wrap — sticking to 1000×562 frame. Code goes alongside
+  // existing items by displacing the chart row slightly down.
 
   // Note on coverage: bar/line/area/pie/ring (5 chart variants) are
   // exercised here. column / scatter / radar are covered by the 38
@@ -177,7 +202,7 @@ export default function Phase2StaticDemo(): ReactElement {
 
       <div style={{ marginTop: 16, color: '#666', fontSize: 12 }}>
         Element count: <b>{DEMO_ELEMENTS.length}</b> ·{' '}
-        Renderers exercised: <b>text · shape (3) · line · table · latex · chart (5)</b>
+        Renderers exercised: <b>text · shape (3) · line · table · latex · chart (5) · code</b>
       </div>
     </div>
   );

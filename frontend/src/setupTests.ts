@@ -81,7 +81,26 @@ vi.mock('@tiptap/extension-code-block-lowlight', () => {
   return { __esModule: true, default: ext };
 });
 
-vi.mock('lowlight', () => ({ createLowlight: () => ({}) }));
+// PRE-EXISTING TECH DEBT — flagged by the no-mocks/no-fakes rule in
+// CLAUDE.md ("Hard rule — production-real only"). The original
+// RichTextEditor.test.tsx + dependents (~90 tests across the LMS)
+// were written assuming this mock; removing it crashes them because
+// `tiptap-extension-code-block-lowlight` calls `createLowlight()` at
+// module-evaluate time with grammars happy-dom can't tolerate.
+//
+// MAIC v2 work (CodeElement, Whiteboard, etc.) MUST un-mock with
+// `vi.unmock('lowlight')` at the top of each test file so the
+// production lowlight pipeline is what's actually verified.
+//
+// TODO: migrate RichTextEditor + dependents to Playwright e2e and
+// delete this mock. Tracked alongside the FakeAudio / MockWebSocket
+// migration in the post-Phase-2 e2e infrastructure work.
+vi.mock('lowlight', () => ({
+  createLowlight: () => ({
+    highlight: () => ({ type: 'root', children: [] }),
+  }),
+  common: {},
+}));
 
 // @xyflow/react (React Flow) accesses the DOM and registers ResizeObserver
 // at module-load time which hangs in happy-dom. Mock it globally so any test

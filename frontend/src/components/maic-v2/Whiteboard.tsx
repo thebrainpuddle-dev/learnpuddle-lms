@@ -10,10 +10,9 @@
  * Mounting outside a provider throws.
  *
  * Element type → renderer mapping is here so the renderer files stay
- * isolated and per-test focused. wb_draw_* element types not yet
- * implemented in Phase 2 (chart, latex, code) fall through to a
- * placeholder div with the type as a label so the smoke shows the
- * outline of what's there even if the renderer hasn't shipped yet.
+ * isolated and per-test focused. As of MAIC-214.1 every wb_draw_*
+ * element type has a real renderer; the `default` branch returns null
+ * for forward-compat with future protocol additions.
  *
  * Phase 2 deferrals (signposted; do NOT remove until linked phase):
  *   - Phase 8+ — zoom / pan / clamp (upstream's InteractiveWhiteboardCanvas)
@@ -23,13 +22,13 @@
  *   - Phase 8+ — cascade-clear per-element fade animation (uses
  *                isClearing flag once CSS keyframes are wired)
  */
-import type { Action } from '../../lib/maic-v2/action-types';
 import {
   useWhiteboardState,
   type WhiteboardElement,
 } from '../../lib/maic-v2/whiteboard-state';
 
 import { ChartElement } from './whiteboard/ChartElement';
+import { CodeElement } from './whiteboard/CodeElement';
 import { LatexElement } from './whiteboard/LatexElement';
 import { LineElement } from './whiteboard/LineElement';
 import { ShapeElement } from './whiteboard/ShapeElement';
@@ -58,40 +57,12 @@ function renderElement(element: WhiteboardElement) {
       return <LatexElement key={key} element={element} />;
     case 'wb_draw_chart':
       return <ChartElement key={key} element={element} />;
-
-    // Renderers shipped by later sub-chunks; until then, a placeholder
-    // box so the smoke shows the agent's geometric intent.
-    case 'wb_draw_code':    // MAIC-214.1
-      return <PlaceholderElement key={key} element={element as Action & {x:number;y:number;width?:number;height?:number}} />;
+    case 'wb_draw_code':
+      return <CodeElement key={key} element={element} />;
 
     default:
       return null;
   }
-}
-
-
-function PlaceholderElement({
-  element,
-}: {
-  element: Action & { x: number; y: number; width?: number; height?: number; type: string };
-}) {
-  const elementKey = elementKeyFor(element as unknown as WhiteboardElement);
-  return (
-    <div
-      data-testid="maic-v2-wb-placeholder"
-      data-element-id={elementKey}
-      data-element-type={element.type}
-      className="absolute flex items-center justify-center border border-dashed border-gray-400 bg-gray-50 text-xs text-gray-500"
-      style={{
-        top: `${element.y}px`,
-        left: `${element.x}px`,
-        width: `${element.width ?? 200}px`,
-        height: `${element.height ?? 100}px`,
-      }}
-    >
-      {element.type} (renderer pending)
-    </div>
-  );
 }
 
 

@@ -114,24 +114,22 @@ export class ActionEngine {
         return;
 
       // Component-only renderers — MAIC-211.2 (text/shape/line/table),
-      // MAIC-212 (latex), MAIC-213 (chart). All share the same 800 ms
-      // fade-in (engine.ts:371, 396, 420, 456, 512, 545).
+      // MAIC-212 (latex), MAIC-213 (chart), MAIC-214.1 (code). All
+      // share the same 800 ms fade-in (engine.ts:371, 396, 420, 456,
+      // 512, 545, 575).
       case 'wb_draw_text':
       case 'wb_draw_shape':
       case 'wb_draw_line':
       case 'wb_draw_table':
       case 'wb_draw_latex':
       case 'wb_draw_chart':
+      case 'wb_draw_code':
         await this.executeWbDrawComponent(action);
         return;
 
-      // Lib-dependent renderers + line-level edits land in MAIC-214.x.
-      // For now they resolve immediately so the playback loop advances;
-      // the action still flows through the registry once those handlers
-      // ship.
-      case 'wb_draw_code':
+      // Line-level code edits land in MAIC-214.2.
       case 'wb_edit_code':
-        // DEFERRED: renderer hand-off — MAIC-214.x
+        // DEFERRED: line-level splice — MAIC-214.2
         return;
 
       // Phase 6 deferrals — left as no-ops with a debug log.
@@ -211,7 +209,8 @@ export class ActionEngine {
         | 'wb_draw_line'
         | 'wb_draw_table'
         | 'wb_draw_latex'
-        | 'wb_draw_chart';
+        | 'wb_draw_chart'
+        | 'wb_draw_code';
     },
   ): Promise<void> {
     if (!this.whiteboard) {
