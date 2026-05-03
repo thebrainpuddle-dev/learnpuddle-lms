@@ -14,20 +14,21 @@
  * Architecture:
  *   - Module-level lazy singleton for the lowlight instance (registers
  *     `common` languages once)
- *   - useMemo-cached HAST tree per (language, code) tuple
+ *   - Reads element.lines (populated by ActionEngine on add) for
+ *     stable per-line keys that survive wb_edit_code splices
+ *   - Falls back to splitting `element.code` on '\n' when lines isn't
+ *     populated (test-direct construction, static demo)
  *   - HAST → JSX via a small recursive renderer (~30 lines below) so
  *     we don't need a transitive `hast-util-to-jsx-runtime` dep
- *   - Line splitting at render time: code.split('\n') → stable
- *     deterministic IDs `L1, L2, ...` per index. MAIC-214.2 will
- *     introduce truly stable IDs when wb_edit_code lands.
  *
  * Phase 2 deferrals signposted:
  *   - Typing-stutter animation (upstream BaseCodeElement.tsx:78-117)
- *     — agent paces the timeline via the 800 ms post-add wait, no
- *     visual delay needed for Phase 2
+ *     — agent paces the timeline via the post-add wait, no visual
+ *     delay needed for Phase 2
  *   - File-tab UI / line numbers chrome
  *   - Per-line edit animations (highlight insertions in green / deletes
- *     in red) — handled by MAIC-214.2 once stable IDs land
+ *     in red) — handled by future polish; MAIC-214.2 ships the
+ *     splice mechanics first
  *   - Theme switching (light/dark) — fixed to `github` light theme
  *
  * Theme: highlight.js's github.css is imported once at the module
@@ -38,9 +39,7 @@ import { useMemo } from 'react';
 import { common, createLowlight } from 'lowlight';
 import 'highlight.js/styles/github.css';
 
-import type { Action } from '../../../lib/maic-v2/action-types';
-
-type CodeAction = Extract<Action, { type: 'wb_draw_code' }>;
+import type { WhiteboardCodeElement } from '../../../lib/maic-v2/whiteboard-state';
 
 
 // ── Lowlight singleton ─────────────────────────────────────────────
@@ -57,11 +56,6 @@ function getLowlight() {
 // ── HAST → JSX ──────────────────────────────────────────────────────
 
 
-/**
- * HAST node shape we care about. lowlight emits `root` containing a
- * mix of `text` and `element` children; elements may have a
- * `properties.className` array (highlight.js token names).
- */
 type HastNode =
   | { type: 'text'; value: string }
   | {
@@ -94,29 +88,18 @@ function renderHast(node: HastNode, key: string | number): React.ReactNode {
 }
 
 
-// ── Line splitting ─────────────────────────────────────────────────
-
-
 /**
- * Split highlighted source into per-line HAST trees. Lowlight returns
- * a single `root` for the whole source; to render line-by-line we
- * highlight each line independently. Slightly redundant cost vs. one
- * highlight call, but for typical code blocks (<200 lines) it's
- * imperceptible and keeps the per-line key model trivial.
+ * Highlight one source line via lowlight. Failures (unknown grammar)
+ * fall through to plain text rendering.
  */
-function highlightLines(language: string, code: string): React.ReactNode[] {
+function highlightLine(language: string, content: string): React.ReactNode {
   const lowlight = getLowlight();
-  const lines = code.split('\n');
-  return lines.map((line, i) => {
-    let tree: HastNode;
-    try {
-      tree = lowlight.highlight(language, line) as HastNode;
-    } catch {
-      // Unknown language → fall through to plain text rendering
-      return [line];
-    }
-    return renderHast(tree, `L${i + 1}-content`);
-  });
+  try {
+    const tree = lowlight.highlight(language, content) as HastNode;
+    return renderHast(tree, 'content');
+  } catch {
+    return content;
+  }
 }
 
 
@@ -125,11 +108,11 @@ function highlightLines(language: string, code: string): React.ReactNode[] {
 
 const DEFAULT_WIDTH = 400;
 const DEFAULT_HEIGHT = 240;
-const HEADER_HEIGHT = 22;  // when fileName present
+const HEADER_HEIGHT = 22;
 
 
 export interface CodeElementProps {
-  element: CodeAction;
+  element: WhiteboardCodeElement;
 }
 
 
@@ -138,14 +121,27 @@ export function CodeElement({ element }: CodeElementProps) {
   const width = element.width ?? DEFAULT_WIDTH;
   const height = element.height ?? DEFAULT_HEIGHT;
   const language = (element.language ?? 'plaintext').toLowerCase();
-  const code = element.code ?? '';
   const fileName = element.fileName;
 
-  // Memoise the line-highlighted JSX per (language, code) pair so
-  // re-renders from unrelated state changes don't re-walk the HAST.
-  const renderedLines = useMemo(
-    () => highlightLines(language, code),
-    [language, code],
+  // Resolve line list: prefer `element.lines` (populated by the
+  // ActionEngine on add — stable IDs that survive wb_edit_code
+  // splices). Fall back to splitting `element.code` for callsites
+  // that build a WhiteboardCodeElement directly without going through
+  // the engine (tests, the static demo).
+  const lines = useMemo(() => {
+    if (element.lines && element.lines.length > 0) return element.lines;
+    return (element.code ?? '').split('\n').map((content, i) => ({
+      id: `L${i + 1}`,
+      content,
+    }));
+  }, [element.lines, element.code]);
+
+  // Memoise highlight output per line. Recomputes when `lines`
+  // identity changes (every wb_edit_code splice returns a fresh
+  // array — that's fine).
+  const highlighted = useMemo(
+    () => lines.map((line) => highlightLine(language, line.content)),
+    [lines, language],
   );
 
   return (
@@ -180,24 +176,16 @@ export function CodeElement({ element }: CodeElementProps) {
       >
         <pre className="hljs m-0" style={{ background: 'transparent', padding: 0 }}>
           <code className={`language-${language}`}>
-            {renderedLines.map((line, i) => (
+            {lines.map((line, i) => (
               <div
-                key={`L${i + 1}`}
-                data-line-id={`L${i + 1}`}
+                key={line.id}
+                data-line-id={line.id}
                 className="whitespace-pre"
                 style={{ minHeight: '1.4em', lineHeight: 1.4 }}
               >
-                {/*
-                  Empty line edge case: an empty string would collapse
-                  the div height; insert a non-breaking space so the
-                  line takes vertical space.
-                */}
-                {(Array.isArray(line) ? line : [line]).length === 0 ||
-                (Array.isArray(line) && line.length === 1 && line[0] === '') ? (
-                  ' '
-                ) : (
-                  line
-                )}
+                {/* Empty-line edge case: render a single space so the
+                    row keeps its vertical rhythm. */}
+                {line.content === '' ? ' ' : highlighted[i]}
               </div>
             ))}
           </code>

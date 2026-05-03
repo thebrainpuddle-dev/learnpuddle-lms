@@ -185,6 +185,31 @@ describe('WhiteboardProvider + hooks', () => {
     expect(result.current.s.elements).toHaveLength(0);
   });
 
+  test('controller.getElement reads the latest live state via stable ref', () => {
+    const { result } = renderHook(
+      () => ({ s: useWhiteboardState(), c: useWhiteboardController() }),
+      { wrapper: ({ children }) => <WhiteboardProvider>{children}</WhiteboardProvider> },
+    );
+
+    expect(result.current.c.getElement('a1')).toBeUndefined();
+
+    act(() => result.current.c.addElement(textElement('a1', { content: 'hello' })));
+    const found = result.current.c.getElement('a1');
+    expect(found).toBeDefined();
+    expect((found as { id: string }).id).toBe('a1');
+
+    // Update should be reflected on the next getElement call (no
+    // stale closure on the ref).
+    act(() =>
+      result.current.c.updateElement('a1', { content: 'world' } as Partial<unknown> as never),
+    );
+    const after = result.current.c.getElement('a1') as { content: string };
+    expect(after.content).toBe('world');
+
+    act(() => result.current.c.deleteElement('a1'));
+    expect(result.current.c.getElement('a1')).toBeUndefined();
+  });
+
   test('controller identity is stable across renders', () => {
     const { result, rerender } = renderHook(() => useWhiteboardController(), {
       wrapper: ({ children }) => <WhiteboardProvider>{children}</WhiteboardProvider>,

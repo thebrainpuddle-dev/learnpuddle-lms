@@ -22,8 +22,10 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useReducer,
+  useRef,
   type ReactNode,
 } from 'react';
 
@@ -40,19 +42,53 @@ import type { Action } from './action-types';
  * `element.type === 'wb_draw_text'` and get TS-narrowed access to the
  * action's params for free.
  */
-export type WhiteboardElement = Extract<
-  Action,
-  {
-    type:
-      | 'wb_draw_text'
-      | 'wb_draw_shape'
-      | 'wb_draw_chart'
-      | 'wb_draw_latex'
-      | 'wb_draw_table'
-      | 'wb_draw_line'
-      | 'wb_draw_code';
-  }
->;
+/**
+ * One line of a wb_draw_code element. The `id` survives splices —
+ * `wb_edit_code` (MAIC-214.2) operates on these stable IDs so the
+ * agent can reliably target a specific line for insert/delete/replace
+ * across multiple turns.
+ */
+export interface CodeLine {
+  id: string;
+  content: string;
+}
+
+
+/**
+ * Code element = wire-format action + synthetic `lines` field. The
+ * action engine populates `lines` when adding a `wb_draw_code` to the
+ * registry (initial IDs L1, L2, ... per index). MAIC-214.2 splices
+ * lines via wb_edit_code, regenerating IDs only for inserted lines
+ * via crypto.randomUUID().slice(0,8).
+ *
+ * `lines` is optional on the type (backwards compat for any callsite
+ * that builds a WhiteboardCodeElement directly), but the action
+ * engine always populates it on add.
+ */
+export type WhiteboardCodeElement = Extract<Action, { type: 'wb_draw_code' }> & {
+  lines?: CodeLine[];
+};
+
+
+/**
+ * Element registry shape. Most variants are the wire-format action
+ * verbatim; wb_draw_code carries an extra `lines` field for stable
+ * line-level edits (MAIC-214.2).
+ */
+export type WhiteboardElement =
+  | Extract<
+      Action,
+      {
+        type:
+          | 'wb_draw_text'
+          | 'wb_draw_shape'
+          | 'wb_draw_chart'
+          | 'wb_draw_latex'
+          | 'wb_draw_table'
+          | 'wb_draw_line';
+      }
+    >
+  | WhiteboardCodeElement;
 
 
 export interface WhiteboardState {
@@ -162,6 +198,13 @@ export interface WhiteboardController {
   updateElement(key: string, patch: Partial<WhiteboardElement>): void;
   deleteElement(key: string): void;
   clear(): void;
+  /**
+   * Read the current state of an element by key. Used by
+   * `wb_edit_code` (MAIC-214.2) which needs to splice an existing
+   * code element's `lines` array. Returns undefined if no element
+   * matches.
+   */
+  getElement(key: string): WhiteboardElement | undefined;
 }
 
 
@@ -188,6 +231,15 @@ export function WhiteboardProvider({
 }: WhiteboardProviderProps) {
   const [state, dispatch] = useReducer(whiteboardReducer, initialState);
 
+  // Latest state via ref so the controller's `getElement` stays a
+  // stable function reference across renders. The ActionEngine reads
+  // from this ref synchronously inside wb_edit_code so it sees the
+  // post-add state of a code element it's about to splice.
+  const stateRef = useRef(state);
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
+
   const setOpen = useCallback((open: boolean) => dispatch({ type: 'set_open', open }), []);
   const setClearing = useCallback(
     (clearing: boolean) => dispatch({ type: 'set_clearing', clearing }),
@@ -207,10 +259,23 @@ export function WhiteboardProvider({
     [],
   );
   const clear = useCallback(() => dispatch({ type: 'clear' }), []);
+  const getElement = useCallback(
+    (key: string): WhiteboardElement | undefined =>
+      stateRef.current.elements.find((e) => getElementKey(e) === key),
+    [],
+  );
 
   const controller = useMemo<WhiteboardController>(
-    () => ({ setOpen, setClearing, addElement, updateElement, deleteElement, clear }),
-    [setOpen, setClearing, addElement, updateElement, deleteElement, clear],
+    () => ({
+      setOpen,
+      setClearing,
+      addElement,
+      updateElement,
+      deleteElement,
+      clear,
+      getElement,
+    }),
+    [setOpen, setClearing, addElement, updateElement, deleteElement, clear, getElement],
   );
 
   return (

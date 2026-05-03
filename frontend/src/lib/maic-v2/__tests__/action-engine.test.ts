@@ -13,29 +13,63 @@
  */
 import { describe, test, expect, vi, beforeEach } from 'vitest';
 
-import { ActionEngine } from '../action-engine';
+import { ActionEngine, applyEditOperation } from '../action-engine';
 import type { Action } from '../action-types';
-import type { WhiteboardController, WhiteboardElement } from '../whiteboard-state';
+import type {
+  CodeLine,
+  WhiteboardController,
+  WhiteboardElement,
+} from '../whiteboard-state';
 
 
 // ── Helpers ────────────────────────────────────────────────────────
 
 
-function makeController(): WhiteboardController & {
+function makeController(seedElements: WhiteboardElement[] = []): WhiteboardController & {
   calls: Array<{ method: string; args: unknown[] }>;
+  elements: WhiteboardElement[];
 } {
   const calls: Array<{ method: string; args: unknown[] }> = [];
-  const record = <K extends string>(method: K) => (...args: unknown[]) => {
-    calls.push({ method, args });
-  };
+  // Mutable element registry for getElement() — the engine's
+  // wb_edit_code reads it after a wb_draw_code add. addElement /
+  // updateElement / deleteElement mutate this so a sequence of
+  // [draw, edit] reflects realistic state.
+  const elements: WhiteboardElement[] = [...seedElements];
+  const keyOf = (el: WhiteboardElement) =>
+    (el as { elementId?: string }).elementId ?? (el as { id: string }).id;
   return {
-    setOpen: record('setOpen'),
-    setClearing: record('setClearing'),
-    addElement: record('addElement'),
-    updateElement: record('updateElement'),
-    deleteElement: record('deleteElement'),
-    clear: record('clear'),
     calls,
+    elements,
+    setOpen(open) {
+      calls.push({ method: 'setOpen', args: [open] });
+    },
+    setClearing(clearing) {
+      calls.push({ method: 'setClearing', args: [clearing] });
+    },
+    addElement(element) {
+      calls.push({ method: 'addElement', args: [element] });
+      const k = keyOf(element);
+      const idx = elements.findIndex((e) => keyOf(e) === k);
+      if (idx >= 0) elements[idx] = element;
+      else elements.push(element);
+    },
+    updateElement(key, patch) {
+      calls.push({ method: 'updateElement', args: [key, patch] });
+      const idx = elements.findIndex((e) => keyOf(e) === key);
+      if (idx >= 0) elements[idx] = { ...elements[idx], ...patch } as WhiteboardElement;
+    },
+    deleteElement(key) {
+      calls.push({ method: 'deleteElement', args: [key] });
+      const idx = elements.findIndex((e) => keyOf(e) === key);
+      if (idx >= 0) elements.splice(idx, 1);
+    },
+    clear() {
+      calls.push({ method: 'clear', args: [] });
+      elements.length = 0;
+    },
+    getElement(key) {
+      return elements.find((e) => keyOf(e) === key);
+    },
   };
 }
 
@@ -228,18 +262,30 @@ describe('ActionEngine — wb_draw_* component renderers (211.2)', () => {
     expect(recorded).toEqual([800]);
   });
 
-  test('wb_draw_code adds element + waits 800 ms', async () => {
+  test('wb_draw_code adds element augmented with lines + waits 800 ms', async () => {
     const ctl = makeController();
     const { delay, recorded } = recordingDelay();
     const engine = new ActionEngine({ whiteboard: ctl, delay });
     const action: Action = {
       id: 'a1', type: 'wb_draw_code', language: 'javascript',
-      code: 'const x = 42;', x: 0, y: 0,
+      code: 'const x = 42;\nconsole.log(x);', x: 0, y: 0,
     };
 
     await engine.execute(action);
 
-    expect(ctl.calls).toEqual([{ method: 'addElement', args: [action] }]);
+    // ActionEngine augments wb_draw_code with `lines: [{id, content}]`
+    // before adding to the registry — wb_edit_code (MAIC-214.2) targets
+    // these stable IDs.
+    expect(ctl.calls).toHaveLength(1);
+    expect(ctl.calls[0].method).toBe('addElement');
+    const added = ctl.calls[0].args[0] as {
+      type: string;
+      lines: Array<{ id: string; content: string }>;
+    };
+    expect(added.type).toBe('wb_draw_code');
+    expect(added.lines).toHaveLength(2);
+    expect(added.lines[0]).toEqual({ id: 'L1', content: 'const x = 42;' });
+    expect(added.lines[1]).toEqual({ id: 'L2', content: 'console.log(x);' });
     expect(recorded).toEqual([800]);
   });
 
@@ -372,5 +418,319 @@ describe('ActionEngine — misc', () => {
     type _C = WhiteboardController;
     type _E = WhiteboardElement;
     expect(true).toBe(true);
+  });
+});
+
+
+// ── applyEditOperation pure helper (MAIC-214.2) ────────────────────
+
+
+function fiveLines(): CodeLine[] {
+  return [
+    { id: 'L1', content: 'function fib(n) {' },
+    { id: 'L2', content: '  if (n < 2)' },
+    { id: 'L3', content: '    return n;' },
+    { id: 'L4', content: '  return fib(n-1) + fib(n-2);' },
+    { id: 'L5', content: '}' },
+  ];
+}
+
+
+describe('applyEditOperation — insert_after', () => {
+  test('inserts the content after lineId, preserving existing ids', () => {
+    const result = applyEditOperation(
+      {
+        id: 'edit-1', type: 'wb_edit_code', elementId: 'c1',
+        operation: 'insert_after', lineId: 'L2', content: '// added',
+      },
+      fiveLines(),
+    );
+    expect(result).toHaveLength(6);
+    expect(result.map((l) => l.id).slice(0, 2)).toEqual(['L1', 'L2']);
+    expect(result[2].content).toBe('// added');
+    expect(result[2].id).not.toBe('L1');
+    expect(result[2].id).not.toBe('L2');
+    expect(result[2].id).not.toBe('L3');
+    expect(result.slice(3).map((l) => l.id)).toEqual(['L3', 'L4', 'L5']);
+  });
+
+  test('multi-line content split on \\n with unique ids per line', () => {
+    const result = applyEditOperation(
+      {
+        id: 'edit-1', type: 'wb_edit_code', elementId: 'c1',
+        operation: 'insert_after', lineId: 'L1', content: 'a\nb\nc',
+      },
+      fiveLines(),
+    );
+    expect(result).toHaveLength(8);
+    const newIds = [result[1].id, result[2].id, result[3].id];
+    expect(new Set(newIds).size).toBe(3);  // all unique
+    expect(result.slice(1, 4).map((l) => l.content)).toEqual(['a', 'b', 'c']);
+  });
+
+  test('no-op when lineId not found (returns same reference)', () => {
+    const before = fiveLines();
+    const result = applyEditOperation(
+      {
+        id: 'edit-1', type: 'wb_edit_code', elementId: 'c1',
+        operation: 'insert_after', lineId: 'no-such-id', content: 'x',
+      },
+      before,
+    );
+    expect(result).toBe(before);
+  });
+
+  test('no-op when lineId omitted', () => {
+    const before = fiveLines();
+    const result = applyEditOperation(
+      {
+        id: 'edit-1', type: 'wb_edit_code', elementId: 'c1',
+        operation: 'insert_after', content: 'x',
+      } as Action & { type: 'wb_edit_code' },
+      before,
+    );
+    expect(result).toBe(before);
+  });
+});
+
+
+describe('applyEditOperation — insert_before', () => {
+  test('inserts the content before lineId', () => {
+    const result = applyEditOperation(
+      {
+        id: 'edit-1', type: 'wb_edit_code', elementId: 'c1',
+        operation: 'insert_before', lineId: 'L3', content: '// note',
+      },
+      fiveLines(),
+    );
+    expect(result).toHaveLength(6);
+    expect(result.slice(0, 2).map((l) => l.id)).toEqual(['L1', 'L2']);
+    expect(result[2].content).toBe('// note');
+    expect(result.slice(3).map((l) => l.id)).toEqual(['L3', 'L4', 'L5']);
+  });
+
+  test('insert_before L1 puts content at index 0', () => {
+    const result = applyEditOperation(
+      {
+        id: 'edit-1', type: 'wb_edit_code', elementId: 'c1',
+        operation: 'insert_before', lineId: 'L1', content: 'header',
+      },
+      fiveLines(),
+    );
+    expect(result[0].content).toBe('header');
+    expect(result.slice(1).map((l) => l.id)).toEqual(['L1', 'L2', 'L3', 'L4', 'L5']);
+  });
+});
+
+
+describe('applyEditOperation — delete_lines', () => {
+  test('removes every line whose id is in lineIds', () => {
+    const result = applyEditOperation(
+      {
+        id: 'edit-1', type: 'wb_edit_code', elementId: 'c1',
+        operation: 'delete_lines', lineIds: ['L2', 'L4'],
+      },
+      fiveLines(),
+    );
+    expect(result.map((l) => l.id)).toEqual(['L1', 'L3', 'L5']);
+  });
+
+  test('no-op when none of the ids match', () => {
+    const before = fiveLines();
+    const result = applyEditOperation(
+      {
+        id: 'edit-1', type: 'wb_edit_code', elementId: 'c1',
+        operation: 'delete_lines', lineIds: ['Lxx', 'Lyy'],
+      },
+      before,
+    );
+    expect(result).toBe(before);
+  });
+
+  test('partial match still removes the matching ones', () => {
+    const result = applyEditOperation(
+      {
+        id: 'edit-1', type: 'wb_edit_code', elementId: 'c1',
+        operation: 'delete_lines', lineIds: ['L1', 'no-such'],
+      },
+      fiveLines(),
+    );
+    expect(result.map((l) => l.id)).toEqual(['L2', 'L3', 'L4', 'L5']);
+  });
+
+  test('empty lineIds is a no-op', () => {
+    const before = fiveLines();
+    const result = applyEditOperation(
+      {
+        id: 'edit-1', type: 'wb_edit_code', elementId: 'c1',
+        operation: 'delete_lines', lineIds: [],
+      },
+      before,
+    );
+    expect(result).toBe(before);
+  });
+});
+
+
+describe('applyEditOperation — replace_lines', () => {
+  test('removes the targeted lines and inserts content at their first position', () => {
+    const result = applyEditOperation(
+      {
+        id: 'edit-1', type: 'wb_edit_code', elementId: 'c1',
+        operation: 'replace_lines', lineIds: ['L2', 'L3'], content: 'X\nY',
+      },
+      fiveLines(),
+    );
+    expect(result).toHaveLength(5);
+    expect(result.map((l) => l.id).slice(0, 1)).toEqual(['L1']);
+    expect(result[1].content).toBe('X');
+    expect(result[2].content).toBe('Y');
+    expect(result.slice(3).map((l) => l.id)).toEqual(['L4', 'L5']);
+  });
+
+  test('replace_lines with non-contiguous ids — first match position is the insertion point', () => {
+    const result = applyEditOperation(
+      {
+        id: 'edit-1', type: 'wb_edit_code', elementId: 'c1',
+        operation: 'replace_lines', lineIds: ['L2', 'L4'], content: 'M',
+      },
+      fiveLines(),
+    );
+    // L2 + L4 removed; replacement 'M' inserted at the position L2
+    // used to occupy among the survivors → between L1 and L3.
+    expect(result.map((l) => l.id).slice(0, 1)).toEqual(['L1']);
+    expect(result[1].content).toBe('M');
+    expect(result.slice(2).map((l) => l.id)).toEqual(['L3', 'L5']);
+  });
+
+  test('no-op when lineIds is empty', () => {
+    const before = fiveLines();
+    const result = applyEditOperation(
+      {
+        id: 'edit-1', type: 'wb_edit_code', elementId: 'c1',
+        operation: 'replace_lines', lineIds: [], content: 'X',
+      },
+      before,
+    );
+    expect(result).toBe(before);
+  });
+});
+
+
+describe('ActionEngine — wb_edit_code dispatch', () => {
+  function preDrawnCodeElement(): WhiteboardElement {
+    return {
+      id: 'a-draw-1', elementId: 'c1', type: 'wb_draw_code',
+      language: 'javascript',
+      code: 'A\nB\nC',
+      x: 0, y: 0,
+      lines: [
+        { id: 'L1', content: 'A' },
+        { id: 'L2', content: 'B' },
+        { id: 'L3', content: 'C' },
+      ],
+    };
+  }
+
+  test('dispatch: insert_after issues updateElement with the spliced lines + waits 600ms', async () => {
+    const ctl = makeController([preDrawnCodeElement()]);
+    const { delay, recorded } = recordingDelay();
+    const engine = new ActionEngine({ whiteboard: ctl, delay });
+
+    await engine.execute({
+      id: 'edit-1', type: 'wb_edit_code', elementId: 'c1',
+      operation: 'insert_after', lineId: 'L1', content: 'NEW',
+    });
+
+    const updateCall = ctl.calls.find((c) => c.method === 'updateElement');
+    expect(updateCall).toBeDefined();
+    expect(updateCall!.args[0]).toBe('c1');
+    const patch = updateCall!.args[1] as { lines: CodeLine[] };
+    expect(patch.lines.map((l) => l.content)).toEqual(['A', 'NEW', 'B', 'C']);
+    expect(recorded).toEqual([600]);
+  });
+
+  test('dispatch: missing element — warns + waits + does NOT call updateElement', async () => {
+    const ctl = makeController();  // empty registry
+    const { delay, recorded } = recordingDelay();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const engine = new ActionEngine({ whiteboard: ctl, delay });
+
+    await engine.execute({
+      id: 'edit-1', type: 'wb_edit_code', elementId: 'no-such',
+      operation: 'insert_after', lineId: 'L1', content: 'x',
+    });
+
+    expect(ctl.calls.some((c) => c.method === 'updateElement')).toBe(false);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('not found'));
+    expect(recorded).toEqual([600]);
+    warnSpy.mockRestore();
+  });
+
+  test('dispatch: missing elementId on action — warns + waits', async () => {
+    const ctl = makeController();
+    const { delay, recorded } = recordingDelay();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const engine = new ActionEngine({ whiteboard: ctl, delay });
+
+    await engine.execute({
+      id: 'edit-1', type: 'wb_edit_code',
+      operation: 'insert_after', lineId: 'L1', content: 'x',
+    } as Action);
+
+    expect(ctl.calls.some((c) => c.method === 'updateElement')).toBe(false);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('elementId'));
+    expect(recorded).toEqual([600]);
+    warnSpy.mockRestore();
+  });
+
+  test('dispatch: no-op edit (insert_after unknown lineId) does NOT call updateElement', async () => {
+    const ctl = makeController([preDrawnCodeElement()]);
+    const { delay, recorded } = recordingDelay();
+    const engine = new ActionEngine({ whiteboard: ctl, delay });
+
+    await engine.execute({
+      id: 'edit-1', type: 'wb_edit_code', elementId: 'c1',
+      operation: 'insert_after', lineId: 'no-such-id', content: 'x',
+    });
+
+    expect(ctl.calls.some((c) => c.method === 'updateElement')).toBe(false);
+    expect(recorded).toEqual([600]);
+  });
+
+  test('end-to-end: wb_draw_code → wb_edit_code(insert_after) flows through addElement→updateElement', async () => {
+    const ctl = makeController();  // empty
+    const { delay } = recordingDelay();
+    const engine = new ActionEngine({ whiteboard: ctl, delay });
+
+    // Draw
+    await engine.execute({
+      id: 'a-draw', type: 'wb_draw_code', elementId: 'c1',
+      language: 'javascript', code: 'one\ntwo\nthree',
+      x: 0, y: 0,
+    });
+    // After add, the controller's getElement should expose lines L1..L3
+    const drawn = ctl.getElement('c1') as WhiteboardElement;
+    expect(drawn).toBeDefined();
+    expect(drawn.type).toBe('wb_draw_code');
+    expect((drawn as { lines: CodeLine[] }).lines.map((l) => l.content)).toEqual(['one', 'two', 'three']);
+
+    // Edit
+    await engine.execute({
+      id: 'a-edit', type: 'wb_edit_code', elementId: 'c1',
+      operation: 'insert_after', lineId: 'L2', content: 'two-and-a-half',
+    });
+
+    const edited = ctl.getElement('c1') as WhiteboardElement;
+    const lines = (edited as { lines: CodeLine[] }).lines;
+    expect(lines.map((l) => l.content)).toEqual([
+      'one', 'two', 'two-and-a-half', 'three',
+    ]);
+    // Original ids preserved on surviving lines
+    expect(lines[0].id).toBe('L1');
+    expect(lines[1].id).toBe('L2');
+    expect(lines[3].id).toBe('L3');
+    // New line has a generated id distinct from L1..L3
+    expect(['L1', 'L2', 'L3']).not.toContain(lines[2].id);
   });
 });

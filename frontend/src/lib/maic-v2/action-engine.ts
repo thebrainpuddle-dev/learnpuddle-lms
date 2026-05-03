@@ -36,7 +36,12 @@
  *     controller from WhiteboardProvider (MAIC-217 wires this).
  */
 import type { Action } from './action-types';
-import type { WhiteboardController, WhiteboardElement } from './whiteboard-state';
+import type {
+  CodeLine,
+  WhiteboardCodeElement,
+  WhiteboardController,
+  WhiteboardElement,
+} from './whiteboard-state';
 
 
 // ── Animation timings (mirror upstream lib/action/engine.ts) ──────
@@ -49,6 +54,7 @@ const WB_CLEAR_BASE_MS = 380;
 const WB_CLEAR_PER_ELEMENT_MS = 55;
 const WB_CLEAR_CAP_MS = 1400;
 const WB_DRAW_COMPONENT_MS = 800;  // upstream:371,396,512,545 — fade-in for text/shape/line/table
+const WB_EDIT_CODE_MS = 600;       // upstream:638 — line-edit transition
 
 
 // ── Options ────────────────────────────────────────────────────────
@@ -127,9 +133,8 @@ export class ActionEngine {
         await this.executeWbDrawComponent(action);
         return;
 
-      // Line-level code edits land in MAIC-214.2.
       case 'wb_edit_code':
-        // DEFERRED: line-level splice — MAIC-214.2
+        await this.executeWbEditCode(action);
         return;
 
       // Phase 6 deferrals — left as no-ops with a debug log.
@@ -218,10 +223,86 @@ export class ActionEngine {
       await this.delay(WB_DRAW_COMPONENT_MS);
       return;
     }
-    // The action is already typed as a WhiteboardElement-compatible
-    // shape (the WhiteboardElement union mirrors these action types).
-    this.whiteboard.addElement(action as unknown as WhiteboardElement);
+
+    if (action.type === 'wb_draw_code') {
+      // wb_draw_code arrives with `code: string`. We split into stable
+      // per-line records here so wb_edit_code (below) can target lines
+      // by id without re-deriving them. Initial IDs are L1..Ln per
+      // index; new lines from edits get UUID-based IDs to avoid
+      // collisions after splices.
+      const lines: CodeLine[] = (action.code ?? '').split('\n').map((content, i) => ({
+        id: `L${i + 1}`,
+        content,
+      }));
+      const augmented: WhiteboardCodeElement = { ...action, lines };
+      this.whiteboard.addElement(augmented);
+    } else {
+      this.whiteboard.addElement(action as unknown as WhiteboardElement);
+    }
+
     await this.delay(WB_DRAW_COMPONENT_MS);
+  }
+
+  /**
+   * wb_edit_code — apply a line-level splice to a previously-drawn
+   * code element. Mirrors upstream lib/action/engine.ts:578-638. Four
+   * operations:
+   *
+   *   insert_after  — insert content (split on '\n') after lineId
+   *   insert_before — insert content before lineId
+   *   delete_lines  — remove every line whose id is in lineIds
+   *   replace_lines — remove lineIds AND insert content at the
+   *                   first removed-line's position
+   *
+   * Missing `lineId`/`lineIds` or unknown ids = no-op (logged at
+   * warn). All line IDs that survive an edit retain their original
+   * id; only inserted lines get fresh ids via crypto.randomUUID.
+   */
+  private async executeWbEditCode(
+    action: Action & { type: 'wb_edit_code' },
+  ): Promise<void> {
+    if (!this.whiteboard) {
+      console.warn('[ActionEngine] wb_edit_code: no whiteboard controller — skipping');
+      await this.delay(WB_EDIT_CODE_MS);
+      return;
+    }
+
+    const elementId = action.elementId;
+    if (!elementId) {
+      console.warn('[ActionEngine] wb_edit_code: missing elementId — skipping');
+      await this.delay(WB_EDIT_CODE_MS);
+      return;
+    }
+
+    // Resolve the target element by reading the current state. We
+    // lazily access state via a getter the controller-side caller
+    // (Stage) wires up via the WhiteboardProvider.  For action-engine
+    // unit tests, the controller is a stub that records calls; tests
+    // pre-seed `lines` via a helper.
+    const target = this.whiteboard.getElement?.(elementId);
+    if (!target || target.type !== 'wb_draw_code') {
+      console.warn(
+        `[ActionEngine] wb_edit_code: element ${JSON.stringify(elementId)} not found or not a code element — skipping`,
+      );
+      await this.delay(WB_EDIT_CODE_MS);
+      return;
+    }
+    const codeElement = target as WhiteboardCodeElement;
+    const currentLines: CodeLine[] = codeElement.lines ?? [];
+
+    const newLines = applyEditOperation(action, currentLines);
+    if (newLines === currentLines) {
+      // applyEditOperation returns the same reference on no-op (e.g.
+      // missing lineId). Nothing to update; still wait so the playback
+      // loop's pacing is consistent across success and no-op edits.
+      await this.delay(WB_EDIT_CODE_MS);
+      return;
+    }
+
+    this.whiteboard.updateElement(elementId, {
+      lines: newLines,
+    } as Partial<WhiteboardElement>);
+    await this.delay(WB_EDIT_CODE_MS);
   }
 
   /**
@@ -254,7 +335,110 @@ export class ActionEngine {
 }
 
 
+// ── Helpers ────────────────────────────────────────────────────────
+
+
+/**
+ * Apply one wb_edit_code operation to a CodeLine[] and return the
+ * resulting array. Returns the SAME reference if no change was made
+ * (missing lineId, empty lineIds, etc.) so the caller can detect a
+ * no-op via reference equality.
+ *
+ * Inserted lines get fresh IDs via crypto.randomUUID().slice(0, 8) —
+ * 8 lowercase hex chars is plenty for collision avoidance within a
+ * single code element. Surviving lines retain their original ids.
+ *
+ * Mirrors upstream lib/action/engine.ts:578-638.
+ */
+export function applyEditOperation(
+  action: Action & { type: 'wb_edit_code' },
+  currentLines: CodeLine[],
+): CodeLine[] {
+  switch (action.operation) {
+    case 'insert_after': {
+      if (!action.lineId) return currentLines;
+      const idx = currentLines.findIndex((l) => l.id === action.lineId);
+      if (idx < 0) return currentLines;
+      const inserted = splitToCodeLines(action.content ?? '');
+      return [
+        ...currentLines.slice(0, idx + 1),
+        ...inserted,
+        ...currentLines.slice(idx + 1),
+      ];
+    }
+    case 'insert_before': {
+      if (!action.lineId) return currentLines;
+      const idx = currentLines.findIndex((l) => l.id === action.lineId);
+      if (idx < 0) return currentLines;
+      const inserted = splitToCodeLines(action.content ?? '');
+      return [
+        ...currentLines.slice(0, idx),
+        ...inserted,
+        ...currentLines.slice(idx),
+      ];
+    }
+    case 'delete_lines': {
+      const ids = new Set(action.lineIds ?? []);
+      if (ids.size === 0) return currentLines;
+      const next = currentLines.filter((l) => !ids.has(l.id));
+      return next.length === currentLines.length ? currentLines : next;
+    }
+    case 'replace_lines': {
+      const ids = new Set(action.lineIds ?? []);
+      if (ids.size === 0) return currentLines;
+      // Insertion point: the first index of any line whose id is in
+      // `ids`. After filtering out the removed ids, the new lines go
+      // at the corresponding position in the filtered array — that's
+      // the count of NOT-ids before the first match.
+      let firstMatchIdx = -1;
+      let insertIdxAfterFilter = 0;
+      for (let i = 0; i < currentLines.length; i++) {
+        if (ids.has(currentLines[i].id)) {
+          firstMatchIdx = i;
+          break;
+        }
+        insertIdxAfterFilter++;
+      }
+      if (firstMatchIdx < 0) return currentLines;
+      const filtered = currentLines.filter((l) => !ids.has(l.id));
+      const inserted = splitToCodeLines(action.content ?? '');
+      return [
+        ...filtered.slice(0, insertIdxAfterFilter),
+        ...inserted,
+        ...filtered.slice(insertIdxAfterFilter),
+      ];
+    }
+    default:
+      return currentLines;
+  }
+}
+
+
+function splitToCodeLines(content: string): CodeLine[] {
+  return content.split('\n').map((c) => ({
+    id: makeLineId(),
+    content: c,
+  }));
+}
+
+
+/**
+ * Generate a fresh line id. crypto.randomUUID is available in
+ * jsdom/happy-dom + every browser we ship to. 8 hex chars is plenty
+ * for collision-avoidance within a single code element (a few hundred
+ * lines max in practice).
+ */
+function makeLineId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID().slice(0, 8);
+  }
+  // Defensive fallback for environments that don't expose crypto
+  // (shouldn't happen on the targets we ship to, but it's cheap).
+  return 'L' + Math.random().toString(36).slice(2, 10);
+}
+
+
 // ── Re-exports for callers that want to hand-write a controller ────
 
 
-export type { WhiteboardController, WhiteboardElement };
+export type { CodeLine, WhiteboardCodeElement, WhiteboardController, WhiteboardElement };
