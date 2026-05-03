@@ -196,3 +196,184 @@ async def test_authenticated_same_tenant_connects_successfully(monkeypatch):
     connected, _ = await communicator.connect()
     assert connected is True
     await communicator.disconnect()
+
+
+# ── MAIC-110.3: session-state container ────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_safe_send_json_short_circuits_when_writer_dead():
+    """A send attempt with `_writer_alive=False` returns False without
+    touching the underlying transport. This is the guard MAIC-110.4's
+    interrupt handler relies on — between cancel() and the next yield,
+    we never push another frame onto a dead socket."""
+    from apps.maic.consumers import ClassroomConsumer
+
+    consumer = ClassroomConsumer()
+    consumer._writer_alive = False
+    sent: list = []
+
+    async def _capture(payload):
+        sent.append(payload)
+
+    consumer.send_json = _capture  # type: ignore[assignment]
+    result = await consumer._safe_send_json({"type": "x"})
+    assert result is False
+    assert sent == []
+
+
+@pytest.mark.asyncio
+async def test_safe_send_json_passes_through_when_alive():
+    from apps.maic.consumers import ClassroomConsumer
+
+    consumer = ClassroomConsumer()
+    consumer._writer_alive = True
+    sent: list = []
+
+    async def _capture(payload):
+        sent.append(payload)
+
+    consumer.send_json = _capture  # type: ignore[assignment]
+    result = await consumer._safe_send_json({"type": "agent_start"})
+    assert result is True
+    assert sent == [{"type": "agent_start"}]
+
+
+@pytest.mark.asyncio
+async def test_safe_send_json_marks_writer_dead_on_send_failure():
+    """When the underlying transport raises (socket already torn down),
+    the guard flips `_writer_alive` to False so subsequent calls
+    short-circuit instead of raising again."""
+    from apps.maic.consumers import ClassroomConsumer
+
+    consumer = ClassroomConsumer()
+    consumer._writer_alive = True
+
+    async def _boom(_payload):
+        raise ConnectionResetError("transport gone")
+
+    consumer.send_json = _boom  # type: ignore[assignment]
+    result = await consumer._safe_send_json({"type": "x"})
+    assert result is False
+    assert consumer._writer_alive is False
+
+
+@pytest.mark.asyncio
+async def test_cancel_in_flight_is_idempotent_with_no_task():
+    """Defensive: calling _cancel_in_flight when no task has been
+    spawned (e.g. disconnect before any `start`) is a no-op."""
+    from apps.maic.consumers import ClassroomConsumer
+
+    consumer = ClassroomConsumer()
+    consumer._classroom_task = None
+    await consumer._cancel_in_flight()  # must not raise
+
+
+@pytest.mark.asyncio
+async def test_cancel_in_flight_cancels_running_task():
+    """A running task must be cancelled and awaited to completion so
+    subsequent `start` calls don't race with its teardown."""
+    import asyncio
+    from apps.maic.consumers import ClassroomConsumer
+
+    consumer = ClassroomConsumer()
+
+    async def _slow():
+        await asyncio.sleep(10)
+
+    consumer._classroom_task = asyncio.create_task(_slow())
+    await asyncio.sleep(0)  # let task start
+    await consumer._cancel_in_flight()
+    assert consumer._classroom_task.done()
+    assert consumer._classroom_task.cancelled()
+
+
+@pytest.mark.asyncio
+async def test_cancel_in_flight_skips_already_completed_task():
+    """If the task has already finished naturally (e.g. stream drained),
+    cancel is a no-op — we don't want to swallow its result by
+    re-cancelling a done task."""
+    import asyncio
+    from apps.maic.consumers import ClassroomConsumer
+
+    consumer = ClassroomConsumer()
+
+    async def _quick():
+        return None
+
+    consumer._classroom_task = asyncio.create_task(_quick())
+    await consumer._classroom_task  # wait for natural completion
+    await consumer._cancel_in_flight()  # must not raise
+    assert consumer._classroom_task.done()
+    assert not consumer._classroom_task.cancelled()
+
+
+@pytest.mark.asyncio
+@override_settings(ALLOWED_HOSTS=["*"])
+async def test_start_action_spawns_tracked_task_and_records_state(monkeypatch):
+    """End-to-end: a `start` frame on a connected WS spawns the stream
+    as an asyncio.Task tracked on the consumer, and stashes the
+    initial OrchestratorState. Both are required for MAIC-110.4's
+    interrupt + 110.5's resume to know what to cancel and what to
+    restart from.
+
+    Uses the same JWT/tenant monkeypatch pattern as the tenant-gate
+    happy-path test above, plus a stub of stream_classroom that yields
+    one frame and then sleeps so the test can observe the in-flight
+    task before it completes.
+    """
+    import asyncio
+    from types import SimpleNamespace
+
+    async def _fake_call(self, scope, receive, send):
+        scope["user"] = SimpleNamespace(
+            is_anonymous=False, id=42, tenant_id=222,
+        )
+        scope["accepted_subprotocol"] = None
+        return await self.inner(scope, receive, send)
+
+    from apps.notifications.middleware import JWTAuthMiddleware
+    monkeypatch.setattr(JWTAuthMiddleware, "__call__", _fake_call)
+
+    async def _fake_resolve(session_id, user):
+        return SimpleNamespace(id=session_id, tenant_id=user.tenant_id), False
+
+    monkeypatch.setattr(
+        "apps.maic.consumers._resolve_or_create_session", _fake_resolve,
+    )
+
+    # Stub stream_classroom so the test doesn't depend on the full
+    # LangGraph + edge_tts pipeline. We yield one frame then await
+    # forever so the task stays in-flight while we assert.
+    async def _fake_stream(initial_state):
+        yield {"type": "agent_start", "data": {"agentId": "default-1"}}
+        await asyncio.sleep(60)  # simulates a long stream
+
+    monkeypatch.setattr(
+        "apps.maic.orchestration.director_graph.stream_classroom",
+        _fake_stream,
+    )
+
+    import importlib
+    from config import asgi as asgi_mod
+    importlib.reload(asgi_mod)
+
+    communicator = WebsocketCommunicator(
+        asgi_mod.application,
+        "/ws/maic/v2/classroom/start-task-test/",
+    )
+    connected, _ = await communicator.connect()
+    assert connected is True
+
+    await communicator.send_json_to({
+        "action": "start",
+        "data": {"agentIds": ["default-1"], "maxTurns": 1},
+    })
+
+    # The stub yields one frame; receive it to confirm the task is live.
+    frame = await communicator.receive_json_from(timeout=2)
+    assert frame == {"type": "agent_start", "data": {"agentId": "default-1"}}
+
+    # Disconnect cancels the in-flight asyncio.Task — if the cancel
+    # path were broken, this would hang past the 2s timeout.
+    await communicator.disconnect()

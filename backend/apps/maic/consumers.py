@@ -6,7 +6,8 @@ Wire format (matches OpenMAIC StatelessEvent — `lib/types/chat.ts`):
                           "agent_end" | "thinking" | "cue_user" |
                           "speech_audio" | "error",
                   "data": {...}}
-  → to server:   {"action": "start" | "interrupt" | "resume" | "stop",
+  → to server:   {"action": "start" | "interrupt" | "resume" | "stop"
+                          | "user_message",
                   "data": {...}}
 
 Auth: JWT in `Sec-WebSocket-Protocol: Bearer.<jwt>` subprotocol, parsed
@@ -28,9 +29,25 @@ Tenant binding (MAIC-101):
   link" flows work without an explicit HTTP-create step. MAIC-301 will
   add the explicit POST /api/maic/v2/sessions/ route for the regular
   flow; both write the same `maic_session_v2` row.
+
+Session-state container (MAIC-110.3):
+  Each connection holds two pieces of mutable state:
+    * `_classroom_task` — the in-flight asyncio.Task running the
+      LangGraph stream, or None when no stream is active.
+    * `_state` — the OrchestratorState the stream was started with.
+      Phase 3's interrupt/resume/user_message handlers reuse this
+      state on resume so the conversation context survives an
+      interrupt without round-tripping through the client.
+
+  A `_writer_alive` flag is set to False when the connection closes
+  or a stream is cancelled mid-frame; the streaming helper checks it
+  before every send_json so an interrupt landing between two frames
+  doesn't blow up on a dead transport. (MAIC-110.4 is the first
+  consumer of the writer-guard pattern — 110.3 just establishes it.)
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -99,9 +116,11 @@ class ClassroomConsumer(AsyncJsonWebsocketConsumer):
 
     Lifecycle:
       connect()      — auth check, tenant gate, session resolve/create
-      receive_json() — dispatch on `action` field; streams from the
-                       LangGraph director (MAIC-005)
-      disconnect()   — log only (no group cleanup in Phase 1)
+      receive_json() — dispatch on `action` field; spawns the LangGraph
+                       stream as a tracked task (MAIC-110.3) so future
+                       handlers (interrupt/resume/user_message —
+                       MAIC-110.4/.5) can cancel + resume cleanly.
+      disconnect()   — cancel any in-flight task, mark writer dead.
     """
 
     async def connect(self) -> None:
@@ -130,6 +149,11 @@ class ClassroomConsumer(AsyncJsonWebsocketConsumer):
             return
         self.session = session
 
+        # MAIC-110.3: per-connection session-state container.
+        self._classroom_task: asyncio.Task[None] | None = None
+        self._state: dict[str, Any] | None = None
+        self._writer_alive: bool = True
+
         # Echo the JWT-bearing subprotocol — the WebSocket spec requires the
         # server to choose one of the client's offered subprotocols for the
         # handshake to succeed (same pattern as apps/notifications consumer).
@@ -144,25 +168,116 @@ class ClassroomConsumer(AsyncJsonWebsocketConsumer):
         )
 
     async def disconnect(self, close_code: int) -> None:
+        # Mark the writer dead BEFORE cancelling — the streaming helper
+        # checks this flag between frames so a cancel landing mid-frame
+        # doesn't try to send on a dead transport.
+        self._writer_alive = False
+
+        task = getattr(self, "_classroom_task", None)
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                # Best-effort cleanup — the connection is already closing.
+                pass
+
         logger.info(
             "MAIC v2 WS disconnect session=%s code=%d",
             getattr(self, "session_id", "<pre-accept>"),
             close_code,
         )
 
+    # ── Internal helpers ───────────────────────────────────────────────
+
+    async def _safe_send_json(self, payload: dict[str, Any]) -> bool:
+        """Send a frame iff the writer is still alive.
+
+        Returns True on success, False if the writer was already marked
+        dead or if the underlying send raised. Callers that need to
+        bail out of a streaming loop check the return value.
+        """
+        if not self._writer_alive:
+            return False
+        try:
+            await self.send_json(payload)
+            return True
+        except Exception:  # noqa: BLE001 — transport gone, mark dead
+            self._writer_alive = False
+            return False
+
+    async def _run_classroom_stream(self, initial_state: dict[str, Any]) -> None:
+        """Drain the LangGraph stream into the WS, frame-by-frame.
+
+        Cancellation safety: every frame send is gated by
+        `_writer_alive`, so a `task.cancel()` between two frames simply
+        returns `False` from the next `_safe_send_json` and the loop
+        unwinds via `CancelledError` on the next `await`.
+        """
+        from apps.maic.exceptions import MaicGraphError
+        from .orchestration.director_graph import stream_classroom
+
+        try:
+            async for event in stream_classroom(initial_state):
+                if not self._writer_alive:
+                    return
+                await self._safe_send_json(event)
+        except asyncio.CancelledError:
+            # Caller (interrupt/disconnect) explicitly cancelled — just
+            # propagate. The director graph's own task cleanup is
+            # handled by langgraph internally.
+            raise
+        except MaicGraphError as exc:
+            logger.exception(
+                "MAIC v2 graph error session=%s",
+                getattr(self, "session_id", "?"),
+            )
+            await self._safe_send_json({
+                "type": "error",
+                "data": {"message": str(exc)},
+            })
+        except Exception as exc:  # noqa: BLE001 — surface as wire-error frame
+            logger.exception(
+                "MAIC v2 stream errored session=%s",
+                getattr(self, "session_id", "?"),
+            )
+            await self._safe_send_json({
+                "type": "error",
+                "data": {"message": str(exc)},
+            })
+
+    async def _cancel_in_flight(self) -> None:
+        """Cancel any running classroom task and await its teardown.
+
+        Idempotent: safe to call when no task is running. Used by both
+        `disconnect()` and (in MAIC-110.4) the `interrupt`/`stop`
+        handlers — both need the same race-safe shutdown sequence.
+        """
+        task = getattr(self, "_classroom_task", None)
+        if task is None or task.done():
+            return
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            pass
+
+    # ── Inbound dispatch ───────────────────────────────────────────────
+
     async def receive_json(self, content: dict[str, Any], **kwargs) -> None:
         action = content.get("action")
 
         if action == "start":
-            # MAIC-005: streams events from the LangGraph director.  The
-            # graph's Phase-0 stub emits the same agent_start → text_delta
-            # → agent_end triplet the placeholder did, so this swap is
-            # invisible to clients.
-            from .orchestration.director_graph import (
-                build_initial_state,
-                stream_classroom,
-            )
-            from apps.maic.exceptions import MaicGraphError
+            # MAIC-005: streams events from the LangGraph director.
+            # MAIC-110.3: the stream now runs as a tracked asyncio.Task
+            # so future handlers (interrupt/stop/user_message —
+            # MAIC-110.4/.5) can cancel and resume it.
+            from .orchestration.director_graph import build_initial_state
+
+            # Defensive: a fresh `start` with a stream still running is
+            # a client bug, but we'd rather cancel cleanly than spawn
+            # parallel streams on the same connection.
+            await self._cancel_in_flight()
 
             data = content.get("data") or {}
             initial_state = build_initial_state(
@@ -170,23 +285,21 @@ class ClassroomConsumer(AsyncJsonWebsocketConsumer):
                 available_agent_ids=data.get("agentIds"),
                 max_turns=int(data.get("maxTurns", 1)),
             )
-            try:
-                async for event in stream_classroom(initial_state):
-                    await self.send_json(event)
-            except MaicGraphError as exc:
-                logger.exception(
-                    "MAIC v2 graph error session=%s",
-                    getattr(self, "session_id", "?"),
-                )
-                await self.send_json({
-                    "type": "error",
-                    "data": {"message": str(exc)},
-                })
+            self._state = initial_state
+            self._classroom_task = asyncio.create_task(
+                self._run_classroom_stream(initial_state)
+            )
             return
 
-        # Unknown action — non-fatal; future-compat for client iterations
-        logger.warning("MAIC v2 WS: unknown action=%r session=%s", action, getattr(self, "session_id", "?"))
-        await self.send_json({
+        # Unknown action — non-fatal; future-compat for client iterations.
+        # MAIC-110.4 / 110.5 will replace this catch-all with proper
+        # branches for interrupt / stop / resume / user_message.
+        logger.warning(
+            "MAIC v2 WS: unknown action=%r session=%s",
+            action,
+            getattr(self, "session_id", "?"),
+        )
+        await self._safe_send_json({
             "type": "error",
             "data": {"message": f"unknown action: {action!r}"},
         })
