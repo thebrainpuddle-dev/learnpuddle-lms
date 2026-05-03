@@ -46,6 +46,7 @@ import {
 import { useMaicClassroomChannelV2 } from '../../hooks/useMaicClassroomChannelV2';
 
 import { AgentOverlay } from './AgentOverlay';
+import { SpotlightOverlay } from './SpotlightOverlay';
 import { StageControls } from './StageControls';
 import { Transcript } from './Transcript';
 import { Whiteboard } from './Whiteboard';
@@ -228,12 +229,15 @@ function StageInner({
           LaserOverlay (216) can absolute-mount over it once they ship. */}
       <div className="relative">
         <Whiteboard />
-        {/*
-          Effect overlay slots — MAIC-215 + MAIC-216 will drop their
-          components here. For now we expose the active-effect kind via
-          the data attribute so e2e + visual tests can verify the
-          callback bridge wiring even before the overlays render.
-        */}
+        {activeEffect?.kind === 'spotlight' && (
+          <SpotlightOverlay
+            key={`spotlight-${activeEffect.targetId}`}
+            targetId={activeEffect.targetId}
+            dimOpacity={activeEffect.dimOpacity}
+            onClear={() => setActiveEffect(null)}
+          />
+        )}
+        {/* MAIC-216 LaserOverlay slot drops in here. */}
       </div>
 
       <Transcript
