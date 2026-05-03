@@ -35,6 +35,10 @@ import {
   PlaybackEngine,
   type Scene,
 } from '../../lib/maic-v2/playback-engine';
+import {
+  createPlaybackPersistence,
+  type PlaybackPersistence,
+} from '../../lib/maic-v2/playbackPersistence';
 import type { EngineMode, Effect } from '../../lib/maic-v2/playback-types';
 import { buildSceneFromBuffer } from '../../lib/maic-v2/scene-builder';
 import { useSceneBuffer } from '../../lib/maic-v2/use-scene-buffer';
@@ -66,6 +70,13 @@ export interface StageProps {
    * unset and get the real setTimeout-based delay.
    */
   actionEngineOptions?: ActionEngineOptions;
+  /**
+   * Test-only override for the PlaybackPersistence backend (MAIC-412).
+   * Production callers leave this unset and get the localStorage-backed
+   * default scoped by `sessionId`. Tests pass an in-memory stub to
+   * assert save/load semantics without touching the real Storage.
+   */
+  persistence?: PlaybackPersistence;
 }
 
 
@@ -89,8 +100,18 @@ function StageInner({
   baseUrl,
   autoConnect = true,
   actionEngineOptions,
+  persistence: persistenceProp,
 }: StageProps) {
   const whiteboardController = useWhiteboardController();
+
+  // MAIC-412: persistence handle scoped by sessionId. Created once per
+  // sessionId so two reloads of the same session share storage; tests
+  // can override via the `persistence` prop to assert save/load
+  // semantics without touching real localStorage.
+  const persistence = useMemo<PlaybackPersistence>(
+    () => persistenceProp ?? createPlaybackPersistence(sessionId),
+    [sessionId, persistenceProp],
+  );
 
   // ── Channel + buffered state ───────────────────────────────────
   const { status: channelStatus, events, send } = useMaicClassroomChannelV2({
@@ -169,15 +190,32 @@ function StageInner({
       {
         onModeChange: (m) => setEngineMode(m),
         onEffectFire: (effect) => setActiveEffect(effect),
+        // MAIC-412: persist progress on every action consume so a
+        // reload restores at the same action.
+        onProgress: (snapshot) => persistence.save(snapshot),
         onComplete: () => {
           // Stage freezes on completion; user can hit Stop to reset.
           // Phase 410 will dispatch the next turn here.
+          // MAIC-412: clear persisted snapshot — completion means
+          // there's nothing left to resume.
+          persistence.clear();
         },
       },
     );
     engineRef.current = engine;
-    engine.start();
-  }, [buffer.status, scene, backendKicked, engineMode]);
+
+    // MAIC-412: try to resume from a saved snapshot before starting.
+    // restoreFromSnapshot already discards the snapshot on sceneId
+    // mismatch (engine.ts:138) so a stale entry from a different scene
+    // simply falls through to a fresh start.
+    const saved = persistence.load();
+    if (saved && saved.sceneId === scene.id) {
+      engine.restoreFromSnapshot(saved);
+      engine.continuePlayback();
+    } else {
+      engine.start();
+    }
+  }, [buffer.status, scene, backendKicked, engineMode, persistence]);
 
   // ── Control callbacks ──────────────────────────────────────────
   const onStart = useCallback(() => {
@@ -194,7 +232,10 @@ function StageInner({
     engineRef.current = null;
     setEngineMode('idle');
     setActiveEffect(null);
-  }, []);
+    // MAIC-412: explicit Stop discards saved progress — the user has
+    // chosen to abandon this run, not pause it.
+    persistence.clear();
+  }, [persistence]);
 
   // ── Derived render state ───────────────────────────────────────
   const messageOrder = useMemo(

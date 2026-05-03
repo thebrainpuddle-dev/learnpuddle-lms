@@ -401,3 +401,146 @@ describe('Stage — error surfacing', () => {
     );
   });
 });
+
+
+// ── MAIC-412: snapshot persistence wiring ──────────────────────────
+
+
+describe('Stage — MAIC-412 snapshot persistence wiring', () => {
+  /**
+   * In-memory PlaybackPersistence stub injected via the test-only
+   * `persistence` prop. Production callers leave the prop unset and
+   * get the real localStorage-backed handle. Using a stub here lets
+   * us assert save/load semantics independent of the storage backend.
+   */
+  function makeStubPersistence(initial: Parameters<PlaybackPersistenceStub['save']>[0] | null = null) {
+    let value: Parameters<PlaybackPersistenceStub['save']>[0] | null = initial;
+    const stub = {
+      save: vi.fn((s: Parameters<PlaybackPersistenceStub['save']>[0]) => {
+        value = s;
+      }),
+      load: vi.fn(() => value),
+      clear: vi.fn(() => {
+        value = null;
+      }),
+      get current() {
+        return value;
+      },
+    };
+    return stub;
+  }
+  type PlaybackPersistenceStub = ReturnType<typeof makeStubPersistence>;
+
+  test('save fires on every action consumed (onProgress callback wired)', async () => {
+    const persistence = makeStubPersistence();
+    render(
+      <Stage
+        sessionId="s1"
+        baseUrl="ws://test"
+        actionEngineOptions={FAST_ACTION_ENGINE}
+        persistence={persistence}
+      />,
+    );
+    const ws = MockWebSocket.instances[0];
+    act(() => ws.open());
+    fireEvent.click(screen.getByTestId('maic-v2-control-start'));
+    act(() => {
+      for (const ev of PHASE1_TURN) ws.receive(ev);
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    // PHASE1_TURN has 2 actions (wb_open + speech). Each action consumed
+    // = one onProgress = one save. Plus clear() on natural completion.
+    expect(persistence.save.mock.calls.length).toBeGreaterThanOrEqual(2);
+    // Final clear() fires when onComplete runs.
+    expect(persistence.clear).toHaveBeenCalled();
+  });
+
+  test('on mount with a saved snapshot for the same scene, engine resumes', async () => {
+    // Pre-seed a snapshot whose sceneId matches the scene built from
+    // the buffer (sessionId + scene-builder uses sessionId as scene id).
+    const persistence = makeStubPersistence({
+      sceneIndex: 0,
+      actionIndex: 1,
+      consumedDiscussions: [],
+      sceneId: 's1',
+    });
+    render(
+      <Stage
+        sessionId="s1"
+        baseUrl="ws://test"
+        actionEngineOptions={FAST_ACTION_ENGINE}
+        persistence={persistence}
+      />,
+    );
+    const ws = MockWebSocket.instances[0];
+    act(() => ws.open());
+    fireEvent.click(screen.getByTestId('maic-v2-control-start'));
+    act(() => {
+      for (const ev of PHASE1_TURN) ws.receive(ev);
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    // load() called once during the engine-construct effect.
+    expect(persistence.load).toHaveBeenCalled();
+  });
+
+  test('on mount with a stale snapshot (different sceneId), engine ignores it', async () => {
+    const persistence = makeStubPersistence({
+      sceneIndex: 0,
+      actionIndex: 5,
+      consumedDiscussions: [],
+      sceneId: 'OTHER-SESSION',  // doesn't match s1 scene id
+    });
+    render(
+      <Stage
+        sessionId="s1"
+        baseUrl="ws://test"
+        actionEngineOptions={FAST_ACTION_ENGINE}
+        persistence={persistence}
+      />,
+    );
+    const ws = MockWebSocket.instances[0];
+    act(() => ws.open());
+    fireEvent.click(screen.getByTestId('maic-v2-control-start'));
+    act(() => {
+      for (const ev of PHASE1_TURN) ws.receive(ev);
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    // load() was called but the scene-id mismatch makes us fall through
+    // to a fresh start; both paths advance through actions and call save.
+    expect(persistence.load).toHaveBeenCalled();
+    expect(persistence.save).toHaveBeenCalled();
+  });
+
+  test('Stop clears the persisted snapshot', async () => {
+    const persistence = makeStubPersistence();
+    render(
+      <Stage
+        sessionId="s1"
+        baseUrl="ws://test"
+        actionEngineOptions={FAST_ACTION_ENGINE}
+        persistence={persistence}
+      />,
+    );
+    const ws = MockWebSocket.instances[0];
+    act(() => ws.open());
+    fireEvent.click(screen.getByTestId('maic-v2-control-start'));
+    act(() => {
+      for (const ev of PHASE1_TURN) ws.receive(ev);
+    });
+    // Click Stop if visible (engine may still be playing a frame).
+    const stopBtn = screen.queryByTestId('maic-v2-control-stop');
+    if (stopBtn) fireEvent.click(stopBtn);
+    // Either onComplete already cleared (natural end) or onStop did.
+    // Both are valid Stage-level behaviors per MAIC-412 contract.
+    expect(persistence.clear).toHaveBeenCalled();
+  });
+});

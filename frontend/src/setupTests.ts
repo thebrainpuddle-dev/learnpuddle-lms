@@ -8,6 +8,56 @@ import '@testing-library/jest-dom';
 // This is the standard migration shim — remove once all tests import from 'vitest' directly.
 (globalThis as any).jest = vi;
 
+// ── localStorage / sessionStorage polyfill ──
+//
+// happy-dom in this vitest config emits a `--localstorage-file was provided
+// without a valid path` warning and exposes window.localStorage as a plain
+// `{}` literal — every Storage method (setItem, getItem, removeItem, clear,
+// key, length) is missing, so any production code that touches localStorage
+// explodes during tests.
+//
+// This is NOT a mock — it's a real in-memory Storage implementation that
+// satisfies the standard DOM Storage API, backed by a Map. Production code
+// stays untouched; only the test environment's broken native is replaced
+// with a working real Storage. If a future vitest/happy-dom upgrade fixes
+// the native, this polyfill becomes redundant: the install is gated on
+// `typeof setItem === 'function'`, so a working native short-circuits it.
+function _installInMemoryStorage(name: 'localStorage' | 'sessionStorage'): void {
+  const existing = (window as unknown as Record<string, unknown>)[name];
+  if (existing && typeof (existing as Storage).setItem === 'function') {
+    return;
+  }
+  const map = new Map<string, string>();
+  const storage: Storage = {
+    get length(): number {
+      return map.size;
+    },
+    clear(): void {
+      map.clear();
+    },
+    getItem(key: string): string | null {
+      return map.has(key) ? map.get(key)! : null;
+    },
+    key(index: number): string | null {
+      return Array.from(map.keys())[index] ?? null;
+    },
+    removeItem(key: string): void {
+      map.delete(key);
+    },
+    setItem(key: string, value: string): void {
+      map.set(String(key), String(value));
+    },
+  };
+  Object.defineProperty(window, name, {
+    value: storage,
+    writable: false,
+    configurable: true,
+  });
+}
+
+_installInMemoryStorage('localStorage');
+_installInMemoryStorage('sessionStorage');
+
 // Tiptap packages ship ESM that CRA/Jest doesn't transpile from node_modules.
 // Mock these modules globally so tests can import pages/components that use RichTextEditor.
 vi.mock('@tiptap/react', () => {
