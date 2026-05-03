@@ -115,7 +115,14 @@ describe('Whiteboard — element-list rendering', () => {
     expect(screen.getByTestId('maic-v2-wb-table')).toBeInTheDocument();
   });
 
-  test('routes wb_draw_chart/latex/code to placeholder until renderers ship', () => {
+  test('routes wb_draw_latex to LatexElement (MAIC-212)', () => {
+    mount({
+      elements: [{ id: 'l1', type: 'wb_draw_latex', latex: '\\frac{1}{2}', x: 0, y: 0 }],
+    });
+    expect(screen.getByTestId('maic-v2-wb-latex')).toBeInTheDocument();
+  });
+
+  test('routes wb_draw_chart/code to placeholder until renderers ship', () => {
     const elements: WhiteboardElement[] = [
       {
         id: 'c1',
@@ -124,11 +131,10 @@ describe('Whiteboard — element-list rendering', () => {
         x: 0, y: 0, width: 100, height: 100,
         data: { labels: [], legends: [], series: [] },
       },
-      { id: 'l1', type: 'wb_draw_latex', latex: 'x', x: 50, y: 0 },
       { id: 'co1', type: 'wb_draw_code', language: 'js', code: 'x', x: 100, y: 0 },
     ];
     mount({ elements });
-    expect(screen.getAllByTestId('maic-v2-wb-placeholder')).toHaveLength(3);
+    expect(screen.getAllByTestId('maic-v2-wb-placeholder')).toHaveLength(2);
   });
 
   test('renders multiple elements in registry order', () => {

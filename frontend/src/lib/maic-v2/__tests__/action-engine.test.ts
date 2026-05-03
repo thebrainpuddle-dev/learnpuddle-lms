@@ -228,6 +228,20 @@ describe('ActionEngine — wb_draw_* component renderers (211.2)', () => {
     expect(recorded).toEqual([800]);
   });
 
+  test('wb_draw_latex adds element + waits 800 ms', async () => {
+    const ctl = makeController();
+    const { delay, recorded } = recordingDelay();
+    const engine = new ActionEngine({ whiteboard: ctl, delay });
+    const action: Action = {
+      id: 'a1', type: 'wb_draw_latex', latex: '\\frac{1}{2}', x: 0, y: 0,
+    };
+
+    await engine.execute(action);
+
+    expect(ctl.calls).toEqual([{ method: 'addElement', args: [action] }]);
+    expect(recorded).toEqual([800]);
+  });
+
   test('wb_draw_table adds element + waits 800 ms', async () => {
     const ctl = makeController();
     const { delay, recorded } = recordingDelay();
@@ -259,7 +273,7 @@ describe('ActionEngine — wb_draw_* component renderers (211.2)', () => {
 
 
 describe('ActionEngine — deferred actions resolve immediately', () => {
-  test('wb_draw_chart/latex/code + wb_edit_code resolve without renderer (MAIC-212/213/214)', async () => {
+  test('wb_draw_chart/code + wb_edit_code resolve without renderer (MAIC-213/214)', async () => {
     const engine = new ActionEngine({ delay: noDelay() });
     const drawActions: Action[] = [
       {
@@ -269,7 +283,6 @@ describe('ActionEngine — deferred actions resolve immediately', () => {
         x: 0, y: 0, width: 100, height: 100,
         data: { labels: [], legends: [], series: [] },
       },
-      { id: '4', type: 'wb_draw_latex', latex: 'x', x: 0, y: 0 },
       { id: '7', type: 'wb_draw_code', language: 'js', code: 'x', x: 0, y: 0 },
       {
         id: '8',
