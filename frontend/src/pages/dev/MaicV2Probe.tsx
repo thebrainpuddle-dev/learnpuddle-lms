@@ -12,6 +12,7 @@ import { useEffect, useState } from 'react';
 import { useMaicClassroomChannelV2 } from '../../hooks/useMaicClassroomChannelV2';
 import { Stage } from '../../components/maic-v2/Stage';
 import { useAuthStore } from '../../stores/authStore';
+import Phase2PlaybackDemo from './Phase2PlaybackDemo';
 import Phase2StaticDemo from './Phase2StaticDemo';
 
 export default function MaicV2Probe() {
@@ -23,6 +24,7 @@ export default function MaicV2Probe() {
       ? new URLSearchParams(window.location.search).get('scene')
       : null;
   const isStaticDemo = sceneParam === 'phase2-static';
+  const isPlaybackDemo = sceneParam === 'phase2-demo';
 
   const [sessionId] = useState(() => `dev-${Math.random().toString(36).slice(2, 10)}`);
   const accessToken = useAuthStore((s) => s.accessToken);
@@ -33,10 +35,10 @@ export default function MaicV2Probe() {
   // of these three is sufficient.  Production builds never set the env
   // var, so this short-circuit is dev-only by construction.
   useEffect(() => {
-    // Static demo bypasses Stage entirely — skip token injection so
-    // the App's tenant-config/auth-me side effects never fire and
-    // can't 401-cascade us to /login.
-    if (isStaticDemo) return;
+    // Static + playback demos bypass Stage entirely — skip token
+    // injection so the App's tenant-config/auth-me side effects
+    // never fire and can't 401-cascade us to /login.
+    if (isStaticDemo || isPlaybackDemo) return;
     if (accessToken) {
       setTokenReady(true);
       return;
@@ -63,7 +65,7 @@ export default function MaicV2Probe() {
       } as never);
       setTokenReady(true);
     }
-  }, [accessToken, isStaticDemo]);
+  }, [accessToken, isStaticDemo, isPlaybackDemo]);
 
   // Raw event log — second WS connection so the Stage's hook owns its
   // own state.  Cheap (one extra WS, dev-only).
@@ -74,6 +76,9 @@ export default function MaicV2Probe() {
 
   if (isStaticDemo) {
     return <Phase2StaticDemo />;
+  }
+  if (isPlaybackDemo) {
+    return <Phase2PlaybackDemo />;
   }
 
   return (
