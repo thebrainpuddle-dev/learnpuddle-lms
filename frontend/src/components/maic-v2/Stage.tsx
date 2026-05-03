@@ -46,6 +46,7 @@ import {
 import { useMaicClassroomChannelV2 } from '../../hooks/useMaicClassroomChannelV2';
 
 import { AgentOverlay } from './AgentOverlay';
+import { LaserOverlay } from './LaserOverlay';
 import { SpotlightOverlay } from './SpotlightOverlay';
 import { StageControls } from './StageControls';
 import { Transcript } from './Transcript';
@@ -237,7 +238,14 @@ function StageInner({
             onClear={() => setActiveEffect(null)}
           />
         )}
-        {/* MAIC-216 LaserOverlay slot drops in here. */}
+        {activeEffect?.kind === 'laser' && (
+          <LaserOverlay
+            key={`laser-${activeEffect.targetId}`}
+            targetId={activeEffect.targetId}
+            color={activeEffect.color}
+            onClear={() => setActiveEffect(null)}
+          />
+        )}
       </div>
 
       <Transcript
