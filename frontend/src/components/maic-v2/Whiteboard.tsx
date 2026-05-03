@@ -29,6 +29,7 @@ import {
   type WhiteboardElement,
 } from '../../lib/maic-v2/whiteboard-state';
 
+import { ChartElement } from './whiteboard/ChartElement';
 import { LatexElement } from './whiteboard/LatexElement';
 import { LineElement } from './whiteboard/LineElement';
 import { ShapeElement } from './whiteboard/ShapeElement';
@@ -55,10 +56,11 @@ function renderElement(element: WhiteboardElement) {
       return <TableElement key={key} element={element} />;
     case 'wb_draw_latex':
       return <LatexElement key={key} element={element} />;
+    case 'wb_draw_chart':
+      return <ChartElement key={key} element={element} />;
 
     // Renderers shipped by later sub-chunks; until then, a placeholder
     // box so the smoke shows the agent's geometric intent.
-    case 'wb_draw_chart':   // MAIC-213
     case 'wb_draw_code':    // MAIC-214.1
       return <PlaceholderElement key={key} element={element as Action & {x:number;y:number;width?:number;height?:number}} />;
 

@@ -228,6 +228,22 @@ describe('ActionEngine — wb_draw_* component renderers (211.2)', () => {
     expect(recorded).toEqual([800]);
   });
 
+  test('wb_draw_chart adds element + waits 800 ms', async () => {
+    const ctl = makeController();
+    const { delay, recorded } = recordingDelay();
+    const engine = new ActionEngine({ whiteboard: ctl, delay });
+    const action: Action = {
+      id: 'a1', type: 'wb_draw_chart', chartType: 'bar',
+      x: 0, y: 0, width: 200, height: 100,
+      data: { labels: ['a'], legends: ['x'], series: [[1]] },
+    };
+
+    await engine.execute(action);
+
+    expect(ctl.calls).toEqual([{ method: 'addElement', args: [action] }]);
+    expect(recorded).toEqual([800]);
+  });
+
   test('wb_draw_latex adds element + waits 800 ms', async () => {
     const ctl = makeController();
     const { delay, recorded } = recordingDelay();
@@ -273,16 +289,9 @@ describe('ActionEngine — wb_draw_* component renderers (211.2)', () => {
 
 
 describe('ActionEngine — deferred actions resolve immediately', () => {
-  test('wb_draw_chart/code + wb_edit_code resolve without renderer (MAIC-213/214)', async () => {
+  test('wb_draw_code + wb_edit_code resolve without renderer (MAIC-214)', async () => {
     const engine = new ActionEngine({ delay: noDelay() });
     const drawActions: Action[] = [
-      {
-        id: '3',
-        type: 'wb_draw_chart',
-        chartType: 'bar',
-        x: 0, y: 0, width: 100, height: 100,
-        data: { labels: [], legends: [], series: [] },
-      },
       { id: '7', type: 'wb_draw_code', language: 'js', code: 'x', x: 0, y: 0 },
       {
         id: '8',

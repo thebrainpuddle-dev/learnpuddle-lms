@@ -122,19 +122,27 @@ describe('Whiteboard — element-list rendering', () => {
     expect(screen.getByTestId('maic-v2-wb-latex')).toBeInTheDocument();
   });
 
-  test('routes wb_draw_chart/code to placeholder until renderers ship', () => {
+  test('routes wb_draw_chart to ChartElement (MAIC-213)', () => {
+    mount({
+      elements: [
+        {
+          id: 'c1',
+          type: 'wb_draw_chart',
+          chartType: 'bar',
+          x: 0, y: 0, width: 200, height: 100,
+          data: { labels: ['a'], legends: ['x'], series: [[1]] },
+        },
+      ],
+    });
+    expect(screen.getByTestId('maic-v2-wb-chart')).toBeInTheDocument();
+  });
+
+  test('routes wb_draw_code to placeholder until renderer ships', () => {
     const elements: WhiteboardElement[] = [
-      {
-        id: 'c1',
-        type: 'wb_draw_chart',
-        chartType: 'bar',
-        x: 0, y: 0, width: 100, height: 100,
-        data: { labels: [], legends: [], series: [] },
-      },
       { id: 'co1', type: 'wb_draw_code', language: 'js', code: 'x', x: 100, y: 0 },
     ];
     mount({ elements });
-    expect(screen.getAllByTestId('maic-v2-wb-placeholder')).toHaveLength(2);
+    expect(screen.getAllByTestId('maic-v2-wb-placeholder')).toHaveLength(1);
   });
 
   test('renders multiple elements in registry order', () => {
