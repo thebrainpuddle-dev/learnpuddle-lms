@@ -45,6 +45,10 @@ import type {
   SpeechAction,
 } from './action-types';
 import type { AudioPlayer } from './audio-player';
+import {
+  createBrowserTTSPlayer,
+  type BrowserTTSPlayer,
+} from './browser-tts';
 import type {
   Effect,
   EngineMode,
@@ -76,6 +80,16 @@ const READING_MS_PER_CJK_CHAR = 150;
 /** Per-word reading time for non-CJK (250 WPM ≈ 240ms/word). */
 const READING_MS_PER_WORD = 240;
 
+/**
+ * Estimated-reading-time threshold above which a no-audio speech
+ * routes through `BrowserTTSPlayer` instead of the silent reading-
+ * timer fallback (MAIC-413.2). 15s is the practical cutoff point:
+ * below it, the reading-timer's predictability beats speechSynthesis
+ * quirks; above it, a long silent reading-timer is worse UX than
+ * any browser-TTS glitch.
+ */
+const BROWSER_TTS_THRESHOLD_MS = 15000;
+
 
 export class PlaybackEngine {
   // ── Scene cursor ────────────────────────────────────────────────
@@ -100,6 +114,10 @@ export class PlaybackEngine {
   private speechTimerStart = 0;
   private speechTimerRemaining = 0;
 
+  // ── Browser-TTS fallback (MAIC-413) ────────────────────────────
+  private browserTts: BrowserTTSPlayer;
+  private _browserTtsActive = false;
+
   // ── Dependencies ───────────────────────────────────────────────
   private audioPlayer: AudioPlayer;
   private actionEngine: ActionEngine;
@@ -110,12 +128,16 @@ export class PlaybackEngine {
     actionEngine: ActionEngine,
     audioPlayer: AudioPlayer,
     callbacks: PlaybackEngineCallbacks = {},
+    browserTts?: BrowserTTSPlayer,
   ) {
     this.scenes = scenes;
     this.sceneId = scenes[0]?.id;
     this.actionEngine = actionEngine;
     this.audioPlayer = audioPlayer;
     this.callbacks = callbacks;
+    // Default to the real provider; tests inject a stub via the
+    // optional 5th arg.
+    this.browserTts = browserTts ?? createBrowserTTSPlayer();
   }
 
   // ── Public API ─────────────────────────────────────────────────
@@ -240,6 +262,13 @@ export class PlaybackEngine {
     // mode==='playing' before advancing.
     this.setMode('idle');
     this.audioPlayer.stop();
+    // MAIC-413.2: cancel browser-TTS if it's the active path. The
+    // `cancel()` drops the pending onEnded callback so we don't
+    // racily re-enter processNext after stop().
+    if (this._browserTtsActive) {
+      this.browserTts.cancel();
+      this._browserTtsActive = false;
+    }
     this.actionEngine.clearEffects();
     if (this.triggerDelayTimer) {
       clearTimeout(this.triggerDelayTimer);
@@ -321,6 +350,13 @@ export class PlaybackEngine {
     this.currentTopicState = 'active';
     this.setMode('live');
     this.audioPlayer.stop();
+    // MAIC-413.2: same reasoning as stop() — cancel any active
+    // browser-TTS so the pending onEnded doesn't fire during live
+    // mode.
+    if (this._browserTtsActive) {
+      this.browserTts.cancel();
+      this._browserTtsActive = false;
+    }
     this.callbacks.onUserInterrupt?.(text);
   }
 
@@ -480,19 +516,55 @@ export class PlaybackEngine {
       .play(action.audioId || '', action.audioUrl)
       .then((started) => {
         if (!started) {
-          // No pre-generated audio for this speech.  Phase 1 falls
-          // back to a reading-time timer; Phase 401.4 will plug the
-          // browser-native TTS path here.
-          this._scheduleReadingTimer(action);
+          // No pre-generated audio for this speech — fall back per
+          // MAIC-413.2: long text → browser-native TTS, short text →
+          // reading-time timer (more reliable than speechSynthesis
+          // for sub-15s utterances).
+          this._dispatchSpeechFallback(action);
         }
       })
       .catch((err) => {
         console.error('[PlaybackEngine] audio play error', err);
-        this._scheduleReadingTimer(action);
+        this._dispatchSpeechFallback(action);
       });
   }
 
-  private _scheduleReadingTimer(action: SpeechAction): void {
+  /**
+   * Choose between the silent reading-timer and the browser-TTS path
+   * for a no-audio speech action (MAIC-413.2). Long estimates favor
+   * browser TTS — a 30s silent timer is worse UX than any
+   * speechSynthesis glitch — but only when the runtime actually
+   * exposes `speechSynthesis` (jsdom / happy-dom fall through to the
+   * timer).
+   */
+  private _dispatchSpeechFallback(action: SpeechAction): void {
+    const estimateMs = this._estimateReadingMs(action);
+    if (
+      estimateMs >= BROWSER_TTS_THRESHOLD_MS &&
+      this.browserTts.isAvailable()
+    ) {
+      this._dispatchBrowserTts(action);
+    } else {
+      this._scheduleReadingTimer(action, estimateMs);
+    }
+  }
+
+  /** Dispatch via `speechSynthesis` (chunked + watchdogged). */
+  private _dispatchBrowserTts(action: SpeechAction): void {
+    this._browserTtsActive = true;
+    this.browserTts.speak(action.text, () => {
+      this._browserTtsActive = false;
+      this.callbacks.onSpeechEnd?.();
+      if (this.mode === 'playing') this.processNext();
+    });
+  }
+
+  /**
+   * Estimate reading time for a speech action's text. CJK characters
+   * use a per-char ms cost; non-CJK uses a per-word cost. Speed
+   * multiplier comes from the host (StageControls' speed picker, etc).
+   */
+  private _estimateReadingMs(action: SpeechAction): number {
     const text = action.text;
     const cjkCount =
       (text.match(/[一-鿿㐀-䶿぀-ゟ゠-ヿ가-힯]/g) || [])
@@ -505,7 +577,11 @@ export class PlaybackEngine {
           READING_TIMER_MIN_MS,
           text.split(/\s+/).filter(Boolean).length * READING_MS_PER_WORD,
         );
-    const readingMs = rawMs / speed;
+    return rawMs / speed;
+  }
+
+  private _scheduleReadingTimer(action: SpeechAction, estimateMs?: number): void {
+    const readingMs = estimateMs ?? this._estimateReadingMs(action);
     this.speechTimerStart = Date.now();
     this.speechTimerRemaining = readingMs;
     this.speechTimer = setTimeout(() => {
@@ -557,6 +633,7 @@ export function createPlaybackEngine(
   actionEngine: ActionEngine,
   audioPlayer: AudioPlayer,
   callbacks?: PlaybackEngineCallbacks,
+  browserTts?: BrowserTTSPlayer,
 ): PlaybackEngine {
-  return new PlaybackEngine(scenes, actionEngine, audioPlayer, callbacks);
+  return new PlaybackEngine(scenes, actionEngine, audioPlayer, callbacks, browserTts);
 }

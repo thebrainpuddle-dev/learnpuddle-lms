@@ -17,6 +17,7 @@ import { describe, test, expect, beforeEach, vi } from 'vitest';
 import { ActionEngine } from '../action-engine';
 import type { Action } from '../action-types';
 import { AudioPlayer } from '../audio-player';
+import type { BrowserTTSPlayer } from '../browser-tts';
 import { PlaybackEngine, type Scene } from '../playback-engine';
 import type { PlaybackEngineCallbacks } from '../playback-types';
 
@@ -72,19 +73,53 @@ function discussionAction(id: string, topic: string): Action {
   return { id, type: 'discussion', topic };
 }
 
+/**
+ * Recordable BrowserTTSPlayer stub for MAIC-413.2 routing tests.
+ * Real BrowserTTS integration is validated by the headless Chromium
+ * smoke (no `speechSynthesis` in happy-dom).
+ */
+class StubBrowserTts implements BrowserTTSPlayer {
+  public available = true;
+  public speakCalls: { text: string; onEnded: () => void }[] = [];
+  public cancelCalls = 0;
+  public pauseCalls = 0;
+  public resumeCalls = 0;
+  isAvailable(): boolean { return this.available; }
+  isSpeaking(): boolean { return false; }
+  speak(text: string, onEnded: () => void): void {
+    this.speakCalls.push({ text, onEnded });
+  }
+  pause(): void { this.pauseCalls++; }
+  resume(): void { this.resumeCalls++; }
+  cancel(): void { this.cancelCalls++; }
+  /** Test helper — synthesize the natural completion of a speak(). */
+  fireOnEnded(index = this.speakCalls.length - 1): void {
+    this.speakCalls[index]?.onEnded();
+  }
+}
+
+
 function makeEngine(
   scenes: Scene[],
   callbacks: PlaybackEngineCallbacks = {},
   player?: FakeAudioPlayer,
-): { engine: PlaybackEngine; player: FakeAudioPlayer; engineActions: ActionEngine } {
+  browserTts?: BrowserTTSPlayer,
+): {
+  engine: PlaybackEngine;
+  player: FakeAudioPlayer;
+  engineActions: ActionEngine;
+  browserTts: BrowserTTSPlayer | undefined;
+} {
   const audioPlayer = player ?? new FakeAudioPlayer();
   // No-op delay so the wb_* lifecycle handlers (MAIC-211.1) don't
   // stall tests for 2000ms+ on each wb_open. PlaybackEngine tests
   // don't care about whiteboard state — only that ActionEngine.execute
   // resolves so the playback loop advances.
   const engineActions = new ActionEngine({ delay: () => Promise.resolve() });
-  const engine = new PlaybackEngine(scenes, engineActions, audioPlayer, callbacks);
-  return { engine, player: audioPlayer, engineActions };
+  const engine = new PlaybackEngine(
+    scenes, engineActions, audioPlayer, callbacks, browserTts,
+  );
+  return { engine, player: audioPlayer, engineActions, browserTts };
 }
 
 
@@ -375,5 +410,165 @@ describe('PlaybackEngine onProgress', () => {
     // shows actionIndex=0, second's snapshot shows actionIndex=1
     expect(snapshots[0]).toBe(0);
     expect(snapshots[1]).toBe(1);
+  });
+});
+
+
+// ── Browser-TTS fallback (MAIC-413.2) ──────────────────────────────
+
+
+describe('PlaybackEngine browser-TTS fallback', () => {
+  test('long no-audio text routes through BrowserTTS when available', async () => {
+    // ~16s estimate at 240ms/word = ~67 words. Long enough to trip the
+    // 15s threshold.
+    const longText = Array.from({ length: 80 }, () => 'word').join(' ');
+    const stub = new StubBrowserTts();
+    const events: string[] = [];
+    const { engine, player } = makeEngine(
+      [{ id: 's', actions: [speechAction('a1', longText)] }],
+      {
+        onSpeechStart: () => events.push('start'),
+        onSpeechEnd: () => events.push('end'),
+        onComplete: () => events.push('complete'),
+      },
+      undefined,
+      stub,
+    );
+    player.playReturn = false;  // no audio source → fallback path
+    engine.start();
+    // Flush the audio.play() promise so the fallback runs.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(stub.speakCalls).toHaveLength(1);
+    expect(stub.speakCalls[0].text).toBe(longText);
+    expect(events).toContain('start');
+    expect(events).not.toContain('end');  // not yet — speak still in flight
+
+    // Simulate browser-TTS completion
+    stub.fireOnEnded();
+    await Promise.resolve();
+    expect(events).toContain('end');
+    expect(events).toContain('complete');
+  });
+
+  test('short no-audio text uses reading-timer even when BrowserTTS available', async () => {
+    vi.useFakeTimers();
+    const stub = new StubBrowserTts();
+    const events: string[] = [];
+    const { engine, player } = makeEngine(
+      [{ id: 's', actions: [speechAction('a1', 'short msg')] }],
+      {
+        onSpeechStart: () => events.push('start'),
+        onSpeechEnd: () => events.push('end'),
+      },
+      undefined,
+      stub,
+    );
+    player.playReturn = false;
+    engine.start();
+    await vi.runAllTimersAsync();
+
+    // BrowserTTS NEVER called for short text
+    expect(stub.speakCalls).toHaveLength(0);
+    expect(events).toContain('end');
+    vi.useRealTimers();
+  });
+
+  test('long text falls back to reading-timer when BrowserTTS unavailable', async () => {
+    vi.useFakeTimers();
+    const longText = Array.from({ length: 80 }, () => 'word').join(' ');
+    const stub = new StubBrowserTts();
+    stub.available = false;
+    const events: string[] = [];
+    const { engine, player } = makeEngine(
+      [{ id: 's', actions: [speechAction('a1', longText)] }],
+      {
+        onSpeechStart: () => events.push('start'),
+        onSpeechEnd: () => events.push('end'),
+      },
+      undefined,
+      stub,
+    );
+    player.playReturn = false;
+    engine.start();
+    await vi.runAllTimersAsync();
+
+    // Even though text is long, isAvailable=false → reading-timer path
+    expect(stub.speakCalls).toHaveLength(0);
+    expect(events).toContain('end');
+    vi.useRealTimers();
+  });
+
+  test('stop() cancels active BrowserTTS session', async () => {
+    const longText = Array.from({ length: 80 }, () => 'word').join(' ');
+    const stub = new StubBrowserTts();
+    const { engine, player } = makeEngine(
+      [{ id: 's', actions: [speechAction('a1', longText)] }],
+      {},
+      undefined,
+      stub,
+    );
+    player.playReturn = false;
+    engine.start();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(stub.speakCalls).toHaveLength(1);
+    expect(stub.cancelCalls).toBe(0);
+
+    engine.stop();
+    expect(stub.cancelCalls).toBe(1);
+  });
+
+  test('handleUserInterrupt cancels active BrowserTTS', async () => {
+    const longText = Array.from({ length: 80 }, () => 'word').join(' ');
+    const stub = new StubBrowserTts();
+    const { engine, player } = makeEngine(
+      [{ id: 's', actions: [speechAction('a1', longText)] }],
+      {},
+      undefined,
+      stub,
+    );
+    player.playReturn = false;
+    engine.start();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(stub.speakCalls).toHaveLength(1);
+
+    engine.handleUserInterrupt('user wants to talk');
+    expect(stub.cancelCalls).toBe(1);
+    expect(engine.getMode()).toBe('live');
+  });
+
+  test('stop() does NOT cancel BrowserTTS when no session is active', () => {
+    const stub = new StubBrowserTts();
+    const { engine } = makeEngine(
+      [{ id: 's', actions: [] }],
+      {},
+      undefined,
+      stub,
+    );
+    engine.stop();
+    // No browser-TTS in flight, so no cancel.
+    expect(stub.cancelCalls).toBe(0);
+  });
+
+  test('engine works without an injected BrowserTTS (uses real default)', async () => {
+    // No 5th arg → engine constructs a real createBrowserTTSPlayer().
+    // In jsdom/happy-dom, isAvailable()=false so any speech routes
+    // to the reading-timer path. This locks the constructor signature.
+    vi.useFakeTimers();
+    const events: string[] = [];
+    const { engine, player } = makeEngine(
+      [{ id: 's', actions: [speechAction('a1', 'short')] }],
+      {
+        onSpeechEnd: () => events.push('end'),
+      },
+    );
+    player.playReturn = false;
+    engine.start();
+    await vi.runAllTimersAsync();
+    expect(events).toContain('end');
+    vi.useRealTimers();
   });
 });
