@@ -75,14 +75,24 @@ def test_consumer_module_exports_classroom_consumer():
     assert issubclass(ClassroomConsumer, AsyncJsonWebsocketConsumer)
 
 
-def test_routing_module_publishes_one_pattern():
-    """The routing module should expose exactly one re_path for the V2 route."""
+def test_routing_module_publishes_classroom_and_generation_patterns():
+    """The routing module should expose the V2 classroom pattern AND
+    the Phase-4 generation-progress pattern (added at MAIC-428.3)."""
     from apps.maic.routing import websocket_urlpatterns
 
-    assert len(websocket_urlpatterns) == 1
-    pattern = websocket_urlpatterns[0]
-    # Pattern is a URLPattern; pattern.pattern is a RoutePattern
-    assert "ws/maic/v2/classroom" in str(pattern.pattern)
+    assert len(websocket_urlpatterns) == 2
+    classroom_paths = [
+        str(p.pattern) for p in websocket_urlpatterns
+        if "classroom" in str(p.pattern)
+    ]
+    generation_paths = [
+        str(p.pattern) for p in websocket_urlpatterns
+        if "generation" in str(p.pattern)
+    ]
+    assert len(classroom_paths) == 1
+    assert len(generation_paths) == 1
+    assert "ws/maic/v2/classroom" in classroom_paths[0]
+    assert "ws/maic/generation" in generation_paths[0]
 
 
 # ── MAIC-101: tenant-gate tests (mock the DB helper) ───────────────────
