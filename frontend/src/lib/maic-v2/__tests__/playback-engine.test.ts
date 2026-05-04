@@ -666,3 +666,123 @@ describe('PlaybackEngine browser-TTS pause/resume parity', () => {
     expect(stub.resumeCalls).toBe(2);
   });
 });
+
+
+// ── confirmDiscussion / handleEndDiscussion round-trip (MAIC-410.1) ──
+
+
+describe('PlaybackEngine confirmDiscussion / handleEndDiscussion round-trip', () => {
+  function makeDiscussionScene() {
+    // Scene with: speech → discussion → speech.  After confirmDiscussion
+    // fires from the trigger delay, the cursor sits past the discussion
+    // (it's already been consumed via processNext++).
+    return [{
+      id: 's1',
+      actions: [
+        speechAction('a1', 'first speech', 'data:audio/mp3;base64,a'),
+        discussionAction('d1', 'fractions topic'),
+        speechAction('a2', 'after discussion', 'data:audio/mp3;base64,b'),
+      ],
+    }];
+  }
+
+  test('confirmDiscussion → handleEndDiscussion preserves consumedDiscussions', () => {
+    const events: string[] = [];
+    const { engine, player } = makeEngine(
+      makeDiscussionScene(),
+      {
+        onProactiveShow: () => events.push('proactive-show'),
+        onDiscussionConfirmed: () => events.push('confirmed'),
+        onDiscussionEnd: () => events.push('discussion-end'),
+        onModeChange: (m) => events.push(`mode:${m}`),
+      },
+    );
+    vi.useFakeTimers();
+    engine.start();
+    // Drain first speech so the loop reaches the discussion action.
+    player.fireEnded();
+    // 3-second proactive delay before currentTrigger is set.
+    vi.advanceTimersByTime(3000);
+    expect(events).toContain('proactive-show');
+
+    engine.confirmDiscussion();
+    expect(engine.getMode()).toBe('live');
+    expect(events).toContain('confirmed');
+
+    engine.handleEndDiscussion();
+    expect(events).toContain('discussion-end');
+    expect(engine.getMode()).toBe('idle');
+
+    // The consumed-discussions set must include d1 even after the
+    // round-trip — that's the dedup contract MAIC-411.2 leans on.
+    const snap = engine.getSnapshot();
+    expect(snap.consumedDiscussions).toContain('d1');
+    vi.useRealTimers();
+  });
+
+  test('confirmDiscussion → handleEndDiscussion restores the cursor', () => {
+    const { engine, player } = makeEngine(makeDiscussionScene());
+    vi.useFakeTimers();
+    engine.start();
+    player.fireEnded();
+    vi.advanceTimersByTime(3000);
+
+    const beforeConfirm = engine.getSnapshot();
+    engine.confirmDiscussion();
+    engine.handleEndDiscussion();
+    const afterEnd = engine.getSnapshot();
+    // Cursor must be exactly where it was at confirmDiscussion (which
+    // was right after the discussion action — the next action is `a2`).
+    expect(afterEnd.sceneIndex).toBe(beforeConfirm.sceneIndex);
+    expect(afterEnd.actionIndex).toBe(beforeConfirm.actionIndex);
+    vi.useRealTimers();
+  });
+
+  test('handleEndDiscussion before any confirm is a safe no-op', () => {
+    const events: string[] = [];
+    const { engine } = makeEngine(
+      [{ id: 's1', actions: [] }],
+      { onDiscussionEnd: () => events.push('end') },
+    );
+    expect(engine.getMode()).toBe('idle');
+    engine.handleEndDiscussion();
+    // Must NOT fire onDiscussionEnd — there was nothing to end.
+    expect(events).not.toContain('end');
+    // Mode unchanged.
+    expect(engine.getMode()).toBe('idle');
+  });
+
+  test('handleEndDiscussion fires from a paused-discussion (currentTopicState=pending) state', () => {
+    const events: string[] = [];
+    const { engine, player } = makeEngine(
+      makeDiscussionScene(),
+      {
+        onDiscussionEnd: () => events.push('end'),
+        onModeChange: (m) => events.push(`mode:${m}`),
+      },
+    );
+    vi.useFakeTimers();
+    engine.start();
+    player.fireEnded();
+    vi.advanceTimersByTime(3000);
+    engine.confirmDiscussion();
+    engine.pause();  // live → paused, sets currentTopicState='pending'
+    engine.handleEndDiscussion();
+    expect(events).toContain('end');
+    expect(engine.getMode()).toBe('idle');
+    vi.useRealTimers();
+  });
+
+  test('confirmDiscussion without a trigger warns + no-ops', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const events: string[] = [];
+    const { engine } = makeEngine(
+      [{ id: 's1', actions: [] }],
+      { onDiscussionConfirmed: () => events.push('confirmed') },
+    );
+    engine.confirmDiscussion();
+    expect(events).not.toContain('confirmed');
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+});

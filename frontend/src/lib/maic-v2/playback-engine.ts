@@ -301,12 +301,15 @@ export class PlaybackEngine {
 
   /** Confirm a discussion trigger from the ProactiveCard UI → live. */
   confirmDiscussion(): void {
-    // Phase 1 skeleton — Phase 3 (MAIC-410) wires the full discussion
-    // lifecycle. Documented here so the API surface is stable.
     if (!this.currentTrigger) {
       console.warn('[PlaybackEngine] confirmDiscussion called but no trigger');
       return;
     }
+    // MAIC-410.1: capture state for the round-trip BEFORE setMode('live')
+    // so any callback firing inside setMode sees a consistent snapshot.
+    // `actionIndex` here points at the action AFTER the discussion (the
+    // discussion was consumed by processNext at the start of this turn);
+    // restoreSavedLectureState replays from there on handleEndDiscussion.
     this.consumedDiscussions.add(this.currentTrigger.id);
     this.savedSceneIndex = this.sceneIndex;
     this.savedActionIndex = this.actionIndex;
@@ -333,8 +336,19 @@ export class PlaybackEngine {
     }
   }
 
-  /** End an active discussion → idle (user clicks Continue to resume lecture). */
+  /** End an active discussion → idle (user clicks Continue to resume lecture).
+   *
+   * MAIC-410.1: defensive — no-op if no discussion was ever confirmed.
+   * A cold call (UI bug, double-click on End Discussion, etc) must not
+   * fire `onDiscussionEnd` into the void or churn cursor state.
+   */
   handleEndDiscussion(): void {
+    if (
+      this.currentTopicState !== 'active' &&
+      this.currentTopicState !== 'pending'
+    ) {
+      return;
+    }
     this.actionEngine.clearEffects();
     this.currentTopicState = 'closed';
     this.callbacks.onDiscussionEnd?.();
