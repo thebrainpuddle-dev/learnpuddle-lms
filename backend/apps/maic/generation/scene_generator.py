@@ -48,6 +48,9 @@ from apps.maic.exceptions import MaicConfigError
 from apps.maic.generation.action_parser import (
     parse_actions_from_structured_output,
 )
+from apps.maic.generation.interactive_post_processor import (
+    post_process_interactive_html,
+)
 from apps.maic.generation.json_repair import parse_json_response
 from apps.maic.generation.prompt_formatters import (
     build_course_context,
@@ -159,13 +162,29 @@ async def generate_scene_content(
             language_directive=options.get("languageDirective", ""),
         )
 
-    # ── Interactive branch — MAIC-422.5 (Session 4) ──
+    # ── Interactive branch (MAIC-422.5) — widget umbrella ──
     if scene_type == "interactive":
-        _logger.info(
-            "scene_type=interactive: branch lands in MAIC-422.5 "
-            "(Session 4); returning None for now."
+        # Defensive: outline_generator's apply_outline_fallbacks
+        # already converts interactive outlines without widget config
+        # to slide. If somehow we still see one here, fall back to
+        # a `simulation` widget using the title as concept (mirrors
+        # upstream lines 307-316).
+        if not (outline.get("widgetType") and outline.get("widgetOutline")):
+            _logger.warning(
+                'Interactive outline "%s" missing widget config; '
+                "defaulting to simulation widget keyed on title.",
+                outline.get("title", "?"),
+            )
+            outline = {
+                **outline,
+                "widgetType": "simulation",
+                "widgetOutline": {"concept": outline.get("title", "")},
+            }
+        return await _generate_widget_content(
+            outline,
+            language_model_id=language_model_id,
+            language_directive=options.get("languageDirective", ""),
         )
-        return None
 
     # ── PBL branch — MAIC-422.4 STUB ──
     if scene_type == "pbl":
@@ -555,6 +574,265 @@ def _generate_pbl_content_stub(outline: SceneOutline) -> dict[str, Any]:
             "selectedRole": None,
         }
     }
+
+
+# ── Interactive / widget content (MAIC-422.5) ────────────────────
+
+
+# Widget-type → (template-id, variable-builder) map. Each builder
+# takes (outline, widget_outline, language_directive) and returns
+# the variable dict the template expects. Mirrors upstream's
+# `switch (widgetType)` block (lines 986-1052). The 5 templates are
+# already on disk (ported during Phase 1-3 prep work).
+_WIDGET_TEMPLATE_IDS: dict[str, str] = {
+    "simulation": "simulation-content",
+    "diagram": "diagram-content",
+    "code": "code-content",
+    "game": "game-content",
+    "visualization3d": "visualization3d-content",
+}
+
+
+async def _generate_widget_content(
+    outline: SceneOutline,
+    *,
+    language_model_id: str,
+    language_directive: str = "",
+) -> dict[str, Any] | None:
+    """Generate interactive widget content.
+
+    Direct port of upstream `generateWidgetContent` (lines 969-1095).
+    Routes on `outline.widgetType` to one of 5 templates, calls
+    generate_text, extracts the HTML response, runs LaTeX delim
+    conversion via `post_process_interactive_html`, and pulls any
+    embedded `<script id="widget-config">` JSON.
+
+    Returns:
+        {"html", "widgetType", "widgetConfig", "teacherActions"}
+        on success, None on:
+          - Missing widget config (caller already defaulted to
+            simulation; this path stays defensive)
+          - Unknown widget type
+          - Missing prompt template
+          - LLM call failure
+          - HTML extraction failure
+
+    Phase 4 simplification: `teacherActions` ships as None. The
+    optional second LLM call (MAIC-422.7) generates teacher actions
+    for Ultra Mode, deferred to Session 5.
+    """
+    widget_type = outline.get("widgetType")
+    widget_outline = outline.get("widgetOutline") or {}
+
+    if not widget_type or not widget_outline:
+        _logger.warning(
+            "Interactive outline missing widget config — caller should "
+            "have defaulted before reaching here."
+        )
+        return None
+
+    template_id = _WIDGET_TEMPLATE_IDS.get(widget_type)
+    if not template_id:
+        _logger.warning("Unknown widget type: %s", widget_type)
+        return None
+
+    variables = _build_widget_variables(
+        widget_type, outline, widget_outline, language_directive
+    )
+
+    try:
+        prompts = load_generation_prompt(template_id, variables)
+    except MaicConfigError as exc:
+        _logger.error(
+            "Widget-content prompt %s missing: %s", template_id, exc
+        )
+        return None
+
+    _logger.debug(
+        "Generating %s widget for: %s",
+        widget_type,
+        outline.get("title", "?"),
+    )
+
+    try:
+        response = await generate_text(
+            messages=[
+                SystemMessage(content=prompts.system),
+                HumanMessage(content=prompts.user),
+            ],
+            language_model_id=language_model_id,
+        )
+    except Exception as exc:  # noqa: BLE001
+        _logger.error(
+            "Widget-content (%s) LLM call failed for %s: %s",
+            widget_type,
+            outline.get("title", "?"),
+            exc,
+        )
+        return None
+
+    html = _extract_html(response)
+    if not html:
+        _logger.error(
+            "Failed to extract HTML from %s response for: %s",
+            widget_type,
+            outline.get("title", "?"),
+        )
+        return None
+
+    widget_config = _extract_widget_config(html)
+
+    return {
+        "html": post_process_interactive_html(html),
+        "widgetType": widget_type,
+        "widgetConfig": widget_config,
+        # MAIC-422.7 (Session 5) wires the optional teacher-actions
+        # second LLM call. Phase 4 ships None — the playback engine
+        # treats absent teacherActions as "no Ultra Mode actions".
+        "teacherActions": None,
+    }
+
+
+def _build_widget_variables(
+    widget_type: str,
+    outline: SceneOutline,
+    widget_outline: dict[str, Any],
+    language_directive: str,
+) -> dict[str, Any]:
+    """Build the prompt variable dict for a widget template.
+
+    Mirrors upstream's `switch (widgetType)` variable-builder block
+    (lines 986-1052). Each branch matches the on-disk template's
+    `{{var}}` placeholders exactly.
+    """
+    key_points = outline.get("keyPoints") or []
+    key_points_text = "\n".join(key_points)
+
+    if widget_type == "simulation":
+        return {
+            "conceptName": widget_outline.get("concept")
+            or outline.get("title", ""),
+            "conceptOverview": outline.get("description", ""),
+            "keyPoints": key_points_text,
+            "variables": ", ".join(
+                widget_outline.get("keyVariables") or []
+            ),
+            "designIdea": "",
+            "languageDirective": language_directive,
+        }
+    if widget_type == "diagram":
+        return {
+            "title": outline.get("title", ""),
+            "diagramType": widget_outline.get("diagramType") or "flowchart",
+            "description": outline.get("description", ""),
+            "keyPoints": key_points_text,
+            "languageDirective": language_directive,
+        }
+    if widget_type == "code":
+        return {
+            "title": outline.get("title", ""),
+            "programmingLanguage": widget_outline.get("language") or "python",
+            "description": outline.get("description", ""),
+            "keyPoints": key_points_text,
+            "starterCode": "",
+            "testCases": "",
+            "hints": "",
+            "languageDirective": language_directive,
+        }
+    if widget_type == "game":
+        return {
+            "title": outline.get("title", ""),
+            "gameType": widget_outline.get("gameType") or "quiz",
+            "description": outline.get("description", ""),
+            "keyPoints": key_points_text,
+            # Upstream passes a dict literal here; the template uses
+            # the rendered string. JSON-encode for prompt readability.
+            "scoring": '{"correctPoints": 10, "speedBonus": 5}',
+            "languageDirective": language_directive,
+        }
+    if widget_type == "visualization3d":
+        objects = widget_outline.get("objects") or []
+        interactions = widget_outline.get("interactions") or []
+        return {
+            "title": outline.get("title", ""),
+            "visualizationType": widget_outline.get("visualizationType")
+            or "custom",
+            "description": outline.get("description", ""),
+            "keyPoints": key_points_text,
+            "objects": ", ".join(objects) if objects else "",
+            "interactions": ", ".join(interactions) if interactions else "",
+            "languageDirective": language_directive,
+        }
+    # _generate_widget_content already gates on _WIDGET_TEMPLATE_IDS
+    # — this is unreachable in practice, but keep the contract crisp.
+    return {}
+
+
+def _extract_html(response: str) -> str | None:
+    """Extract an HTML document from an LLM response.
+
+    Direct port of upstream `extractHtml` (lines 928-963). Three
+    strategies in order:
+      1. Find `<!DOCTYPE html>` or `<html` and slice through `</html>`.
+      2. Pull the first triple-backtick code block (with or without
+         the `html` tag), keep it only if it contains `<html` or
+         `<!DOCTYPE`.
+      3. If the trimmed response itself starts with `<!DOCTYPE` or
+         `<html`, return as-is.
+
+    Returns None if none of the strategies find HTML.
+    """
+    import re as _re
+
+    # Strategy 1: complete HTML document.
+    doctype_start = response.find("<!DOCTYPE html>")
+    html_tag_start = response.find("<html")
+    start = doctype_start if doctype_start != -1 else html_tag_start
+    if start != -1:
+        html_end = response.rfind("</html>")
+        if html_end != -1:
+            return response[start : html_end + len("</html>")]
+
+    # Strategy 2: code block extraction.
+    match = _re.search(
+        r"```(?:html)?\s*([\s\S]*?)```", response, flags=_re.MULTILINE
+    )
+    if match:
+        content = match.group(1).strip()
+        if "<html" in content or "<!DOCTYPE" in content:
+            return content
+
+    # Strategy 3: response itself is HTML.
+    trimmed = response.strip()
+    if trimmed.startswith("<!DOCTYPE") or trimmed.startswith("<html"):
+        return trimmed
+
+    return None
+
+
+def _extract_widget_config(html: str) -> dict[str, Any] | None:
+    """Extract embedded widget config JSON from HTML.
+
+    Direct port of upstream `extractWidgetConfig` (lines 1100-1111).
+    Looks for `<script type="application/json" id="widget-config">…
+    </script>` and parses the inner JSON. Returns None on no match
+    or parse failure.
+    """
+    import json
+    import re as _re
+
+    match = _re.search(
+        r'<script type="application/json" id="widget-config">'
+        r"([\s\S]*?)</script>",
+        html,
+    )
+    if not match:
+        return None
+
+    try:
+        return json.loads(match.group(1))
+    except (ValueError, TypeError):
+        return None
 
 
 # ── Scene actions dispatcher (MAIC-422.1) ─────────────────────────

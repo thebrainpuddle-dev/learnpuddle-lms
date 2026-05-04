@@ -49,10 +49,29 @@ async def test_dispatcher_routes_slide_to_slide_content():
 
 
 @pytest.mark.asyncio
-async def test_dispatcher_returns_none_for_interactive_until_maic_422_5():
-    outline = {"type": "interactive", "title": "I"}
-    content = await generate_scene_content(outline)
-    assert content is None
+async def test_dispatcher_routes_interactive_to_widget_content():
+    """Interactive outlines hit the widget umbrella (MAIC-422.5)."""
+    outline = {
+        "type": "interactive",
+        "title": "Wave Mechanics",
+        "description": "interactive wave demo",
+        "widgetType": "simulation",
+        "widgetOutline": {"concept": "Wave Mechanics", "keyVariables": ["amplitude"]},
+    }
+
+    async def _fake(*args, **kwargs):
+        return "<!DOCTYPE html><html><body>simulation</body></html>"
+
+    with patch(
+        "apps.maic.generation.scene_generator.generate_text", new=_fake
+    ):
+        content = await generate_scene_content(
+            outline, language_model_id="stub"
+        )
+    assert content is not None
+    assert content["widgetType"] == "simulation"
+    assert "<html>" in content["html"]
+    assert content["teacherActions"] is None  # MAIC-422.7 lands later
 
 
 @pytest.mark.asyncio
@@ -1317,3 +1336,292 @@ async def test_pbl_actions_falls_back_to_outline_when_no_pblConfig():
             )
     assert captured_vars["projectTopic"] == "Outline Title"
     assert captured_vars["projectDescription"] == "Outline Desc"
+
+
+# ── Interactive / widget content (MAIC-422.5) ─────────────────────
+
+
+@pytest.mark.asyncio
+async def test_interactive_simulation_routes_to_simulation_template():
+    captured_template_id = None
+
+    def _capture(template_id, vars):
+        nonlocal captured_template_id
+        captured_template_id = template_id
+        from apps.maic.prompts.loader import BuiltPrompt
+        return BuiltPrompt(system="sys", user="user")
+
+    async def _fake(*args, **kwargs):
+        return "<!DOCTYPE html><html><body>x</body></html>"
+
+    outline = {
+        "type": "interactive",
+        "title": "T",
+        "widgetType": "simulation",
+        "widgetOutline": {"concept": "C"},
+    }
+
+    with patch(
+        "apps.maic.generation.scene_generator.load_generation_prompt",
+        side_effect=_capture,
+    ):
+        with patch(
+            "apps.maic.generation.scene_generator.generate_text", new=_fake
+        ):
+            await generate_scene_content(outline, language_model_id="stub")
+    assert captured_template_id == "simulation-content"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "widget_type, expected_template, extra_outline",
+    [
+        ("simulation", "simulation-content", {"concept": "C"}),
+        ("diagram", "diagram-content", {"diagramType": "flowchart"}),
+        ("code", "code-content", {"language": "python"}),
+        ("game", "game-content", {"gameType": "quiz"}),
+        (
+            "visualization3d",
+            "visualization3d-content",
+            {"visualizationType": "custom"},
+        ),
+    ],
+)
+async def test_each_widget_type_routes_to_its_template(
+    widget_type, expected_template, extra_outline
+):
+    captured_template_id = None
+
+    def _capture(template_id, vars):
+        nonlocal captured_template_id
+        captured_template_id = template_id
+        from apps.maic.prompts.loader import BuiltPrompt
+        return BuiltPrompt(system="sys", user="user")
+
+    async def _fake(*args, **kwargs):
+        return "<!DOCTYPE html><html><body>x</body></html>"
+
+    outline = {
+        "type": "interactive",
+        "title": "T",
+        "description": "d",
+        "widgetType": widget_type,
+        "widgetOutline": extra_outline,
+    }
+
+    with patch(
+        "apps.maic.generation.scene_generator.load_generation_prompt",
+        side_effect=_capture,
+    ):
+        with patch(
+            "apps.maic.generation.scene_generator.generate_text", new=_fake
+        ):
+            content = await generate_scene_content(
+                outline, language_model_id="stub"
+            )
+    assert captured_template_id == expected_template
+    assert content is not None
+    assert content["widgetType"] == widget_type
+
+
+@pytest.mark.asyncio
+async def test_interactive_returns_none_on_html_extraction_failure():
+    outline = {
+        "type": "interactive",
+        "title": "T",
+        "widgetType": "simulation",
+        "widgetOutline": {"concept": "C"},
+    }
+
+    async def _fake(*args, **kwargs):
+        return "no html anywhere — just prose"
+
+    with patch(
+        "apps.maic.generation.scene_generator.generate_text", new=_fake
+    ):
+        content = await generate_scene_content(outline, language_model_id="stub")
+    assert content is None
+
+
+@pytest.mark.asyncio
+async def test_interactive_returns_none_on_unknown_widget_type():
+    outline = {
+        "type": "interactive",
+        "title": "T",
+        "widgetType": "totally-fake-widget",
+        "widgetOutline": {"concept": "C"},
+    }
+    content = await generate_scene_content(outline, language_model_id="stub")
+    assert content is None
+
+
+@pytest.mark.asyncio
+async def test_interactive_defaults_to_simulation_when_no_widget_config():
+    """Defensive: outline_generator already handles this case but if
+    an interactive arrives sans widget config, default to a simulation
+    keyed on title (mirrors upstream lines 307-316)."""
+    captured_vars = {}
+
+    def _capture(template_id, vars):
+        captured_vars.update(vars)
+        captured_vars["__template_id"] = template_id
+        from apps.maic.prompts.loader import BuiltPrompt
+        return BuiltPrompt(system="sys", user="user")
+
+    async def _fake(*args, **kwargs):
+        return "<!DOCTYPE html><html><body>x</body></html>"
+
+    outline = {
+        "type": "interactive",
+        "title": "Bare Interactive",
+        "description": "no widget config at all",
+    }
+
+    with patch(
+        "apps.maic.generation.scene_generator.load_generation_prompt",
+        side_effect=_capture,
+    ):
+        with patch(
+            "apps.maic.generation.scene_generator.generate_text", new=_fake
+        ):
+            content = await generate_scene_content(
+                outline, language_model_id="stub"
+            )
+    assert captured_vars["__template_id"] == "simulation-content"
+    assert captured_vars["conceptName"] == "Bare Interactive"
+    assert content is not None
+    assert content["widgetType"] == "simulation"
+
+
+@pytest.mark.asyncio
+async def test_interactive_html_runs_through_post_processor():
+    """LaTeX delimiters in the LLM output get converted by
+    post_process_interactive_html (mirrors upstream line 1090)."""
+    outline = {
+        "type": "interactive",
+        "title": "T",
+        "widgetType": "simulation",
+        "widgetOutline": {"concept": "C"},
+    }
+
+    # \\( ... \\) is upstream LaTeX; post-processor converts to $ ... $
+    raw_html = (
+        '<!DOCTYPE html><html><body>'
+        r'<p>The formula is \(E = mc^2\).</p>'
+        '</body></html>'
+    )
+
+    async def _fake(*args, **kwargs):
+        return raw_html
+
+    with patch(
+        "apps.maic.generation.scene_generator.generate_text", new=_fake
+    ):
+        content = await generate_scene_content(outline, language_model_id="stub")
+    # Post-processor injects KaTeX script; original LaTeX should
+    # remain in the body in some form (either converted or preserved).
+    assert content is not None
+    assert "html" in content
+    # KaTeX CDN injection lands somewhere in the document.
+    assert "katex" in content["html"].lower()
+
+
+@pytest.mark.asyncio
+async def test_interactive_extracts_widget_config_when_present():
+    """If the LLM-generated HTML embeds a `<script id="widget-config">`,
+    the JSON inside is parsed and surfaced under widgetConfig."""
+    outline = {
+        "type": "interactive",
+        "title": "T",
+        "widgetType": "simulation",
+        "widgetOutline": {"concept": "C"},
+    }
+    config_payload = '{"engine": "p5", "params": {"speed": 1.5}}'
+    html = (
+        '<!DOCTYPE html><html><head>'
+        f'<script type="application/json" id="widget-config">{config_payload}</script>'
+        '</head><body>x</body></html>'
+    )
+
+    async def _fake(*args, **kwargs):
+        return html
+
+    with patch(
+        "apps.maic.generation.scene_generator.generate_text", new=_fake
+    ):
+        content = await generate_scene_content(outline, language_model_id="stub")
+    assert content["widgetConfig"] == {
+        "engine": "p5",
+        "params": {"speed": 1.5},
+    }
+
+
+@pytest.mark.asyncio
+async def test_interactive_widget_config_is_none_when_absent():
+    outline = {
+        "type": "interactive",
+        "title": "T",
+        "widgetType": "simulation",
+        "widgetOutline": {"concept": "C"},
+    }
+
+    async def _fake(*args, **kwargs):
+        return "<!DOCTYPE html><html><body>no config</body></html>"
+
+    with patch(
+        "apps.maic.generation.scene_generator.generate_text", new=_fake
+    ):
+        content = await generate_scene_content(outline, language_model_id="stub")
+    assert content["widgetConfig"] is None
+
+
+# ── extract_html / extract_widget_config helpers ──────────────────
+
+
+def test_extract_html_finds_doctype_document():
+    from apps.maic.generation.scene_generator import _extract_html
+    out = _extract_html("preamble<!DOCTYPE html><html>x</html>trailing")
+    assert out == "<!DOCTYPE html><html>x</html>"
+
+
+def test_extract_html_finds_html_tag_when_no_doctype():
+    from apps.maic.generation.scene_generator import _extract_html
+    out = _extract_html("<html>x</html>")
+    assert out == "<html>x</html>"
+
+
+def test_extract_html_pulls_from_code_block():
+    from apps.maic.generation.scene_generator import _extract_html
+    response = "Here you go:\n```html\n<html>x</html>\n```\nhope it helps"
+    out = _extract_html(response)
+    assert out is not None
+    assert "<html>x</html>" in out
+
+
+def test_extract_html_returns_none_when_no_html_anywhere():
+    from apps.maic.generation.scene_generator import _extract_html
+    assert _extract_html("just prose, no markup") is None
+
+
+def test_extract_widget_config_parses_embedded_json():
+    from apps.maic.generation.scene_generator import _extract_widget_config
+    html = (
+        '<script type="application/json" id="widget-config">'
+        '{"engine":"p5","speed":1}</script>'
+    )
+    cfg = _extract_widget_config(html)
+    assert cfg == {"engine": "p5", "speed": 1}
+
+
+def test_extract_widget_config_returns_none_when_no_script_tag():
+    from apps.maic.generation.scene_generator import _extract_widget_config
+    assert _extract_widget_config("<html>no config</html>") is None
+
+
+def test_extract_widget_config_returns_none_on_invalid_json():
+    from apps.maic.generation.scene_generator import _extract_widget_config
+    html = (
+        '<script type="application/json" id="widget-config">'
+        'not json{{{</script>'
+    )
+    assert _extract_widget_config(html) is None
