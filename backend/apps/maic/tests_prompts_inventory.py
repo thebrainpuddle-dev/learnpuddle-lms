@@ -28,7 +28,12 @@ from apps.maic.prompts import (
 # ── Expected inventory (lock-set) ─────────────────────────────────────
 
 
-# Mirror of /Volumes/CrucialX9/OpenMAIC/lib/prompts/templates/
+# Mirror of /Volumes/CrucialX9/OpenMAIC/lib/prompts/templates/, plus
+# the local-only `pbl-content` STUB added at MAIC-422.4 so the
+# generation prompt-loader diagnostic returns [] at Phase 4 close. The
+# real upstream PBL content generator (lib/pbl/generate-pbl.ts) is an
+# agentic-MCP loop deferred to Phase 5+ per MAIC-432 research; the stub
+# template is a doc-only placeholder (no LLM call hits it).
 EXPECTED_TEMPLATES = frozenset({
     "agent-system",
     "agent-system-wb-assistant",
@@ -41,6 +46,7 @@ EXPECTED_TEMPLATES = frozenset({
     "interactive-actions",
     "interactive-outlines",
     "pbl-actions",
+    "pbl-content",  # MAIC-422.4 STUB (Phase 4)
     "pbl-design",
     "quiz-actions",
     "quiz-content",
@@ -54,7 +60,7 @@ EXPECTED_TEMPLATES = frozenset({
 })
 
 
-def test_all_21_templates_present():
+def test_all_22_templates_present():
     """The full template-set mirrors upstream exactly. If you add or
     remove a template, update this set and the SOURCES.txt manifest."""
     actual = set(list_available_prompts())

@@ -141,20 +141,12 @@ def test_list_missing_contains_only_known_ids():
         assert tid in canonical, f"unknown template id in missing list: {tid}"
 
 
-def test_list_missing_at_maic_429_0_is_only_pbl_content():
-    """MAIC-429.0 ground truth: 13 of the 14 generation templates were
-    already ported during Phase 1-3 prep work (they live alongside
-    `agent-system`, `director`, etc. in the templates directory).
-
-    Only `pbl-content` is missing. Per MAIC-432's research decision,
-    `pbl-content` ships as a STUB at MAIC-422.4 (Session 4) — the real
-    agentic-MCP loop is deferred to Phase 5+.
-
-    When MAIC-422.4 lands the stub template, this test flips to
-    `assert missing == []`."""
+def test_list_missing_at_phase_4_close_is_empty():
+    """At MAIC-422.4 the pbl-content STUB template lands, completing
+    the 14-template set. The diagnostic must now return an empty
+    list. The closure-doc validation gate also asserts this — if it
+    regresses, both tests will catch it."""
     missing = list_missing_generation_templates()
-    assert missing == ["pbl-content"], (
-        f"unexpected missing-templates set: {missing}. "
-        "If MAIC-422.4 has shipped pbl-content, update this test to "
-        "expect an empty list."
+    assert missing == [], (
+        f"unexpected missing-templates set at Phase 4 close: {missing}"
     )

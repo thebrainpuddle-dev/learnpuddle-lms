@@ -167,13 +167,9 @@ async def generate_scene_content(
         )
         return None
 
-    # ── PBL branch — MAIC-422.4 STUB (Session 4) ──
+    # ── PBL branch — MAIC-422.4 STUB ──
     if scene_type == "pbl":
-        _logger.info(
-            "scene_type=pbl: STUB lands in MAIC-422.4 (Session 4); "
-            "returning None for now."
-        )
-        return None
+        return _generate_pbl_content_stub(outline)
 
     _logger.warning(
         "generate_scene_content: unknown scene type %r — returning None",
@@ -513,6 +509,54 @@ def _normalize_quiz_answer(
     return [str(raw)]
 
 
+# ── PBL content STUB (MAIC-422.4) ─────────────────────────────────
+
+
+def _generate_pbl_content_stub(outline: SceneOutline) -> dict[str, Any]:
+    """STUB — programmatic PBL content (no LLM call).
+
+    The real PBL content generator is upstream's
+    `lib/pbl/generate-pbl.ts` (414 LoC + 4 MCP modules: project-info,
+    agent, issueboard, chat). It runs an agentic tool-calling loop
+    that incrementally constructs a `PBLProjectConfig`. Per MAIC-432
+    research, that work is **deferred to Phase 5+**.
+
+    Phase 4 produces a minimal-but-well-formed `projectConfig` so
+    the playback engine can render a placeholder PBL scene without
+    a runtime crash. The output uses outline.title /
+    outline.description / outline.pblConfig (when present) to seed
+    `projectInfo`. Agents + issueboard + chat ship as empty lists —
+    the frontend treats this as "PBL not configured yet".
+
+    Returns a `{"projectConfig": ...}` dict matching the
+    GeneratedPBLContent shape upstream's pbl-actions branch + scene-
+    builder both expect.
+    """
+    pbl_config = outline.get("pblConfig") or {}
+    project_topic = pbl_config.get("projectTopic") or outline.get("title", "")
+    project_description = (
+        pbl_config.get("projectDescription")
+        or outline.get("description", "")
+    )
+
+    return {
+        "projectConfig": {
+            "projectInfo": {
+                "title": project_topic,
+                "description": project_description,
+            },
+            "agents": [],
+            "issueboard": {
+                "agent_ids": [],
+                "issues": [],
+                "current_issue_id": None,
+            },
+            "chat": {"messages": []},
+            "selectedRole": None,
+        }
+    }
+
+
 # ── Scene actions dispatcher (MAIC-422.1) ─────────────────────────
 
 
@@ -528,9 +572,9 @@ async def generate_scene_actions(
     Mirrors upstream `generateSceneActions` (lines 1145-1291). Routes
     on outline.type:
       - slide → slide-actions LLM call (MAIC-422.1)
-      - quiz → quiz-actions LLM call (MAIC-422.3, this chunk)
+      - quiz → quiz-actions LLM call (MAIC-422.3)
       - interactive → interactive-actions (MAIC-422.6, Session 4)
-      - pbl → pbl-actions (MAIC-422.4 STUB, Session 4)
+      - pbl → pbl-actions LLM call (MAIC-422.4, this chunk)
 
     Returns an empty list when the scene type doesn't match any branch
     OR when the LLM call / parse fails AND no default fallback applies.
@@ -577,13 +621,16 @@ async def generate_scene_actions(
         )
         return []
 
-    # ── PBL branch — MAIC-422.4 STUB (Session 4) ──
+    # ── PBL branch (MAIC-422.4) ──
     if outline.get("type") == "pbl" and "projectConfig" in content:
-        _logger.info(
-            "generate_scene_actions: pbl STUB lands in MAIC-422.4 "
-            "(Session 4); returning [] for now."
+        return await _generate_pbl_actions(
+            outline,
+            content,
+            language_model_id=language_model_id,
+            ctx=options.get("ctx"),
+            agents=agents,
+            language_directive=options.get("languageDirective", ""),
         )
-        return []
 
     return []
 
@@ -788,6 +835,118 @@ def _generate_default_quiz_actions(
             "title": "测验引导",  # "quiz introduction"
             "text": "现在让我们来做一个小测验，检验一下学习成果。",
             # ^ "Now let's do a small quiz to check what we've learned."
+        }
+    ]
+
+
+# ── PBL actions (MAIC-422.4) ──────────────────────────────────────
+
+
+async def _generate_pbl_actions(
+    outline: SceneOutline,
+    content: dict[str, Any],  # noqa: ARG001  # kept for shape parity
+    *,
+    language_model_id: str,
+    ctx: SceneGenerationContext | None,
+    agents: list[AgentInfo] | None,
+    language_directive: str,
+) -> list[dict[str, Any]]:
+    """PBL-actions LLM call.
+
+    Direct port of upstream `generateSceneActions` pbl branch
+    (lines 1262-1288). Builds the pbl-actions prompt with title /
+    description / keyPoints + projectTopic / projectDescription
+    pulled from outline.pblConfig (or outline title/description when
+    pblConfig is absent — the Phase 4 stub case).
+
+    Falls back to `_generate_default_pbl_actions` when the prompt
+    template is missing OR the LLM returns zero actions OR the LLM
+    call fails.
+
+    Note: `content` is unused in this branch — upstream also doesn't
+    feed projectConfig into the actions prompt. The pbl-actions
+    template uses pblConfig + outline metadata only.
+    """
+    pbl_config = outline.get("pblConfig") or {}
+    project_topic = pbl_config.get("projectTopic") or outline.get("title", "")
+    project_description = (
+        pbl_config.get("projectDescription")
+        or outline.get("description", "")
+    )
+
+    agents_text = format_agents_for_prompt(agents)
+    course_context = build_course_context(ctx)
+
+    key_points = outline.get("keyPoints") or []
+    key_points_text = "\n".join(
+        f"{i + 1}. {p}" for i, p in enumerate(key_points)
+    )
+
+    try:
+        prompts = load_generation_prompt(
+            "pbl-actions",
+            {
+                "title": outline.get("title", ""),
+                "keyPoints": key_points_text,
+                "description": outline.get("description", ""),
+                "projectTopic": project_topic,
+                "projectDescription": project_description,
+                "courseContext": course_context,
+                "agents": agents_text,
+                "languageDirective": language_directive,
+            },
+        )
+    except MaicConfigError:
+        _logger.warning(
+            "PBL-actions prompt missing — using default fallback."
+        )
+        return _generate_default_pbl_actions(outline)
+
+    try:
+        response = await generate_text(
+            messages=[
+                SystemMessage(content=prompts.system),
+                HumanMessage(content=prompts.user),
+            ],
+            language_model_id=language_model_id,
+        )
+    except Exception as exc:  # noqa: BLE001
+        _logger.error(
+            "PBL-actions LLM call failed for %s: %s",
+            outline.get("title", "?"),
+            exc,
+        )
+        return _generate_default_pbl_actions(outline)
+
+    actions = parse_actions_from_structured_output(
+        response, scene_type="pbl"
+    )
+
+    if actions:
+        return _process_actions(actions, [], agents)
+    return _generate_default_pbl_actions(outline)
+
+
+def _generate_default_pbl_actions(
+    _outline: SceneOutline,
+) -> list[dict[str, Any]]:
+    """Default PBL actions when the LLM returns nothing usable.
+
+    Mirrors upstream `generateDefaultPBLActions` (lines 1296-1305). A
+    single speech that frames the PBL phase as a project kickoff.
+    """
+    return [
+        {
+            "id": f"action_{_nanoid_8()}",
+            "type": "speech",
+            "title": "PBL 项目介绍",  # "PBL project introduction"
+            "text": (
+                "现在让我们开始一个项目式学习活动。"
+                "请选择你的角色，查看任务看板，开始协作完成项目。"
+            ),
+            # ^ "Now let's start a project-based learning activity.
+            # Please select your role, check the task board, and
+            # begin collaborating to complete the project."
         }
     ]
 

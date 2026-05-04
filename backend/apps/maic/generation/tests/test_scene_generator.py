@@ -56,10 +56,26 @@ async def test_dispatcher_returns_none_for_interactive_until_maic_422_5():
 
 
 @pytest.mark.asyncio
-async def test_dispatcher_returns_none_for_pbl_until_maic_422_4():
-    outline = {"type": "pbl", "title": "P"}
+async def test_dispatcher_routes_pbl_to_stub():
+    """PBL outlines hit the programmatic STUB (MAIC-422.4) — no LLM."""
+    outline = {
+        "type": "pbl",
+        "title": "Build a Mini-LMS",
+        "description": "Project description",
+    }
     content = await generate_scene_content(outline)
-    assert content is None
+    assert content is not None
+    assert "projectConfig" in content
+    pc = content["projectConfig"]
+    assert pc["projectInfo"]["title"] == "Build a Mini-LMS"
+    assert pc["projectInfo"]["description"] == "Project description"
+    assert pc["agents"] == []
+    assert pc["issueboard"] == {
+        "agent_ids": [],
+        "issues": [],
+        "current_issue_id": None,
+    }
+    assert pc["chat"] == {"messages": []}
 
 
 @pytest.mark.asyncio
@@ -420,11 +436,25 @@ async def test_actions_dispatcher_returns_empty_for_interactive_until_422_6():
 
 
 @pytest.mark.asyncio
-async def test_actions_dispatcher_returns_empty_for_pbl_stub():
-    outline = {"type": "pbl", "title": "P"}
-    content = {"projectConfig": {"phases": []}}
-    actions = await generate_scene_actions(outline, content)
-    assert actions == []
+async def test_actions_dispatcher_routes_pbl():
+    """PBL outlines now hit the pbl-actions branch (MAIC-422.4)."""
+    outline = {"type": "pbl", "title": "P", "keyPoints": []}
+    content = {"projectConfig": {"projectInfo": {"title": "P"}}}
+
+    async def _fake(*args, **kwargs):
+        return json.dumps([
+            {"type": "text", "content": "Welcome to the project."},
+        ])
+
+    with patch(
+        "apps.maic.generation.scene_generator.generate_text", new=_fake
+    ):
+        actions = await generate_scene_actions(
+            outline, content, language_model_id="stub"
+        )
+    assert len(actions) == 1
+    assert actions[0]["type"] == "speech"
+    assert actions[0]["text"] == "Welcome to the project."
 
 
 # ── Slide actions branch ──────────────────────────────────────────
@@ -1101,3 +1131,189 @@ def test_format_questions_for_prompt_omits_options_when_absent():
     ])
     assert "Q1 (short_answer): Explain X." in out
     assert "Options:" not in out
+
+
+# ── PBL content STUB (MAIC-422.4) ─────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_pbl_content_stub_uses_pblConfig_when_provided():
+    """When outline.pblConfig has projectTopic + projectDescription,
+    those win over outline.title / outline.description."""
+    outline = {
+        "type": "pbl",
+        "title": "outer-title",
+        "description": "outer-desc",
+        "pblConfig": {
+            "projectTopic": "explicit-topic",
+            "projectDescription": "explicit-desc",
+        },
+    }
+    content = await generate_scene_content(outline)
+    assert content["projectConfig"]["projectInfo"] == {
+        "title": "explicit-topic",
+        "description": "explicit-desc",
+    }
+
+
+@pytest.mark.asyncio
+async def test_pbl_content_stub_does_not_call_llm():
+    """The STUB is purely programmatic — no `generate_text` call."""
+    outline = {"type": "pbl", "title": "T"}
+
+    async def _fake(*args, **kwargs):
+        raise AssertionError("STUB must not call generate_text")
+
+    with patch(
+        "apps.maic.generation.scene_generator.generate_text", new=_fake
+    ):
+        content = await generate_scene_content(outline, language_model_id="stub")
+    assert content is not None
+    assert "projectConfig" in content
+
+
+# ── PBL actions branch (MAIC-422.4) ───────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_pbl_actions_falls_back_to_default_when_llm_returns_empty():
+    """LLM returns nothing parseable → default PBL kickoff speech."""
+    outline = {
+        "type": "pbl",
+        "title": "Mini Project",
+        "description": "intro",
+        "keyPoints": ["a"],
+    }
+    content = {"projectConfig": {"projectInfo": {"title": "Mini Project"}}}
+
+    async def _fake(*args, **kwargs):
+        return "no JSON here"
+
+    with patch(
+        "apps.maic.generation.scene_generator.generate_text", new=_fake
+    ):
+        actions = await generate_scene_actions(
+            outline, content, language_model_id="stub"
+        )
+    assert len(actions) == 1
+    assert actions[0]["type"] == "speech"
+    assert actions[0]["title"] == "PBL 项目介绍"
+
+
+@pytest.mark.asyncio
+async def test_pbl_actions_default_on_missing_template():
+    outline = {"type": "pbl", "title": "T", "keyPoints": []}
+    content = {"projectConfig": {}}
+
+    from apps.maic.exceptions import MaicConfigError
+
+    def _raise(*args, **kwargs):
+        raise MaicConfigError("template not found: pbl-actions")
+
+    async def _fake_text(*args, **kwargs):
+        raise AssertionError("LLM must not be called when template missing")
+
+    with patch(
+        "apps.maic.generation.scene_generator.load_generation_prompt",
+        side_effect=_raise,
+    ):
+        with patch(
+            "apps.maic.generation.scene_generator.generate_text",
+            new=_fake_text,
+        ):
+            actions = await generate_scene_actions(
+                outline, content, language_model_id="stub"
+            )
+    assert len(actions) == 1
+    assert actions[0]["type"] == "speech"
+
+
+@pytest.mark.asyncio
+async def test_pbl_actions_default_when_llm_call_fails():
+    outline = {"type": "pbl", "title": "T", "keyPoints": []}
+    content = {"projectConfig": {}}
+
+    async def _fake(*args, **kwargs):
+        raise RuntimeError("provider down")
+
+    with patch(
+        "apps.maic.generation.scene_generator.generate_text", new=_fake
+    ):
+        actions = await generate_scene_actions(
+            outline, content, language_model_id="stub"
+        )
+    assert len(actions) == 1
+    assert actions[0]["type"] == "speech"
+
+
+@pytest.mark.asyncio
+async def test_pbl_actions_passes_pblConfig_into_prompt():
+    """projectTopic / projectDescription from outline.pblConfig flow
+    into the pbl-actions prompt (mirrors upstream lines 1269-1270)."""
+    captured_vars = {}
+
+    def _capture(template_id, vars):
+        captured_vars.update(vars)
+        from apps.maic.prompts.loader import BuiltPrompt
+        return BuiltPrompt(system="sys", user="user")
+
+    async def _fake(*args, **kwargs):
+        return json.dumps([])
+
+    outline = {
+        "type": "pbl",
+        "title": "fallback-title",
+        "description": "fallback-desc",
+        "pblConfig": {
+            "projectTopic": "explicit-topic",
+            "projectDescription": "explicit-desc",
+        },
+    }
+    content = {"projectConfig": {}}
+
+    with patch(
+        "apps.maic.generation.scene_generator.load_generation_prompt",
+        side_effect=_capture,
+    ):
+        with patch(
+            "apps.maic.generation.scene_generator.generate_text", new=_fake
+        ):
+            await generate_scene_actions(
+                outline, content, language_model_id="stub"
+            )
+    assert captured_vars["projectTopic"] == "explicit-topic"
+    assert captured_vars["projectDescription"] == "explicit-desc"
+
+
+@pytest.mark.asyncio
+async def test_pbl_actions_falls_back_to_outline_when_no_pblConfig():
+    """No pblConfig → projectTopic/Description fall back to title/desc."""
+    captured_vars = {}
+
+    def _capture(template_id, vars):
+        captured_vars.update(vars)
+        from apps.maic.prompts.loader import BuiltPrompt
+        return BuiltPrompt(system="sys", user="user")
+
+    async def _fake(*args, **kwargs):
+        return json.dumps([])
+
+    outline = {
+        "type": "pbl",
+        "title": "Outline Title",
+        "description": "Outline Desc",
+    }
+    content = {"projectConfig": {}}
+
+    with patch(
+        "apps.maic.generation.scene_generator.load_generation_prompt",
+        side_effect=_capture,
+    ):
+        with patch(
+            "apps.maic.generation.scene_generator.generate_text", new=_fake
+        ):
+            await generate_scene_actions(
+                outline, content, language_model_id="stub"
+            )
+    assert captured_vars["projectTopic"] == "Outline Title"
+    assert captured_vars["projectDescription"] == "Outline Desc"

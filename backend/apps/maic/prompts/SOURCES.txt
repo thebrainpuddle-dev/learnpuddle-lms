@@ -13,7 +13,7 @@ Upstream commit:    10b1fc83cf77c769e8acac7b6c0569122b764bfd
                     plus a few post-release fixes; verifiable via
                     `git -C /Volumes/CrucialX9/OpenMAIC log 10b1fc83`).
 
-Templates ported (21 directories under templates/):
+Templates ported (22 directories under templates/):
   agent-system                  agent-system-wb-assistant
   agent-system-wb-student       agent-system-wb-teacher
   code-content                  diagram-content
@@ -25,6 +25,15 @@ Templates ported (21 directories under templates/):
   slide-actions                 slide-content
   visualization3d-content       web-search-query-rewrite
   widget-teacher-actions
+
+Local-only addition (NOT in upstream):
+  pbl-content (MAIC-422.4 STUB, Phase 4) — placeholder template that
+    lets the generation prompt-loader diagnostic return [] at Phase 4
+    close. The real PBL content generator is upstream's
+    lib/pbl/generate-pbl.ts (414 LoC + 4 MCP modules); that work is
+    deferred to Phase 5+ per MAIC-432 research. The Phase 4 stub
+    builds projectConfig programmatically — no LLM call hits this
+    template.
 
 Resync from upstream:
   diff -ruN /Volumes/CrucialX9/OpenMAIC/lib/prompts/{templates,snippets} \
