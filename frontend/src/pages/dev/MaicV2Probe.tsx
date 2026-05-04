@@ -15,6 +15,7 @@ import { useAuthStore } from '../../stores/authStore';
 import Phase2PlaybackDemo from './Phase2PlaybackDemo';
 import Phase2StaticDemo from './Phase2StaticDemo';
 import Phase3LiveModeDemo from './Phase3LiveModeDemo';
+import Phase3MultiAgentDemo from './Phase3MultiAgentDemo';
 import Phase3TtsFallbackDemo from './Phase3TtsFallbackDemo';
 
 export default function MaicV2Probe() {
@@ -29,6 +30,9 @@ export default function MaicV2Probe() {
   const isPlaybackDemo = sceneParam === 'phase2-demo';
   const isPhase3LiveMode = sceneParam === 'phase3-live-mode';
   const isPhase3TtsFallback = sceneParam === 'phase3-tts-fallback';
+  // Phase 3 multi-agent demo NEEDS daphne + JWT (real WS path);
+  // intentionally NOT in the JWT-skip list below.
+  const isPhase3MultiAgent = sceneParam === 'phase3-demo';
 
   const [sessionId] = useState(() => `dev-${Math.random().toString(36).slice(2, 10)}`);
   const accessToken = useAuthStore((s) => s.accessToken);
@@ -101,7 +105,7 @@ export default function MaicV2Probe() {
       </div>
 
       {tokenReady ? (
-        <Stage sessionId={sessionId} />
+        isPhase3MultiAgent ? <Phase3MultiAgentDemo /> : <Stage sessionId={sessionId} />
       ) : (
         <div style={{ padding: 16, border: '1px dashed #999', borderRadius: 8, background: '#fff8e1' }}>
           <b>No auth token.</b> Append <code>?token=&lt;jwt&gt;</code> to the URL or log in via the

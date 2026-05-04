@@ -83,6 +83,15 @@ export interface StageProps {
    * assert save/load semantics without touching the real Storage.
    */
   persistence?: PlaybackPersistence;
+  /**
+   * Optional payload merged into the WS `start` action's `data` field
+   * (MAIC-418.5). Used by Phase 3+ demo routes to specify
+   * `agentIds`/`maxTurns` so the backend builds the right
+   * OrchestratorState. Existing callers (Phase 1 default Stage,
+   * Phase 2 demos that don't use Stage) leave this unset and get the
+   * single-agent default per consumers.py:build_initial_state.
+   */
+  startPayload?: Record<string, unknown>;
 }
 
 
@@ -107,6 +116,7 @@ function StageInner({
   autoConnect = true,
   actionEngineOptions,
   persistence: persistenceProp,
+  startPayload,
 }: StageProps) {
   const whiteboardController = useWhiteboardController();
 
@@ -234,10 +244,17 @@ function StageInner({
   // ── Control callbacks ──────────────────────────────────────────
   const onStart = useCallback(() => {
     if (channelStatus === 'open' && !backendKicked) {
-      send({ action: 'start' });
+      // MAIC-418.5: forward optional startPayload (agentIds, maxTurns)
+      // so multi-agent demos can override the default single-agent
+      // initial state on the backend (consumers.py:build_initial_state).
+      if (startPayload && Object.keys(startPayload).length > 0) {
+        send({ action: 'start', data: startPayload });
+      } else {
+        send({ action: 'start' });
+      }
       setBackendKicked(true);
     }
-  }, [channelStatus, backendKicked, send]);
+  }, [channelStatus, backendKicked, send, startPayload]);
 
   const onPause = useCallback(() => engineRef.current?.pause(), []);
   const onResume = useCallback(() => engineRef.current?.resume(), []);
