@@ -166,9 +166,35 @@ def resolve_chat_model(language_model_id: str):
             timeout=60,
         )
 
+    # OpenRouter — routes any provider via OpenRouter's OpenAI-compatible
+    # API. ID format: `openrouter/<owner>/<model>`, e.g.
+    # `openrouter/anthropic/claude-3.5-sonnet`. Uses ChatOpenAI under the
+    # hood with a custom base_url + OPENROUTER_API_KEY.
+    if lid.startswith("openrouter/"):
+        api_key = os.environ.get("OPENROUTER_API_KEY")
+        if not api_key:
+            raise MaicConfigError(
+                "OPENROUTER_API_KEY is required to call OpenRouter models"
+            )
+        try:
+            from langchain_openai import ChatOpenAI
+        except ImportError as exc:
+            raise MaicConfigError("langchain-openai not installed") from exc
+
+        # Strip the `openrouter/` prefix; OpenRouter's slug format is
+        # `<owner>/<model>` (e.g. `anthropic/claude-3.5-sonnet`).
+        model_name = language_model_id.removeprefix("openrouter/")
+        return ChatOpenAI(
+            model=model_name,
+            base_url="https://openrouter.ai/api/v1",
+            api_key=api_key,
+            timeout=60,
+        )
+
     raise MaicConfigError(
         f"unknown language_model_id={language_model_id!r}; "
-        f"expected 'stub', 'claude-…', or 'gpt-…' / 'openai/…'"
+        f"expected 'stub', 'claude-…', 'gpt-…' / 'openai/…', "
+        f"or 'openrouter/<owner>/<model>'"
     )
 
 
