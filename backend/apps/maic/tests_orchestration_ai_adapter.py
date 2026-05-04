@@ -149,3 +149,87 @@ async def test_stub_stream_is_deterministic():
     run_1 = "".join([c async for c in stream_text([], "stub")])
     run_2 = "".join([c async for c in stream_text([], "stub")])
     assert run_1 == run_2 == STUB_OUTPUT
+
+
+# ── generate_text (Phase 4 / MAIC-433) ─────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_generate_text_against_stub_returns_full_stub_output():
+    """`generate_text` must drain `stream_text` and return the joined
+    string — Phase 4's generation pipeline relies on a complete string
+    for json_repair.parse_json_response."""
+    from apps.maic.orchestration.ai_adapter import generate_text, STUB_OUTPUT
+    text = await generate_text([], "stub")
+    assert text == STUB_OUTPUT
+
+
+@pytest.mark.asyncio
+async def test_generate_text_is_deterministic_across_calls():
+    """Two calls with the same input return the same output. Critical
+    for the ADR-005 parity test — golden outputs only stay stable if
+    the generation calls are deterministic."""
+    from apps.maic.orchestration.ai_adapter import generate_text
+    a = await generate_text([], "stub")
+    b = await generate_text([], "stub")
+    assert a == b
+
+
+@pytest.mark.asyncio
+async def test_generate_text_default_temperature_is_zero():
+    """Generation calls default to temperature=0 (deterministic) —
+    distinct from stream_text's 0.7 default. Lock the contract so a
+    future refactor doesn't accidentally re-introduce non-determinism
+    into generation calls (which would flake the parity test)."""
+    import inspect
+    from apps.maic.orchestration.ai_adapter import generate_text
+    sig = inspect.signature(generate_text)
+    assert sig.parameters["temperature"].default == 0.0
+
+
+@pytest.mark.asyncio
+async def test_generate_text_with_stub_director_returns_one_decision():
+    """`stub-director` cycles through 4 decisions; one call returns
+    exactly one decision (the cycle counter advances)."""
+    from apps.maic.orchestration.ai_adapter import (
+        generate_text,
+        reset_director_stub_counter,
+    )
+    reset_director_stub_counter()
+    text = await generate_text([], "stub-director")
+    # Whatever the first decision is, must be a valid JSON shape
+    import json
+    parsed = json.loads(text)
+    assert "next_agent" in parsed
+
+
+@pytest.mark.asyncio
+async def test_generate_text_propagates_unknown_provider_error():
+    """generate_text doesn't swallow MaicConfigError — generation's
+    GenerationResult envelope wraps these explicitly upstream."""
+    from apps.maic.orchestration.ai_adapter import generate_text
+    from apps.maic.exceptions import MaicConfigError
+    with pytest.raises(MaicConfigError):
+        await generate_text([], "totally-unknown-provider-xyz")
+
+
+@pytest.mark.asyncio
+async def test_generate_text_returns_empty_string_for_empty_stream():
+    """Defensive: if a future provider yields zero chunks (e.g. an
+    error path that gracefully returns nothing), generate_text must
+    return '' rather than raising or hanging."""
+    from apps.maic.orchestration import ai_adapter
+    from apps.maic.orchestration.ai_adapter import generate_text
+
+    async def _empty_stream(*args, **kwargs):
+        return
+        yield  # unreachable; makes this a generator
+
+    # Replace stream_text in the module for this one test
+    original = ai_adapter.stream_text
+    ai_adapter.stream_text = _empty_stream  # type: ignore[assignment]
+    try:
+        text = await generate_text([], "stub")
+        assert text == ""
+    finally:
+        ai_adapter.stream_text = original  # type: ignore[assignment]

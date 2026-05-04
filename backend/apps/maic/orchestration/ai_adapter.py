@@ -273,6 +273,65 @@ async def stream_text(
         ) from exc
 
 
+# ── Sync-collect helper (Phase 4 / MAIC-433) ──────────────────────────
+
+
+async def generate_text(
+    messages: list[BaseMessage],
+    language_model_id: str,
+    *,
+    temperature: float = 0.0,
+    max_tokens: int | None = None,
+) -> str:
+    """Drain `stream_text(...)` and return the joined string.
+
+    Phase 4's generation pipeline (`apps.maic.generation.*`) parses
+    LLM output via `json_repair.parse_json_response`, which expects a
+    complete string — not a stream. Rather than fork a second HTTP
+    client (the chatbot/outline_service `requests.post` pattern),
+    generation reuses `stream_text` and joins the yielded chunks here.
+
+    Defaulting `temperature=0.0` (lower than `stream_text`'s 0.7
+    default) — generation calls are deterministic by design so the
+    parity test (ADR-005) gets stable golden outputs.
+
+    Args:
+        messages: langchain BaseMessage list (system + user typically).
+        language_model_id: the same id `stream_text` accepts —
+            'stub', 'stub-director', 'claude-...', 'gpt-...',
+            'openai/...', or 'openrouter/<owner>/<model>'.
+        temperature: 0.0 by default (was 0.7 in stream_text). Override
+            for non-deterministic generation paths if any.
+        max_tokens: passed through to `stream_text` for provider
+            backends that support it.
+
+    Returns:
+        The concatenated text the LLM produced. Empty string if the
+        stream yielded nothing.
+
+    Raises:
+        MaicConfigError / MaicProviderError — same exception classes
+        `stream_text` raises. Generation callers wrap these into
+        `GenerationResult{success: False, error: ...}` envelopes.
+
+    Example:
+        >>> from langchain_core.messages import SystemMessage, HumanMessage
+        >>> text = await generate_text(
+        ...     [SystemMessage(content="..."), HumanMessage(content="...")],
+        ...     "openrouter/anthropic/claude-3.5-sonnet",
+        ... )
+    """
+    chunks: list[str] = []
+    async for chunk in stream_text(
+        messages,
+        language_model_id,
+        temperature=temperature,
+        max_tokens=max_tokens,
+    ):
+        chunks.append(chunk)
+    return "".join(chunks)
+
+
 # ── Stub implementation ───────────────────────────────────────────────
 
 
