@@ -353,3 +353,260 @@ async def test_slide_content_image_flags_all_false_in_phase_4():
     assert captured_vars["generatedImageEnabled"] is False
     assert captured_vars["generatedVideoEnabled"] is False
     assert captured_vars["mediaElementEnabled"] is False
+
+
+# ── Scene actions dispatcher (MAIC-422.1) ─────────────────────────
+
+
+from apps.maic.generation.scene_generator import generate_scene_actions
+
+
+@pytest.mark.asyncio
+async def test_actions_dispatcher_routes_slide():
+    outline = {"type": "slide", "title": "T", "keyPoints": ["a"]}
+    content = {
+        "elements": [
+            {"id": "el-1", "type": "text", "content": "hello"},
+        ],
+    }
+
+    async def _fake(*args, **kwargs):
+        return json.dumps([
+            {"type": "action", "name": "spotlight", "params": {"elementId": "el-1"}},
+            {"type": "text", "content": "describing the slide"},
+        ])
+
+    with patch(
+        "apps.maic.generation.scene_generator.generate_text", new=_fake
+    ):
+        actions = await generate_scene_actions(
+            outline, content, language_model_id="stub"
+        )
+    assert len(actions) == 2
+    assert actions[0]["type"] == "spotlight"
+    assert actions[0]["elementId"] == "el-1"
+    assert actions[1]["type"] == "speech"
+    assert actions[1]["text"] == "describing the slide"
+
+
+@pytest.mark.asyncio
+async def test_actions_dispatcher_returns_empty_for_quiz_until_maic_422_3():
+    outline = {"type": "quiz", "title": "Q"}
+    content = {"questions": [{"q": "?"}]}
+    actions = await generate_scene_actions(outline, content)
+    assert actions == []
+
+
+@pytest.mark.asyncio
+async def test_actions_dispatcher_returns_empty_for_interactive_until_422_6():
+    outline = {"type": "interactive", "title": "I"}
+    content = {"html": "<div>x</div>"}
+    actions = await generate_scene_actions(outline, content)
+    assert actions == []
+
+
+@pytest.mark.asyncio
+async def test_actions_dispatcher_returns_empty_for_pbl_stub():
+    outline = {"type": "pbl", "title": "P"}
+    content = {"projectConfig": {"phases": []}}
+    actions = await generate_scene_actions(outline, content)
+    assert actions == []
+
+
+# ── Slide actions branch ──────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_slide_actions_falls_back_to_default_when_llm_returns_empty():
+    """LLM returns nothing parseable → default actions."""
+    outline = {
+        "type": "slide",
+        "title": "Photosynthesis",
+        "description": "intro",
+        "keyPoints": ["chlorophyll", "light"],
+    }
+    content = {
+        "elements": [
+            {"id": "el-1", "type": "text", "content": "hello"},
+        ],
+    }
+
+    async def _fake(*args, **kwargs):
+        return "garbage no JSON"
+
+    with patch(
+        "apps.maic.generation.scene_generator.generate_text", new=_fake
+    ):
+        actions = await generate_scene_actions(
+            outline, content, language_model_id="stub"
+        )
+    # Default fallback: spotlight on first text element + speech with
+    # joined keyPoints.
+    types = [a["type"] for a in actions]
+    assert "spotlight" in types
+    assert "speech" in types
+    speech = next(a for a in actions if a["type"] == "speech")
+    assert "chlorophyll" in speech["text"]
+    assert "light" in speech["text"]
+
+
+@pytest.mark.asyncio
+async def test_slide_actions_default_uses_description_when_no_keypoints():
+    """No keyPoints → speech.text falls back to description."""
+    outline = {
+        "type": "slide",
+        "title": "T",
+        "description": "fallback desc",
+        "keyPoints": [],
+    }
+    content = {"elements": []}
+
+    async def _fake(*args, **kwargs):
+        return "no actions here"
+
+    with patch(
+        "apps.maic.generation.scene_generator.generate_text", new=_fake
+    ):
+        actions = await generate_scene_actions(
+            outline, content, language_model_id="stub"
+        )
+    speech = next(a for a in actions if a["type"] == "speech")
+    assert speech["text"] == "fallback desc"
+
+
+@pytest.mark.asyncio
+async def test_slide_actions_default_uses_title_when_no_keypoints_or_description():
+    outline = {"type": "slide", "title": "Just a title"}
+    content = {"elements": []}
+
+    async def _fake(*args, **kwargs):
+        return "no actions"
+
+    with patch(
+        "apps.maic.generation.scene_generator.generate_text", new=_fake
+    ):
+        actions = await generate_scene_actions(
+            outline, content, language_model_id="stub"
+        )
+    speech = next(a for a in actions if a["type"] == "speech")
+    assert speech["text"] == "Just a title"
+
+
+@pytest.mark.asyncio
+async def test_slide_actions_processes_invalid_element_id():
+    """spotlight.elementId pointing at non-existent element gets
+    rewritten to the first element's id (defense in depth)."""
+    outline = {"type": "slide", "title": "T"}
+    content = {
+        "elements": [
+            {"id": "real-el", "type": "text", "content": "x"},
+        ],
+    }
+
+    async def _fake(*args, **kwargs):
+        return json.dumps([
+            {"type": "action", "name": "spotlight", "params": {"elementId": "ghost"}},
+        ])
+
+    with patch(
+        "apps.maic.generation.scene_generator.generate_text", new=_fake
+    ):
+        actions = await generate_scene_actions(
+            outline, content, language_model_id="stub"
+        )
+    assert actions[0]["elementId"] == "real-el"
+
+
+@pytest.mark.asyncio
+async def test_slide_actions_processes_discussion_invalid_agent():
+    """discussion.agentId pointing at unknown agent gets reassigned
+    to a random student (or non-teacher)."""
+    outline = {"type": "slide", "title": "T"}
+    content = {"elements": [{"id": "e1", "type": "text"}]}
+    agents = [
+        {"id": "default-1", "name": "Teacher", "role": "teacher"},
+        {"id": "default-3", "name": "Student", "role": "student"},
+    ]
+
+    async def _fake(*args, **kwargs):
+        return json.dumps([
+            {
+                "type": "action",
+                "name": "discussion",
+                "params": {"agentId": "ghost", "topic": "test"},
+            },
+        ])
+
+    with patch(
+        "apps.maic.generation.scene_generator.generate_text", new=_fake
+    ):
+        actions = await generate_scene_actions(
+            outline,
+            content,
+            language_model_id="stub",
+            options={"agents": agents},
+        )
+    # discussion got reassigned to a student
+    assert actions[0]["agentId"] == "default-3"
+
+
+@pytest.mark.asyncio
+async def test_slide_actions_action_ids_filled():
+    """Actions arriving without an id get a generated `action_<8chars>` id."""
+    outline = {"type": "slide", "title": "T"}
+    content = {"elements": []}
+
+    async def _fake(*args, **kwargs):
+        # action without explicit id
+        return json.dumps([
+            {"type": "action", "name": "wb_open", "params": {}},
+        ])
+
+    with patch(
+        "apps.maic.generation.scene_generator.generate_text", new=_fake
+    ):
+        actions = await generate_scene_actions(
+            outline, content, language_model_id="stub"
+        )
+    assert actions[0]["id"].startswith("action_")
+    assert len(actions[0]["id"]) > len("action_")
+
+
+@pytest.mark.asyncio
+async def test_slide_actions_passes_course_context_into_prompt():
+    """Course context (page index + previous speeches) flows into
+    the slide-actions prompt via build_course_context."""
+    captured_vars = {}
+
+    def _capture(template_id, vars):
+        captured_vars.update(vars)
+        from apps.maic.prompts.loader import BuiltPrompt
+        return BuiltPrompt(system="sys", user="user")
+
+    async def _fake(*args, **kwargs):
+        return json.dumps([])
+
+    outline = {"type": "slide", "title": "T", "keyPoints": []}
+    content = {"elements": []}
+    ctx = {
+        "pageIndex": 2,
+        "totalPages": 5,
+        "allTitles": ["A", "B", "C", "D", "E"],
+        "previousSpeeches": ["earlier speech text"],
+    }
+
+    with patch(
+        "apps.maic.generation.scene_generator.load_generation_prompt",
+        side_effect=_capture,
+    ):
+        with patch(
+            "apps.maic.generation.scene_generator.generate_text", new=_fake
+        ):
+            await generate_scene_actions(
+                outline,
+                content,
+                language_model_id="stub",
+                options={"ctx": ctx},
+            )
+    assert "Page 2 of 5" in captured_vars["courseContext"]
+    assert "earlier speech text" in captured_vars["courseContext"]
