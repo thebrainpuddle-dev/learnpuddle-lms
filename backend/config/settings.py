@@ -909,3 +909,13 @@ CHATBOT_OLLAMA_MODEL = config('CHATBOT_OLLAMA_MODEL', default='llama3')
 # See docs/AI_CLASSROOM_BLUEPRINT.md and the project brain at
 # obsidian-vault/agent-hq/projects/learnpuddle-lms/maic-rebuild/.
 MAIC_V2_ENABLED = config('MAIC_V2_ENABLED', default=False, cast=bool)
+
+# Phase 4 (MAIC-431) — generation pipeline v1→v2 gate. When True,
+# the legacy v1 generation routes in apps/courses/maic_urls.py are
+# NOT mounted; clients hit POST /api/maic/v2/generate/ instead.
+# When False (rollback path), the v1 path resumes serving without
+# a code change.
+#
+# Default True — Phase 4 closes with the v2 path as canonical.
+# Phase 8 deletes both this gate and apps/courses/maic_generation_service.py.
+MAIC_GENERATION_USE_V2 = config('MAIC_GENERATION_USE_V2', default=True, cast=bool)

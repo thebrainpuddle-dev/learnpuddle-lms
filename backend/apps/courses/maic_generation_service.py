@@ -11,6 +11,29 @@ Functions:
     generate_scene_actions() → dict with rich action list (15-25 actions, 12 types)
     generate_tts_audio()     → bytes for per-agent TTS voices
     fallback_quiz_grade()    → LLM-based quiz grading when sidecar is down
+
+──────────────────────────────────────────────────────────────────────────────
+DEPRECATED (Phase 4, MAIC-431) — DEFERRED: Phase 8 final delete.
+
+This module is the legacy v1 generation service. Phase 4 ships the v2
+replacement at apps/maic/generation/ — `POST /api/maic/v2/generate/`
+enqueues a Celery chain (outline → chord(scenes) → finalize) and the
+WS consumer at /ws/maic/generation/<job_id>/ streams progress events.
+
+The legacy v1 path is GATED behind `settings.MAIC_GENERATION_USE_V2`
+(default True in dev / cert / prod). When the flag is True (the
+expected case), `apps/courses/maic_urls.py` skips the v1 routes and
+clients are routed to v2 instead.
+
+This file is NOT deleted at Phase 4 close — Phase 8 owns the final
+delete after we've verified v2 carries production load. Until then
+the flag is the safety net: flip to False if a v2 regression surfaces
+in prod, and the legacy v1 path resumes serving without a code change.
+
+Do NOT add new features here. Send all generation work to apps/maic/
+generation/. Existing callers are migrated to v2 incrementally; the
+v1 routes remain mounted only while the flag is False.
+──────────────────────────────────────────────────────────────────────────────
 """
 
 import io
