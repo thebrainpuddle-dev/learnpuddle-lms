@@ -55,6 +55,7 @@ import { useMaicClassroomChannelV2 } from '../../hooks/useMaicClassroomChannelV2
 
 import { AgentOverlay } from './AgentOverlay';
 import { LaserOverlay } from './LaserOverlay';
+import { LiveInput } from './LiveInput';
 import { ProactiveCardManager } from './ProactiveCardManager';
 import { SpotlightOverlay } from './SpotlightOverlay';
 import { StageControls } from './StageControls';
@@ -311,6 +312,24 @@ function StageInner({
           trigger={proactiveTrigger}
           onJoin={() => engineRef.current?.confirmDiscussion()}
           onSkip={() => engineRef.current?.skipDiscussion()}
+        />
+      )}
+
+      {/* MAIC-411.3: LiveInput visible only in `live` mode.
+          Send forwards to engine.sendUserMessage + WS user_message;
+          End Discussion forwards to handleEndDiscussion +
+          continuePlayback (resume the saved cursor) + WS resume. */}
+      {engineMode === 'live' && (
+        <LiveInput
+          onSend={(text) => {
+            engineRef.current?.sendUserMessage(text);
+            send({ action: 'user_message', data: { text } });
+          }}
+          onEnd={() => {
+            engineRef.current?.handleEndDiscussion();
+            engineRef.current?.continuePlayback();
+            send({ action: 'resume' });
+          }}
         />
       )}
 

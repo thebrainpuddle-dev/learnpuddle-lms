@@ -671,3 +671,118 @@ describe('Stage — MAIC-411.2 ProactiveCard wiring', () => {
     }
   });
 });
+
+
+// ── MAIC-411.3: LiveInput wiring in Stage ─────────────────────────
+
+
+describe('Stage — MAIC-411.3 LiveInput wiring', () => {
+  /**
+   * Fixture turn that ends with a discussion action — same shape as
+   * the 411.2 wiring tests, used to drive Stage into live mode.
+   */
+  const TURN_WITH_DISCUSSION = [
+    { type: 'thinking', data: { stage: 'agent_loading' } },
+    {
+      type: 'agent_start',
+      data: {
+        messageId: 'm1',
+        agentId: 'default-1',
+        agentName: 'AI Teacher',
+        agentAvatar: '🎓',
+        agentColor: '#3b82f6',
+      },
+    },
+    { type: 'text_delta', data: { content: 'Discussion time.', messageId: 'm1' } },
+    {
+      type: 'action',
+      data: {
+        actionId: 'd-1',
+        actionName: 'discussion',
+        params: { topic: 'topic' },
+        agentId: 'default-1',
+        messageId: 'm1',
+      },
+    },
+    { type: 'agent_end', data: { messageId: 'm1', agentId: 'default-1' } },
+  ];
+
+  function driveIntoLiveMode() {
+    render(
+      <Stage
+        sessionId="s1"
+        baseUrl="ws://test"
+        actionEngineOptions={FAST_ACTION_ENGINE}
+      />,
+    );
+    const ws = MockWebSocket.instances[0];
+    act(() => ws.open());
+    fireEvent.click(screen.getByTestId('maic-v2-control-start'));
+    act(() => {
+      for (const ev of TURN_WITH_DISCUSSION) ws.receive(ev);
+    });
+    act(() => {
+      vi.advanceTimersByTime(3000);
+    });
+    fireEvent.click(screen.getByTestId('maic-v2-proactive-card-join'));
+    return ws;
+  }
+
+  test('LiveInput is hidden outside live mode', () => {
+    render(<Stage sessionId="s1" baseUrl="ws://test" />);
+    expect(screen.queryByTestId('maic-v2-live-input')).toBeNull();
+  });
+
+  test('LiveInput renders when engine enters live mode', () => {
+    vi.useFakeTimers();
+    try {
+      driveIntoLiveMode();
+      expect(screen.getByTestId('maic-v2-live-input')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('Send dispatches user_message frame over WS', () => {
+    vi.useFakeTimers();
+    try {
+      const ws = driveIntoLiveMode();
+      const sentBefore = ws.sent.length;
+
+      const input = screen.getByTestId('maic-v2-live-input-text');
+      fireEvent.change(input, { target: { value: 'edge case question?' } });
+      fireEvent.click(screen.getByTestId('maic-v2-live-input-send'));
+
+      const newFrames = ws.sent.slice(sentBefore).map((s) => JSON.parse(s));
+      const userMsg = newFrames.find((f) => f.action === 'user_message');
+      expect(userMsg).toBeTruthy();
+      expect(userMsg.data.text).toBe('edge case question?');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('End Discussion dispatches resume frame and exits live mode', () => {
+    vi.useFakeTimers();
+    try {
+      const ws = driveIntoLiveMode();
+      const sentBefore = ws.sent.length;
+
+      fireEvent.click(screen.getByTestId('maic-v2-live-input-end'));
+
+      const newFrames = ws.sent.slice(sentBefore).map((s) => JSON.parse(s));
+      const resumeMsg = newFrames.find((f) => f.action === 'resume');
+      expect(resumeMsg).toBeTruthy();
+
+      // Engine no longer in live mode after End Discussion +
+      // continuePlayback. Final mode is 'playing' or 'idle' (depends
+      // on whether saved cursor still has actions to play).
+      const stage = screen.getByTestId('maic-v2-stage');
+      expect(stage.getAttribute('data-engine-mode')).not.toBe('live');
+      // LiveInput hidden after exiting live mode.
+      expect(screen.queryByTestId('maic-v2-live-input')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
