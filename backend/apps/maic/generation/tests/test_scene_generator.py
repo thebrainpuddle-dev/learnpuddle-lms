@@ -49,16 +49,6 @@ async def test_dispatcher_routes_slide_to_slide_content():
 
 
 @pytest.mark.asyncio
-async def test_dispatcher_returns_none_for_quiz_until_maic_422_2():
-    """Quiz branch lands in MAIC-422.2. Until then, dispatcher
-    returns None — defended by an explicit branch (not a default
-    fall-through) so a misrouted outline doesn't silently break."""
-    outline = {"type": "quiz", "title": "Q"}
-    content = await generate_scene_content(outline)
-    assert content is None
-
-
-@pytest.mark.asyncio
 async def test_dispatcher_returns_none_for_interactive_until_maic_422_5():
     outline = {"type": "interactive", "title": "I"}
     content = await generate_scene_content(outline)
@@ -610,3 +600,254 @@ async def test_slide_actions_passes_course_context_into_prompt():
             )
     assert "Page 2 of 5" in captured_vars["courseContext"]
     assert "earlier speech text" in captured_vars["courseContext"]
+
+
+# ── Quiz-content branch (MAIC-422.2) ──────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_routes_quiz_to_quiz_content():
+    """Quiz outlines now hit the quiz-content branch (MAIC-422.2)."""
+    outline = {
+        "type": "quiz",
+        "title": "Photosynthesis Quiz",
+        "description": "test understanding",
+        "keyPoints": ["chlorophyll", "ATP"],
+    }
+
+    async def _fake(*args, **kwargs):
+        return json.dumps([
+            {
+                "type": "single",
+                "question": "What pigment captures light?",
+                "options": ["chlorophyll", "hemoglobin", "melanin"],
+                "correctAnswer": "A",
+            },
+        ])
+
+    with patch(
+        "apps.maic.generation.scene_generator.generate_text", new=_fake
+    ):
+        content = await generate_scene_content(outline, language_model_id="stub")
+    assert content is not None
+    assert "questions" in content
+    assert len(content["questions"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_quiz_questions_get_unique_ids():
+    """Generated question IDs must be unique within one call."""
+    outline = {"type": "quiz", "title": "Q"}
+
+    async def _fake(*args, **kwargs):
+        return json.dumps([
+            {"type": "single", "question": "Q1?", "options": ["a", "b"]},
+            {"type": "single", "question": "Q2?", "options": ["a", "b"]},
+            {"type": "single", "question": "Q3?", "options": ["a", "b"]},
+        ])
+
+    with patch(
+        "apps.maic.generation.scene_generator.generate_text", new=_fake
+    ):
+        content = await generate_scene_content(outline, language_model_id="stub")
+    ids = [q["id"] for q in content["questions"]]
+    assert len(set(ids)) == 3  # all unique
+    for q_id in ids:
+        assert q_id.startswith("q_")
+
+
+@pytest.mark.asyncio
+async def test_quiz_options_normalized_from_string_array():
+    """Plain string options get coerced to {value: letter, label: str}."""
+    outline = {"type": "quiz", "title": "T"}
+
+    async def _fake(*args, **kwargs):
+        return json.dumps([
+            {
+                "type": "single",
+                "question": "?",
+                "options": ["First", "Second", "Third"],
+            },
+        ])
+
+    with patch(
+        "apps.maic.generation.scene_generator.generate_text", new=_fake
+    ):
+        content = await generate_scene_content(outline, language_model_id="stub")
+    options = content["questions"][0]["options"]
+    assert options == [
+        {"value": "A", "label": "First"},
+        {"value": "B", "label": "Second"},
+        {"value": "C", "label": "Third"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_quiz_options_normalized_from_dict_array():
+    """Dict options pass through with letter fallback when missing."""
+    outline = {"type": "quiz", "title": "T"}
+
+    async def _fake(*args, **kwargs):
+        return json.dumps([
+            {
+                "type": "single",
+                "question": "?",
+                "options": [
+                    {"value": "X", "label": "First"},  # explicit value
+                    {"label": "Second"},  # missing value → fallback letter
+                    {"value": "C"},  # missing label → use value as label
+                ],
+            },
+        ])
+
+    with patch(
+        "apps.maic.generation.scene_generator.generate_text", new=_fake
+    ):
+        content = await generate_scene_content(outline, language_model_id="stub")
+    options = content["questions"][0]["options"]
+    assert options[0] == {"value": "X", "label": "First"}
+    assert options[1] == {"value": "B", "label": "Second"}  # B from index
+    assert options[2]["value"] == "C"
+
+
+@pytest.mark.asyncio
+async def test_quiz_answer_normalized_from_various_field_names():
+    """The AI may use answer / correctAnswer / correct_answer; all
+    three resolve to a string[] under `answer`."""
+    outline = {"type": "quiz", "title": "T"}
+
+    async def _fake(*args, **kwargs):
+        return json.dumps([
+            {"type": "single", "question": "Q1", "answer": "A"},
+            {"type": "single", "question": "Q2", "correctAnswer": "B"},
+            {"type": "single", "question": "Q3", "correct_answer": ["C", "D"]},
+        ])
+
+    with patch(
+        "apps.maic.generation.scene_generator.generate_text", new=_fake
+    ):
+        content = await generate_scene_content(outline, language_model_id="stub")
+    assert content["questions"][0]["answer"] == ["A"]
+    assert content["questions"][1]["answer"] == ["B"]
+    assert content["questions"][2]["answer"] == ["C", "D"]
+
+
+@pytest.mark.asyncio
+async def test_short_answer_questions_have_no_options_or_answer():
+    """short_answer questions are free-form — options + answer get
+    nulled, hasAnswer=False."""
+    outline = {"type": "quiz", "title": "T"}
+
+    async def _fake(*args, **kwargs):
+        return json.dumps([
+            {
+                "type": "short_answer",
+                "question": "Explain photosynthesis.",
+                "options": ["should", "be", "stripped"],
+                "correctAnswer": "free response",
+            },
+        ])
+
+    with patch(
+        "apps.maic.generation.scene_generator.generate_text", new=_fake
+    ):
+        content = await generate_scene_content(outline, language_model_id="stub")
+    q = content["questions"][0]
+    assert q["options"] is None
+    assert q["answer"] is None
+    assert q["hasAnswer"] is False
+
+
+@pytest.mark.asyncio
+async def test_other_question_types_have_hasAnswer_true():
+    outline = {"type": "quiz", "title": "T"}
+
+    async def _fake(*args, **kwargs):
+        return json.dumps([
+            {"type": "single", "question": "?", "options": ["a"], "answer": "A"},
+        ])
+
+    with patch(
+        "apps.maic.generation.scene_generator.generate_text", new=_fake
+    ):
+        content = await generate_scene_content(outline, language_model_id="stub")
+    assert content["questions"][0]["hasAnswer"] is True
+
+
+@pytest.mark.asyncio
+async def test_quiz_content_returns_none_on_parse_failure():
+    outline = {"type": "quiz", "title": "T"}
+
+    async def _fake(*args, **kwargs):
+        return "not json at all"
+
+    with patch(
+        "apps.maic.generation.scene_generator.generate_text", new=_fake
+    ):
+        content = await generate_scene_content(outline, language_model_id="stub")
+    assert content is None
+
+
+@pytest.mark.asyncio
+async def test_quiz_uses_default_config_when_outline_has_none():
+    """No quizConfig → defaults: 3 questions, medium, ['single']."""
+    captured_vars = {}
+
+    def _capture(template_id, vars):
+        captured_vars.update(vars)
+        from apps.maic.prompts.loader import BuiltPrompt
+        return BuiltPrompt(system="sys", user="user")
+
+    async def _fake(*args, **kwargs):
+        return json.dumps([])
+
+    outline = {"type": "quiz", "title": "T"}
+
+    with patch(
+        "apps.maic.generation.scene_generator.load_generation_prompt",
+        side_effect=_capture,
+    ):
+        with patch(
+            "apps.maic.generation.scene_generator.generate_text", new=_fake
+        ):
+            await generate_scene_content(outline, language_model_id="stub")
+    assert captured_vars["questionCount"] == 3
+    assert captured_vars["difficulty"] == "medium"
+    assert captured_vars["questionTypes"] == "single"
+
+
+@pytest.mark.asyncio
+async def test_quiz_uses_explicit_quizConfig_when_provided():
+    """When the outline carries quizConfig, those values flow into
+    the prompt instead of the defaults."""
+    captured_vars = {}
+
+    def _capture(template_id, vars):
+        captured_vars.update(vars)
+        from apps.maic.prompts.loader import BuiltPrompt
+        return BuiltPrompt(system="sys", user="user")
+
+    async def _fake(*args, **kwargs):
+        return json.dumps([])
+
+    outline = {
+        "type": "quiz",
+        "title": "T",
+        "quizConfig": {
+            "questionCount": 7,
+            "difficulty": "hard",
+            "questionTypes": ["single", "multiple", "short_answer"],
+        },
+    }
+
+    with patch(
+        "apps.maic.generation.scene_generator.load_generation_prompt",
+        side_effect=_capture,
+    ):
+        with patch(
+            "apps.maic.generation.scene_generator.generate_text", new=_fake
+        ):
+            await generate_scene_content(outline, language_model_id="stub")
+    assert captured_vars["questionCount"] == 7
+    assert captured_vars["difficulty"] == "hard"
+    assert captured_vars["questionTypes"] == "single, multiple, short_answer"

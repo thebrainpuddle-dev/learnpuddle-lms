@@ -151,13 +151,13 @@ async def generate_scene_content(
             language_directive=options.get("languageDirective", ""),
         )
 
-    # ── Quiz branch — MAIC-422.2 (Session 3) ──
+    # ── Quiz branch (MAIC-422.2) ──
     if scene_type == "quiz":
-        _logger.info(
-            "scene_type=quiz: branch lands in MAIC-422.2 (Session 3); "
-            "returning None for now."
+        return await _generate_quiz_content(
+            outline,
+            language_model_id=language_model_id,
+            language_directive=options.get("languageDirective", ""),
         )
-        return None
 
     # ── Interactive branch — MAIC-422.5 (Session 4) ──
     if scene_type == "interactive":
@@ -328,6 +328,189 @@ async def _generate_slide_content(
         "background": background,
         "remark": generated_data.get("remark") or outline.get("description", ""),
     }
+
+
+# ── Quiz content (MAIC-422.2) ─────────────────────────────────────
+
+
+# Default quizConfig — mirrors upstream lines 784-788. Used when the
+# outline doesn't carry an explicit quizConfig (which is the common
+# Phase 4 case since UserRequirements doesn't ship that field).
+_DEFAULT_QUIZ_CONFIG: dict[str, Any] = {
+    "questionCount": 3,
+    "difficulty": "medium",
+    "questionTypes": ["single"],
+}
+
+
+async def _generate_quiz_content(
+    outline: SceneOutline,
+    *,
+    language_model_id: str,
+    language_directive: str = "",
+) -> dict[str, Any] | None:
+    """Generate quiz content.
+
+    Direct port of upstream `generateQuizContent` (lines 779-828).
+
+    Builds the quiz-content prompt with title / description /
+    keyPoints + quizConfig (questionCount / difficulty /
+    questionTypes), calls generate_text + parse_json_response
+    (expects an array of QuizQuestion dicts), and normalizes each
+    question:
+      - Ensures stable id (`q_<8chars>` if missing).
+      - For non-short-answer types: normalizes options to
+        `[{value: 'A', label: '...'}, ...]` and answers to `string[]`.
+      - For short-answer types: drops options + answer + sets
+        hasAnswer=False (free-form student response).
+
+    Returns `{"questions": [...]}` on success OR None on prompt-load
+    / LLM / parse failure.
+    """
+    quiz_config = outline.get("quizConfig") or _DEFAULT_QUIZ_CONFIG
+
+    key_points = outline.get("keyPoints") or []
+    key_points_text = "\n".join(
+        f"{i + 1}. {p}" for i, p in enumerate(key_points)
+    )
+    question_types = quiz_config.get("questionTypes") or ["single"]
+
+    try:
+        prompts = load_generation_prompt(
+            "quiz-content",
+            {
+                "title": outline.get("title", ""),
+                "description": outline.get("description", ""),
+                "keyPoints": key_points_text,
+                "questionCount": quiz_config.get("questionCount", 3),
+                "difficulty": quiz_config.get("difficulty", "medium"),
+                "questionTypes": ", ".join(question_types),
+                "languageDirective": language_directive,
+            },
+        )
+    except MaicConfigError as exc:
+        _logger.error("Quiz-content prompt missing: %s", exc)
+        return None
+
+    _logger.debug(
+        "Generating quiz content for: %s", outline.get("title", "?")
+    )
+
+    try:
+        response = await generate_text(
+            messages=[
+                SystemMessage(content=prompts.system),
+                HumanMessage(content=prompts.user),
+            ],
+            language_model_id=language_model_id,
+        )
+    except Exception as exc:  # noqa: BLE001
+        _logger.error(
+            "Quiz-content LLM call failed for %s: %s",
+            outline.get("title", "?"),
+            exc,
+        )
+        return None
+
+    generated_questions = parse_json_response(response)
+    if not isinstance(generated_questions, list):
+        _logger.error(
+            "Failed to parse quiz-content AI response for: %s",
+            outline.get("title", "?"),
+        )
+        return None
+
+    _logger.debug(
+        "Got %d questions for: %s",
+        len(generated_questions),
+        outline.get("title", "?"),
+    )
+
+    questions: list[dict[str, Any]] = []
+    for q in generated_questions:
+        if not isinstance(q, dict):
+            _logger.warning("Skipping non-dict quiz question: %r", q)
+            continue
+        is_text = q.get("type") == "short_answer"
+        normalized = {
+            **q,
+            "id": q.get("id") or f"q_{_nanoid_8()}",
+            "options": (
+                None if is_text else _normalize_quiz_options(q.get("options"))
+            ),
+            "answer": (
+                None if is_text else _normalize_quiz_answer(q)
+            ),
+            "hasAnswer": not is_text,
+        }
+        questions.append(normalized)
+
+    return {"questions": questions}
+
+
+def _normalize_quiz_options(
+    options: list[Any] | None,
+) -> list[dict[str, str]] | None:
+    """Normalize quiz options from an AI response.
+
+    Mirrors upstream `normalizeQuizOptions` (lines 835-857). Coerces
+    plain strings or partial dicts into the `{value, label}` shape.
+    Letter assignment defaults to A, B, C, D, ... when missing.
+
+    Returns None when input isn't a list.
+    """
+    if not isinstance(options, list):
+        return None
+
+    normalized: list[dict[str, str]] = []
+    for index, opt in enumerate(options):
+        letter = chr(65 + index)  # A, B, C, ...
+
+        if isinstance(opt, str):
+            normalized.append({"value": letter, "label": opt})
+            continue
+
+        if isinstance(opt, dict):
+            value = opt.get("value") if isinstance(opt.get("value"), str) else letter
+            # label fallback chain: opt.label > opt.value > opt.text > letter
+            raw_label = opt.get("label")
+            if isinstance(raw_label, str):
+                label = raw_label
+            else:
+                fallback = opt.get("value") or opt.get("text") or letter
+                label = str(fallback)
+            normalized.append({"value": value, "label": label})
+            continue
+
+        # Anything else (int, None, etc.) — coerce to string
+        normalized.append({"value": letter, "label": str(opt)})
+
+    return normalized
+
+
+def _normalize_quiz_answer(
+    question: dict[str, Any],
+) -> list[str] | None:
+    """Normalize the answer field from an AI response.
+
+    Mirrors upstream `normalizeQuizAnswer` (lines 864-876). The AI may
+    use any of: `answer`, `correctAnswer`, `correct_answer`. Returns
+    a list of strings (always — even when the source is a single
+    value) so downstream code can treat it uniformly.
+    """
+    raw = (
+        question.get("answer")
+        if question.get("answer") is not None
+        else question.get("correctAnswer")
+        if question.get("correctAnswer") is not None
+        else question.get("correct_answer")
+    )
+    if raw is None:
+        return None
+
+    if isinstance(raw, list):
+        return [str(x) for x in raw]
+    return [str(raw)]
 
 
 # ── Scene actions dispatcher (MAIC-422.1) ─────────────────────────
