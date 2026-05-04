@@ -851,8 +851,10 @@ async def generate_scene_actions(
     on outline.type:
       - slide → slide-actions LLM call (MAIC-422.1)
       - quiz → quiz-actions LLM call (MAIC-422.3)
-      - interactive → interactive-actions (MAIC-422.6, Session 4)
-      - pbl → pbl-actions LLM call (MAIC-422.4, this chunk)
+      - interactive → interactive-actions LLM call (MAIC-422.6, this
+        chunk). Ultra Mode `teacherActions`-conversion early-exit
+        deferred to MAIC-422.7.
+      - pbl → pbl-actions LLM call (MAIC-422.4)
 
     Returns an empty list when the scene type doesn't match any branch
     OR when the LLM call / parse fails AND no default fallback applies.
@@ -891,13 +893,32 @@ async def generate_scene_actions(
             language_directive=options.get("languageDirective", ""),
         )
 
-    # ── Interactive branch — MAIC-422.6 (Session 4) ──
-    if outline.get("type") == "interactive" and "html" in content:
+    # ── Interactive branch (MAIC-422.6) ──
+    # Ultra Mode early-exit: if the widget content carried teacher
+    # actions, convert them directly to Actions (skips the LLM call).
+    # MAIC-422.7 (Session 5) wires the upstream conversion logic
+    # (convertTeacherActionsToActions, lines 1361-1467). For now,
+    # content["teacherActions"] is always None (set by MAIC-422.5);
+    # so this guard is a no-op until Session 5.
+    if (
+        outline.get("type") == "interactive"
+        and "html" in content
+        and content.get("teacherActions")
+    ):
         _logger.info(
-            "generate_scene_actions: interactive branch lands in "
-            "MAIC-422.6 (Session 4); returning [] for now."
+            "[Ultra Mode] teacherActions present but conversion lands "
+            "in MAIC-422.7; falling through to interactive-actions LLM."
         )
-        return []
+
+    if outline.get("type") == "interactive" and "html" in content:
+        return await _generate_interactive_actions(
+            outline,
+            content,
+            language_model_id=language_model_id,
+            ctx=options.get("ctx"),
+            agents=agents,
+            language_directive=options.get("languageDirective", ""),
+        )
 
     # ── PBL branch (MAIC-422.4) ──
     if outline.get("type") == "pbl" and "projectConfig" in content:
@@ -1225,6 +1246,127 @@ def _generate_default_pbl_actions(
             # ^ "Now let's start a project-based learning activity.
             # Please select your role, check the task board, and
             # begin collaborating to complete the project."
+        }
+    ]
+
+
+# ── Interactive actions (MAIC-422.6) ──────────────────────────────
+
+
+async def _generate_interactive_actions(
+    outline: SceneOutline,
+    content: dict[str, Any],  # noqa: ARG001  # kept for shape parity
+    *,
+    language_model_id: str,
+    ctx: SceneGenerationContext | None,
+    agents: list[AgentInfo] | None,
+    language_directive: str,
+) -> list[dict[str, Any]]:
+    """Interactive-actions LLM call.
+
+    Direct port of upstream `generateSceneActions` interactive branch
+    (lines 1234-1260). Builds the interactive-actions prompt with
+    title / description / keyPoints + conceptName + designIdea +
+    course context + agents roster.
+
+    Phase 4 sources `conceptName` and `designIdea` from
+    `outline.widgetOutline` (Ultra Mode shape) with a fallback to
+    legacy `outline.interactiveConfig` if present. Default
+    `conceptName = outline.title` and `designIdea = ""` mirror
+    upstream lines 1241-1242.
+
+    Falls back to `_generate_default_interactive_actions` when the
+    prompt template is missing OR the LLM returns zero actions OR
+    the LLM call fails.
+    """
+    widget_outline = outline.get("widgetOutline") or {}
+    legacy_config = outline.get("interactiveConfig") or {}
+
+    concept_name = (
+        widget_outline.get("concept")
+        or legacy_config.get("conceptName")
+        or outline.get("title", "")
+    )
+    design_idea = (
+        widget_outline.get("designIdea")
+        or legacy_config.get("designIdea")
+        or ""
+    )
+
+    agents_text = format_agents_for_prompt(agents)
+    course_context = build_course_context(ctx)
+
+    key_points = outline.get("keyPoints") or []
+    key_points_text = "\n".join(
+        f"{i + 1}. {p}" for i, p in enumerate(key_points)
+    )
+
+    try:
+        prompts = load_generation_prompt(
+            "interactive-actions",
+            {
+                "title": outline.get("title", ""),
+                "keyPoints": key_points_text,
+                "description": outline.get("description", ""),
+                "conceptName": concept_name,
+                "designIdea": design_idea,
+                "courseContext": course_context,
+                "agents": agents_text,
+                "languageDirective": language_directive,
+            },
+        )
+    except MaicConfigError:
+        _logger.warning(
+            "Interactive-actions prompt missing — using default fallback."
+        )
+        return _generate_default_interactive_actions(outline)
+
+    try:
+        response = await generate_text(
+            messages=[
+                SystemMessage(content=prompts.system),
+                HumanMessage(content=prompts.user),
+            ],
+            language_model_id=language_model_id,
+        )
+    except Exception as exc:  # noqa: BLE001
+        _logger.error(
+            "Interactive-actions LLM call failed for %s: %s",
+            outline.get("title", "?"),
+            exc,
+        )
+        return _generate_default_interactive_actions(outline)
+
+    actions = parse_actions_from_structured_output(
+        response, scene_type="interactive"
+    )
+
+    if actions:
+        return _process_actions(actions, [], agents)
+    return _generate_default_interactive_actions(outline)
+
+
+def _generate_default_interactive_actions(
+    _outline: SceneOutline,
+) -> list[dict[str, Any]]:
+    """Default interactive actions when the LLM returns nothing usable.
+
+    Mirrors upstream `generateDefaultInteractiveActions` (lines
+    1566-1575). A single speech that frames the widget as an
+    exploration prompt.
+    """
+    return [
+        {
+            "id": f"action_{_nanoid_8()}",
+            "type": "speech",
+            "title": "交互引导",  # "interactive introduction"
+            "text": (
+                "现在让我们通过交互式可视化来探索这个概念。"
+                "请尝试操作页面中的元素，观察变化。"
+            ),
+            # ^ "Now let's explore this concept through an interactive
+            # visualization. Try operating the elements on the page
+            # and observe how things change."
         }
     ]
 

@@ -447,11 +447,37 @@ async def test_actions_dispatcher_routes_quiz():
 
 
 @pytest.mark.asyncio
-async def test_actions_dispatcher_returns_empty_for_interactive_until_422_6():
-    outline = {"type": "interactive", "title": "I"}
-    content = {"html": "<div>x</div>"}
-    actions = await generate_scene_actions(outline, content)
-    assert actions == []
+async def test_actions_dispatcher_routes_interactive():
+    """Interactive outlines now hit the interactive-actions branch
+    (MAIC-422.6)."""
+    outline = {
+        "type": "interactive",
+        "title": "Wave Mechanics",
+        "keyPoints": ["amplitude", "frequency"],
+        "widgetType": "simulation",
+        "widgetOutline": {"concept": "Wave Mechanics"},
+    }
+    content = {
+        "html": "<html><body>widget</body></html>",
+        "widgetType": "simulation",
+        "widgetConfig": None,
+        "teacherActions": None,
+    }
+
+    async def _fake(*args, **kwargs):
+        return json.dumps([
+            {"type": "text", "content": "Try adjusting the amplitude slider."},
+        ])
+
+    with patch(
+        "apps.maic.generation.scene_generator.generate_text", new=_fake
+    ):
+        actions = await generate_scene_actions(
+            outline, content, language_model_id="stub"
+        )
+    assert len(actions) == 1
+    assert actions[0]["type"] == "speech"
+    assert "amplitude" in actions[0]["text"]
 
 
 @pytest.mark.asyncio
@@ -1625,3 +1651,263 @@ def test_extract_widget_config_returns_none_on_invalid_json():
         'not json{{{</script>'
     )
     assert _extract_widget_config(html) is None
+
+
+# ── Interactive-actions branch (MAIC-422.6) ───────────────────────
+
+
+@pytest.mark.asyncio
+async def test_interactive_actions_falls_back_to_default_when_llm_returns_empty():
+    outline = {
+        "type": "interactive",
+        "title": "T",
+        "widgetType": "simulation",
+        "widgetOutline": {"concept": "C"},
+    }
+    content = {
+        "html": "<html>x</html>",
+        "widgetType": "simulation",
+        "widgetConfig": None,
+        "teacherActions": None,
+    }
+
+    async def _fake(*args, **kwargs):
+        return "no JSON here"
+
+    with patch(
+        "apps.maic.generation.scene_generator.generate_text", new=_fake
+    ):
+        actions = await generate_scene_actions(
+            outline, content, language_model_id="stub"
+        )
+    assert len(actions) == 1
+    assert actions[0]["type"] == "speech"
+    assert actions[0]["title"] == "交互引导"
+
+
+@pytest.mark.asyncio
+async def test_interactive_actions_default_on_missing_template():
+    outline = {
+        "type": "interactive",
+        "title": "T",
+        "widgetType": "simulation",
+        "widgetOutline": {"concept": "C"},
+    }
+    content = {
+        "html": "<html>x</html>",
+        "widgetType": "simulation",
+        "widgetConfig": None,
+        "teacherActions": None,
+    }
+
+    from apps.maic.exceptions import MaicConfigError
+
+    def _raise(*args, **kwargs):
+        raise MaicConfigError("template not found: interactive-actions")
+
+    async def _fake_text(*args, **kwargs):
+        raise AssertionError("LLM must not be called when template missing")
+
+    with patch(
+        "apps.maic.generation.scene_generator.load_generation_prompt",
+        side_effect=_raise,
+    ):
+        with patch(
+            "apps.maic.generation.scene_generator.generate_text",
+            new=_fake_text,
+        ):
+            actions = await generate_scene_actions(
+                outline, content, language_model_id="stub"
+            )
+    assert len(actions) == 1
+    assert actions[0]["type"] == "speech"
+
+
+@pytest.mark.asyncio
+async def test_interactive_actions_default_when_llm_call_fails():
+    outline = {
+        "type": "interactive",
+        "title": "T",
+        "widgetType": "simulation",
+        "widgetOutline": {"concept": "C"},
+    }
+    content = {
+        "html": "<html>x</html>",
+        "widgetType": "simulation",
+        "widgetConfig": None,
+        "teacherActions": None,
+    }
+
+    async def _fake(*args, **kwargs):
+        raise RuntimeError("provider down")
+
+    with patch(
+        "apps.maic.generation.scene_generator.generate_text", new=_fake
+    ):
+        actions = await generate_scene_actions(
+            outline, content, language_model_id="stub"
+        )
+    assert len(actions) == 1
+    assert actions[0]["type"] == "speech"
+
+
+@pytest.mark.asyncio
+async def test_interactive_actions_pulls_concept_from_widget_outline():
+    """Ultra Mode: conceptName comes from outline.widgetOutline.concept,
+    not legacy outline.interactiveConfig."""
+    captured_vars = {}
+
+    def _capture(template_id, vars):
+        captured_vars.update(vars)
+        from apps.maic.prompts.loader import BuiltPrompt
+        return BuiltPrompt(system="sys", user="user")
+
+    async def _fake(*args, **kwargs):
+        return json.dumps([])
+
+    outline = {
+        "type": "interactive",
+        "title": "outline-title",
+        "widgetType": "simulation",
+        "widgetOutline": {
+            "concept": "Wave Mechanics",
+            "designIdea": "interactive sliders",
+        },
+    }
+    content = {
+        "html": "<html>x</html>",
+        "widgetType": "simulation",
+        "widgetConfig": None,
+        "teacherActions": None,
+    }
+
+    with patch(
+        "apps.maic.generation.scene_generator.load_generation_prompt",
+        side_effect=_capture,
+    ):
+        with patch(
+            "apps.maic.generation.scene_generator.generate_text", new=_fake
+        ):
+            await generate_scene_actions(
+                outline, content, language_model_id="stub"
+            )
+    assert captured_vars["conceptName"] == "Wave Mechanics"
+    assert captured_vars["designIdea"] == "interactive sliders"
+
+
+@pytest.mark.asyncio
+async def test_interactive_actions_falls_back_to_legacy_interactive_config():
+    """Legacy: when widgetOutline lacks concept/designIdea, pull from
+    interactiveConfig (back-compat)."""
+    captured_vars = {}
+
+    def _capture(template_id, vars):
+        captured_vars.update(vars)
+        from apps.maic.prompts.loader import BuiltPrompt
+        return BuiltPrompt(system="sys", user="user")
+
+    async def _fake(*args, **kwargs):
+        return json.dumps([])
+
+    outline = {
+        "type": "interactive",
+        "title": "outline-title",
+        "interactiveConfig": {
+            "conceptName": "Legacy Concept",
+            "designIdea": "Legacy Idea",
+        },
+    }
+    content = {
+        "html": "<html>x</html>",
+        "widgetType": "simulation",
+        "widgetConfig": None,
+        "teacherActions": None,
+    }
+
+    with patch(
+        "apps.maic.generation.scene_generator.load_generation_prompt",
+        side_effect=_capture,
+    ):
+        with patch(
+            "apps.maic.generation.scene_generator.generate_text", new=_fake
+        ):
+            await generate_scene_actions(
+                outline, content, language_model_id="stub"
+            )
+    assert captured_vars["conceptName"] == "Legacy Concept"
+    assert captured_vars["designIdea"] == "Legacy Idea"
+
+
+@pytest.mark.asyncio
+async def test_interactive_actions_concept_falls_back_to_title_when_missing():
+    """No widgetOutline + no interactiveConfig → conceptName = title."""
+    captured_vars = {}
+
+    def _capture(template_id, vars):
+        captured_vars.update(vars)
+        from apps.maic.prompts.loader import BuiltPrompt
+        return BuiltPrompt(system="sys", user="user")
+
+    async def _fake(*args, **kwargs):
+        return json.dumps([])
+
+    outline = {"type": "interactive", "title": "T-fallback"}
+    content = {
+        "html": "<html>x</html>",
+        "widgetType": "simulation",
+        "widgetConfig": None,
+        "teacherActions": None,
+    }
+
+    with patch(
+        "apps.maic.generation.scene_generator.load_generation_prompt",
+        side_effect=_capture,
+    ):
+        with patch(
+            "apps.maic.generation.scene_generator.generate_text", new=_fake
+        ):
+            await generate_scene_actions(
+                outline, content, language_model_id="stub"
+            )
+    assert captured_vars["conceptName"] == "T-fallback"
+    assert captured_vars["designIdea"] == ""
+
+
+@pytest.mark.asyncio
+async def test_interactive_actions_processes_discussion_invalid_agent():
+    outline = {
+        "type": "interactive",
+        "title": "T",
+        "widgetType": "simulation",
+        "widgetOutline": {"concept": "C"},
+    }
+    content = {
+        "html": "<html>x</html>",
+        "widgetType": "simulation",
+        "widgetConfig": None,
+        "teacherActions": None,
+    }
+    agents = [
+        {"id": "default-1", "name": "Teacher", "role": "teacher"},
+        {"id": "default-3", "name": "Student", "role": "student"},
+    ]
+
+    async def _fake(*args, **kwargs):
+        return json.dumps([
+            {
+                "type": "action",
+                "name": "discussion",
+                "params": {"agentId": "ghost", "topic": "T"},
+            },
+        ])
+
+    with patch(
+        "apps.maic.generation.scene_generator.generate_text", new=_fake
+    ):
+        actions = await generate_scene_actions(
+            outline,
+            content,
+            language_model_id="stub",
+            options={"agents": agents},
+        )
+    assert actions[0]["agentId"] == "default-3"
