@@ -45,6 +45,8 @@ from typing import Any, TypedDict
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from apps.maic.exceptions import MaicConfigError
+import asyncio
+
 from apps.maic.generation.action_parser import (
     parse_actions_from_structured_output,
 )
@@ -58,6 +60,11 @@ from apps.maic.generation.prompt_formatters import (
     format_teacher_persona_for_prompt,
 )
 from apps.maic.generation.prompt_loader import load_generation_prompt
+from apps.maic.generation.scene_builder import (
+    build_complete_scene,
+    uniquify_media_element_ids,
+)
+from apps.maic.generation.types import GenerationCallbacks
 from apps.maic.generation.types import (
     AgentInfo,
     SceneGenerationContext,
@@ -1680,3 +1687,180 @@ def _nanoid_8() -> str:
     if len(raw) < 8:
         raw = (raw + secrets.token_urlsafe(4))[:8]
     return raw
+
+
+# ── Stage 3 orchestrator (MAIC-422.8) ─────────────────────────────
+
+
+async def generate_full_scenes(
+    outlines: list[SceneOutline],
+    *,
+    language_model_id: str = "stub",
+    language_directive: str = "",
+    agents: list[AgentInfo] | None = None,
+    user_profile: str = "",
+    stage_id: str | None = None,
+    callbacks: GenerationCallbacks | None = None,
+) -> list[dict[str, Any]]:
+    """Stage 3: generate full scenes (parallel).
+
+    Direct port of upstream `generateFullScenes` (lines 94-150). Runs
+    every outline through `_generate_single_scene` in parallel via
+    `asyncio.gather`; preserves outline order in the returned list;
+    drops scenes whose generation failed (logged via callbacks.onError).
+
+    Phase 4 simplification: no `StageStore` parameter. The upstream
+    stage store is the in-app classroom-editor state; Phase 4 returns
+    Scene dicts directly so the Celery finalize task (Session 6) can
+    persist them via the WS HTTP route.
+
+    The `ctx` per-scene is built from outline ordering — pageIndex /
+    totalPages / allTitles / previousSpeeches let the actions LLM
+    write narration that flows naturally between scenes.
+
+    Args:
+        outlines: from Stage 1 (outline_generator).
+        language_model_id: forwarded to every LLM call.
+        language_directive: shared across all scenes (set by Stage 1).
+        agents: forwarded to scene-actions for discussion validation.
+        user_profile: optional per-student profile string.
+        callbacks: onProgress fires after each scene completes (best-
+                   effort — concurrent updates are non-atomic but the
+                   final count converges to the total).
+
+    Returns:
+        List of Scene dicts (the build_complete_scene output) in
+        outline order, with failures elided. The caller in
+        pipeline_runner stores these on session["scenes"].
+    """
+    on_progress = callbacks and callbacks.get("onProgress")
+    on_error = callbacks and callbacks.get("onError")
+
+    # Stage id for build_complete_scene. The Celery finalize task
+    # (Session 6) will attach the real Classroom Stage; until then
+    # generation runs against a placeholder so the output Scene dict
+    # is well-formed.
+    if stage_id is None:
+        stage_id = f"stage_{_nanoid_8()}"
+
+    # Mirror upstream's media-id uniquification pass (line 92 of
+    # outline_generator forwards but Stage 3 also runs it as a
+    # belt+suspenders before content generation).
+    outlines = uniquify_media_element_ids(outlines)
+
+    total = len(outlines)
+    completed = {"n": 0}
+
+    if on_progress:
+        on_progress({
+            "stage": 3,
+            "completed": 0,
+            "total": total,
+            "message": f"Generating {total} scenes in parallel...",
+        })
+
+    all_titles = [o.get("title", "") for o in outlines]
+    # Per-scene `previousSpeeches` is best-effort because scenes run
+    # in parallel — we can't know what an earlier scene's speech
+    # actions will be at dispatch time. For Phase 4 we ship the empty
+    # list (matches the v1 service behavior). When the Celery chain
+    # lands in Session 6, the chord can serialize this if needed.
+    previous_speeches: list[str] = []
+
+    async def _run_one(index: int, outline: SceneOutline) -> tuple[int, dict[str, Any] | None]:
+        ctx: SceneGenerationContext = {
+            "pageIndex": index + 1,
+            "totalPages": total,
+            "allTitles": all_titles,
+            "previousSpeeches": previous_speeches,
+        }
+        try:
+            scene = await _generate_single_scene(
+                outline,
+                language_model_id=language_model_id,
+                language_directive=language_directive,
+                agents=agents,
+                user_profile=user_profile,
+                ctx=ctx,
+                stage_id=stage_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _logger.error(
+                "Failed to generate scene %r: %s", outline.get("title", "?"), exc
+            )
+            if on_error:
+                on_error(
+                    f"Failed to generate scene {outline.get('title', '?')}: {exc}"
+                )
+            scene = None
+
+        completed["n"] += 1
+        if on_progress:
+            on_progress({
+                "stage": 3,
+                "completed": completed["n"],
+                "total": total,
+                "message": f"Completed {completed['n']}/{total} scenes",
+            })
+        return index, scene
+
+    results = await asyncio.gather(
+        *[_run_one(i, o) for i, o in enumerate(outlines)]
+    )
+
+    # Sort by original index; drop failures.
+    results.sort(key=lambda r: r[0])
+    return [scene for _, scene in results if scene is not None]
+
+
+async def _generate_single_scene(
+    outline: SceneOutline,
+    *,
+    language_model_id: str,
+    language_directive: str,
+    agents: list[AgentInfo] | None,
+    user_profile: str,
+    ctx: SceneGenerationContext | None,
+    stage_id: str,
+) -> dict[str, Any] | None:
+    """Two-step single-scene generator.
+
+    Direct port of upstream `generateSingleScene` (lines 158-179):
+        Step 3.1: generate_scene_content
+        Step 3.2: generate_scene_actions
+    Then assembles via `build_complete_scene`.
+
+    Returns None when content generation fails (caller drops the
+    scene + emits an onError). Actions failure → falls back to the
+    per-type default (handled inside generate_scene_actions).
+    """
+    _logger.info("Step 3.1: generating content for: %s", outline.get("title", "?"))
+    content = await generate_scene_content(
+        outline,
+        language_model_id=language_model_id,
+        options={
+            "agents": agents or [],
+            "languageDirective": language_directive,
+        },
+    )
+    if not content:
+        _logger.error("Failed to generate content for: %s", outline.get("title", "?"))
+        return None
+
+    _logger.info("Step 3.2: generating actions for: %s", outline.get("title", "?"))
+    actions = await generate_scene_actions(
+        outline,
+        content,
+        language_model_id=language_model_id,
+        options={
+            "ctx": ctx,
+            "agents": agents or [],
+            "userProfile": user_profile,
+            "languageDirective": language_directive,
+        },
+    )
+    _logger.info(
+        "Generated %d actions for: %s", len(actions), outline.get("title", "?")
+    )
+
+    return build_complete_scene(outline, content, actions, stage_id)

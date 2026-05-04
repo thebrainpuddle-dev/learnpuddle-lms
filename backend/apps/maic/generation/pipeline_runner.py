@@ -14,9 +14,10 @@ Two public functions:
 
 Phase 4 status:
   - Stage 1 is fully wired (MAIC-421).
-  - Stage 2 is a STUB that returns `data.scenes = []`. The real
-    `generate_full_scenes` ports in Session 3-5 (MAIC-422.x). When
-    that lands, the call site here is a single-line swap.
+  - Stage 2 is fully wired (MAIC-422.0 through .8). Stage 2 forwards
+    to scene_generator.generate_full_scenes, which runs all scenes
+    through asyncio.gather (parallel). Celery wraps the call in
+    Session 6 (MAIC-428.x) but doesn't change the in-process pipeline.
 
 The upstream `StageStore` parameter is NOT carried forward in this
 port. Upstream's stage store is the in-app classroom-editor state;
@@ -38,6 +39,7 @@ from typing import Any, TypedDict
 from apps.maic.generation.outline_generator import (
     generate_scene_outlines_from_requirements,
 )
+from apps.maic.generation.scene_generator import generate_full_scenes
 from apps.maic.generation.types import (
     GenerationCallbacks,
     GenerationProgress,
@@ -157,7 +159,7 @@ async def run_generation_pipeline(
         if on_stage_complete:
             on_stage_complete(1, outlines)
 
-        # ── Stage 2 — Full Scenes (STUB until MAIC-422.x ships) ──
+        # ── Stage 2 — Full Scenes (parallel; MAIC-422.8) ──
         if on_progress:
             on_progress({
                 "stage": 2,
@@ -166,10 +168,19 @@ async def run_generation_pipeline(
                 "message": "Generating scene content...",
             })
 
-        scenes = await _stage_two_stub(
+        # Pull agents from the requirements (the v2 generation
+        # endpoint forwards `agents` here when set; otherwise we
+        # ship an empty list — scene_generator handles that).
+        requirements = session.get("requirements") or {}
+        agents = requirements.get("agents") or []
+        user_profile = requirements.get("userProfile") or ""
+
+        scenes = await generate_full_scenes(
             outlines,
-            language_directive,
             language_model_id=language_model_id,
+            language_directive=language_directive,
+            agents=agents,
+            user_profile=user_profile,
             callbacks=callbacks,
         )
         session["scenes"] = scenes
@@ -204,40 +215,3 @@ def _generate_session_id() -> str:
     return secrets.token_urlsafe(9).replace("-", "").replace("_", "")[:12]
 
 
-async def _stage_two_stub(
-    outlines: list[SceneOutline],
-    language_directive: str,
-    *,
-    language_model_id: str,
-    callbacks: GenerationCallbacks | None,
-) -> list[dict[str, Any]]:
-    """STUB — Stage 2 returns an empty list of scenes.
-
-    DEFERRED: full implementation in `scene_generator.py:generate_full_scenes`
-    lands in Session 3-5 via MAIC-422.x. When that ships, this stub
-    becomes a single-line forward call:
-
-        from apps.maic.generation.scene_generator import generate_full_scenes
-        scenes_result = await generate_full_scenes(
-            outlines,
-            language_directive=language_directive,
-            language_model_id=language_model_id,
-            callbacks=callbacks,
-        )
-        if not scenes_result.get("success"):
-            raise RuntimeError(scenes_result.get("error"))
-        return scenes_result["data"]
-
-    For now the pipeline is "Stage 1 only" — outlines populate, scenes
-    stay empty. The Celery chain (MAIC-428) doesn't run yet either, so
-    this stub never reaches a production code path — it only flows
-    through unit tests + Pass-A parity setup.
-    """
-    _logger.info(
-        "Stage 2 stub — returning empty scenes list. "
-        "Full Stage 2 ships in MAIC-422.x (Session 3-5)."
-    )
-    # Args intentionally unused — kept for forward-compat with the
-    # real signature.
-    _ = (outlines, language_directive, language_model_id, callbacks)
-    return []

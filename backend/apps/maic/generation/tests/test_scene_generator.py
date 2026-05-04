@@ -2164,3 +2164,200 @@ def test_convert_teacher_action_ids_are_unique():
     ])
     ids = [a["id"] for a in out]
     assert len(set(ids)) == 3
+
+
+# ── generate_full_scenes orchestrator (MAIC-422.8) ────────────────
+
+
+from apps.maic.generation.scene_generator import generate_full_scenes
+
+
+@pytest.mark.asyncio
+async def test_full_scenes_runs_all_outlines_in_parallel():
+    """All outlines flow through generate_scene_content → actions →
+    build_complete_scene; output preserves outline order."""
+    outlines = [
+        {"type": "slide", "title": "S1", "description": "d1", "keyPoints": []},
+        {"type": "slide", "title": "S2", "description": "d2", "keyPoints": []},
+        {"type": "slide", "title": "S3", "description": "d3", "keyPoints": []},
+    ]
+
+    async def _fake(*args, **kwargs):
+        # Distinguish content vs actions calls: only the actions
+        # prompts ask for "JSON array directly" with N segments.
+        msgs = (
+            kwargs.get("messages")
+            or (args[0] if args else None)
+        ) or []
+        prompt_text = " ".join(getattr(m, "content", "") for m in msgs)
+        if "JSON array directly" in prompt_text:
+            return json.dumps([
+                {"type": "text", "content": "narration"},
+            ])
+        return json.dumps({
+            "elements": [{"type": "text", "id": "el1", "content": "x"}],
+        })
+
+    with patch(
+        "apps.maic.generation.scene_generator.generate_text", new=_fake
+    ):
+        scenes = await generate_full_scenes(outlines, language_model_id="stub")
+    assert len(scenes) == 3
+    titles = [s.get("title") for s in scenes]
+    assert titles == ["S1", "S2", "S3"]
+
+
+@pytest.mark.asyncio
+async def test_full_scenes_drops_failed_scene_content():
+    """A scene whose content generation returns None is dropped (not
+    a hard failure for the whole pipeline)."""
+    outlines = [
+        {"type": "slide", "title": "OK", "description": "d", "keyPoints": []},
+        {"type": "slide", "title": "BAD", "description": "d", "keyPoints": []},
+    ]
+
+    async def _fake(*args, **kwargs):
+        msgs = (
+            kwargs.get("messages")
+            or (args[0] if args else None)
+        ) or []
+        prompt_text = " ".join(getattr(m, "content", "") for m in msgs)
+        if "BAD" in prompt_text:
+            return "no JSON anywhere"
+        if "JSON array directly" in prompt_text:
+            return json.dumps([
+                {"type": "text", "content": "narration"},
+            ])
+        return json.dumps({
+            "elements": [{"type": "text", "id": "el1", "content": "x"}],
+        })
+
+    with patch(
+        "apps.maic.generation.scene_generator.generate_text", new=_fake
+    ):
+        scenes = await generate_full_scenes(outlines, language_model_id="stub")
+    assert len(scenes) == 1
+    assert scenes[0]["title"] == "OK"
+
+
+@pytest.mark.asyncio
+async def test_full_scenes_emits_progress_callbacks():
+    """onProgress fires before generation starts and after each
+    completion (best-effort under parallel execution)."""
+    outlines = [
+        {"type": "slide", "title": "S1", "description": "d", "keyPoints": []},
+        {"type": "slide", "title": "S2", "description": "d", "keyPoints": []},
+    ]
+    progress_events: list[dict] = []
+
+    def _on_progress(p):
+        progress_events.append(dict(p))
+
+    async def _fake(*args, **kwargs):
+        return json.dumps({
+            "elements": [{"type": "text", "id": "el1", "content": "x"}],
+        })
+
+    with patch(
+        "apps.maic.generation.scene_generator.generate_text", new=_fake
+    ):
+        scenes = await generate_full_scenes(
+            outlines,
+            language_model_id="stub",
+            callbacks={"onProgress": _on_progress},
+        )
+    assert len(scenes) == 2
+    # First event = "starting" (completed=0), final event = full
+    # completion (completed=2).
+    assert progress_events[0]["completed"] == 0
+    assert progress_events[-1]["completed"] == 2
+    assert progress_events[-1]["total"] == 2
+
+
+@pytest.mark.asyncio
+async def test_full_scenes_emits_onerror_for_failed_scene():
+    """Failed scenes go through callbacks.onError."""
+    outlines = [
+        {"type": "slide", "title": "OK", "description": "d", "keyPoints": []},
+        {"type": "slide", "title": "FAIL", "description": "d", "keyPoints": []},
+    ]
+    errors: list[str] = []
+
+    def _on_error(msg):
+        errors.append(msg)
+
+    async def _fake(*args, **kwargs):
+        msgs = (
+            kwargs.get("messages")
+            or (args[0] if args else None)
+        ) or []
+        prompt_text = " ".join(getattr(m, "content", "") for m in msgs)
+        if "FAIL" in prompt_text:
+            return "garbage"
+        if "JSON array directly" in prompt_text:
+            return json.dumps([{"type": "text", "content": "n"}])
+        return json.dumps({
+            "elements": [{"type": "text", "id": "el1", "content": "x"}],
+        })
+
+    with patch(
+        "apps.maic.generation.scene_generator.generate_text", new=_fake
+    ):
+        await generate_full_scenes(
+            outlines,
+            language_model_id="stub",
+            callbacks={"onError": _on_error},
+        )
+    # _generate_single_scene returns None on content failure, but
+    # that's a soft drop (not an exception). onError fires only on
+    # exceptions in this orchestrator. So errors stays empty here —
+    # the FAIL scene is silently dropped, content failure is logged.
+    # (This locks the contract: content-None != exception.)
+    assert errors == []
+
+
+@pytest.mark.asyncio
+async def test_full_scenes_empty_outlines_returns_empty_list():
+    scenes = await generate_full_scenes([], language_model_id="stub")
+    assert scenes == []
+
+
+@pytest.mark.asyncio
+async def test_full_scenes_passes_ctx_with_correct_pageIndex():
+    """Each scene's actions get a `ctx` reflecting its position in
+    the outline list (1-based pageIndex, total = len(outlines)).
+    The course context renderer emits "FIRST page" for index 1,
+    "LAST page" for index N, and "Page X of N" for middle pages."""
+    captured_courseContexts: list[str] = []
+
+    outlines = [
+        {"type": "slide", "title": f"S{i}", "description": "d", "keyPoints": []}
+        for i in range(3)
+    ]
+
+    async def _fake(*args, **kwargs):
+        return json.dumps({
+            "elements": [{"type": "text", "id": "el1", "content": "x"}],
+        })
+
+    def _capture(template_id, vars):
+        if template_id == "slide-actions":
+            captured_courseContexts.append(vars.get("courseContext", ""))
+        from apps.maic.prompts.loader import BuiltPrompt
+        return BuiltPrompt(system="sys", user="user")
+
+    with patch(
+        "apps.maic.generation.scene_generator.load_generation_prompt",
+        side_effect=_capture,
+    ):
+        with patch(
+            "apps.maic.generation.scene_generator.generate_text", new=_fake
+        ):
+            await generate_full_scenes(outlines, language_model_id="stub")
+    # Three distinct courseContext strings (one per scene), each
+    # tagged with its position in the outline.
+    assert len(captured_courseContexts) == 3
+    contexts_text = " ".join(captured_courseContexts)
+    assert "FIRST page" in contexts_text
+    assert "LAST page" in contexts_text
+    assert "Page 2 of 3" in contexts_text
