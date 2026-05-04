@@ -306,12 +306,12 @@ def _uniquify_media_element_ids(
     """Replace sequential `gen_img_N` / `gen_vid_N` with globally unique
     IDs.
 
-    Phase 4 STUB — passthrough. The real implementation lives in
-    scene_builder.py (MAIC-423, Session 3). Phase 4 outlines have no
-    media elements to uniquify since image / video generation is
-    DEFERRED to Phase 5+.
+    Forwards to the real implementation in
+    `apps.maic.generation.scene_builder` (MAIC-423). Imported lazily
+    to avoid any future circular-import surprise as scene_generator
+    grows. Outlines without `mediaGenerations` entries pass through
+    unchanged — Phase 4 doesn't ship image/video generation, so
+    most outlines have no media IDs to uniquify.
     """
-    # DEFERRED: real uniquification ships when scene_builder lands.
-    # Phase 4 has no `gen_img_N` / `gen_vid_N` placeholders flowing
-    # through (image gen is Phase 5+), so passthrough is correct.
-    return outlines
+    from apps.maic.generation.scene_builder import uniquify_media_element_ids
+    return uniquify_media_element_ids(outlines)
