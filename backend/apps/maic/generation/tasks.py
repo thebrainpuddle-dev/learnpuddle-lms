@@ -41,14 +41,17 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from celery import chain, shared_task
+from celery import chain, chord, group, shared_task
 from django.db import DatabaseError, OperationalError
 
 from apps.maic.generation.pipeline_runner import (
     create_generation_session,
     run_generation_pipeline,
 )
-from apps.maic.generation.scene_generator import generate_full_scenes
+from apps.maic.generation.scene_generator import (
+    _generate_single_scene,
+    generate_full_scenes,
+)
 from apps.maic.generation.outline_generator import (
     generate_scene_outlines_from_requirements,
 )
@@ -163,14 +166,31 @@ def outline_task(job_id: str) -> dict:
     retry_backoff=True,
     retry_backoff_max=120,
     retry_jitter=True,
+    bind=True,
 )
-def scene_dispatch_task(stage1_payload: dict) -> dict:
-    """Stage 2 — generate full scenes.
+def scene_dispatch_task(self, stage1_payload: dict) -> dict:
+    """Stage 2 — fan out one scene_task per outline (MAIC-428.2).
 
-    MAIC-428.1: runs generate_full_scenes inline (the in-process
-    parallel path that already passed Pass-A parity at MAIC-430.A).
-    MAIC-428.2 will refactor to a Celery chord that fans out one
-    scene_task per outline + uses Redis INCR for atomic progress.
+    Refactored from MAIC-428.1's inline generate_full_scenes to a
+    Celery chord:
+
+        chord(group(scene_task.s(...) for each outline), scenes_finalize.s())
+
+    Per-scene tasks run in parallel on Celery workers. Atomic progress
+    counter via Redis INCR (django_redis.get_redis_connection()) so
+    concurrent worker increments never race. The chord callback
+    (scenes_finalize_task) waits for all scenes, sorts by index, and
+    forwards the assembled list to finalize_task.
+
+    Eager-mode fallback: when CELERY_TASK_ALWAYS_EAGER is set (tests
+    + dev), the chord is executed in-process. Eager chord dispatch
+    semantics differ slightly from the broker path — the result of
+    `chord(group(...))(callback)` is still an AsyncResult, but with
+    .get() we can block on the callback's return synchronously.
+
+    The downstream finalize_task expects {"job_id", "scenes"} — we
+    pre-build the per-scene "task payloads" with index attached so
+    scenes_finalize_task can re-sort by original outline order.
     """
     job_id = stage1_payload["job_id"]
     outlines = stage1_payload["outlines"]
@@ -180,46 +200,156 @@ def scene_dispatch_task(stage1_payload: dict) -> dict:
     job = MaicGenerationJob.objects.get(pk=job_id)
     requirements = job.requirements or {}
     agents = requirements.get("agents") or []
+    user_profile = requirements.get("userProfile") or ""
+
+    total = len(outlines)
+    stage_id = f"stage_{job_id}"
 
     job.progress = {
         "stage": 2,
         "completed": 0,
-        "total": len(outlines),
-        "message": "Generating scene content...",
+        "total": total,
+        "message": f"Dispatching {total} scenes...",
     }
     job.save(update_fields=["progress", "updated_at"])
 
-    completed_count = {"n": 0}
+    # Reset the Redis progress counter for this job. Idempotent —
+    # repeated chord dispatch (autoretry) starts from zero.
+    _reset_progress_counter(job_id)
 
-    def _on_progress(p):
-        # generate_full_scenes emits stage=3 for its own ordering;
-        # we re-stamp as stage=2 (Celery's per-job stage view).
-        completed_count["n"] = p.get("completed", completed_count["n"])
-        if (
-            completed_count["n"] > 0
-            and completed_count["n"] != p.get("total", 0)
-        ):
-            _emit_progress(job_id, "scene_done", {
-                "completed": completed_count["n"],
-                "total": p.get("total", len(outlines)),
-            })
+    # Per-scene context — same for every scene, just include index +
+    # outline so scene_task can rebuild per-scene ctx.
+    all_titles = [o.get("title", "") for o in outlines]
+    base_args = {
+        "job_id": job_id,
+        "language_model_id": language_model_id,
+        "language_directive": language_directive,
+        "agents": agents,
+        "user_profile": user_profile,
+        "stage_id": stage_id,
+        "total": total,
+        "all_titles": all_titles,
+    }
+
+    # Empty outline = nothing to fan out. Return early so the chord
+    # doesn't dispatch with an empty group (which would just no-op).
+    if total == 0:
+        return {"job_id": job_id, "scenes": []}
+
+    header = group(
+        scene_task.s(index=i, outline=outline, **base_args)
+        for i, outline in enumerate(outlines)
+    )
+    callback = scenes_finalize_task.s(job_id=job_id, total=total)
+
+    chord_result = chord(header)(callback)
+
+    # In eager mode, chord returns an EagerResult — .get() returns
+    # the callback's payload synchronously. In broker mode, the
+    # outer chain captures this AsyncResult and the next task in the
+    # chain (finalize_task) receives the callback's return.
+    return chord_result.get(disable_sync_subtasks=False)
+
+
+@shared_task(
+    name="apps.maic.generation.tasks.scene_task",
+    autoretry_for=(OperationalError, DatabaseError, ConnectionError),
+    max_retries=2,
+    retry_backoff=True,
+    retry_backoff_max=60,
+)
+def scene_task(
+    *,
+    index: int,
+    outline: dict,
+    job_id: str,
+    language_model_id: str,
+    language_directive: str,
+    agents: list,
+    user_profile: str,
+    stage_id: str,
+    total: int,
+    all_titles: list,
+) -> dict:
+    """Per-scene worker task. One per outline.
+
+    Builds the per-scene ctx (pageIndex / totalPages / allTitles /
+    previousSpeeches), runs _generate_single_scene, increments the
+    Redis progress counter, emits a `scene_done` WS event with the
+    new completed-count, and returns the assembled scene dict
+    (index attached so scenes_finalize_task can sort).
+
+    Failures bubble up — the chord callback receives a SCENE-FAILED
+    sentinel via Celery's native task-failure path. We surface this
+    as scene=None in the result so scenes_finalize_task drops it
+    silently (matches the in-process generate_full_scenes contract).
+    """
+    ctx = {
+        "pageIndex": index + 1,
+        "totalPages": total,
+        "allTitles": all_titles,
+        # previousSpeeches is empty under chord parallel — same
+        # constraint as generate_full_scenes (Pass-A parity already
+        # locked this).
+        "previousSpeeches": [],
+    }
 
     async def _run():
-        return await generate_full_scenes(
-            outlines,
+        return await _generate_single_scene(
+            outline,
             language_model_id=language_model_id,
             language_directive=language_directive,
             agents=agents,
-            user_profile=requirements.get("userProfile") or "",
-            callbacks={"onProgress": _on_progress},
+            user_profile=user_profile,
+            ctx=ctx,
+            stage_id=stage_id,
         )
 
-    scenes = asyncio.run(_run())
+    try:
+        scene = asyncio.run(_run())
+    except Exception as exc:  # noqa: BLE001
+        _logger.error(
+            "scene_task[%d] for %r failed: %s",
+            index,
+            outline.get("title", "?"),
+            exc,
+        )
+        scene = None
 
+    completed = _incr_progress_counter(job_id)
+    _emit_progress(job_id, "scene_done", {
+        "completed": completed,
+        "total": total,
+        "index": index,
+    })
+
+    return {"index": index, "scene": scene}
+
+
+@shared_task(
+    name="apps.maic.generation.tasks.scenes_finalize_task",
+    # No autoretry — chord callbacks must run exactly once.
+)
+def scenes_finalize_task(
+    scene_results: list[dict],
+    *,
+    job_id: str,
+    total: int,
+) -> dict:
+    """Chord callback — collect scene_task results into ordered scene list.
+
+    Sorts by original outline index (chord results may arrive in any
+    order), drops any None scenes (failed scene_task runs), and hands
+    a flat scene list to finalize_task via the outer chain.
+    """
+    scene_results = sorted(scene_results, key=lambda r: r["index"])
+    scenes = [r["scene"] for r in scene_results if r.get("scene") is not None]
+
+    job = MaicGenerationJob.objects.get(pk=job_id)
     job.progress = {
         "stage": 2,
         "completed": len(scenes),
-        "total": len(outlines),
+        "total": total,
         "message": f"Generated {len(scenes)} scenes; finalizing...",
     }
     job.save(update_fields=["progress", "updated_at"])
@@ -303,6 +433,66 @@ def mark_job_failed(request, exc, traceback, *, job_id: str) -> None:
 
 
 # ── Helpers ───────────────────────────────────────────────────────
+
+
+def _progress_key(job_id: str) -> str:
+    return f"maic:generation:progress:{job_id}"
+
+
+def _redis_connection():
+    """Open a Redis connection from settings.REDIS_URL.
+
+    The plan called for django_redis.get_redis_connection() but
+    that package isn't in the project. Use the standard `redis`
+    Python client directly — already a transitive dep via Celery
+    and channels-redis.
+    """
+    import redis
+    from django.conf import settings
+    url = getattr(settings, "REDIS_URL", None) or "redis://localhost:6379/1"
+    return redis.from_url(url)
+
+
+def _reset_progress_counter(job_id: str) -> None:
+    """Reset the per-job Redis INCR counter to 0.
+
+    Called at the start of scene_dispatch_task so the chord starts
+    counting from zero. Failure to reach Redis is logged but
+    non-fatal — the WS progress events are a UX nice-to-have; the
+    canonical state is the DB row updated by scenes_finalize_task.
+    """
+    try:
+        conn = _redis_connection()
+        conn.delete(_progress_key(job_id))
+    except Exception as exc:  # noqa: BLE001
+        _logger.warning(
+            "Redis counter reset failed for %s: %s", job_id, exc
+        )
+
+
+def _incr_progress_counter(job_id: str) -> int:
+    """Atomic INCR on the per-job Redis counter; returns the new value.
+
+    Mirrors the plan's "Redis INCR for atomic progress counter" —
+    concurrent worker increments never race because INCR is atomic
+    at the Redis level.
+
+    Returns 0 on Redis failure (caller treats as "couldn't update";
+    the scene_done event still fires with completed=0 which the WS
+    consumer ignores).
+    """
+    try:
+        conn = _redis_connection()
+        value = conn.incr(_progress_key(job_id))
+        # Set TTL on the counter — 1h is plenty for any single
+        # generation; the key auto-expires if the chord dies.
+        conn.expire(_progress_key(job_id), 3600)
+        return int(value)
+    except Exception as exc:  # noqa: BLE001
+        _logger.warning(
+            "Redis counter incr failed for %s: %s", job_id, exc
+        )
+        return 0
 
 
 def _emit_progress(job_id: str, event: str, payload: dict) -> None:

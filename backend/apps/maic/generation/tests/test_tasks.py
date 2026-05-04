@@ -242,8 +242,9 @@ def test_mark_job_failed_tolerates_missing_job(db):
 def test_enqueue_generation_chain_runs_end_to_end(
     db, settings, tenant, parity_responses
 ):
-    """Eager-mode chain: outline_task → scene_dispatch → finalize all
-    run in-process. Verifies that the chain plumbing is wired end-to-end."""
+    """Eager-mode chain: outline_task → scene_dispatch (chord fan-out)
+    → scenes_finalize → finalize all run in-process. Verifies that
+    the chain + chord plumbing is wired end-to-end."""
     settings.CELERY_TASK_ALWAYS_EAGER = True
     settings.CELERY_TASK_EAGER_PROPAGATES = True
 
@@ -272,3 +273,148 @@ def test_enqueue_generation_chain_runs_end_to_end(
     assert saved.status == MaicGenerationJob.STATUS_SUCCEEDED
     assert len(saved.result["scenes"]) == 10
     assert saved.completed_at is not None
+
+
+# ── Chord fan-out (MAIC-428.2) ────────────────────────────────────
+
+
+def test_scene_task_runs_one_scene(db, parity_responses):
+    """A single scene_task call generates one scene from one outline."""
+    from apps.maic.generation.tasks import scene_task
+
+    outline = {
+        "type": "slide",
+        "title": "S1",
+        "description": "d",
+        "keyPoints": ["a"],
+    }
+    router = PromptRoutedStub(parity_responses)
+
+    with patch(
+        "apps.maic.generation.scene_generator.generate_text", new=router
+    ):
+        result = scene_task(
+            index=0,
+            outline=outline,
+            job_id="test-job-1",
+            language_model_id="stub",
+            language_directive="",
+            agents=[],
+            user_profile="",
+            stage_id="stage_test",
+            total=1,
+            all_titles=["S1"],
+        )
+    assert result["index"] == 0
+    assert result["scene"] is not None
+    assert result["scene"]["title"] == "S1"
+
+
+def test_scene_task_returns_none_on_content_failure(db):
+    """When _generate_single_scene returns None (content failed),
+    scene_task returns {"index": i, "scene": None} so
+    scenes_finalize_task can drop it."""
+    from apps.maic.generation.tasks import scene_task
+
+    async def _broken(*args, **kwargs):
+        return "no JSON anywhere"
+
+    with patch(
+        "apps.maic.generation.scene_generator.generate_text", new=_broken
+    ):
+        result = scene_task(
+            index=2,
+            outline={
+                "type": "slide",
+                "title": "BAD",
+                "description": "d",
+                "keyPoints": [],
+            },
+            job_id="test-job-2",
+            language_model_id="stub",
+            language_directive="",
+            agents=[],
+            user_profile="",
+            stage_id="stage_test",
+            total=3,
+            all_titles=["A", "B", "BAD"],
+        )
+    assert result["index"] == 2
+    assert result["scene"] is None
+
+
+def test_scenes_finalize_task_sorts_by_index_and_drops_none(db, tenant):
+    """The chord callback may receive scenes out of order — finalize
+    sorts back to outline order + drops failed scenes."""
+    from apps.maic.generation.tasks import scenes_finalize_task
+
+    job = create_job_session(
+        tenant_id=tenant.id, user_id=None, requirements={}
+    )
+    out = scenes_finalize_task(
+        [
+            {"index": 2, "scene": {"id": "s3", "title": "Third"}},
+            {"index": 0, "scene": {"id": "s1", "title": "First"}},
+            {"index": 1, "scene": None},
+            {"index": 3, "scene": {"id": "s4", "title": "Fourth"}},
+        ],
+        job_id=job.id,
+        total=4,
+    )
+    assert out["job_id"] == job.id
+    titles = [s["title"] for s in out["scenes"]]
+    assert titles == ["First", "Third", "Fourth"]
+
+
+def test_scene_dispatch_handles_empty_outline_list(db, tenant):
+    """Empty outline → return {"scenes": []} immediately, don't
+    dispatch a no-op chord."""
+    from apps.maic.generation.tasks import scene_dispatch_task
+
+    job = create_job_session(
+        tenant_id=tenant.id, user_id=None, requirements={}
+    )
+    payload = scene_dispatch_task(
+        {
+            "job_id": job.id,
+            "outlines": [],
+            "languageDirective": "",
+            "languageModelId": "stub",
+        }
+    )
+    assert payload == {"job_id": job.id, "scenes": []}
+
+
+# ── Redis counter helpers ─────────────────────────────────────────
+
+
+def test_progress_counter_increments_atomically():
+    """_incr_progress_counter returns successive integers."""
+    from apps.maic.generation.tasks import (
+        _incr_progress_counter,
+        _reset_progress_counter,
+    )
+    job_id = "counter-test-1"
+    _reset_progress_counter(job_id)
+    assert _incr_progress_counter(job_id) == 1
+    assert _incr_progress_counter(job_id) == 2
+    assert _incr_progress_counter(job_id) == 3
+    _reset_progress_counter(job_id)
+    assert _incr_progress_counter(job_id) == 1
+
+
+def test_progress_counter_isolates_per_job():
+    """Each job_id has its own counter; concurrent jobs don't
+    interfere."""
+    from apps.maic.generation.tasks import (
+        _incr_progress_counter,
+        _reset_progress_counter,
+    )
+    _reset_progress_counter("job-A")
+    _reset_progress_counter("job-B")
+    _incr_progress_counter("job-A")
+    _incr_progress_counter("job-A")
+    _incr_progress_counter("job-B")
+    # Counter A == 2; counter B == 1; second incr on B → 2.
+    assert _incr_progress_counter("job-A") == 3
+    assert _incr_progress_counter("job-B") == 2
