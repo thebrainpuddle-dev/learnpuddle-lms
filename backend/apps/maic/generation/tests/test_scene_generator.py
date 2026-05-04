@@ -380,11 +380,35 @@ async def test_actions_dispatcher_routes_slide():
 
 
 @pytest.mark.asyncio
-async def test_actions_dispatcher_returns_empty_for_quiz_until_maic_422_3():
-    outline = {"type": "quiz", "title": "Q"}
-    content = {"questions": [{"q": "?"}]}
-    actions = await generate_scene_actions(outline, content)
-    assert actions == []
+async def test_actions_dispatcher_routes_quiz():
+    """Quiz outlines now hit the quiz-actions branch (MAIC-422.3)."""
+    outline = {"type": "quiz", "title": "Q", "keyPoints": ["a"]}
+    content = {
+        "questions": [
+            {"id": "q_1", "type": "single", "question": "What?", "options": []},
+        ],
+    }
+
+    async def _fake(*args, **kwargs):
+        return json.dumps([
+            {"type": "text", "content": "Let's test what we learned."},
+            {
+                "type": "action",
+                "name": "discussion",
+                "params": {"topic": "What did this quiz reveal?"},
+            },
+        ])
+
+    with patch(
+        "apps.maic.generation.scene_generator.generate_text", new=_fake
+    ):
+        actions = await generate_scene_actions(
+            outline, content, language_model_id="stub"
+        )
+    assert len(actions) == 2
+    assert actions[0]["type"] == "speech"
+    assert actions[0]["text"] == "Let's test what we learned."
+    assert actions[1]["type"] == "discussion"
 
 
 @pytest.mark.asyncio
@@ -851,3 +875,229 @@ async def test_quiz_uses_explicit_quizConfig_when_provided():
     assert captured_vars["questionCount"] == 7
     assert captured_vars["difficulty"] == "hard"
     assert captured_vars["questionTypes"] == "single, multiple, short_answer"
+
+
+# ── Quiz-actions branch (MAIC-422.3) ──────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_quiz_actions_falls_back_to_default_when_llm_returns_empty():
+    """LLM returns nothing parseable → default quiz actions."""
+    outline = {
+        "type": "quiz",
+        "title": "Photosynthesis Quiz",
+        "description": "intro",
+        "keyPoints": ["chlorophyll"],
+    }
+    content = {
+        "questions": [
+            {"id": "q1", "type": "single", "question": "?", "options": []},
+        ],
+    }
+
+    async def _fake(*args, **kwargs):
+        return "no JSON here"
+
+    with patch(
+        "apps.maic.generation.scene_generator.generate_text", new=_fake
+    ):
+        actions = await generate_scene_actions(
+            outline, content, language_model_id="stub"
+        )
+    # Default quiz fallback: a single intro speech.
+    assert len(actions) == 1
+    assert actions[0]["type"] == "speech"
+    assert actions[0]["title"] == "测验引导"
+    assert actions[0]["id"].startswith("action_")
+
+
+@pytest.mark.asyncio
+async def test_quiz_actions_default_on_missing_template():
+    """Prompt template missing → default fallback (no LLM call)."""
+    outline = {"type": "quiz", "title": "T", "keyPoints": []}
+    content = {"questions": []}
+
+    from apps.maic.exceptions import MaicConfigError
+
+    def _raise(*args, **kwargs):
+        raise MaicConfigError("template not found: quiz-actions")
+
+    async def _fake_text(*args, **kwargs):  # should NOT be called
+        raise AssertionError("LLM must not be called when template missing")
+
+    with patch(
+        "apps.maic.generation.scene_generator.load_generation_prompt",
+        side_effect=_raise,
+    ):
+        with patch(
+            "apps.maic.generation.scene_generator.generate_text",
+            new=_fake_text,
+        ):
+            actions = await generate_scene_actions(
+                outline, content, language_model_id="stub"
+            )
+    assert len(actions) == 1
+    assert actions[0]["type"] == "speech"
+
+
+@pytest.mark.asyncio
+async def test_quiz_actions_passes_questions_summary_into_prompt():
+    """Per-question summary lines flow into the quiz-actions prompt
+    so the LLM can write narration that references specific items."""
+    captured_vars = {}
+
+    def _capture(template_id, vars):
+        captured_vars.update(vars)
+        from apps.maic.prompts.loader import BuiltPrompt
+        return BuiltPrompt(system="sys", user="user")
+
+    async def _fake(*args, **kwargs):
+        return json.dumps([])
+
+    outline = {"type": "quiz", "title": "T", "keyPoints": []}
+    content = {
+        "questions": [
+            {
+                "id": "q1",
+                "type": "single",
+                "question": "What pigment captures light?",
+                "options": [
+                    {"value": "A", "label": "chlorophyll"},
+                    {"value": "B", "label": "hemoglobin"},
+                ],
+            },
+            {
+                "id": "q2",
+                "type": "short_answer",
+                "question": "Explain ATP.",
+            },
+        ],
+    }
+
+    with patch(
+        "apps.maic.generation.scene_generator.load_generation_prompt",
+        side_effect=_capture,
+    ):
+        with patch(
+            "apps.maic.generation.scene_generator.generate_text", new=_fake
+        ):
+            await generate_scene_actions(
+                outline, content, language_model_id="stub"
+            )
+    questions_text = captured_vars["questions"]
+    assert "Q1 (single)" in questions_text
+    assert "What pigment captures light?" in questions_text
+    assert "A. chlorophyll" in questions_text
+    assert "Q2 (short_answer)" in questions_text
+
+
+@pytest.mark.asyncio
+async def test_quiz_actions_processes_discussion_invalid_agent():
+    """Discussion in quiz actions: invalid agentId reassigned to a
+    student (mirrors upstream's processActions on quiz scenes)."""
+    outline = {"type": "quiz", "title": "T", "keyPoints": []}
+    content = {"questions": [{"id": "q1", "type": "single", "question": "?"}]}
+    agents = [
+        {"id": "default-1", "name": "Teacher", "role": "teacher"},
+        {"id": "default-3", "name": "Student", "role": "student"},
+    ]
+
+    async def _fake(*args, **kwargs):
+        return json.dumps([
+            {
+                "type": "action",
+                "name": "discussion",
+                "params": {"agentId": "ghost", "topic": "T"},
+            },
+        ])
+
+    with patch(
+        "apps.maic.generation.scene_generator.generate_text", new=_fake
+    ):
+        actions = await generate_scene_actions(
+            outline,
+            content,
+            language_model_id="stub",
+            options={"agents": agents},
+        )
+    assert actions[0]["agentId"] == "default-3"
+
+
+@pytest.mark.asyncio
+async def test_quiz_actions_passes_course_context():
+    """Course context (page index + previous speeches) flows into
+    the quiz-actions prompt via build_course_context."""
+    captured_vars = {}
+
+    def _capture(template_id, vars):
+        captured_vars.update(vars)
+        from apps.maic.prompts.loader import BuiltPrompt
+        return BuiltPrompt(system="sys", user="user")
+
+    async def _fake(*args, **kwargs):
+        return json.dumps([])
+
+    outline = {"type": "quiz", "title": "T", "keyPoints": []}
+    content = {"questions": []}
+    ctx = {
+        "pageIndex": 4,
+        "totalPages": 6,
+        "allTitles": ["A", "B", "C", "D", "E", "F"],
+        "previousSpeeches": ["intro speech"],
+    }
+
+    with patch(
+        "apps.maic.generation.scene_generator.load_generation_prompt",
+        side_effect=_capture,
+    ):
+        with patch(
+            "apps.maic.generation.scene_generator.generate_text", new=_fake
+        ):
+            await generate_scene_actions(
+                outline,
+                content,
+                language_model_id="stub",
+                options={"ctx": ctx},
+            )
+    assert "Page 4 of 6" in captured_vars["courseContext"]
+    assert "intro speech" in captured_vars["courseContext"]
+
+
+@pytest.mark.asyncio
+async def test_quiz_actions_default_when_llm_call_fails():
+    """LLM error → default fallback (don't propagate)."""
+    outline = {"type": "quiz", "title": "T", "keyPoints": []}
+    content = {"questions": []}
+
+    async def _fake(*args, **kwargs):
+        raise RuntimeError("provider down")
+
+    with patch(
+        "apps.maic.generation.scene_generator.generate_text", new=_fake
+    ):
+        actions = await generate_scene_actions(
+            outline, content, language_model_id="stub"
+        )
+    assert len(actions) == 1
+    assert actions[0]["type"] == "speech"
+
+
+def test_format_questions_for_prompt_handles_string_options():
+    """Defense in depth: if normalize wasn't applied, string options
+    still render gracefully (don't crash)."""
+    from apps.maic.generation.scene_generator import _format_questions_for_prompt
+    out = _format_questions_for_prompt([
+        {"type": "single", "question": "?", "options": ["a", "b"]},
+    ])
+    assert "Q1 (single)" in out
+    # raw strings render as themselves
+    assert "a" in out and "b" in out
+
+
+def test_format_questions_for_prompt_omits_options_when_absent():
+    from apps.maic.generation.scene_generator import _format_questions_for_prompt
+    out = _format_questions_for_prompt([
+        {"type": "short_answer", "question": "Explain X."},
+    ])
+    assert "Q1 (short_answer): Explain X." in out
+    assert "Options:" not in out

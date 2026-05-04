@@ -527,8 +527,8 @@ async def generate_scene_actions(
 
     Mirrors upstream `generateSceneActions` (lines 1145-1291). Routes
     on outline.type:
-      - slide → slide-actions LLM call (MAIC-422.1, this chunk)
-      - quiz → quiz-actions (MAIC-422.3, Session 4)
+      - slide → slide-actions LLM call (MAIC-422.1)
+      - quiz → quiz-actions LLM call (MAIC-422.3, this chunk)
       - interactive → interactive-actions (MAIC-422.6, Session 4)
       - pbl → pbl-actions (MAIC-422.4 STUB, Session 4)
 
@@ -558,13 +558,16 @@ async def generate_scene_actions(
             language_directive=options.get("languageDirective", ""),
         )
 
-    # ── Quiz branch — MAIC-422.3 (Session 4) ──
+    # ── Quiz branch (MAIC-422.3) ──
     if outline.get("type") == "quiz" and "questions" in content:
-        _logger.info(
-            "generate_scene_actions: quiz branch lands in MAIC-422.3 "
-            "(Session 4); returning [] for now."
+        return await _generate_quiz_actions(
+            outline,
+            content,
+            language_model_id=language_model_id,
+            ctx=options.get("ctx"),
+            agents=agents,
+            language_directive=options.get("languageDirective", ""),
         )
-        return []
 
     # ── Interactive branch — MAIC-422.6 (Session 4) ──
     if outline.get("type") == "interactive" and "html" in content:
@@ -659,6 +662,134 @@ async def _generate_slide_actions(
     if actions:
         return _process_actions(actions, elements, agents)
     return _generate_default_slide_actions(outline, elements)
+
+
+# ── Quiz actions (MAIC-422.3) ─────────────────────────────────────
+
+
+async def _generate_quiz_actions(
+    outline: SceneOutline,
+    content: dict[str, Any],
+    *,
+    language_model_id: str,
+    ctx: SceneGenerationContext | None,
+    agents: list[AgentInfo] | None,
+    language_directive: str,
+) -> list[dict[str, Any]]:
+    """Quiz-actions LLM call.
+
+    Direct port of upstream `generateSceneActions` quiz branch
+    (lines 1206-1232). Builds the quiz-actions prompt with title /
+    description / keyPoints + a per-question summary (so the LLM can
+    reference questions in narration) + course context + agents
+    roster.
+
+    Falls back to `_generate_default_quiz_actions` when the prompt
+    template is missing OR the LLM returns zero actions.
+
+    `processActions` runs with an empty elements list — quiz scenes
+    don't have spotlightable elements; only discussion.agentId
+    validation matters here.
+    """
+    questions: list[dict[str, Any]] = content.get("questions") or []
+    questions_text = _format_questions_for_prompt(questions)
+    agents_text = format_agents_for_prompt(agents)
+    course_context = build_course_context(ctx)
+
+    key_points = outline.get("keyPoints") or []
+    key_points_text = "\n".join(
+        f"{i + 1}. {p}" for i, p in enumerate(key_points)
+    )
+
+    try:
+        prompts = load_generation_prompt(
+            "quiz-actions",
+            {
+                "title": outline.get("title", ""),
+                "keyPoints": key_points_text,
+                "description": outline.get("description", ""),
+                "questions": questions_text,
+                "courseContext": course_context,
+                "agents": agents_text,
+                "languageDirective": language_directive,
+            },
+        )
+    except MaicConfigError:
+        _logger.warning(
+            "Quiz-actions prompt missing — using default fallback."
+        )
+        return _generate_default_quiz_actions(outline)
+
+    try:
+        response = await generate_text(
+            messages=[
+                SystemMessage(content=prompts.system),
+                HumanMessage(content=prompts.user),
+            ],
+            language_model_id=language_model_id,
+        )
+    except Exception as exc:  # noqa: BLE001
+        _logger.error(
+            "Quiz-actions LLM call failed for %s: %s",
+            outline.get("title", "?"),
+            exc,
+        )
+        return _generate_default_quiz_actions(outline)
+
+    actions = parse_actions_from_structured_output(
+        response, scene_type="quiz"
+    )
+
+    if actions:
+        return _process_actions(actions, [], agents)
+    return _generate_default_quiz_actions(outline)
+
+
+def _format_questions_for_prompt(
+    questions: list[dict[str, Any]],
+) -> str:
+    """Render quiz questions as a per-question summary line.
+
+    Mirrors upstream `formatQuestionsForPrompt` (lines 1337-1346). The
+    LLM uses these summaries to write quiz-narration text that
+    references specific questions.
+    """
+    lines: list[str] = []
+    for i, q in enumerate(questions):
+        q_type = q.get("type") or "?"
+        q_text = q.get("question") or ""
+        options = q.get("options")
+        if isinstance(options, list) and options:
+            opts_rendered = ", ".join(
+                f"{o.get('value', '?')}. {o.get('label', '')}"
+                if isinstance(o, dict)
+                else str(o)
+                for o in options
+            )
+            options_text = f"Options: {opts_rendered}"
+        else:
+            options_text = ""
+        lines.append(f"Q{i + 1} ({q_type}): {q_text}\n{options_text}")
+    return "\n\n".join(lines)
+
+
+def _generate_default_quiz_actions(
+    _outline: SceneOutline,
+) -> list[dict[str, Any]]:
+    """Default quiz actions when the LLM returns nothing usable.
+
+    Mirrors upstream `generateDefaultQuizActions` (lines 1552-1561). A
+    single speech that frames the quiz as a check-in.
+    """
+    return [
+        {
+            "id": f"action_{_nanoid_8()}",
+            "type": "speech",
+            "title": "测验引导",  # "quiz introduction"
+            "text": "现在让我们来做一个小测验，检验一下学习成果。",
+            # ^ "Now let's do a small quiz to check what we've learned."
+        }
+    ]
 
 
 # ── Action helpers (MAIC-422.1) ───────────────────────────────────
