@@ -39,7 +39,11 @@ import {
   createPlaybackPersistence,
   type PlaybackPersistence,
 } from '../../lib/maic-v2/playbackPersistence';
-import type { EngineMode, Effect } from '../../lib/maic-v2/playback-types';
+import type {
+  EngineMode,
+  Effect,
+  TriggerEvent,
+} from '../../lib/maic-v2/playback-types';
 import { buildSceneFromBuffer } from '../../lib/maic-v2/scene-builder';
 import { useSceneBuffer } from '../../lib/maic-v2/use-scene-buffer';
 import {
@@ -51,6 +55,7 @@ import { useMaicClassroomChannelV2 } from '../../hooks/useMaicClassroomChannelV2
 
 import { AgentOverlay } from './AgentOverlay';
 import { LaserOverlay } from './LaserOverlay';
+import { ProactiveCardManager } from './ProactiveCardManager';
 import { SpotlightOverlay } from './SpotlightOverlay';
 import { StageControls } from './StageControls';
 import { Transcript } from './Transcript';
@@ -136,6 +141,10 @@ function StageInner({
   // through onEffectFire; we capture them here and the overlay
   // components (MAIC-215, 216) consume + auto-clear at 5000 ms.
   const [activeEffect, setActiveEffect] = useState<Effect | null>(null);
+  // MAIC-411.2: ProactiveCard trigger surface — controlled by the
+  // engine via onProactiveShow / onProactiveHide. ProactiveCardManager
+  // dedups against engine.getSnapshot().consumedDiscussions.
+  const [proactiveTrigger, setProactiveTrigger] = useState<TriggerEvent | null>(null);
   // Track sceneIds we've already wired into a PlaybackEngine.  Without
   // this, calling Stop sets engineRef.current=null which would cause
   // the auto-construct effect to spin up a fresh engine for the same
@@ -193,9 +202,13 @@ function StageInner({
         // MAIC-412: persist progress on every action consume so a
         // reload restores at the same action.
         onProgress: (snapshot) => persistence.save(snapshot),
+        // MAIC-411.2: ProactiveCard surface — engine fires
+        // onProactiveShow 3s after a `discussion` action enters the
+        // stream. Manager dedups against consumedDiscussions.
+        onProactiveShow: (t) => setProactiveTrigger(t),
+        onProactiveHide: () => setProactiveTrigger(null),
         onComplete: () => {
           // Stage freezes on completion; user can hit Stop to reset.
-          // Phase 410 will dispatch the next turn here.
           // MAIC-412: clear persisted snapshot — completion means
           // there's nothing left to resume.
           persistence.clear();
@@ -288,6 +301,18 @@ function StageInner({
           />
         )}
       </div>
+
+      {/* MAIC-411.2: ProactiveCard surfaces between Whiteboard and
+          Transcript when the engine fires onProactiveShow. Manager
+          dedups against engine.getSnapshot().consumedDiscussions. */}
+      {engineRef.current && (
+        <ProactiveCardManager
+          engine={engineRef.current}
+          trigger={proactiveTrigger}
+          onJoin={() => engineRef.current?.confirmDiscussion()}
+          onSkip={() => engineRef.current?.skipDiscussion()}
+        />
+      )}
 
       <Transcript
         textByMessageId={buffer.textByMessageId}

@@ -544,3 +544,130 @@ describe('Stage — MAIC-412 snapshot persistence wiring', () => {
     expect(persistence.clear).toHaveBeenCalled();
   });
 });
+
+
+// ── MAIC-411.2: ProactiveCard manager wiring in Stage ──────────────
+
+
+describe('Stage — MAIC-411.2 ProactiveCard wiring', () => {
+  /**
+   * Build a turn that ends with a `discussion` action so the engine
+   * dispatches it and (after the 3 s delay) fires onProactiveShow.
+   */
+  const TURN_WITH_DISCUSSION = [
+    { type: 'thinking', data: { stage: 'agent_loading' } },
+    {
+      type: 'agent_start',
+      data: {
+        messageId: 'm1',
+        agentId: 'default-1',
+        agentName: 'AI Teacher',
+        agentAvatar: '🎓',
+        agentColor: '#3b82f6',
+      },
+    },
+    { type: 'text_delta', data: { content: 'Discussion time.', messageId: 'm1' } },
+    {
+      type: 'action',
+      data: {
+        actionId: 'd-fractions',
+        actionName: 'discussion',
+        params: { topic: 'Are fractions intuitive?' },
+        agentId: 'default-1',
+        messageId: 'm1',
+      },
+    },
+    { type: 'agent_end', data: { messageId: 'm1', agentId: 'default-1' } },
+  ];
+
+  test('ProactiveCard appears 3 s after a discussion action enters the buffer', async () => {
+    vi.useFakeTimers();
+    try {
+      render(
+        <Stage
+          sessionId="s1"
+          baseUrl="ws://test"
+          actionEngineOptions={FAST_ACTION_ENGINE}
+        />,
+      );
+      const ws = MockWebSocket.instances[0];
+      act(() => ws.open());
+      fireEvent.click(screen.getByTestId('maic-v2-control-start'));
+      act(() => {
+        for (const ev of TURN_WITH_DISCUSSION) ws.receive(ev);
+      });
+      // Engine reaches the discussion action, schedules the 3s
+      // proactive delay. ProactiveCard should NOT yet be visible.
+      expect(screen.queryByTestId('maic-v2-proactive-card')).toBeNull();
+
+      // Advance the 3s delay — onProactiveShow fires, Stage state
+      // updates, manager renders the card.
+      act(() => {
+        vi.advanceTimersByTime(3000);
+      });
+      expect(screen.getByTestId('maic-v2-proactive-card')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('clicking Join transitions engine into live mode', async () => {
+    vi.useFakeTimers();
+    try {
+      const { container } = render(
+        <Stage
+          sessionId="s1"
+          baseUrl="ws://test"
+          actionEngineOptions={FAST_ACTION_ENGINE}
+        />,
+      );
+      const ws = MockWebSocket.instances[0];
+      act(() => ws.open());
+      fireEvent.click(screen.getByTestId('maic-v2-control-start'));
+      act(() => {
+        for (const ev of TURN_WITH_DISCUSSION) ws.receive(ev);
+      });
+      act(() => {
+        vi.advanceTimersByTime(3000);
+      });
+
+      // Click Join → engine.confirmDiscussion → mode 'live'
+      fireEvent.click(screen.getByTestId('maic-v2-proactive-card-join'));
+      const stage = container.querySelector('[data-testid="maic-v2-stage"]')!;
+      expect(stage.getAttribute('data-engine-mode')).toBe('live');
+      // Card should be hidden after Join (engine fires onProactiveHide).
+      expect(screen.queryByTestId('maic-v2-proactive-card')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('clicking Skip dismisses the card without entering live mode', async () => {
+    vi.useFakeTimers();
+    try {
+      const { container } = render(
+        <Stage
+          sessionId="s1"
+          baseUrl="ws://test"
+          actionEngineOptions={FAST_ACTION_ENGINE}
+        />,
+      );
+      const ws = MockWebSocket.instances[0];
+      act(() => ws.open());
+      fireEvent.click(screen.getByTestId('maic-v2-control-start'));
+      act(() => {
+        for (const ev of TURN_WITH_DISCUSSION) ws.receive(ev);
+      });
+      act(() => {
+        vi.advanceTimersByTime(3000);
+      });
+      fireEvent.click(screen.getByTestId('maic-v2-proactive-card-skip'));
+      // Card hidden; engine NOT in live mode.
+      expect(screen.queryByTestId('maic-v2-proactive-card')).toBeNull();
+      const stage = container.querySelector('[data-testid="maic-v2-stage"]')!;
+      expect(stage.getAttribute('data-engine-mode')).not.toBe('live');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
