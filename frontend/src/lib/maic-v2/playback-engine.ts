@@ -356,6 +356,25 @@ export class PlaybackEngine {
     this.setMode('idle');
   }
 
+  /**
+   * Send a user message during `live` mode (MAIC-410.2). Fires the
+   * `onLiveUserMessage` callback so Stage can forward to the WS via
+   * `send({action:'user_message', data:{text}})`.
+   *
+   * Validates mode === 'live'; warns + no-ops otherwise so a stale
+   * UI binding can't dispatch a user message during the lecture
+   * playback path.
+   */
+  sendUserMessage(text: string): void {
+    if (this.mode !== 'live') {
+      console.warn(
+        '[PlaybackEngine] sendUserMessage ignored: mode is', this.mode,
+      );
+      return;
+    }
+    this.callbacks.onLiveUserMessage?.(text);
+  }
+
   /** User typed a message during playback → enter live mode. */
   handleUserInterrupt(text: string): void {
     if (this.mode === 'playing' || this.mode === 'paused') {

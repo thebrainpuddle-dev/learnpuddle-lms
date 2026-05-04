@@ -64,7 +64,11 @@ export type MaicChannelStatus =
 
 export type MaicSendMessage =
   | { action: 'start'; data?: Record<string, unknown> }
-  | { action: 'interrupt' | 'resume' | 'stop'; data?: Record<string, unknown> };
+  | { action: 'interrupt' | 'resume' | 'stop'; data?: Record<string, unknown> }
+  // MAIC-410.2 / MAIC-110.5: live-mode user reply. Backend appends
+  // `{role:"user", content:text}` to state.messages and respawns the
+  // LangGraph stream with a small live-mode budget.
+  | { action: 'user_message'; data: { text: string; maxTurns?: number } };
 
 export interface UseMaicChannelV2Options {
   /** Session id — used in the WS path. */

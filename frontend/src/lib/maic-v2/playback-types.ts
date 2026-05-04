@@ -138,6 +138,14 @@ export interface PlaybackEngineCallbacks {
   onDiscussionConfirmed?: (topic: string, prompt?: string, agentId?: string) => void;
   onDiscussionEnd?: () => void;
   onUserInterrupt?: (text: string) => void;
+  /**
+   * Fired when the user types and sends a message during `live` mode
+   * (MAIC-410.2). Stage forwards the text to the WS via
+   * `send({action:'user_message', data:{text}})`. Distinct from
+   * `onUserInterrupt`: interrupt enters live mode mid-lecture; this
+   * fires for every subsequent message inside live mode.
+   */
+  onLiveUserMessage?: (text: string) => void;
 
   // ── Topic / transcript (for cross-classroom history view) ──
   onTopicStart?: (type: 'lecture' | 'discussion', title: string) => void;

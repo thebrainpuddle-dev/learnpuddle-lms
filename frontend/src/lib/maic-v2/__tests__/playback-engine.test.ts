@@ -786,3 +786,57 @@ describe('PlaybackEngine confirmDiscussion / handleEndDiscussion round-trip', ()
     warnSpy.mockRestore();
   });
 });
+
+
+// ── sendUserMessage (MAIC-410.2) ─────────────────────────────────────
+
+
+describe('PlaybackEngine sendUserMessage', () => {
+  test('fires onLiveUserMessage when in live mode', () => {
+    const messages: string[] = [];
+    const { engine } = makeEngine(
+      [{ id: 's', actions: [
+        speechAction('a1', 'hi', 'data:audio/mp3;base64,a'),
+        discussionAction('d1', 'topic'),
+      ] }],
+      { onLiveUserMessage: (text) => messages.push(text) },
+    );
+    vi.useFakeTimers();
+    engine.start();
+    // Drain first speech and the 3s discussion delay so we can confirm.
+    // Easier path: drive engine directly into live via handleUserInterrupt
+    // (which sets mode='live' synchronously).
+    engine.handleUserInterrupt('forced into live');
+    expect(engine.getMode()).toBe('live');
+
+    engine.sendUserMessage('what about edge cases?');
+    expect(messages).toEqual(['what about edge cases?']);
+    vi.useRealTimers();
+  });
+
+  test('warns + no-ops when called outside live mode', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const messages: string[] = [];
+    const { engine } = makeEngine(
+      [{ id: 's', actions: [] }],
+      { onLiveUserMessage: (text) => messages.push(text) },
+    );
+    expect(engine.getMode()).toBe('idle');
+    engine.sendUserMessage('this should be dropped');
+    expect(messages).toEqual([]);
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  test('multiple sendUserMessage calls in live mode each fire', () => {
+    const messages: string[] = [];
+    const { engine } = makeEngine(
+      [{ id: 's', actions: [speechAction('a1', 'hi', 'data:audio/mp3;base64,a')] }],
+      { onLiveUserMessage: (text) => messages.push(text) },
+    );
+    engine.handleUserInterrupt('first');
+    engine.sendUserMessage('reply 1');
+    engine.sendUserMessage('reply 2');
+    expect(messages).toEqual(['reply 1', 'reply 2']);
+  });
+});

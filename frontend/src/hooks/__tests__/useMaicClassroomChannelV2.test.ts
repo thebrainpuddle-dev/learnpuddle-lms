@@ -173,6 +173,27 @@ describe('useMaicClassroomChannelV2', () => {
     expect(ws.sent).toEqual([]);
   });
 
+  test('send() accepts user_message variant (MAIC-410.2)', () => {
+    // Locks the MaicSendMessage union: backend's MAIC-110.5 accepts
+    // {action:'user_message', data:{text}}. Without this case in the
+    // union, TS rejects the call site at compile time.
+    const { result } = renderHook(() =>
+      useMaicClassroomChannelV2({ sessionId: 's', baseUrl: 'ws://x' })
+    );
+    const ws = MockWebSocket.instances[0];
+    act(() => ws.open());
+    act(() => result.current.send({
+      action: 'user_message',
+      data: { text: 'what about the edge case?' },
+    }));
+    expect(ws.sent).toEqual([
+      JSON.stringify({
+        action: 'user_message',
+        data: { text: 'what about the edge case?' },
+      }),
+    ]);
+  });
+
   test('reset() clears the events buffer', () => {
     const { result } = renderHook(() =>
       useMaicClassroomChannelV2({ sessionId: 's', baseUrl: 'ws://x' })
