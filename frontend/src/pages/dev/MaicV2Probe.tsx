@@ -15,6 +15,7 @@ import { useAuthStore } from '../../stores/authStore';
 import Phase2PlaybackDemo from './Phase2PlaybackDemo';
 import Phase2StaticDemo from './Phase2StaticDemo';
 import Phase3LiveModeDemo from './Phase3LiveModeDemo';
+import Phase3TtsFallbackDemo from './Phase3TtsFallbackDemo';
 
 export default function MaicV2Probe() {
   // Dev sub-routes via ?scene= query param. phase2-static bypasses
@@ -27,6 +28,7 @@ export default function MaicV2Probe() {
   const isStaticDemo = sceneParam === 'phase2-static';
   const isPlaybackDemo = sceneParam === 'phase2-demo';
   const isPhase3LiveMode = sceneParam === 'phase3-live-mode';
+  const isPhase3TtsFallback = sceneParam === 'phase3-tts-fallback';
 
   const [sessionId] = useState(() => `dev-${Math.random().toString(36).slice(2, 10)}`);
   const accessToken = useAuthStore((s) => s.accessToken);
@@ -41,7 +43,7 @@ export default function MaicV2Probe() {
     // injection so the App's tenant-config/auth-me side effects
     // never fire and can't 401-cascade us to /login. Phase 3 demos
     // also mount engine directly without the channel hook.
-    if (isStaticDemo || isPlaybackDemo || isPhase3LiveMode) return;
+    if (isStaticDemo || isPlaybackDemo || isPhase3LiveMode || isPhase3TtsFallback) return;
     if (accessToken) {
       setTokenReady(true);
       return;
@@ -68,7 +70,7 @@ export default function MaicV2Probe() {
       } as never);
       setTokenReady(true);
     }
-  }, [accessToken, isStaticDemo, isPlaybackDemo, isPhase3LiveMode]);
+  }, [accessToken, isStaticDemo, isPlaybackDemo, isPhase3LiveMode, isPhase3TtsFallback]);
 
   // Raw event log — second WS connection so the Stage's hook owns its
   // own state.  Cheap (one extra WS, dev-only).
@@ -85,6 +87,9 @@ export default function MaicV2Probe() {
   }
   if (isPhase3LiveMode) {
     return <Phase3LiveModeDemo />;
+  }
+  if (isPhase3TtsFallback) {
+    return <Phase3TtsFallbackDemo />;
   }
 
   return (
