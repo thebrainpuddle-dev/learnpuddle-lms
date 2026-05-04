@@ -1369,11 +1369,12 @@ async def test_pbl_actions_falls_back_to_outline_when_no_pblConfig():
 
 @pytest.mark.asyncio
 async def test_interactive_simulation_routes_to_simulation_template():
-    captured_template_id = None
+    """The widget-content branch loads the simulation-content template
+    first; MAIC-422.7's widget-teacher-actions call lands second."""
+    template_ids: list[str] = []
 
     def _capture(template_id, vars):
-        nonlocal captured_template_id
-        captured_template_id = template_id
+        template_ids.append(template_id)
         from apps.maic.prompts.loader import BuiltPrompt
         return BuiltPrompt(system="sys", user="user")
 
@@ -1395,7 +1396,7 @@ async def test_interactive_simulation_routes_to_simulation_template():
             "apps.maic.generation.scene_generator.generate_text", new=_fake
         ):
             await generate_scene_content(outline, language_model_id="stub")
-    assert captured_template_id == "simulation-content"
+    assert template_ids[0] == "simulation-content"
 
 
 @pytest.mark.asyncio
@@ -1416,11 +1417,12 @@ async def test_interactive_simulation_routes_to_simulation_template():
 async def test_each_widget_type_routes_to_its_template(
     widget_type, expected_template, extra_outline
 ):
-    captured_template_id = None
+    """Per-widget content template is loaded FIRST; widget-teacher-
+    actions lands second (MAIC-422.7)."""
+    template_ids: list[str] = []
 
     def _capture(template_id, vars):
-        nonlocal captured_template_id
-        captured_template_id = template_id
+        template_ids.append(template_id)
         from apps.maic.prompts.loader import BuiltPrompt
         return BuiltPrompt(system="sys", user="user")
 
@@ -1445,7 +1447,7 @@ async def test_each_widget_type_routes_to_its_template(
             content = await generate_scene_content(
                 outline, language_model_id="stub"
             )
-    assert captured_template_id == expected_template
+    assert template_ids[0] == expected_template
     assert content is not None
     assert content["widgetType"] == widget_type
 
@@ -1486,11 +1488,10 @@ async def test_interactive_defaults_to_simulation_when_no_widget_config():
     """Defensive: outline_generator already handles this case but if
     an interactive arrives sans widget config, default to a simulation
     keyed on title (mirrors upstream lines 307-316)."""
-    captured_vars = {}
+    captures: list[tuple[str, dict]] = []
 
     def _capture(template_id, vars):
-        captured_vars.update(vars)
-        captured_vars["__template_id"] = template_id
+        captures.append((template_id, dict(vars)))
         from apps.maic.prompts.loader import BuiltPrompt
         return BuiltPrompt(system="sys", user="user")
 
@@ -1513,8 +1514,10 @@ async def test_interactive_defaults_to_simulation_when_no_widget_config():
             content = await generate_scene_content(
                 outline, language_model_id="stub"
             )
-    assert captured_vars["__template_id"] == "simulation-content"
-    assert captured_vars["conceptName"] == "Bare Interactive"
+    # First capture is the widget content (simulation-content); the
+    # second is widget-teacher-actions (MAIC-422.7).
+    assert captures[0][0] == "simulation-content"
+    assert captures[0][1]["conceptName"] == "Bare Interactive"
     assert content is not None
     assert content["widgetType"] == "simulation"
 
@@ -1911,3 +1914,253 @@ async def test_interactive_actions_processes_discussion_invalid_agent():
             options={"agents": agents},
         )
     assert actions[0]["agentId"] == "default-3"
+
+
+# ── Widget teacher actions / Ultra Mode (MAIC-422.7) ──────────────
+
+
+@pytest.mark.asyncio
+async def test_widget_content_attaches_teacher_actions_when_returned():
+    """The widget content branch makes a 2nd LLM call to widget-
+    teacher-actions; when the LLM returns `{"actions": [...]}` those
+    flow through to content["teacherActions"]."""
+    call_count = {"n": 0}
+
+    async def _fake(*args, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return "<!DOCTYPE html><html><body>x</body></html>"
+        return json.dumps({
+            "actions": [
+                {"type": "speech", "label": "Intro", "content": "Welcome."},
+                {
+                    "type": "highlight",
+                    "label": "Spot",
+                    "target": "#amplitude-slider",
+                    "content": "Watch this.",
+                },
+            ]
+        })
+
+    outline = {
+        "type": "interactive",
+        "title": "T",
+        "widgetType": "simulation",
+        "widgetOutline": {"concept": "C"},
+    }
+
+    with patch(
+        "apps.maic.generation.scene_generator.generate_text", new=_fake
+    ):
+        content = await generate_scene_content(outline, language_model_id="stub")
+    assert content is not None
+    assert content["teacherActions"] is not None
+    assert len(content["teacherActions"]) == 2
+    assert content["teacherActions"][0]["type"] == "speech"
+    assert content["teacherActions"][1]["type"] == "highlight"
+
+
+@pytest.mark.asyncio
+async def test_widget_content_teacher_actions_none_on_unparseable_response():
+    """If the 2nd LLM call returns garbage, teacherActions defaults
+    to None (caller falls through to standard interactive-actions
+    LLM call)."""
+    call_count = {"n": 0}
+
+    async def _fake(*args, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return "<!DOCTYPE html><html>x</html>"
+        return "no JSON anywhere"
+
+    outline = {
+        "type": "interactive",
+        "title": "T",
+        "widgetType": "simulation",
+        "widgetOutline": {"concept": "C"},
+    }
+
+    with patch(
+        "apps.maic.generation.scene_generator.generate_text", new=_fake
+    ):
+        content = await generate_scene_content(outline, language_model_id="stub")
+    assert content is not None
+    assert content["teacherActions"] is None
+
+
+@pytest.mark.asyncio
+async def test_widget_content_teacher_actions_none_when_template_missing():
+    """If the widget-teacher-actions template is absent, the function
+    returns None and the widget content still ships."""
+    captures: list[str] = []
+
+    def _capture(template_id, vars):
+        captures.append(template_id)
+        if template_id == "widget-teacher-actions":
+            from apps.maic.exceptions import MaicConfigError
+            raise MaicConfigError("template not found")
+        from apps.maic.prompts.loader import BuiltPrompt
+        return BuiltPrompt(system="sys", user="user")
+
+    async def _fake(*args, **kwargs):
+        return "<!DOCTYPE html><html>x</html>"
+
+    outline = {
+        "type": "interactive",
+        "title": "T",
+        "widgetType": "simulation",
+        "widgetOutline": {"concept": "C"},
+    }
+
+    with patch(
+        "apps.maic.generation.scene_generator.load_generation_prompt",
+        side_effect=_capture,
+    ):
+        with patch(
+            "apps.maic.generation.scene_generator.generate_text", new=_fake
+        ):
+            content = await generate_scene_content(outline, language_model_id="stub")
+    assert content is not None
+    assert content["teacherActions"] is None
+    assert "simulation-content" in captures
+    assert "widget-teacher-actions" in captures
+
+
+@pytest.mark.asyncio
+async def test_actions_dispatcher_ultra_mode_early_exit():
+    """When content carries teacherActions, the actions dispatcher
+    converts directly without an LLM call (skips the standard
+    interactive-actions branch)."""
+    outline = {
+        "type": "interactive",
+        "title": "T",
+        "widgetType": "simulation",
+        "widgetOutline": {"concept": "C"},
+    }
+    content = {
+        "html": "<html>x</html>",
+        "widgetType": "simulation",
+        "widgetConfig": None,
+        "teacherActions": [
+            {"type": "speech", "label": "Intro", "content": "Welcome."},
+        ],
+    }
+
+    async def _fake(*args, **kwargs):
+        raise AssertionError(
+            "LLM must not be called when Ultra Mode actions present"
+        )
+
+    with patch(
+        "apps.maic.generation.scene_generator.generate_text", new=_fake
+    ):
+        actions = await generate_scene_actions(
+            outline, content, language_model_id="stub"
+        )
+    assert len(actions) == 1
+    assert actions[0]["type"] == "speech"
+    assert actions[0]["text"] == "Welcome."
+
+
+# ── _convert_teacher_actions_to_actions ───────────────────────────
+
+
+def test_convert_speech_teacher_action_to_speech_action():
+    from apps.maic.generation.scene_generator import (
+        _convert_teacher_actions_to_actions,
+    )
+    out = _convert_teacher_actions_to_actions([
+        {"type": "speech", "label": "Hello", "content": "Hi there."},
+    ])
+    assert len(out) == 1
+    assert out[0]["type"] == "speech"
+    assert out[0]["text"] == "Hi there."
+    assert out[0]["title"] == "Hello"
+    assert out[0]["id"].startswith("action_")
+
+
+def test_convert_highlight_teacher_action_emits_widget_and_speech():
+    from apps.maic.generation.scene_generator import (
+        _convert_teacher_actions_to_actions,
+    )
+    out = _convert_teacher_actions_to_actions([
+        {
+            "type": "highlight",
+            "label": "Spot",
+            "target": "#x",
+            "content": "Notice this.",
+        },
+    ])
+    assert len(out) == 2
+    assert out[0]["type"] == "widget_highlight"
+    assert out[0]["target"] == "#x"
+    assert out[1]["type"] == "speech"
+    assert out[1]["text"] == "Notice this."
+    assert out[1]["id"] == f"{out[0]['id']}_speech"
+
+
+def test_convert_highlight_without_content_emits_only_widget_action():
+    from apps.maic.generation.scene_generator import (
+        _convert_teacher_actions_to_actions,
+    )
+    out = _convert_teacher_actions_to_actions([
+        {"type": "highlight", "label": "Spot", "target": "#x"},
+    ])
+    assert len(out) == 1
+    assert out[0]["type"] == "widget_highlight"
+
+
+def test_convert_setState_teacher_action():
+    from apps.maic.generation.scene_generator import (
+        _convert_teacher_actions_to_actions,
+    )
+    out = _convert_teacher_actions_to_actions([
+        {
+            "type": "setState",
+            "label": "Set",
+            "state": {"speed": 2},
+            "content": "Speed up.",
+        },
+    ])
+    assert len(out) == 2
+    assert out[0]["type"] == "widget_setState"
+    assert out[0]["state"] == {"speed": 2}
+    assert out[1]["type"] == "speech"
+
+
+def test_convert_annotation_and_reveal_teacher_actions():
+    from apps.maic.generation.scene_generator import (
+        _convert_teacher_actions_to_actions,
+    )
+    out = _convert_teacher_actions_to_actions([
+        {"type": "annotation", "label": "A", "target": "#a"},
+        {"type": "reveal", "label": "R", "target": "#b"},
+    ])
+    types = [a["type"] for a in out]
+    assert "widget_annotation" in types
+    assert "widget_reveal" in types
+
+
+def test_convert_unknown_teacher_action_falls_back_to_speech():
+    from apps.maic.generation.scene_generator import (
+        _convert_teacher_actions_to_actions,
+    )
+    out = _convert_teacher_actions_to_actions([
+        {"type": "future-mystery-type", "label": "?", "content": "hi"},
+    ])
+    assert len(out) == 1
+    assert out[0]["type"] == "speech"
+    assert out[0]["text"] == "hi"
+
+
+def test_convert_teacher_action_ids_are_unique():
+    from apps.maic.generation.scene_generator import (
+        _convert_teacher_actions_to_actions,
+    )
+    out = _convert_teacher_actions_to_actions([
+        {"type": "speech", "content": "A"},
+        {"type": "speech", "content": "B"},
+        {"type": "speech", "content": "C"},
+    ])
+    ids = [a["id"] for a in out]
+    assert len(set(ids)) == 3

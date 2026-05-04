@@ -682,15 +682,171 @@ async def _generate_widget_content(
 
     widget_config = _extract_widget_config(html)
 
+    # MAIC-422.7: optional second LLM call to produce Ultra Mode
+    # teacher actions. None on missing template OR LLM failure OR
+    # parse failure — the playback engine treats absent teacherActions
+    # as "no Ultra Mode actions" and falls through to the standard
+    # interactive-actions LLM call (MAIC-422.6).
+    teacher_actions = await _generate_widget_teacher_actions(
+        widget_type=widget_type,
+        outline=outline,
+        widget_config=widget_config,
+        language_model_id=language_model_id,
+        language_directive=language_directive,
+    )
+
     return {
         "html": post_process_interactive_html(html),
         "widgetType": widget_type,
         "widgetConfig": widget_config,
-        # MAIC-422.7 (Session 5) wires the optional teacher-actions
-        # second LLM call. Phase 4 ships None — the playback engine
-        # treats absent teacherActions as "no Ultra Mode actions".
-        "teacherActions": None,
+        "teacherActions": teacher_actions,
     }
+
+
+async def _generate_widget_teacher_actions(
+    *,
+    widget_type: str,
+    outline: SceneOutline,
+    widget_config: dict[str, Any] | None,
+    language_model_id: str,
+    language_directive: str,
+) -> list[dict[str, Any]] | None:
+    """Generate Ultra Mode teacher actions for a widget.
+
+    Direct port of upstream `generateWidgetTeacherActions` (lines
+    1116-1140). Calls the widget-teacher-actions template, expects
+    `{"actions": [...TeacherAction]}`. Returns None on missing
+    template, LLM failure, or parse failure — caller treats None
+    as "fall through to standard interactive-actions LLM call".
+
+    The returned list is shape-only here; conversion to Action[] is
+    performed by `_convert_teacher_actions_to_actions` (called from
+    the actions dispatcher's Ultra Mode early-exit).
+    """
+    import json as _json
+
+    key_points = outline.get("keyPoints") or []
+    key_points_text = "\n".join(key_points)
+
+    try:
+        prompts = load_generation_prompt(
+            "widget-teacher-actions",
+            {
+                "widgetType": widget_type,
+                "description": outline.get("description", ""),
+                "keyPoints": key_points_text,
+                "widgetConfig": _json.dumps(widget_config or {}),
+                "languageDirective": language_directive,
+            },
+        )
+    except MaicConfigError as exc:
+        _logger.warning(
+            "widget-teacher-actions prompt missing: %s — Ultra Mode disabled.",
+            exc,
+        )
+        return None
+
+    try:
+        response = await generate_text(
+            messages=[
+                SystemMessage(content=prompts.system),
+                HumanMessage(content=prompts.user),
+            ],
+            language_model_id=language_model_id,
+        )
+    except Exception as exc:  # noqa: BLE001
+        _logger.warning(
+            "widget-teacher-actions LLM call failed for %s: %s — "
+            "falling through to standard interactive-actions.",
+            outline.get("title", "?"),
+            exc,
+        )
+        return None
+
+    parsed = parse_json_response(response)
+    if not isinstance(parsed, dict):
+        return None
+    actions = parsed.get("actions")
+    if not isinstance(actions, list):
+        return None
+    return [a for a in actions if isinstance(a, dict)]
+
+
+def _convert_teacher_actions_to_actions(
+    teacher_actions: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Convert Ultra Mode TeacherAction[] to Action[].
+
+    Direct port of upstream `convertTeacherActionsToActions` (lines
+    1361-1465).
+
+    Conversion rules:
+      - speech → single speech Action.
+      - highlight / setState / annotation / reveal → widget_<type>
+        Action (visual/state change). If the TeacherAction has
+        `content`, ALSO emit a paired speech Action with
+        `id = "{base.id}_speech"` so TTS can narrate the change.
+      - Unknown types → fallback to a single speech Action with
+        `text = ta.content or ""`.
+    """
+    out: list[dict[str, Any]] = []
+
+    for ta in teacher_actions:
+        action_id = f"action_{_nanoid_8()}"
+        base_title = ta.get("label") or ""
+        ta_type = ta.get("type")
+        content = ta.get("content") or ""
+
+        if ta_type == "speech":
+            out.append({
+                "id": action_id,
+                "type": "speech",
+                "title": base_title,
+                "text": content,
+            })
+            continue
+
+        if ta_type in ("highlight", "annotation", "reveal"):
+            out.append({
+                "id": action_id,
+                "type": f"widget_{ta_type}",
+                "title": base_title,
+                "target": ta.get("target") or "",
+            })
+            if content:
+                out.append({
+                    "id": f"{action_id}_speech",
+                    "type": "speech",
+                    "title": base_title,
+                    "text": content,
+                })
+            continue
+
+        if ta_type == "setState":
+            out.append({
+                "id": action_id,
+                "type": "widget_setState",
+                "title": base_title,
+                "state": ta.get("state") or {},
+            })
+            if content:
+                out.append({
+                    "id": f"{action_id}_speech",
+                    "type": "speech",
+                    "title": base_title,
+                    "text": content,
+                })
+            continue
+
+        # Unknown type — fall back to speech.
+        out.append({
+            "id": action_id,
+            "type": "speech",
+            "title": base_title,
+            "text": content,
+        })
+
+    return out
 
 
 def _build_widget_variables(
@@ -851,9 +1007,9 @@ async def generate_scene_actions(
     on outline.type:
       - slide → slide-actions LLM call (MAIC-422.1)
       - quiz → quiz-actions LLM call (MAIC-422.3)
-      - interactive → interactive-actions LLM call (MAIC-422.6, this
-        chunk). Ultra Mode `teacherActions`-conversion early-exit
-        deferred to MAIC-422.7.
+      - interactive → interactive-actions LLM call (MAIC-422.6).
+        Ultra Mode `teacherActions`-conversion early-exit lands at
+        MAIC-422.7 (this chunk).
       - pbl → pbl-actions LLM call (MAIC-422.4)
 
     Returns an empty list when the scene type doesn't match any branch
@@ -893,22 +1049,23 @@ async def generate_scene_actions(
             language_directive=options.get("languageDirective", ""),
         )
 
-    # ── Interactive branch (MAIC-422.6) ──
-    # Ultra Mode early-exit: if the widget content carried teacher
-    # actions, convert them directly to Actions (skips the LLM call).
-    # MAIC-422.7 (Session 5) wires the upstream conversion logic
-    # (convertTeacherActionsToActions, lines 1361-1467). For now,
-    # content["teacherActions"] is always None (set by MAIC-422.5);
-    # so this guard is a no-op until Session 5.
+    # ── Interactive branch (MAIC-422.6 + .7) ──
+    # Ultra Mode early-exit (MAIC-422.7): if the widget content
+    # carried teacher actions, convert them directly to Action[] and
+    # SKIP the standard interactive-actions LLM call. Mirrors upstream
+    # lines 1167-1174.
     if (
         outline.get("type") == "interactive"
         and "html" in content
         and content.get("teacherActions")
     ):
+        teacher_actions = content["teacherActions"]
         _logger.info(
-            "[Ultra Mode] teacherActions present but conversion lands "
-            "in MAIC-422.7; falling through to interactive-actions LLM."
+            "[Ultra Mode] Converting %d teacherActions to Actions for: %s",
+            len(teacher_actions),
+            outline.get("title", "?"),
         )
+        return _convert_teacher_actions_to_actions(teacher_actions)
 
     if outline.get("type") == "interactive" and "html" in content:
         return await _generate_interactive_actions(
