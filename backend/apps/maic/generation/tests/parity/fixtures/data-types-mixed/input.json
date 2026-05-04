@@ -1,0 +1,7 @@
+{
+  "topic": "Python data types: int, float, str, list, dict",
+  "agentCount": 4,
+  "language": "English",
+  "level": "intermediate",
+  "specifications": "Bootcamp-style introductory programming. Slides for each type, a code playground widget for hands-on practice with int/str conversion, a quiz on type predictions, and a brief PBL project on building a contact-list dictionary."
+}

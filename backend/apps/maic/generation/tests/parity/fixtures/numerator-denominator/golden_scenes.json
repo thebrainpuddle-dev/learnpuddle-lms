@@ -1,0 +1,899 @@
+[
+  {
+    "id": "1FhfmhPmgMlF",
+    "stageId": "stage_Er4P3ODp",
+    "title": "What Is a Fraction?",
+    "order": 1,
+    "actions": [
+      {
+        "id": "action_1bJtUckO",
+        "type": "spotlight",
+        "elementId": "el_title"
+      },
+      {
+        "id": "action_wrpYA0uW",
+        "type": "speech",
+        "text": "Let's look at this slide together."
+      },
+      {
+        "id": "action_OQyBgBWw",
+        "type": "spotlight",
+        "elementId": "el_body"
+      },
+      {
+        "id": "action_RO6BjQ5i",
+        "type": "speech",
+        "text": "Notice the key idea here."
+      },
+      {
+        "id": "action_luK7Htjd",
+        "type": "speech",
+        "text": "Take a moment to think about it."
+      }
+    ],
+    "createdAt": 1777912996539,
+    "updatedAt": 1777912996539,
+    "type": "slide",
+    "content": {
+      "type": "slide",
+      "canvas": {
+        "id": "rmZsJ5Nsb4pM",
+        "viewportSize": 1000,
+        "viewportRatio": 0.5625,
+        "theme": {
+          "backgroundColor": "#ffffff",
+          "themeColors": [
+            "#5b9bd5",
+            "#ed7d31",
+            "#a5a5a5",
+            "#ffc000",
+            "#4472c4"
+          ],
+          "fontColor": "#333333",
+          "fontName": "Microsoft YaHei",
+          "outline": {
+            "color": "#d14424",
+            "width": 2,
+            "style": "solid"
+          },
+          "shadow": {
+            "h": 0,
+            "v": 0,
+            "blur": 10,
+            "color": "#000000"
+          }
+        },
+        "elements": [
+          {
+            "id": "el_title",
+            "type": "text",
+            "left": 50,
+            "top": 50,
+            "width": 900,
+            "height": 80,
+            "content": "<h1>Slide Title</h1>"
+          },
+          {
+            "id": "el_body",
+            "type": "text",
+            "left": 50,
+            "top": 150,
+            "width": 900,
+            "height": 350,
+            "content": "<p>Key points body content.</p>"
+          }
+        ],
+        "background": {
+          "type": "solid",
+          "color": "#ffffff"
+        }
+      }
+    }
+  },
+  {
+    "id": "PLkWdsbnlQTm",
+    "stageId": "stage_Er4P3ODp",
+    "title": "Numerator and Denominator",
+    "order": 2,
+    "actions": [
+      {
+        "id": "action_yo6Ucirq",
+        "type": "spotlight",
+        "elementId": "el_title"
+      },
+      {
+        "id": "action_QpFYm3bm",
+        "type": "speech",
+        "text": "Let's look at this slide together."
+      },
+      {
+        "id": "action_Z0J9pc6c",
+        "type": "spotlight",
+        "elementId": "el_body"
+      },
+      {
+        "id": "action_KtvZFH6U",
+        "type": "speech",
+        "text": "Notice the key idea here."
+      },
+      {
+        "id": "action_RGi5ZGob",
+        "type": "speech",
+        "text": "Take a moment to think about it."
+      }
+    ],
+    "createdAt": 1777912996540,
+    "updatedAt": 1777912996540,
+    "type": "slide",
+    "content": {
+      "type": "slide",
+      "canvas": {
+        "id": "nWZhG3acw11T",
+        "viewportSize": 1000,
+        "viewportRatio": 0.5625,
+        "theme": {
+          "backgroundColor": "#ffffff",
+          "themeColors": [
+            "#5b9bd5",
+            "#ed7d31",
+            "#a5a5a5",
+            "#ffc000",
+            "#4472c4"
+          ],
+          "fontColor": "#333333",
+          "fontName": "Microsoft YaHei",
+          "outline": {
+            "color": "#d14424",
+            "width": 2,
+            "style": "solid"
+          },
+          "shadow": {
+            "h": 0,
+            "v": 0,
+            "blur": 10,
+            "color": "#000000"
+          }
+        },
+        "elements": [
+          {
+            "id": "el_title",
+            "type": "text",
+            "left": 50,
+            "top": 50,
+            "width": 900,
+            "height": 80,
+            "content": "<h1>Slide Title</h1>"
+          },
+          {
+            "id": "el_body",
+            "type": "text",
+            "left": 50,
+            "top": 150,
+            "width": 900,
+            "height": 350,
+            "content": "<p>Key points body content.</p>"
+          }
+        ],
+        "background": {
+          "type": "solid",
+          "color": "#ffffff"
+        }
+      }
+    }
+  },
+  {
+    "id": "sJB3o8prnR6X",
+    "stageId": "stage_Er4P3ODp",
+    "title": "Reading Fractions Aloud",
+    "order": 3,
+    "actions": [
+      {
+        "id": "action_6DSPuYIf",
+        "type": "spotlight",
+        "elementId": "el_title"
+      },
+      {
+        "id": "action_WAYAyR0a",
+        "type": "speech",
+        "text": "Let's look at this slide together."
+      },
+      {
+        "id": "action_KeG4EBaO",
+        "type": "spotlight",
+        "elementId": "el_body"
+      },
+      {
+        "id": "action_4baiJ8Jl",
+        "type": "speech",
+        "text": "Notice the key idea here."
+      },
+      {
+        "id": "action_3RWPWO7q",
+        "type": "speech",
+        "text": "Take a moment to think about it."
+      }
+    ],
+    "createdAt": 1777912996540,
+    "updatedAt": 1777912996540,
+    "type": "slide",
+    "content": {
+      "type": "slide",
+      "canvas": {
+        "id": "5wpzallG7WIN",
+        "viewportSize": 1000,
+        "viewportRatio": 0.5625,
+        "theme": {
+          "backgroundColor": "#ffffff",
+          "themeColors": [
+            "#5b9bd5",
+            "#ed7d31",
+            "#a5a5a5",
+            "#ffc000",
+            "#4472c4"
+          ],
+          "fontColor": "#333333",
+          "fontName": "Microsoft YaHei",
+          "outline": {
+            "color": "#d14424",
+            "width": 2,
+            "style": "solid"
+          },
+          "shadow": {
+            "h": 0,
+            "v": 0,
+            "blur": 10,
+            "color": "#000000"
+          }
+        },
+        "elements": [
+          {
+            "id": "el_title",
+            "type": "text",
+            "left": 50,
+            "top": 50,
+            "width": 900,
+            "height": 80,
+            "content": "<h1>Slide Title</h1>"
+          },
+          {
+            "id": "el_body",
+            "type": "text",
+            "left": 50,
+            "top": 150,
+            "width": 900,
+            "height": 350,
+            "content": "<p>Key points body content.</p>"
+          }
+        ],
+        "background": {
+          "type": "solid",
+          "color": "#ffffff"
+        }
+      }
+    }
+  },
+  {
+    "id": "wIDewCVRy0Bt",
+    "stageId": "stage_Er4P3ODp",
+    "title": "Fractions in Daily Life",
+    "order": 4,
+    "actions": [
+      {
+        "id": "action_D9l6WSXN",
+        "type": "spotlight",
+        "elementId": "el_title"
+      },
+      {
+        "id": "action_jTK8WJ2u",
+        "type": "speech",
+        "text": "Let's look at this slide together."
+      },
+      {
+        "id": "action_2mle0COS",
+        "type": "spotlight",
+        "elementId": "el_body"
+      },
+      {
+        "id": "action_uCJ5coAx",
+        "type": "speech",
+        "text": "Notice the key idea here."
+      },
+      {
+        "id": "action_MBDCVqzX",
+        "type": "speech",
+        "text": "Take a moment to think about it."
+      }
+    ],
+    "createdAt": 1777912996540,
+    "updatedAt": 1777912996540,
+    "type": "slide",
+    "content": {
+      "type": "slide",
+      "canvas": {
+        "id": "XAz9bkx4wci0",
+        "viewportSize": 1000,
+        "viewportRatio": 0.5625,
+        "theme": {
+          "backgroundColor": "#ffffff",
+          "themeColors": [
+            "#5b9bd5",
+            "#ed7d31",
+            "#a5a5a5",
+            "#ffc000",
+            "#4472c4"
+          ],
+          "fontColor": "#333333",
+          "fontName": "Microsoft YaHei",
+          "outline": {
+            "color": "#d14424",
+            "width": 2,
+            "style": "solid"
+          },
+          "shadow": {
+            "h": 0,
+            "v": 0,
+            "blur": 10,
+            "color": "#000000"
+          }
+        },
+        "elements": [
+          {
+            "id": "el_title",
+            "type": "text",
+            "left": 50,
+            "top": 50,
+            "width": 900,
+            "height": 80,
+            "content": "<h1>Slide Title</h1>"
+          },
+          {
+            "id": "el_body",
+            "type": "text",
+            "left": 50,
+            "top": 150,
+            "width": 900,
+            "height": 350,
+            "content": "<p>Key points body content.</p>"
+          }
+        ],
+        "background": {
+          "type": "solid",
+          "color": "#ffffff"
+        }
+      }
+    }
+  },
+  {
+    "id": "JgHGKb8y1rnJ",
+    "stageId": "stage_Er4P3ODp",
+    "title": "Quick Check: Numerator vs Denominator",
+    "order": 5,
+    "actions": [
+      {
+        "id": "action_Op5ObS8W",
+        "type": "speech",
+        "text": "Let's check what we just learned."
+      },
+      {
+        "id": "action_WJWqMW0Z",
+        "type": "speech",
+        "text": "Read each question carefully."
+      },
+      {
+        "id": "action_y8M1t4Bp",
+        "type": "speech",
+        "text": "Take your time."
+      }
+    ],
+    "createdAt": 1777912996541,
+    "updatedAt": 1777912996541,
+    "type": "quiz",
+    "content": {
+      "type": "quiz",
+      "questions": [
+        {
+          "id": "q1",
+          "type": "single",
+          "question": "In the fraction 5/8, which is the numerator?",
+          "options": [
+            {
+              "value": "A",
+              "label": "5"
+            },
+            {
+              "value": "B",
+              "label": "8"
+            },
+            {
+              "value": "C",
+              "label": "both"
+            }
+          ],
+          "correctAnswer": "A",
+          "answer": [
+            "A"
+          ],
+          "hasAnswer": true
+        },
+        {
+          "id": "q2",
+          "type": "single",
+          "question": "In the fraction 3/7, which is the denominator?",
+          "options": [
+            {
+              "value": "A",
+              "label": "3"
+            },
+            {
+              "value": "B",
+              "label": "7"
+            },
+            {
+              "value": "C",
+              "label": "neither"
+            }
+          ],
+          "correctAnswer": "B",
+          "answer": [
+            "B"
+          ],
+          "hasAnswer": true
+        },
+        {
+          "id": "q3",
+          "type": "single",
+          "question": "Which fraction has 4 equal parts?",
+          "options": [
+            {
+              "value": "A",
+              "label": "1/3"
+            },
+            {
+              "value": "B",
+              "label": "1/4"
+            },
+            {
+              "value": "C",
+              "label": "1/5"
+            }
+          ],
+          "correctAnswer": "B",
+          "answer": [
+            "B"
+          ],
+          "hasAnswer": true
+        }
+      ]
+    }
+  },
+  {
+    "id": "aperVpBPpzmj",
+    "stageId": "stage_Er4P3ODp",
+    "title": "Fraction Builder Simulation",
+    "order": 6,
+    "actions": [
+      {
+        "id": "action_noADNSXU",
+        "type": "speech",
+        "title": "intro",
+        "text": "Let's build a fraction together by adjusting the sliders."
+      },
+      {
+        "id": "action_K7WNHdAY",
+        "type": "widget_highlight",
+        "title": "slider",
+        "target": "#numerator-slider"
+      },
+      {
+        "id": "action_K7WNHdAY_speech",
+        "type": "speech",
+        "title": "slider",
+        "text": "This top slider sets the numerator."
+      },
+      {
+        "id": "action_CuKi6sxq",
+        "type": "speech",
+        "title": "explain",
+        "text": "Watch how the display updates as you slide."
+      }
+    ],
+    "createdAt": 1777912996543,
+    "updatedAt": 1777912996543,
+    "type": "interactive",
+    "content": {
+      "type": "interactive",
+      "url": "",
+      "html": "<!DOCTYPE html><html><head><title>Fraction Builder</title><script type=\"application/json\" id=\"widget-config\">{\"engine\":\"vanilla\",\"variables\":[\"numerator\",\"denominator\"]}</script>\n<link rel=\"stylesheet\" href=\"https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css\">\n<script src=\"https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js\"></script>\n<script src=\"https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js\"></script>\n<script>\ndocument.addEventListener(\"DOMContentLoaded\", function() {\n    const katexOptions = {\n        delimiters: [\n            {left: '\\\\[', right: '\\\\]', display: true},\n            {left: '\\\\(', right: '\\\\)', display: false},\n            {left: '$$', right: '$$', display: true},\n            {left: '$', right: '$', display: false}\n        ],\n        throwOnError: false,\n        strict: false,\n        trust: true\n    };\n\n    let renderTimeout;\n    function safeRender() {\n        if (renderTimeout) clearTimeout(renderTimeout);\n        renderTimeout = setTimeout(() => {\n            renderMathInElement(document.body, katexOptions);\n        }, 100);\n    }\n\n    renderMathInElement(document.body, katexOptions);\n\n    const observer = new MutationObserver((mutations) => {\n        let shouldRender = false;\n        mutations.forEach((mutation) => {\n            if (mutation.target &&\n                mutation.target.className &&\n                typeof mutation.target.className === 'string' &&\n                mutation.target.className.includes('katex')) {\n                return;\n            }\n            shouldRender = true;\n        });\n\n        if (shouldRender) {\n            safeRender();\n        }\n    });\n\n    observer.observe(document.body, {\n        childList: true,\n        subtree: true,\n        characterData: true\n    });\n\n    setInterval(() => {\n        const text = document.body.innerText;\n        if (text.includes('\\\\(') || text.includes('$$')) {\n            safeRender();\n        }\n    }, 2000);\n});\n</script>\n</head><body><div id=\"app\"><h2>Fraction Builder</h2><div>Numerator: <input id=\"numerator-slider\" type=\"range\" min=\"0\" max=\"8\"></div><div>Denominator: <input id=\"denominator-slider\" type=\"range\" min=\"1\" max=\"12\"></div><div id=\"display\">0/1</div></div></body></html>",
+      "widgetType": "simulation",
+      "widgetConfig": {
+        "engine": "vanilla",
+        "variables": [
+          "numerator",
+          "denominator"
+        ]
+      },
+      "teacherActions": [
+        {
+          "type": "speech",
+          "label": "intro",
+          "content": "Let's build a fraction together by adjusting the sliders."
+        },
+        {
+          "type": "highlight",
+          "label": "slider",
+          "target": "#numerator-slider",
+          "content": "This top slider sets the numerator."
+        },
+        {
+          "type": "speech",
+          "label": "explain",
+          "content": "Watch how the display updates as you slide."
+        }
+      ]
+    }
+  },
+  {
+    "id": "1RcT5IgDwDEr",
+    "stageId": "stage_Er4P3ODp",
+    "title": "Equal Parts Matter",
+    "order": 7,
+    "actions": [
+      {
+        "id": "action_oaxJJytv",
+        "type": "spotlight",
+        "elementId": "el_title"
+      },
+      {
+        "id": "action_reX33qKs",
+        "type": "speech",
+        "text": "Let's look at this slide together."
+      },
+      {
+        "id": "action_HPcVn1Cc",
+        "type": "spotlight",
+        "elementId": "el_body"
+      },
+      {
+        "id": "action_Nwfo2wpA",
+        "type": "speech",
+        "text": "Notice the key idea here."
+      },
+      {
+        "id": "action_ZTw4ZNFs",
+        "type": "speech",
+        "text": "Take a moment to think about it."
+      }
+    ],
+    "createdAt": 1777912996543,
+    "updatedAt": 1777912996543,
+    "type": "slide",
+    "content": {
+      "type": "slide",
+      "canvas": {
+        "id": "FedIyCKcn1h2",
+        "viewportSize": 1000,
+        "viewportRatio": 0.5625,
+        "theme": {
+          "backgroundColor": "#ffffff",
+          "themeColors": [
+            "#5b9bd5",
+            "#ed7d31",
+            "#a5a5a5",
+            "#ffc000",
+            "#4472c4"
+          ],
+          "fontColor": "#333333",
+          "fontName": "Microsoft YaHei",
+          "outline": {
+            "color": "#d14424",
+            "width": 2,
+            "style": "solid"
+          },
+          "shadow": {
+            "h": 0,
+            "v": 0,
+            "blur": 10,
+            "color": "#000000"
+          }
+        },
+        "elements": [
+          {
+            "id": "el_title",
+            "type": "text",
+            "left": 50,
+            "top": 50,
+            "width": 900,
+            "height": 80,
+            "content": "<h1>Slide Title</h1>"
+          },
+          {
+            "id": "el_body",
+            "type": "text",
+            "left": 50,
+            "top": 150,
+            "width": 900,
+            "height": 350,
+            "content": "<p>Key points body content.</p>"
+          }
+        ],
+        "background": {
+          "type": "solid",
+          "color": "#ffffff"
+        }
+      }
+    }
+  },
+  {
+    "id": "zjLDcXKw8lSr",
+    "stageId": "stage_Er4P3ODp",
+    "title": "Common Mistakes",
+    "order": 8,
+    "actions": [
+      {
+        "id": "action_s7JUMDbA",
+        "type": "spotlight",
+        "elementId": "el_title"
+      },
+      {
+        "id": "action_v2uvIjmc",
+        "type": "speech",
+        "text": "Let's look at this slide together."
+      },
+      {
+        "id": "action_8SVwn5xp",
+        "type": "spotlight",
+        "elementId": "el_body"
+      },
+      {
+        "id": "action_tFPetGJI",
+        "type": "speech",
+        "text": "Notice the key idea here."
+      },
+      {
+        "id": "action_f1HXfTm0",
+        "type": "speech",
+        "text": "Take a moment to think about it."
+      }
+    ],
+    "createdAt": 1777912996543,
+    "updatedAt": 1777912996543,
+    "type": "slide",
+    "content": {
+      "type": "slide",
+      "canvas": {
+        "id": "dGLwjwGvF1G1",
+        "viewportSize": 1000,
+        "viewportRatio": 0.5625,
+        "theme": {
+          "backgroundColor": "#ffffff",
+          "themeColors": [
+            "#5b9bd5",
+            "#ed7d31",
+            "#a5a5a5",
+            "#ffc000",
+            "#4472c4"
+          ],
+          "fontColor": "#333333",
+          "fontName": "Microsoft YaHei",
+          "outline": {
+            "color": "#d14424",
+            "width": 2,
+            "style": "solid"
+          },
+          "shadow": {
+            "h": 0,
+            "v": 0,
+            "blur": 10,
+            "color": "#000000"
+          }
+        },
+        "elements": [
+          {
+            "id": "el_title",
+            "type": "text",
+            "left": 50,
+            "top": 50,
+            "width": 900,
+            "height": 80,
+            "content": "<h1>Slide Title</h1>"
+          },
+          {
+            "id": "el_body",
+            "type": "text",
+            "left": 50,
+            "top": 150,
+            "width": 900,
+            "height": 350,
+            "content": "<p>Key points body content.</p>"
+          }
+        ],
+        "background": {
+          "type": "solid",
+          "color": "#ffffff"
+        }
+      }
+    }
+  },
+  {
+    "id": "0bEoM2vxY6RQ",
+    "stageId": "stage_Er4P3ODp",
+    "title": "Recap: What We Learned",
+    "order": 9,
+    "actions": [
+      {
+        "id": "action_LWBtPUYU",
+        "type": "spotlight",
+        "elementId": "el_title"
+      },
+      {
+        "id": "action_1gPb3i5a",
+        "type": "speech",
+        "text": "Let's look at this slide together."
+      },
+      {
+        "id": "action_2y0FBRij",
+        "type": "spotlight",
+        "elementId": "el_body"
+      },
+      {
+        "id": "action_Zu0h1Rh0",
+        "type": "speech",
+        "text": "Notice the key idea here."
+      },
+      {
+        "id": "action_kB9qLqLO",
+        "type": "speech",
+        "text": "Take a moment to think about it."
+      }
+    ],
+    "createdAt": 1777912996544,
+    "updatedAt": 1777912996544,
+    "type": "slide",
+    "content": {
+      "type": "slide",
+      "canvas": {
+        "id": "Fi5XPBM6emjj",
+        "viewportSize": 1000,
+        "viewportRatio": 0.5625,
+        "theme": {
+          "backgroundColor": "#ffffff",
+          "themeColors": [
+            "#5b9bd5",
+            "#ed7d31",
+            "#a5a5a5",
+            "#ffc000",
+            "#4472c4"
+          ],
+          "fontColor": "#333333",
+          "fontName": "Microsoft YaHei",
+          "outline": {
+            "color": "#d14424",
+            "width": 2,
+            "style": "solid"
+          },
+          "shadow": {
+            "h": 0,
+            "v": 0,
+            "blur": 10,
+            "color": "#000000"
+          }
+        },
+        "elements": [
+          {
+            "id": "el_title",
+            "type": "text",
+            "left": 50,
+            "top": 50,
+            "width": 900,
+            "height": 80,
+            "content": "<h1>Slide Title</h1>"
+          },
+          {
+            "id": "el_body",
+            "type": "text",
+            "left": 50,
+            "top": 150,
+            "width": 900,
+            "height": 350,
+            "content": "<p>Key points body content.</p>"
+          }
+        ],
+        "background": {
+          "type": "solid",
+          "color": "#ffffff"
+        }
+      }
+    }
+  },
+  {
+    "id": "Wq3OHE66TuL0",
+    "stageId": "stage_Er4P3ODp",
+    "title": "Next Steps",
+    "order": 10,
+    "actions": [
+      {
+        "id": "action_EG2Iz6vm",
+        "type": "spotlight",
+        "elementId": "el_title"
+      },
+      {
+        "id": "action_qt3kHvDR",
+        "type": "speech",
+        "text": "Let's look at this slide together."
+      },
+      {
+        "id": "action_d5V8EqCB",
+        "type": "spotlight",
+        "elementId": "el_body"
+      },
+      {
+        "id": "action_MpOnn5lw",
+        "type": "speech",
+        "text": "Notice the key idea here."
+      },
+      {
+        "id": "action_lrS7WZ7L",
+        "type": "speech",
+        "text": "Take a moment to think about it."
+      }
+    ],
+    "createdAt": 1777912996544,
+    "updatedAt": 1777912996544,
+    "type": "slide",
+    "content": {
+      "type": "slide",
+      "canvas": {
+        "id": "Uwe7Yn2BTUoc",
+        "viewportSize": 1000,
+        "viewportRatio": 0.5625,
+        "theme": {
+          "backgroundColor": "#ffffff",
+          "themeColors": [
+            "#5b9bd5",
+            "#ed7d31",
+            "#a5a5a5",
+            "#ffc000",
+            "#4472c4"
+          ],
+          "fontColor": "#333333",
+          "fontName": "Microsoft YaHei",
+          "outline": {
+            "color": "#d14424",
+            "width": 2,
+            "style": "solid"
+          },
+          "shadow": {
+            "h": 0,
+            "v": 0,
+            "blur": 10,
+            "color": "#000000"
+          }
+        },
+        "elements": [
+          {
+            "id": "el_title",
+            "type": "text",
+            "left": 50,
+            "top": 50,
+            "width": 900,
+            "height": 80,
+            "content": "<h1>Slide Title</h1>"
+          },
+          {
+            "id": "el_body",
+            "type": "text",
+            "left": 50,
+            "top": 150,
+            "width": 900,
+            "height": 350,
+            "content": "<p>Key points body content.</p>"
+          }
+        ],
+        "background": {
+          "type": "solid",
+          "color": "#ffffff"
+        }
+      }
+    }
+  }
+]

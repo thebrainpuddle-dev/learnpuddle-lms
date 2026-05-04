@@ -1,0 +1,140 @@
+{
+  "outlines": [
+    {
+      "order": 1,
+      "type": "slide",
+      "title": "What Is a Fraction?",
+      "description": "Introduce fractions with a pizza-slice visual.",
+      "keyPoints": [
+        "A fraction is a part of a whole.",
+        "The whole is the full pizza.",
+        "A slice is part of that whole."
+      ],
+      "id": "NR9rOKVYY3Y"
+    },
+    {
+      "order": 2,
+      "type": "slide",
+      "title": "Numerator and Denominator",
+      "description": "Define both halves of the fraction notation.",
+      "keyPoints": [
+        "The numerator is the top number \u2014 how many parts you have.",
+        "The denominator is the bottom number \u2014 total parts in the whole.",
+        "Together they tell you 'how many out of how many'."
+      ],
+      "id": "e0Kmw9flrLSb"
+    },
+    {
+      "order": 3,
+      "type": "slide",
+      "title": "Reading Fractions Aloud",
+      "description": "Practice naming fractions like 1/2, 3/4.",
+      "keyPoints": [
+        "1/2 is read as 'one half'.",
+        "1/4 is read as 'one quarter'.",
+        "3/4 is read as 'three quarters'."
+      ],
+      "id": "8PJPJWAiGPD"
+    },
+    {
+      "order": 4,
+      "type": "slide",
+      "title": "Fractions in Daily Life",
+      "description": "Show pizza, chocolate bar, glass of water examples.",
+      "keyPoints": [
+        "A pizza cut in 8 slices and you eat 3 \u2014 you ate 3/8.",
+        "A chocolate bar with 12 squares \u2014 you give 4 to a friend, you have 8/12 left.",
+        "A water glass half full is 1/2."
+      ],
+      "id": "uLYPJcEHSsBx"
+    },
+    {
+      "order": 5,
+      "type": "quiz",
+      "title": "Quick Check: Numerator vs Denominator",
+      "description": "3-question quiz on identifying parts of a fraction.",
+      "keyPoints": [
+        "Identify the numerator in 5/8.",
+        "Identify the denominator in 3/7.",
+        "Match the fraction to a pizza diagram."
+      ],
+      "quizConfig": {
+        "questionCount": 3,
+        "difficulty": "easy",
+        "questionTypes": [
+          "single"
+        ]
+      },
+      "id": "zhnqR61Hi2f"
+    },
+    {
+      "order": 6,
+      "type": "interactive",
+      "title": "Fraction Builder Simulation",
+      "description": "Drag slices to build a fraction visually.",
+      "keyPoints": [
+        "Adjust the denominator to set total parts.",
+        "Adjust the numerator to color slices.",
+        "Watch the fraction notation update live."
+      ],
+      "widgetType": "simulation",
+      "widgetOutline": {
+        "concept": "Fraction Builder",
+        "keyVariables": [
+          "numerator",
+          "denominator"
+        ]
+      },
+      "id": "GViGdWxnq7Gl"
+    },
+    {
+      "order": 7,
+      "type": "slide",
+      "title": "Equal Parts Matter",
+      "description": "Why each slice must be the same size.",
+      "keyPoints": [
+        "Fractions only work when the parts are equal.",
+        "Three uneven slices is NOT 1/3.",
+        "Cutting a pizza into 4 equal slices makes each slice exactly 1/4."
+      ],
+      "id": "iS7GNN9bcYg"
+    },
+    {
+      "order": 8,
+      "type": "slide",
+      "title": "Common Mistakes",
+      "description": "Watch out for flipped fractions.",
+      "keyPoints": [
+        "3/4 and 4/3 are very different \u2014 order matters.",
+        "3/4 is less than a whole; 4/3 is more than a whole.",
+        "Always count carefully."
+      ],
+      "id": "LnueNRHJnHtK"
+    },
+    {
+      "order": 9,
+      "type": "slide",
+      "title": "Recap: What We Learned",
+      "description": "Wrap up the lesson.",
+      "keyPoints": [
+        "Numerator on top.",
+        "Denominator on bottom.",
+        "Fractions need equal parts."
+      ],
+      "id": "BYQpo0rsNAuc"
+    },
+    {
+      "order": 10,
+      "type": "slide",
+      "title": "Next Steps",
+      "description": "Preview future lessons.",
+      "keyPoints": [
+        "Next we'll add fractions.",
+        "Then we'll compare fractions.",
+        "Practice helps everything click."
+      ],
+      "id": "kEPQxQeKFw"
+    }
+  ],
+  "languageDirective": "Deliver the entire course in English. Use simple, concrete vocabulary suitable for 4th-grade students. Avoid jargon; introduce one new term at a time with a worked example."
+}

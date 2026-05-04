@@ -65,11 +65,18 @@ def test_parity_runner_exports_public_surface():
 # ── fixture loader ────────────────────────────────────────────────
 
 
-def test_list_fixtures_returns_empty_for_skeleton():
-    """In the skeleton (MAIC-430.0), no fixtures exist yet.
-    `list_fixtures()` must return [] without raising — Session 5's
-    MAIC-430.A drops the actual fixtures into place."""
-    assert list_fixtures() == []
+def test_list_fixtures_returns_the_five_adr_005_fixtures():
+    """At MAIC-430.A the 5-fixture set is locked: numerator-denominator
+    (named) + 4 covering STEM, humanities, languages, mixed. The
+    Pass-A test parametrizes against this list."""
+    fixtures = set(list_fixtures())
+    assert fixtures == {
+        "numerator-denominator",
+        "photosynthesis-stem",
+        "french-revolution-humanities",
+        "spanish-greetings-languages",
+        "data-types-mixed",
+    }
 
 
 def test_load_fixture_raises_clear_error_when_missing():
