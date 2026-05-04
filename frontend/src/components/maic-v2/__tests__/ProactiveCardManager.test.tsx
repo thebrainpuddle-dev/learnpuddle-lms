@@ -4,27 +4,47 @@
  * The MAIC-411.2 risk regression net: never re-render a card for an
  * already-consumed discussion. Manager reads engine.getSnapshot()
  * .consumedDiscussions synchronously on every render — no caching.
+ *
+ * Per the project's no-mocks rule, these tests use a REAL
+ * `PlaybackEngine` instance (with real `AudioPlayer` + `ActionEngine`
+ * deps) and seed the consumed-discussions set via the engine's
+ * public `restoreFromSnapshot` API — the same path the persistence
+ * layer (MAIC-412) uses in production.
  */
 import { describe, expect, test, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 
+import { ActionEngine } from '../../../lib/maic-v2/action-engine';
+import { AudioPlayer } from '../../../lib/maic-v2/audio-player';
+import { PlaybackEngine } from '../../../lib/maic-v2/playback-engine';
 import { ProactiveCardManager } from '../ProactiveCardManager';
-import type { PlaybackEngine } from '../../../lib/maic-v2/playback-engine';
-import type { PlaybackSnapshot, TriggerEvent } from '../../../lib/maic-v2/playback-types';
+import type { TriggerEvent } from '../../../lib/maic-v2/playback-types';
 
 
-/** Minimal engine stub — we only need `getSnapshot()` for these tests. */
-function makeEngineStub(consumedDiscussions: string[]): PlaybackEngine {
-  const stub: Partial<PlaybackEngine> = {
-    getSnapshot(): PlaybackSnapshot {
-      return {
-        sceneIndex: 0,
-        actionIndex: 0,
-        consumedDiscussions,
-      };
-    },
-  };
-  return stub as PlaybackEngine;
+/**
+ * Build a real PlaybackEngine with a seeded `consumedDiscussions` set.
+ * No stubs — real constructor path; `restoreFromSnapshot` is the
+ * production-real API for setting consumed-IDs (MAIC-412 calls it
+ * on every page reload).
+ */
+function makeEngine(consumedDiscussions: string[] = []): PlaybackEngine {
+  const audioPlayer = new AudioPlayer();
+  const actionEngine = new ActionEngine({ delay: () => Promise.resolve() });
+  const engine = new PlaybackEngine(
+    [{ id: 's1', actions: [] }],
+    actionEngine,
+    audioPlayer,
+    {},
+  );
+  if (consumedDiscussions.length > 0) {
+    engine.restoreFromSnapshot({
+      sceneIndex: 0,
+      actionIndex: 0,
+      consumedDiscussions,
+      sceneId: 's1',
+    });
+  }
+  return engine;
 }
 
 
@@ -41,7 +61,7 @@ describe('ProactiveCardManager', () => {
   test('renders nothing when trigger is null', () => {
     const { container } = render(
       <ProactiveCardManager
-        engine={makeEngineStub([])}
+        engine={makeEngine()}
         trigger={null}
         onJoin={() => {}}
         onSkip={() => {}}
@@ -54,7 +74,7 @@ describe('ProactiveCardManager', () => {
   test('renders a ProactiveCard when trigger is set and NOT consumed', () => {
     render(
       <ProactiveCardManager
-        engine={makeEngineStub([])}
+        engine={makeEngine()}
         trigger={makeTrigger({ id: 'd-fresh' })}
         onJoin={() => {}}
         onSkip={() => {}}
@@ -72,7 +92,7 @@ describe('ProactiveCardManager', () => {
     // filter catches it. The manager adds a second-line check.
     const { container } = render(
       <ProactiveCardManager
-        engine={makeEngineStub(['d-consumed'])}
+        engine={makeEngine(['d-consumed'])}
         trigger={makeTrigger({ id: 'd-consumed' })}
         onJoin={() => {}}
         onSkip={() => {}}
@@ -88,7 +108,7 @@ describe('ProactiveCardManager', () => {
     const onSkip = vi.fn();
     render(
       <ProactiveCardManager
-        engine={makeEngineStub([])}
+        engine={makeEngine()}
         trigger={makeTrigger()}
         onJoin={onJoin}
         onSkip={onSkip}
@@ -101,20 +121,15 @@ describe('ProactiveCardManager', () => {
   });
 
   test('reads consumedDiscussions on EVERY render (no caching)', () => {
-    // If the manager ever caches the consumed-set in module-level
-    // state, this test catches it: the same trigger toggles between
-    // shown / dropped as the engine's set mutates between renders.
-    let consumed: string[] = [];
-    const stubEngine: Partial<PlaybackEngine> = {
-      getSnapshot(): PlaybackSnapshot {
-        return { sceneIndex: 0, actionIndex: 0, consumedDiscussions: consumed };
-      },
-    };
-
+    // If the manager ever caches the consumed-set, this test catches
+    // it: the same trigger toggles between shown / dropped as we
+    // mutate the engine's consumed-set between renders via the
+    // production-real `restoreFromSnapshot` path.
+    const engine = makeEngine();
     const trigger = makeTrigger({ id: 'd-toggle' });
     const { rerender, container } = render(
       <ProactiveCardManager
-        engine={stubEngine as PlaybackEngine}
+        engine={engine}
         trigger={trigger}
         onJoin={() => {}}
         onSkip={() => {}}
@@ -123,11 +138,18 @@ describe('ProactiveCardManager', () => {
     // First render: not consumed → shown
     expect(screen.getByTestId('maic-v2-proactive-card')).toBeInTheDocument();
 
-    // Mutate the consumed-set, then re-render with the same trigger.
-    consumed = ['d-toggle'];
+    // Mutate the engine's consumed-set via real restoreFromSnapshot
+    // (same path the persistence layer uses on page reload), then
+    // re-render with the same trigger.
+    engine.restoreFromSnapshot({
+      sceneIndex: 0,
+      actionIndex: 0,
+      consumedDiscussions: ['d-toggle'],
+      sceneId: 's1',
+    });
     rerender(
       <ProactiveCardManager
-        engine={stubEngine as PlaybackEngine}
+        engine={engine}
         trigger={trigger}
         onJoin={() => {}}
         onSkip={() => {}}
