@@ -572,3 +572,97 @@ describe('PlaybackEngine browser-TTS fallback', () => {
     vi.useRealTimers();
   });
 });
+
+
+// ── Browser-TTS pause/resume parity (MAIC-413.3) ──────────────────
+
+
+describe('PlaybackEngine browser-TTS pause/resume parity', () => {
+  function makeLongSpeechEngine() {
+    const longText = Array.from({ length: 80 }, () => 'word').join(' ');
+    const stub = new StubBrowserTts();
+    const events: string[] = [];
+    const result = makeEngine(
+      [{ id: 's', actions: [speechAction('a1', longText)] }],
+      {
+        onSpeechStart: () => events.push('start'),
+        onSpeechEnd: () => events.push('end'),
+        onComplete: () => events.push('complete'),
+        onModeChange: (m) => events.push(`mode:${m}`),
+      },
+      undefined,
+      stub,
+    );
+    result.player.playReturn = false;
+    return { ...result, stub, events };
+  }
+
+  test('pause() forwards to browserTts.pause when BrowserTTS active', async () => {
+    const { engine, stub } = makeLongSpeechEngine();
+    engine.start();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(stub.speakCalls).toHaveLength(1);
+    expect(stub.pauseCalls).toBe(0);
+
+    engine.pause();
+    expect(stub.pauseCalls).toBe(1);
+    expect(engine.getMode()).toBe('paused');
+  });
+
+  test('resume() forwards to browserTts.resume after a pause', async () => {
+    const { engine, stub } = makeLongSpeechEngine();
+    engine.start();
+    await Promise.resolve();
+    await Promise.resolve();
+    engine.pause();
+    expect(stub.pauseCalls).toBe(1);
+    expect(stub.resumeCalls).toBe(0);
+
+    engine.resume();
+    expect(stub.resumeCalls).toBe(1);
+    expect(engine.getMode()).toBe('playing');
+  });
+
+  test('resume completes naturally via the existing onEnded callback', async () => {
+    const { engine, stub, events } = makeLongSpeechEngine();
+    engine.start();
+    await Promise.resolve();
+    await Promise.resolve();
+    engine.pause();
+    engine.resume();
+    // Speech finishes while resumed → fire the saved onEnded
+    stub.fireOnEnded();
+    await Promise.resolve();
+    expect(events).toContain('end');
+    expect(events).toContain('complete');
+  });
+
+  test('pause() does NOT forward to browserTts when not active', () => {
+    const stub = new StubBrowserTts();
+    const { engine, player } = makeEngine(
+      [{ id: 's', actions: [speechAction('a1', 'hi', 'data:audio/mp3;base64,a')] }],
+      {},
+      undefined,
+      stub,
+    );
+    // Audio path is active, not browser-TTS
+    engine.start();
+    player.fireEnded();  // wraps speech up but doesn't matter here
+    engine.pause();  // While in playing/paused — but _browserTtsActive=false
+    expect(stub.pauseCalls).toBe(0);
+  });
+
+  test('multiple pause/resume cycles each forward to browserTts', async () => {
+    const { engine, stub } = makeLongSpeechEngine();
+    engine.start();
+    await Promise.resolve();
+    await Promise.resolve();
+    engine.pause();
+    engine.resume();
+    engine.pause();
+    engine.resume();
+    expect(stub.pauseCalls).toBe(2);
+    expect(stub.resumeCalls).toBe(2);
+  });
+});

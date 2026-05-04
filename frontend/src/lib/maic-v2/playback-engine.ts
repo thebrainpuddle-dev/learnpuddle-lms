@@ -206,6 +206,12 @@ export class PlaybackEngine {
       if (!this.currentTrigger && this.audioPlayer.isPlaying()) {
         this.audioPlayer.pause();
       }
+      // MAIC-413.3: forward pause to browser-TTS when it owns the
+      // current speech. The provider's own watchdog freezes alongside
+      // so resume() doesn't fire spuriously while we're paused.
+      if (this._browserTtsActive) {
+        this.browserTts.pause();
+      }
     } else if (this.mode === 'live') {
       this.setMode('paused');
       this.currentTopicState = 'pending';
@@ -240,6 +246,12 @@ export class PlaybackEngine {
     if (this.audioPlayer.hasActiveAudio()) {
       this.audioPlayer.resume();
       // onEnded will fire processNext when audio completes.
+    } else if (this._browserTtsActive) {
+      // MAIC-413.3: browser-TTS owns the current speech.
+      // `browserTts.resume()` rearms its internal watchdog with the
+      // remaining time captured at pause(); the existing onEnded
+      // callback continues to drive processNext when speech finishes.
+      this.browserTts.resume();
     } else if (this.speechTimerRemaining > 0) {
       // Reading-time path: reschedule with remaining ms.
       this.speechTimerStart = Date.now();
