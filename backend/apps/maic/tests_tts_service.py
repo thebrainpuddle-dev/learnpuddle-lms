@@ -13,6 +13,8 @@ from __future__ import annotations
 import asyncio
 import base64
 import os
+import sys
+import types
 from typing import Any
 
 import pytest
@@ -722,6 +724,224 @@ async def test_elevenlabs_empty_text_short_circuits(fake_elevenlabs_aiohttp, ele
     result = await synthesize_speech("", audio_id="aud-el-9")
     assert result.audio_b64 == ""
     assert _FakeElevenLabsSession.last_request == {}
+
+
+# ── MAIC-501.C: provider fallback chain ───────────────────────────────
+# When the primary provider fails (auth, quota, network), synthesize_speech
+# walks MAIC_TTS_FALLBACK_CHAIN. Each fallback uses SERVER-WIDE env keys,
+# not the tenant's primary api_key, which only authenticates against
+# their pinned provider.
+
+
+@pytest.mark.asyncio
+async def test_fallback_chain_recovers_when_primary_fails(monkeypatch):
+    """Primary elevenlabs fails (HTTP 402 quota_exceeded) → chain walks
+    to edge_tts which succeeds. Caller never sees the elevenlabs error."""
+
+    # Primary elevenlabs returns 402.
+    class _ElevenQuotaSession:
+        def __init__(self, *_a, **_kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *_a): return None
+        def post(self, *_a, **_kw):
+            class _R:
+                status = 402
+                async def __aenter__(self): return self
+                async def __aexit__(self, *_a): return None
+                async def text(self): return "quota_exceeded"
+                async def read(self): return b""
+            return _R()
+
+    fake_aiohttp = types.ModuleType("aiohttp")
+    fake_aiohttp.ClientSession = _ElevenQuotaSession  # type: ignore[attr-defined]
+    fake_aiohttp.ClientError = ConnectionError  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "aiohttp", fake_aiohttp)
+
+    # edge_tts always succeeds with a fixed payload.
+    fake_edge = types.ModuleType("edge_tts")
+    class _OkComm:
+        def __init__(self, *_a, **_kw): pass
+        async def stream(self):
+            yield {"type": "audio", "data": b"\xff\xfb\x90fallback-edge"}
+    fake_edge.Communicate = _OkComm  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "edge_tts", fake_edge)
+
+    monkeypatch.setenv("MAIC_TTS_PROVIDER", "elevenlabs")
+    monkeypatch.setenv("MAIC_TTS_FALLBACK_CHAIN", "edge")
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "k")
+
+    result = await synthesize_speech("hi", audio_id="aud-fb-1")
+    # Got audio from edge despite primary quota error
+    assert base64.b64decode(result.audio_b64) == b"\xff\xfb\x90fallback-edge"
+
+
+@pytest.mark.asyncio
+async def test_fallback_chain_walks_in_order_minimax_then_edge(monkeypatch):
+    """ElevenLabs fails → Minimax fails → edge succeeds. All three
+    providers are exercised in order."""
+    from collections import deque
+
+    # aiohttp.post returns failures for the first 2 calls (elevenlabs, minimax),
+    # but only edge_tts is wired through edge_tts.Communicate, so any aiohttp
+    # call from elevenlabs or minimax just always fails the same way.
+    class _AlwaysFailSession:
+        def __init__(self, *_a, **_kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *_a): return None
+        def post(self, *_a, **_kw):
+            class _R:
+                status = 500
+                async def __aenter__(self): return self
+                async def __aexit__(self, *_a): return None
+                async def text(self): return "upstream broken"
+                async def read(self): return b""
+            return _R()
+
+    fake_aiohttp = types.ModuleType("aiohttp")
+    fake_aiohttp.ClientSession = _AlwaysFailSession  # type: ignore[attr-defined]
+    fake_aiohttp.ClientError = ConnectionError  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "aiohttp", fake_aiohttp)
+
+    # edge_tts succeeds — the safety net
+    fake_edge = types.ModuleType("edge_tts")
+    class _OkComm:
+        def __init__(self, *_a, **_kw): pass
+        async def stream(self):
+            yield {"type": "audio", "data": b"\xff\xfb\x90rescued-by-edge"}
+    fake_edge.Communicate = _OkComm  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "edge_tts", fake_edge)
+
+    monkeypatch.setenv("MAIC_TTS_PROVIDER", "elevenlabs")
+    monkeypatch.setenv("MAIC_TTS_FALLBACK_CHAIN", "minimax,edge")
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "el-k")
+    monkeypatch.setenv("MINIMAX_API_KEY", "mm-k")
+
+    result = await synthesize_speech("hi", audio_id="aud-fb-2")
+    assert base64.b64decode(result.audio_b64) == b"\xff\xfb\x90rescued-by-edge"
+
+
+@pytest.mark.asyncio
+async def test_fallback_chain_raises_last_error_when_all_exhausted(monkeypatch):
+    """If every provider in the chain fails, surface the LAST error
+    (admin debugging signal: 'this is what hit when we were already out
+    of options')."""
+
+    class _AlwaysFailSession:
+        def __init__(self, *_a, **_kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *_a): return None
+        def post(self, *_a, **_kw):
+            class _R:
+                status = 500
+                async def __aenter__(self): return self
+                async def __aexit__(self, *_a): return None
+                async def text(self): return "upstream broken"
+                async def read(self): return b""
+            return _R()
+
+    fake_aiohttp = types.ModuleType("aiohttp")
+    fake_aiohttp.ClientSession = _AlwaysFailSession  # type: ignore[attr-defined]
+    fake_aiohttp.ClientError = ConnectionError  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "aiohttp", fake_aiohttp)
+
+    # edge_tts also blows up (simulated outage of even the fallback)
+    fake_edge = types.ModuleType("edge_tts")
+    class _BrokenEdge:
+        def __init__(self, *_a, **_kw): pass
+        async def stream(self):
+            raise ConnectionError("edge_tts WebSocket dropped")
+            yield  # pragma: no cover
+    fake_edge.Communicate = _BrokenEdge  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "edge_tts", fake_edge)
+
+    monkeypatch.setenv("MAIC_TTS_PROVIDER", "elevenlabs")
+    monkeypatch.setenv("MAIC_TTS_FALLBACK_CHAIN", "minimax,edge")
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "el-k")
+    monkeypatch.setenv("MINIMAX_API_KEY", "mm-k")
+
+    with pytest.raises(SpeechSynthesisError) as exc_info:
+        await synthesize_speech("hi", audio_id="aud-fb-3")
+    # LAST error in chain was edge's WebSocket drop — that's what surfaces
+    assert "edge_tts" in str(exc_info.value).lower() or "websocket" in str(exc_info.value).lower()
+
+
+@pytest.mark.asyncio
+async def test_no_fallback_chain_propagates_primary_error(monkeypatch, fake_aiohttp, minimax_env):
+    """When MAIC_TTS_FALLBACK_CHAIN is empty/unset, primary failures
+    propagate unchanged — no surprise fallback kicks in."""
+
+    class _Err500Session(_FakeMinimaxSession):
+        response_factory = staticmethod(
+            lambda: _FakeMinimaxResponse(500, body="upstream down")
+        )
+
+    _install_fake_aiohttp(monkeypatch, session_cls=_Err500Session)
+    monkeypatch.delenv("MAIC_TTS_FALLBACK_CHAIN", raising=False)
+
+    with pytest.raises(SpeechSynthesisError, match="HTTP 500"):
+        await synthesize_speech("hi", audio_id="aud-fb-4")
+
+
+@pytest.mark.asyncio
+async def test_fallback_chain_drops_tenant_voice_for_fallback_providers(monkeypatch):
+    """Voice id from provider A is meaningless to provider B (e.g., an
+    ElevenLabs UUID won't resolve in Minimax). When falling back, voice
+    is dropped — fallback uses its own default."""
+
+    # Primary elevenlabs fails immediately.
+    class _ElevenFailSession:
+        def __init__(self, *_a, **_kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *_a): return None
+        def post(self, *_a, **_kw):
+            class _R:
+                status = 401
+                async def __aenter__(self): return self
+                async def __aexit__(self, *_a): return None
+                async def text(self): return "unauthorized"
+                async def read(self): return b""
+            return _R()
+
+    fake_aiohttp = types.ModuleType("aiohttp")
+    fake_aiohttp.ClientSession = _ElevenFailSession  # type: ignore[attr-defined]
+    fake_aiohttp.ClientError = ConnectionError  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "aiohttp", fake_aiohttp)
+
+    # Capture the voice that edge_tts gets
+    captured: dict[str, Any] = {}
+    fake_edge = types.ModuleType("edge_tts")
+    class _CaptureComm:
+        def __init__(self, text: str, voice: str, rate: str = "+0%"):
+            captured["voice"] = voice
+        async def stream(self):
+            yield {"type": "audio", "data": b"\xff\xfb\x90"}
+    fake_edge.Communicate = _CaptureComm  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "edge_tts", fake_edge)
+
+    monkeypatch.setenv("MAIC_TTS_PROVIDER", "elevenlabs")
+    monkeypatch.setenv("MAIC_TTS_FALLBACK_CHAIN", "edge")
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "k")
+
+    # Caller pins an ElevenLabs voice; fallback to edge MUST NOT use it
+    await synthesize_speech(
+        "hi", audio_id="aud-fb-5",
+        voice="EXAVITQu4vr4xnSDxMaL",  # Sarah — only meaningful to ElevenLabs
+    )
+    # edge falls back to its default voice (Aria)
+    assert captured["voice"] == "en-US-AriaNeural"
+
+
+def test_fallback_chain_parses_csv_and_dedupes(monkeypatch):
+    """Chain parser handles whitespace, blanks, dupes, and excludes the primary."""
+    from apps.maic.tts.service import _fallback_chain
+    monkeypatch.setenv("MAIC_TTS_FALLBACK_CHAIN", "minimax, edge ,, elevenlabs , minimax")
+    # Primary excluded; first occurrence wins; blanks dropped
+    assert _fallback_chain(exclude="elevenlabs") == ["minimax", "edge"]
+    # Empty chain
+    monkeypatch.setenv("MAIC_TTS_FALLBACK_CHAIN", "")
+    assert _fallback_chain(exclude="edge") == []
+    monkeypatch.delenv("MAIC_TTS_FALLBACK_CHAIN", raising=False)
+    assert _fallback_chain(exclude="edge") == []
 
 
 # ── Manual / live Minimax smoke (gated by env flag) ──────────────────

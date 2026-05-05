@@ -80,6 +80,7 @@ _DEFAULT_ELEVENLABS_VOICE: Final = "EXAVITQu4vr4xnSDxMaL"
 # synthesize_speech; each respects the same async signature
 # (text, voice, speed, …) -> bytes (raw audio).
 _PROVIDER_ENV: Final = "MAIC_TTS_PROVIDER"
+_FALLBACK_CHAIN_ENV: Final = "MAIC_TTS_FALLBACK_CHAIN"
 _PROVIDER_EDGE: Final = "edge"
 _PROVIDER_MINIMAX: Final = "minimax"
 _PROVIDER_ELEVENLABS: Final = "elevenlabs"
@@ -134,15 +135,93 @@ async def synthesize_speech(
     if not text:
         return SpeechAudio(audio_id=audio_id, audio_b64="", format="mp3")
 
-    chosen = (provider or _provider()).strip().lower()
-    if chosen == _PROVIDER_EDGE:
+    primary = (provider or _provider()).strip().lower()
+    try:
+        return await _synthesize_with_provider(
+            primary, text,
+            audio_id=audio_id,
+            voice=voice, speed=speed,
+            api_key=api_key, base_url=base_url, model=model,
+        )
+    except SpeechSynthesisError as primary_exc:
+        # Walk the fallback chain. Fallbacks use server-wide env-var
+        # keys (MINIMAX_API_KEY, ELEVENLABS_API_KEY) — NOT the tenant's
+        # primary api_key, which only applies to their pinned provider.
+        # `voice` is also dropped on fallback because a voice id from
+        # provider A (e.g. ElevenLabs UUID) is meaningless to provider
+        # B (Minimax slug). Each fallback uses its own default voice
+        # via the rotation-or-default ladder.
+        chain = _fallback_chain(exclude=primary)
+        if not chain:
+            raise
+
+        last_exc = primary_exc
+        for fb in chain:
+            try:
+                logger.warning(
+                    "tts: primary %r failed (%s); falling back to %r",
+                    primary, primary_exc, fb,
+                )
+                return await _synthesize_with_provider(
+                    fb, text,
+                    audio_id=audio_id,
+                    voice=None, speed=speed,
+                    api_key=None, base_url=None, model=None,
+                )
+            except SpeechSynthesisError as fb_exc:
+                logger.warning("tts: fallback %r also failed: %s", fb, fb_exc)
+                last_exc = fb_exc
+                continue
+
+        # All fallbacks exhausted — raise the LAST error so the caller
+        # sees what the bottom of the chain reported (usually edge_tts
+        # when it's the only one without keys).
+        raise last_exc
+
+
+# ── Provider dispatch helpers ─────────────────────────────────────────
+
+
+def _fallback_chain(exclude: str) -> list[str]:
+    """Parse MAIC_TTS_FALLBACK_CHAIN into a deduplicated, lowercased
+    provider list with the primary already removed.
+
+    Empty or unset env var → empty list (no fallback). Whitespace and
+    blank entries are tolerated so an admin can comment-style edit.
+    """
+    raw = os.environ.get(_FALLBACK_CHAIN_ENV, "")
+    seen: set[str] = {exclude}
+    chain: list[str] = []
+    for item in raw.split(","):
+        token = item.strip().lower()
+        if token and token not in seen:
+            seen.add(token)
+            chain.append(token)
+    return chain
+
+
+async def _synthesize_with_provider(
+    provider: str,
+    text: str,
+    *,
+    audio_id: str,
+    voice: str | None,
+    speed: float,
+    api_key: str | None,
+    base_url: str | None,
+    model: str | None,
+) -> SpeechAudio:
+    """Single-provider synthesis. Raises SpeechSynthesisError on any
+    provider-specific failure so the fallback-chain caller can decide
+    whether to try the next provider."""
+    if provider == _PROVIDER_EDGE:
         audio_bytes = await _edge_tts_synthesize(text, voice or _DEFAULT_EDGE_VOICE, speed)
         return SpeechAudio(
             audio_id=audio_id,
             audio_b64=base64.b64encode(audio_bytes).decode("ascii"),
             format="mp3",
         )
-    if chosen == _PROVIDER_MINIMAX:
+    if provider == _PROVIDER_MINIMAX:
         audio_bytes = await _minimax_synthesize(
             text,
             voice=voice or _DEFAULT_MINIMAX_VOICE,
@@ -156,7 +235,7 @@ async def synthesize_speech(
             audio_b64=base64.b64encode(audio_bytes).decode("ascii"),
             format="mp3",
         )
-    if chosen == _PROVIDER_ELEVENLABS:
+    if provider == _PROVIDER_ELEVENLABS:
         audio_bytes = await _elevenlabs_synthesize(
             text,
             voice=voice or _DEFAULT_ELEVENLABS_VOICE,
@@ -172,7 +251,7 @@ async def synthesize_speech(
         )
 
     raise SpeechSynthesisError(
-        f"unknown TTS provider {chosen!r}; "
+        f"unknown TTS provider {provider!r}; "
         f"set {_PROVIDER_ENV}=edge|minimax|elevenlabs (or pass provider=)"
     )
 
