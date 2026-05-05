@@ -1,17 +1,24 @@
 // src/components/maic/PBLRenderer.tsx
 //
-// Project-Based Learning renderer. Displays project overview, role selection,
-// issue board with status tracking, deliverables checklist, and a simple AI
-// chat panel for agent feedback via SSE streaming.
+// Project-Based Learning renderer (Phase 7, MAIC-705).
 //
-// Phase 3C: replaced simple milestones checklist with a 3-column issue board.
+// Reads upstream's `PBLProjectConfig` shape from
+// `content.projectConfig` (lifted from THU-MAIC/OpenMAIC's
+// `lib/pbl/types.ts` under ADR-001a). Three panels:
+//   1. Role selector  — built from agents where `is_user_role` is true
+//   2. Issue board    — 3 columns driven by `is_active` / `is_done`
+//   3. Chat panel     — sends to legacy SSE endpoint until MAIC-706
+//                       swaps in the WS hook for /ws/maic/pbl/<id>/
+//
+// Issue status is DERIVED from upstream's flags rather than held in
+// local state — the Judge agent's `COMPLETE` verdict (handled
+// server-side at apps/maic_pbl/consumers.py) is what advances issues,
+// and the renderer just reflects whatever the backend persisted.
 
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import {
   Users,
   Target,
-  CheckSquare,
-  PackageCheck,
   Send,
   Loader2,
 } from 'lucide-react';
@@ -19,21 +26,20 @@ import { useAuthStore } from '../../stores/authStore';
 import { streamMAIC } from '../../lib/maicSSE';
 import type { MAICSSEEvent } from '../../types/maic';
 import type { MAICPBLContent } from '../../types/maic-scenes';
+import type { PBLAgent, PBLIssue } from '../../types/pbl';
 import { cn } from '../../lib/utils';
 import { maicChatUrl, type MAICRole } from '../../lib/maic/endpoints';
 
 // ─── Issue Board Types ───────────────────────────────────────────────────────
 
 type IssueStatus = 'pending' | 'active' | 'done';
-type IssuePriority = 'low' | 'medium' | 'high';
 
-interface PBLIssue {
+interface BoardIssue {
   id: string;
   title: string;
   description: string;
   status: IssueStatus;
-  assignee?: string; // role id
-  priority?: IssuePriority;
+  personInCharge: string;
 }
 
 // ─── Component Props ─────────────────────────────────────────────────────────
@@ -52,22 +58,6 @@ interface ChatMessage {
   content: string;
 }
 
-// ─── Status cycling helper ───────────────────────────────────────────────────
-
-const STATUS_CYCLE: Record<IssueStatus, IssueStatus> = {
-  pending: 'active',
-  active: 'done',
-  done: 'pending',
-};
-
-// ─── Priority dot color ──────────────────────────────────────────────────────
-
-const PRIORITY_DOT_COLOR: Record<IssuePriority, string> = {
-  low: 'bg-green-500',
-  medium: 'bg-yellow-500',
-  high: 'bg-red-500',
-};
-
 // ─── Column config ───────────────────────────────────────────────────────────
 
 const COLUMNS: { key: IssueStatus; label: string; headerColor: string; badgeBg: string }[] = [
@@ -76,69 +66,56 @@ const COLUMNS: { key: IssueStatus; label: string; headerColor: string; badgeBg: 
   { key: 'done', label: 'Done', headerColor: 'bg-green-500', badgeBg: 'bg-green-100 text-green-600' },
 ];
 
+function _toBoardIssue(i: PBLIssue): BoardIssue {
+  const status: IssueStatus = i.is_done ? 'done' : i.is_active ? 'active' : 'pending';
+  return {
+    id: i.id,
+    title: i.title,
+    description: i.description,
+    status,
+    personInCharge: i.person_in_charge,
+  };
+}
+
 // ─── Main Component ──────────────────────────────────────────────────────────
 
 export const PBLRenderer = React.memo<PBLRendererProps>(function PBLRenderer({
   content,
   sceneId,
-  mode = 'autonomous',
+  mode: _mode = 'autonomous',
   role,
 }) {
   const accessToken = useAuthStore((s) => s.accessToken);
+  const config = content.projectConfig;
+  const projectInfo = config.projectInfo;
 
-  const [selectedRole, setSelectedRole] = useState<string | null>(null);
+  const [selectedRole, setSelectedRole] = useState<string | null>(
+    config.selectedRole ?? null,
+  );
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [isSending, setIsSending] = useState(false);
 
-  // ─── Issue board state ──────────────────────────────────────────────────
-  const [issues, setIssues] = useState<PBLIssue[]>(() =>
-    [...content.milestones]
-      .sort((a, b) => a.order - b.order)
-      .map((m) => ({
-        id: m.id,
-        title: m.title,
-        description: m.description,
-        status: 'pending' as IssueStatus,
-        assignee: undefined,
-        priority: undefined,
-      })),
+  // ─── Derived data ───────────────────────────────────────────────────────
+
+  // Roles are agents flagged is_user_role:true (upstream design loop
+  // marks one human-driven agent per project). actor_role is the
+  // displayed label; system_prompt seeds the description blurb.
+  const userRoles = useMemo<PBLAgent[]>(
+    () => config.agents.filter((a) => a.is_user_role),
+    [config.agents],
   );
 
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const abortRef = useRef<AbortController | null>(null);
+  const issues = useMemo<BoardIssue[]>(
+    () =>
+      [...config.issueboard.issues]
+        .sort((a, b) => a.index - b.index)
+        .map(_toBoardIssue),
+    [config.issueboard.issues],
+  );
 
-  // Auto-scroll chat
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [chatMessages.length]);
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      abortRef.current?.abort();
-    };
-  }, []);
-
-  // ─── Issue board callbacks ──────────────────────────────────────────────
-
-  const updateIssueStatus = useCallback((id: string, status: IssueStatus) => {
-    setIssues((prev) =>
-      prev.map((issue) => (issue.id === id ? { ...issue, status } : issue)),
-    );
-  }, []);
-
-  const cycleIssueStatus = useCallback((id: string) => {
-    setIssues((prev) =>
-      prev.map((issue) =>
-        issue.id === id ? { ...issue, status: STATUS_CYCLE[issue.status] } : issue,
-      ),
-    );
-  }, []);
-
-  // Grouped issues per column
   const issuesByStatus = useMemo(() => {
-    const grouped: Record<IssueStatus, PBLIssue[]> = {
+    const grouped: Record<IssueStatus, BoardIssue[]> = {
       pending: [],
       active: [],
       done: [],
@@ -149,27 +126,31 @@ export const PBLRenderer = React.memo<PBLRendererProps>(function PBLRenderer({
     return grouped;
   }, [issues]);
 
-  // Overall progress
   const doneCount = issuesByStatus.done.length;
   const totalCount = issues.length;
   const progress = totalCount > 0 ? Math.round((doneCount / totalCount) * 100) : 0;
 
-  // Derive completed milestone IDs for chat context
-  const completedMilestoneIds = useMemo(
+  const completedIssueIds = useMemo(
     () => issues.filter((i) => i.status === 'done').map((i) => i.id),
     [issues],
   );
 
-  // Role lookup for assignee display
-  const roleMap = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const role of content.roles) {
-      map.set(role.id, role.name);
-    }
-    return map;
-  }, [content.roles]);
+  // ─── Refs / effects ─────────────────────────────────────────────────────
 
-  // ─── Chat handlers ─────────────────────────────────────────────────────
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [chatMessages.length]);
+
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, []);
+
+  // ─── Chat (legacy SSE; MAIC-706 swaps in WS) ───────────────────────────
 
   const handleSendChat = useCallback(async () => {
     const trimmed = chatInput.trim();
@@ -196,7 +177,7 @@ export const PBLRenderer = React.memo<PBLRendererProps>(function PBLRenderer({
         sceneId,
         context: 'pbl',
         selectedRole,
-        completedMilestones: completedMilestoneIds,
+        completedMilestones: completedIssueIds,
       },
       token: accessToken,
       signal: controller.signal,
@@ -225,7 +206,7 @@ export const PBLRenderer = React.memo<PBLRendererProps>(function PBLRenderer({
     });
 
     setIsSending(false);
-  }, [chatInput, isSending, accessToken, sceneId, selectedRole, completedMilestoneIds, role]);
+  }, [chatInput, isSending, accessToken, sceneId, selectedRole, completedIssueIds, role]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -241,39 +222,41 @@ export const PBLRenderer = React.memo<PBLRendererProps>(function PBLRenderer({
     <div className="flex flex-col h-full overflow-hidden bg-white">
       {/* Header */}
       <div className="shrink-0 px-6 py-4 border-b border-gray-100 bg-gradient-to-r from-indigo-50 to-purple-50">
-        <h2 className="text-lg font-bold text-gray-900">{content.projectTitle}</h2>
-        <p className="text-sm text-gray-600 mt-1">{content.description}</p>
+        <h2 className="text-lg font-bold text-gray-900">{projectInfo.title}</h2>
+        <p className="text-sm text-gray-600 mt-1">{projectInfo.description}</p>
       </div>
 
       {/* Main content grid */}
       <div className="flex-1 min-h-0 flex overflow-hidden">
-        {/* Left panel: roles, issue board, deliverables */}
+        {/* Left panel: roles + issue board */}
         <div className="flex-1 min-w-0 overflow-y-auto px-6 py-4 space-y-6">
           {/* Role Selection */}
-          <section>
-            <h3 className="flex items-center gap-2 text-sm font-semibold text-gray-800 mb-3">
-              <Users className="h-4 w-4 text-indigo-500" />
-              Select Your Role
-            </h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {content.roles.map((role) => (
-                <button
-                  key={role.id}
-                  type="button"
-                  onClick={() => setSelectedRole(role.id)}
-                  className={cn(
-                    'text-left rounded-lg border px-3 py-2.5 transition-colors',
-                    selectedRole === role.id
-                      ? 'border-indigo-500 bg-indigo-50 ring-1 ring-indigo-500'
-                      : 'border-gray-200 hover:border-indigo-300 hover:bg-indigo-50/50',
-                  )}
-                >
-                  <p className="text-sm font-medium text-gray-900">{role.name}</p>
-                  <p className="text-xs text-gray-500 mt-0.5">{role.description}</p>
-                </button>
-              ))}
-            </div>
-          </section>
+          {userRoles.length > 0 && (
+            <section>
+              <h3 className="flex items-center gap-2 text-sm font-semibold text-gray-800 mb-3">
+                <Users className="h-4 w-4 text-indigo-500" />
+                Select Your Role
+              </h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {userRoles.map((agent) => (
+                  <button
+                    key={agent.name}
+                    type="button"
+                    onClick={() => setSelectedRole(agent.name)}
+                    className={cn(
+                      'text-left rounded-lg border px-3 py-2.5 transition-colors',
+                      selectedRole === agent.name
+                        ? 'border-indigo-500 bg-indigo-50 ring-1 ring-indigo-500'
+                        : 'border-gray-200 hover:border-indigo-300 hover:bg-indigo-50/50',
+                    )}
+                  >
+                    <p className="text-sm font-medium text-gray-900">{agent.actor_role}</p>
+                    <p className="text-xs text-gray-500 mt-0.5">{agent.name}</p>
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
 
           {/* Issue Board */}
           <section>
@@ -321,37 +304,13 @@ export const PBLRenderer = React.memo<PBLRendererProps>(function PBLRenderer({
                         </div>
                       )}
                       {columnIssues.map((issue) => (
-                        <IssueCard
-                          key={issue.id}
-                          issue={issue}
-                          roleName={issue.assignee ? roleMap.get(issue.assignee) : undefined}
-                          onClick={() => cycleIssueStatus(issue.id)}
-                        />
+                        <IssueCard key={issue.id} issue={issue} />
                       ))}
                     </div>
                   </div>
                 );
               })}
             </div>
-          </section>
-
-          {/* Deliverables */}
-          <section>
-            <h3 className="flex items-center gap-2 text-sm font-semibold text-gray-800 mb-3">
-              <PackageCheck className="h-4 w-4 text-amber-500" />
-              Deliverables
-            </h3>
-            <ul className="space-y-1.5">
-              {content.deliverables.map((deliverable, idx) => (
-                <li
-                  key={idx}
-                  className="flex items-start gap-2 text-sm text-gray-700"
-                >
-                  <CheckSquare className="h-4 w-4 text-amber-400 shrink-0 mt-0.5" />
-                  {deliverable}
-                </li>
-              ))}
-            </ul>
           </section>
         </div>
 
@@ -457,30 +416,24 @@ const STATUS_BADGE: Record<IssueStatus, { bg: string; text: string; label: strin
 };
 
 interface IssueCardProps {
-  issue: PBLIssue;
-  roleName?: string;
-  onClick: () => void;
+  issue: BoardIssue;
 }
 
-const IssueCard = React.memo<IssueCardProps>(function IssueCard({ issue, roleName, onClick }) {
+const IssueCard = React.memo<IssueCardProps>(function IssueCard({ issue }) {
   const badge = STATUS_BADGE[issue.status];
 
   return (
-    <button
-      type="button"
-      onClick={onClick}
+    <div
       className={cn(
-        'w-full text-left rounded-lg border px-3 py-2.5 transition-all',
-        'hover:shadow-sm hover:border-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:ring-offset-1',
+        'w-full text-left rounded-lg border px-3 py-2.5',
         issue.status === 'done'
           ? 'border-green-200 bg-green-50/50'
           : issue.status === 'active'
             ? 'border-blue-200 bg-blue-50/30'
             : 'border-gray-200 bg-white',
       )}
-      aria-label={`${issue.title} - ${badge.label}. Click to change status.`}
+      aria-label={`${issue.title} - ${badge.label}`}
     >
-      {/* Title */}
       <p className={cn(
         'text-sm font-medium leading-snug',
         issue.status === 'done' ? 'text-green-800 line-through' : 'text-gray-900',
@@ -488,31 +441,19 @@ const IssueCard = React.memo<IssueCardProps>(function IssueCard({ issue, roleNam
         {issue.title}
       </p>
 
-      {/* Description (truncated to 2 lines) */}
       <p className="text-xs text-gray-500 mt-1 line-clamp-2">{issue.description}</p>
 
-      {/* Footer: badges */}
       <div className="flex items-center gap-1.5 mt-2 flex-wrap">
-        {/* Status badge */}
         <span className={cn('text-[10px] font-medium rounded-full px-1.5 py-0.5', badge.bg, badge.text)}>
           {badge.label}
         </span>
 
-        {/* Assignee badge */}
-        {roleName && (
+        {issue.personInCharge && (
           <span className="text-[10px] font-medium rounded-full px-1.5 py-0.5 bg-indigo-100 text-indigo-600">
-            {roleName}
-          </span>
-        )}
-
-        {/* Priority indicator */}
-        {issue.priority && (
-          <span className="flex items-center gap-1 ml-auto">
-            <span className={cn('h-2 w-2 rounded-full', PRIORITY_DOT_COLOR[issue.priority])} />
-            <span className="text-[10px] text-gray-400 capitalize">{issue.priority}</span>
+            {issue.personInCharge}
           </span>
         )}
       </div>
-    </button>
+    </div>
   );
 });

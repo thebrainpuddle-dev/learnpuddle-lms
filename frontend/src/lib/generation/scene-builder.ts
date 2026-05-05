@@ -48,19 +48,10 @@ interface GeneratedInteractiveContent {
   url?: string;
 }
 
-interface GeneratedPBLContent {
-  projectTitle: string;
-  description: string;
-  roles: { id: string; name: string; description: string }[];
-  milestones: { id: string; title: string; description: string; order: number }[];
-  deliverables: string[];
-}
-
 type GeneratedContent =
   | GeneratedSlideContent
   | GeneratedQuizContent
-  | GeneratedInteractiveContent
-  | GeneratedPBLContent;
+  | GeneratedInteractiveContent;
 
 // ─── Media ID uniquification ─────────────────────────────────────────────────
 
@@ -192,25 +183,12 @@ export function buildCompleteScene(
     };
   }
 
-  if (sceneType === 'pbl' && 'projectTitle' in content) {
-    const pblContent = content as GeneratedPBLContent;
-    return {
-      id: sceneId,
-      type: 'pbl',
-      title: outline.title,
-      order: outline.estimatedMinutes,
-      content: {
-        type: 'pbl',
-        projectTitle: pblContent.projectTitle,
-        description: pblContent.description,
-        roles: pblContent.roles,
-        milestones: pblContent.milestones,
-        deliverables: pblContent.deliverables,
-      },
-      actions,
-    };
-  }
-
+  // Phase 7 PBL scenes are NOT built by this per-scene content prompt
+  // path — they are generated through `POST /api/maic/v2/pbl/projects/`
+  // (the design loop) which produces a complete PBLProjectConfig and
+  // wraps it server-side at apps/maic/generation/scene_builder.py:201.
+  // If we get here with sceneType==='pbl', the outline lacked the
+  // pblConfig metadata that the backend builder needs — log and skip.
   log.warn(`Could not build scene for type "${outline.type}" with given content`);
   return null;
 }
@@ -305,8 +283,6 @@ function buildContentPrompt(
     parts.push('Each question: { id, type, question, options?, answer?, analysis?, points? }');
   } else if (sceneType === 'interactive') {
     parts.push('Return a JSON object with "html" (complete HTML page) and optional "url".');
-  } else if (sceneType === 'pbl') {
-    parts.push('Return a JSON object with "projectTitle", "description", "roles", "milestones", "deliverables".');
   }
 
   return parts.join('\n');
@@ -348,8 +324,6 @@ function parseContentResponse(response: string, sceneType: MAICSceneType): Gener
     return parseJsonResponse<GeneratedQuizContent>(response);
   } else if (sceneType === 'interactive') {
     return parseJsonResponse<GeneratedInteractiveContent>(response);
-  } else if (sceneType === 'pbl') {
-    return parseJsonResponse<GeneratedPBLContent>(response);
   }
 
   return null;

@@ -108,11 +108,17 @@ export interface MAICInteractiveContent {
   widgetConfig?: import('./widget').WidgetConfig;
 }
 
+/**
+ * MAIC-705: scene-content wrapper for a Phase 7 PBL session.
+ *
+ * Single canonical shape — `projectConfig` is upstream's
+ * `PBLProjectConfig` (see frontend/src/types/pbl.ts, the TS port of
+ * `lib/pbl/types.ts` lifted under ADR-001a). Backend hands this same
+ * shape over WS at `/ws/maic/pbl/<session_id>/` and HTTP at
+ * `POST /api/maic/v2/pbl/projects/`. Frontend renderer reads from
+ * `content.projectConfig.*` directly — no flattening, no drift.
+ */
 export interface MAICPBLContent {
   type: 'pbl';
-  projectTitle: string;
-  description: string;
-  roles: { id: string; name: string; description: string }[];
-  milestones: { id: string; title: string; description: string; order: number }[];
-  deliverables: string[];
+  projectConfig: import('./pbl').PBLProjectConfig;
 }
