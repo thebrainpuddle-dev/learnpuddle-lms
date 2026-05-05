@@ -69,12 +69,20 @@ _DEFAULT_MINIMAX_BASE_URL: Final = "https://api.minimaxi.com"
 _DEFAULT_MINIMAX_MODEL: Final = "speech-2.8-hd"
 _DEFAULT_MINIMAX_VOICE: Final = "female-yujie"
 
+# ElevenLabs defaults — match upstream constants.ts:'elevenlabs-tts'.
+# defaultBaseUrl = "https://api.elevenlabs.io/v1"; default voice is
+# Sarah (warm female, English) — same id as DEFAULT_VOICES_BY_PROVIDER.
+_DEFAULT_ELEVENLABS_BASE_URL: Final = "https://api.elevenlabs.io/v1"
+_DEFAULT_ELEVENLABS_MODEL: Final = "eleven_multilingual_v2"
+_DEFAULT_ELEVENLABS_VOICE: Final = "EXAVITQu4vr4xnSDxMaL"
+
 # Provider selection. Each provider slots in by branching in
 # synthesize_speech; each respects the same async signature
 # (text, voice, speed, …) -> bytes (raw audio).
 _PROVIDER_ENV: Final = "MAIC_TTS_PROVIDER"
 _PROVIDER_EDGE: Final = "edge"
 _PROVIDER_MINIMAX: Final = "minimax"
+_PROVIDER_ELEVENLABS: Final = "elevenlabs"
 
 
 def _provider() -> str:
@@ -148,10 +156,24 @@ async def synthesize_speech(
             audio_b64=base64.b64encode(audio_bytes).decode("ascii"),
             format="mp3",
         )
+    if chosen == _PROVIDER_ELEVENLABS:
+        audio_bytes = await _elevenlabs_synthesize(
+            text,
+            voice=voice or _DEFAULT_ELEVENLABS_VOICE,
+            speed=speed,
+            api_key=api_key or os.environ.get("ELEVENLABS_API_KEY", ""),
+            base_url=base_url or _DEFAULT_ELEVENLABS_BASE_URL,
+            model=model or _DEFAULT_ELEVENLABS_MODEL,
+        )
+        return SpeechAudio(
+            audio_id=audio_id,
+            audio_b64=base64.b64encode(audio_bytes).decode("ascii"),
+            format="mp3",
+        )
 
     raise SpeechSynthesisError(
         f"unknown TTS provider {chosen!r}; "
-        f"set {_PROVIDER_ENV}=edge|minimax (or pass provider=)"
+        f"set {_PROVIDER_ENV}=edge|minimax|elevenlabs (or pass provider=)"
     )
 
 
@@ -306,3 +328,86 @@ async def _minimax_synthesize(
         return bytes.fromhex(cleaned)
     except ValueError as exc:
         raise SpeechSynthesisError(f"minimax: hex decode failed: {exc}") from exc
+
+
+# ── ElevenLabs TTS provider ───────────────────────────────────────────
+# Mirrors upstream OpenMAIC lib/audio/tts-providers.ts:generateElevenLabsTTS.
+# Differences from Minimax (so the test of the abstraction is real):
+#   - Auth header is `xi-api-key` (NOT Bearer)
+#   - voice_id goes in the URL path: /text-to-speech/{voice}
+#   - output_format goes in the query string (not the body)
+#   - Response is RAW MP3 bytes (not hex-encoded JSON)
+#   - HTTP errors come back as text, no `base_resp` envelope
+# Speed is clamped to [0.7, 1.2] per upstream's documented voice_settings
+# range; out-of-range values are silently corrected rather than raising.
+
+
+_ELEVENLABS_OUTPUT_FORMAT: Final[dict[str, str]] = {
+    "mp3": "mp3_44100_128",
+    "opus": "opus_48000_96",
+    "pcm": "pcm_44100",
+    "wav": "wav_44100",
+    "ulaw": "ulaw_8000",
+    "alaw": "alaw_8000",
+}
+
+
+async def _elevenlabs_synthesize(
+    text: str,
+    *,
+    voice: str,
+    speed: float,
+    api_key: str,
+    base_url: str,
+    model: str,
+) -> bytes:
+    if not api_key:
+        raise SpeechSynthesisError(
+            "elevenlabs: api_key required (set ELEVENLABS_API_KEY or pass per-tenant key)"
+        )
+
+    try:
+        import aiohttp  # type: ignore[import-untyped]
+    except ImportError as exc:
+        raise SpeechSynthesisError(
+            "aiohttp not installed; pip install -r requirements.txt"
+        ) from exc
+
+    from urllib.parse import quote
+
+    clamped_speed = max(0.7, min(1.2, float(speed)))
+    output_format = _ELEVENLABS_OUTPUT_FORMAT["mp3"]
+    url = (
+        f"{base_url.rstrip('/')}/text-to-speech/{quote(voice, safe='')}"
+        f"?output_format={output_format}"
+    )
+    payload = {
+        "text": text,
+        "model_id": model,
+        "voice_settings": {
+            "stability": 0.5,
+            "similarity_boost": 0.75,
+            "speed": clamped_speed,
+        },
+    }
+    headers = {
+        "xi-api-key": api_key,
+        "Content-Type": "application/json; charset=utf-8",
+    }
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload, headers=headers) as resp:
+                if resp.status != 200:
+                    body = await resp.text()
+                    raise SpeechSynthesisError(
+                        f"elevenlabs: HTTP {resp.status}: {body[:200]}"
+                    )
+                audio_bytes = await resp.read()
+    except aiohttp.ClientError as exc:
+        logger.warning("elevenlabs: network error", exc_info=True)
+        raise SpeechSynthesisError(f"elevenlabs synthesis failed: {exc}") from exc
+
+    if not audio_bytes:
+        raise SpeechSynthesisError("elevenlabs: empty audio body")
+    return audio_bytes

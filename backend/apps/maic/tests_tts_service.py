@@ -514,6 +514,216 @@ async def test_minimax_empty_text_short_circuits(fake_aiohttp, minimax_env):
     assert _FakeMinimaxSession.last_request == {}
 
 
+# ── ElevenLabs TTS provider (MAIC-501.B) ──────────────────────────────
+# Different shape from Minimax — different auth header (xi-api-key not
+# Bearer), voice in URL path not body, output_format in query string,
+# raw MP3 bytes back (no hex JSON envelope). Validates the abstraction
+# is genuinely provider-agnostic.
+
+
+_FAKE_ELEVENLABS_MP3 = b"\xff\xfb\x90elevenlabs-fake-mp3-bytes"
+
+
+class _FakeElevenLabsResponse:
+    def __init__(self, status: int, body_bytes: bytes = b"", body_text: str = ""):
+        self.status = status
+        self._body_bytes = body_bytes
+        self._body_text = body_text
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_a):
+        return None
+
+    async def read(self):
+        return self._body_bytes
+
+    async def text(self):
+        return self._body_text
+
+
+class _FakeElevenLabsSession:
+    last_request: dict[str, Any] = {}
+    response_factory = staticmethod(
+        lambda: _FakeElevenLabsResponse(200, body_bytes=_FAKE_ELEVENLABS_MP3)
+    )
+
+    def __init__(self, *_a, **_kw):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_a):
+        return None
+
+    def post(self, url: str, *, json: dict, headers: dict):
+        _FakeElevenLabsSession.last_request = {"url": url, "json": json, "headers": headers}
+        return type(self).response_factory()
+
+
+def _install_fake_elevenlabs_aiohttp(monkeypatch, session_cls=_FakeElevenLabsSession):
+    import sys
+    import types
+
+    fake = types.ModuleType("aiohttp")
+    fake.ClientSession = session_cls  # type: ignore[attr-defined]
+    fake.ClientError = ConnectionError  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "aiohttp", fake)
+    _FakeElevenLabsSession.last_request = {}
+    return fake
+
+
+@pytest.fixture
+def fake_elevenlabs_aiohttp(monkeypatch: pytest.MonkeyPatch):
+    return _install_fake_elevenlabs_aiohttp(monkeypatch)
+
+
+@pytest.fixture
+def elevenlabs_env(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("MAIC_TTS_PROVIDER", "elevenlabs")
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "test-server-eleven-key")
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_happy_path_returns_raw_mp3(fake_elevenlabs_aiohttp, elevenlabs_env):
+    """ElevenLabs returns raw MP3 bytes (NOT hex-encoded JSON like Minimax).
+    Service base64-encodes them for the wire frame."""
+    result = await synthesize_speech("hello world", audio_id="aud-el-1")
+    assert result.audio_id == "aud-el-1"
+    assert result.format == "mp3"
+    assert base64.b64decode(result.audio_b64) == _FAKE_ELEVENLABS_MP3
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_request_shape_matches_upstream(fake_elevenlabs_aiohttp, elevenlabs_env):
+    """Validates against upstream lib/audio/tts-providers.ts:generateElevenLabsTTS:
+    - URL: {base}/text-to-speech/{voice}?output_format=mp3_44100_128
+    - Header: xi-api-key (NOT Authorization: Bearer)
+    - Body: {text, model_id, voice_settings:{stability, similarity_boost, speed}}
+    """
+    await synthesize_speech(
+        "welcome", audio_id="aud-el-2",
+        voice="custom-voice-id-xyz", speed=1.05,
+    )
+    req = _FakeElevenLabsSession.last_request
+    assert req["url"] == (
+        "https://api.elevenlabs.io/v1/text-to-speech/custom-voice-id-xyz"
+        "?output_format=mp3_44100_128"
+    )
+    assert req["headers"]["xi-api-key"] == "test-server-eleven-key"
+    assert "Authorization" not in req["headers"]  # xi-api-key, NOT Bearer
+    assert req["headers"]["Content-Type"].startswith("application/json")
+    body = req["json"]
+    assert body["text"] == "welcome"
+    assert body["model_id"] == "eleven_multilingual_v2"
+    assert body["voice_settings"]["stability"] == 0.5
+    assert body["voice_settings"]["similarity_boost"] == 0.75
+    assert body["voice_settings"]["speed"] == 1.05
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("speed,expected", [
+    (1.0, 1.0),
+    (1.5, 1.2),    # clamped to upstream's documented max
+    (0.5, 0.7),    # clamped to upstream's documented min
+    (3.0, 1.2),
+    (0.1, 0.7),
+])
+async def test_elevenlabs_speed_clamped_to_documented_range(
+    fake_elevenlabs_aiohttp, elevenlabs_env, speed, expected,
+):
+    """ElevenLabs voice_settings.speed must be in [0.7, 1.2] per their
+    docs. Upstream silently clamps; we mirror that — out-of-range values
+    don't raise, they get corrected."""
+    await synthesize_speech("x", audio_id="aud-el-clamp", speed=speed)
+    assert _FakeElevenLabsSession.last_request["json"]["voice_settings"]["speed"] == expected
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_voice_id_url_encoded(fake_elevenlabs_aiohttp, elevenlabs_env):
+    """Voice IDs come from user/tenant config — must be URL-encoded so
+    a hostile or quirky id can't break out of the path segment."""
+    await synthesize_speech(
+        "x", audio_id="aud-el-3", voice="weird/voice id with spaces",
+    )
+    assert (
+        "/text-to-speech/weird%2Fvoice%20id%20with%20spaces?"
+        in _FakeElevenLabsSession.last_request["url"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_per_tenant_kwargs_override_env(fake_elevenlabs_aiohttp, elevenlabs_env):
+    """Tenant-supplied api_key + base_url + model take priority over env."""
+    await synthesize_speech(
+        "x", audio_id="aud-el-4",
+        api_key="tenant-eleven-key",
+        base_url="https://api.elevenlabs.io/v1/",  # trailing slash to test stripping
+        model="eleven_flash_v2_5",
+    )
+    req = _FakeElevenLabsSession.last_request
+    assert req["headers"]["xi-api-key"] == "tenant-eleven-key"
+    assert req["json"]["model_id"] == "eleven_flash_v2_5"
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_default_voice_is_sarah_id(fake_elevenlabs_aiohttp, elevenlabs_env):
+    """Falls back to upstream's DEFAULT_VOICES_BY_PROVIDER['elevenlabs-tts']
+    = 'EXAVITQu4vr4xnSDxMaL' (Sarah, warm female English)."""
+    await synthesize_speech("x", audio_id="aud-el-5")
+    assert "/text-to-speech/EXAVITQu4vr4xnSDxMaL" in _FakeElevenLabsSession.last_request["url"]
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_missing_api_key_raises(fake_elevenlabs_aiohttp, monkeypatch):
+    """No api_key (kwarg or env) → SpeechSynthesisError, no HTTP call."""
+    monkeypatch.setenv("MAIC_TTS_PROVIDER", "elevenlabs")
+    monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
+    with pytest.raises(SpeechSynthesisError, match="api_key required"):
+        await synthesize_speech("x", audio_id="aud-el-6")
+    assert _FakeElevenLabsSession.last_request == {}
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_http_error_wrapped(monkeypatch, elevenlabs_env):
+    """Non-200 → SpeechSynthesisError with body for diagnostics."""
+
+    class _Err402Session(_FakeElevenLabsSession):
+        response_factory = staticmethod(
+            lambda: _FakeElevenLabsResponse(
+                402, body_text='{"detail":{"status":"quota_exceeded","message":"You have exceeded your free quota"}}',
+            )
+        )
+
+    _install_fake_elevenlabs_aiohttp(monkeypatch, session_cls=_Err402Session)
+    with pytest.raises(SpeechSynthesisError, match=r"HTTP 402.*quota_exceeded"):
+        await synthesize_speech("x", audio_id="aud-el-7")
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_empty_body_raises(monkeypatch, elevenlabs_env):
+    """200 but empty bytes — surface as failure, not silent zero-byte frame."""
+
+    class _EmptySession(_FakeElevenLabsSession):
+        response_factory = staticmethod(
+            lambda: _FakeElevenLabsResponse(200, body_bytes=b"")
+        )
+
+    _install_fake_elevenlabs_aiohttp(monkeypatch, session_cls=_EmptySession)
+    with pytest.raises(SpeechSynthesisError, match="empty audio body"):
+        await synthesize_speech("x", audio_id="aud-el-8")
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_empty_text_short_circuits(fake_elevenlabs_aiohttp, elevenlabs_env):
+    """Empty text — no HTTP call, no api_key check; mirrors edge + minimax."""
+    result = await synthesize_speech("", audio_id="aud-el-9")
+    assert result.audio_b64 == ""
+    assert _FakeElevenLabsSession.last_request == {}
+
+
 # ── Manual / live Minimax smoke (gated by env flag) ──────────────────
 
 
