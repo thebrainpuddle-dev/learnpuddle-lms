@@ -47,6 +47,9 @@ _api_patterns = [
     # MAIC v2 sessions endpoint (Phase 1 MAIC-301).  WS routes are
     # mounted separately in config/asgi.py via apps.maic.routing.
     path('maic/v2/', include('apps.maic.urls', namespace='maic_v2')),
+    # PBL subsystem (Phase 7 MAIC-704). HTTP at /api/maic/v2/pbl/projects/;
+    # WS at /ws/maic/pbl/<session_id>/ (mounted in config/asgi.py).
+    path('maic/v2/pbl/', include('apps.maic_pbl.urls', namespace='maic_pbl')),
     # Content versioning (TASK-048) — admin-only revisions/restore endpoints.
     path('admin/', include('apps.courses.versioning_urls')),
     # SCORM 1.2 export (TASK-052) — admin-only export endpoints.

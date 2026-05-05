@@ -35,9 +35,17 @@ if getattr(settings, "MAIC_V2_ENABLED", False):
     from apps.maic.routing import websocket_urlpatterns as maic_v2_ws_routes
     maic_v2_ws = list(maic_v2_ws_routes)
 
+# PBL subsystem WS routes — also gated on MAIC_V2_ENABLED.
+maic_pbl_ws: list = []
+if getattr(settings, "MAIC_V2_ENABLED", False):
+    from apps.maic_pbl.routing import websocket_urlpatterns as maic_pbl_ws_routes
+    maic_pbl_ws = list(maic_pbl_ws_routes)
+
 # Compose all WebSocket routes from the apps that own them. Order is
 # irrelevant because each ``re_path`` carries a distinct prefix.
-websocket_urlpatterns = list(notification_ws) + list(courses_ws) + maic_v2_ws
+websocket_urlpatterns = (
+    list(notification_ws) + list(courses_ws) + maic_v2_ws + maic_pbl_ws
+)
 
 
 application = ProtocolTypeRouter({
