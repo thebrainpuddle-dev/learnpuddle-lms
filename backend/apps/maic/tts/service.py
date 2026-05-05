@@ -272,6 +272,27 @@ async def _minimax_synthesize(
         logger.warning("minimax: network error", exc_info=True)
         raise SpeechSynthesisError(f"minimax synthesis failed: {exc}") from exc
 
+    # Minimax wraps business-logic errors in a 200 response with a
+    # `base_resp` envelope. Surface the status_code + status_msg so
+    # production debugging is one log line, not a diff against upstream.
+    # Common codes:
+    #   1008 — insufficient balance (account has no credits left)
+    #   2049 — invalid api key (key not recognized for this region)
+    #   2013 — invalid voice_id (voice doesn't exist for this provider)
+    # Three regional endpoints exist: api.minimaxi.com (international),
+    # api.minimax.chat (CN), api.minimax.io. A key issued in one region
+    # returns 2049 against the others — set tts_base_url on the tenant
+    # to override the default in TenantAIConfig.
+    if isinstance(data, dict):
+        base_resp = data.get("base_resp") or {}
+        if isinstance(base_resp, dict):
+            err_code = base_resp.get("status_code")
+            if err_code not in (None, 0):
+                err_msg = base_resp.get("status_msg") or "unknown"
+                raise SpeechSynthesisError(
+                    f"minimax error {err_code}: {err_msg}"
+                )
+
     hex_audio = (data.get("data") or {}).get("audio") if isinstance(data, dict) else None
     if not isinstance(hex_audio, str) or not hex_audio.strip():
         raise SpeechSynthesisError(

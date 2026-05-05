@@ -411,6 +411,66 @@ async def test_minimax_no_audio_in_response_raises(monkeypatch, minimax_env):
 
 
 @pytest.mark.asyncio
+async def test_minimax_base_resp_error_surfaces_code_and_message(monkeypatch, minimax_env):
+    """Minimax wraps business errors (insufficient balance, invalid key,
+    bad voice_id) in a 200 response with a base_resp envelope. Production
+    callers need the status_code + status_msg to debug — verified
+    empirically against api.minimax.io which returned 1008/2049 codes
+    that my old handler hid as the unhelpful 'no audio in response'."""
+
+    class _BaseRespErrorSession(_FakeMinimaxSession):
+        response_factory = staticmethod(
+            lambda: _FakeMinimaxResponse(
+                200,
+                payload={"base_resp": {"status_code": 1008, "status_msg": "insufficient balance"}},
+            )
+        )
+
+    _install_fake_aiohttp(monkeypatch, session_cls=_BaseRespErrorSession)
+    with pytest.raises(SpeechSynthesisError, match=r"minimax error 1008.*insufficient balance"):
+        await synthesize_speech("x", audio_id="aud-mm-7b")
+
+
+@pytest.mark.asyncio
+async def test_minimax_invalid_api_key_error_surfaced(monkeypatch, minimax_env):
+    """Code 2049 — the most common production failure when a tenant
+    uses a key bound to a different Minimax region."""
+
+    class _BadKeySession(_FakeMinimaxSession):
+        response_factory = staticmethod(
+            lambda: _FakeMinimaxResponse(
+                200,
+                payload={"base_resp": {"status_code": 2049, "status_msg": "invalid api key"}},
+            )
+        )
+
+    _install_fake_aiohttp(monkeypatch, session_cls=_BadKeySession)
+    with pytest.raises(SpeechSynthesisError, match=r"minimax error 2049.*invalid api key"):
+        await synthesize_speech("x", audio_id="aud-mm-7c")
+
+
+@pytest.mark.asyncio
+async def test_minimax_base_resp_status_zero_treated_as_success(monkeypatch, minimax_env):
+    """status_code: 0 is Minimax's convention for 'no error'; payload
+    must still flow through and the audio decoded."""
+
+    class _OkBaseRespSession(_FakeMinimaxSession):
+        response_factory = staticmethod(
+            lambda: _FakeMinimaxResponse(
+                200,
+                payload={
+                    "base_resp": {"status_code": 0, "status_msg": "success"},
+                    "data": {"audio": _FAKE_MINIMAX_HEX},
+                },
+            )
+        )
+
+    _install_fake_aiohttp(monkeypatch, session_cls=_OkBaseRespSession)
+    result = await synthesize_speech("x", audio_id="aud-mm-7d")
+    assert base64.b64decode(result.audio_b64) == _FAKE_MINIMAX_MP3
+
+
+@pytest.mark.asyncio
 async def test_minimax_invalid_hex_raises(monkeypatch, minimax_env):
     """Odd-length hex → SpeechSynthesisError, not ValueError leak."""
 
