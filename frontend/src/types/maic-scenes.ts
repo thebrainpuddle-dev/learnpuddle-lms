@@ -101,6 +101,11 @@ export interface MAICInteractiveContent {
   type: 'interactive';
   html: string;
   url?: string;
+  /** MAIC-602/605: typed widget config the backend extracted from the
+   *  embedded `<script id="widget-config">` block. Optional. Schema
+   *  at frontend/src/types/widget.ts (mirror of upstream
+   *  lib/types/widgets.ts via ADR-001a). */
+  widgetConfig?: import('./widget').WidgetConfig;
 }
 
 export interface MAICPBLContent {

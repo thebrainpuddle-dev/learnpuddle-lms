@@ -36,6 +36,20 @@ interface SceneRendererProps {
    * "fetching image…" skeleton instead of an immediate Unsplash fallback.
    */
   imagesPending?: boolean;
+  /**
+   * MAIC-608: callback for widget iframe events. Forwarded to
+   * InteractiveRenderer when scene.type === 'interactive'. The
+   * Stage-level owner (typically the WS hook holder) wires this to
+   * `channel.send({action:'widget_event', ...})` so student
+   * interactions reach the backend's pendingWidgetEvents buffer
+   * (MAIC-603). When absent, no listener is attached — read-only
+   * playback contexts pay zero overhead.
+   */
+  onWidgetEvent?: (
+    sceneId: string,
+    event: string,
+    payload: Record<string, unknown>,
+  ) => void;
 }
 
 export const SceneRenderer = React.memo<SceneRendererProps>(function SceneRenderer({
@@ -43,6 +57,7 @@ export const SceneRenderer = React.memo<SceneRendererProps>(function SceneRender
   mode = 'autonomous',
   role,
   imagesPending,
+  onWidgetEvent,
 }) {
   const content = scene.content;
   const slides = useMAICStageStore((s) => s.slides);
@@ -102,11 +117,22 @@ export const SceneRenderer = React.memo<SceneRendererProps>(function SceneRender
 
       case 'interactive': {
         const interactiveContent = content as MAICInteractiveContent;
+        // MAIC-608: bind sceneId into the uplink so the parent's
+        // widget_event handler doesn't have to re-derive it. Closure
+        // captures scene.id; the callback identity is stable per
+        // scene render which is fine for InteractiveRenderer's
+        // useEffect dependency.
+        const handleWidgetEvent = onWidgetEvent
+          ? (event: string, payload: Record<string, unknown>) =>
+              onWidgetEvent(scene.id, event, payload)
+          : undefined;
         return (
           <InteractiveRenderer
             html={interactiveContent.html}
             url={interactiveContent.url}
             sceneId={scene.id}
+            widgetConfig={interactiveContent.widgetConfig}
+            onWidgetEvent={handleWidgetEvent}
           />
         );
       }
@@ -134,7 +160,7 @@ export const SceneRenderer = React.memo<SceneRendererProps>(function SceneRender
           </div>
         );
     }
-  }, [content, scene.id, scene.title, mode, slides, currentSlideIndex, currentSceneIndex, totalSlides, imagesPending, role]);
+  }, [content, scene.id, scene.title, mode, slides, currentSlideIndex, currentSceneIndex, totalSlides, imagesPending, role, onWidgetEvent]);
 
   // Quiz scenes can have lots of questions — let them scroll within the
   // 16:9 viewport. All other scene types stay overflow-hidden so animations
