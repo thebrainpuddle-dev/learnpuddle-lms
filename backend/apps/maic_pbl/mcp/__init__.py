@@ -28,11 +28,13 @@ from apps.maic_pbl.mcp.agent_templates import (
     get_judge_agent_prompt,
     get_question_agent_prompt,
 )
+from apps.maic_pbl.mcp.issueboard_mcp import IssueboardMCP
 from apps.maic_pbl.mcp.mode_mcp import ModeMCP
 from apps.maic_pbl.mcp.project_mcp import ProjectMCP
 
 __all__ = [
     "AgentMCP",
+    "IssueboardMCP",
     "ModeMCP",
     "ProjectMCP",
     "get_judge_agent_prompt",
