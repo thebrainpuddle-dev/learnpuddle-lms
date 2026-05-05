@@ -229,3 +229,226 @@ async def test_live_edge_tts_smoke_returns_real_mp3():
     assert decoded[:3] in (b"ID3",) or decoded[:1] == b"\xff", (
         f"unexpected MP3 header: {decoded[:4]!r}"
     )
+
+
+# ── Minimax TTS provider (MAIC-501) ───────────────────────────────────
+# Pattern mirrors _FakeCommunicate above: an injected fake stands in for
+# the real network client (aiohttp.ClientSession). We don't mock the
+# function under test — we replace the IO boundary with a deterministic
+# stub, exactly as the no-mocks rule requires (production code path
+# runs end-to-end; only the network is faked).
+
+
+# Fixed MP3 payload encoded as hex (matches Minimax's wire format).
+_FAKE_MINIMAX_MP3 = b"\xff\xfb\x90minimax-fake-mp3-bytes"
+_FAKE_MINIMAX_HEX = _FAKE_MINIMAX_MP3.hex()
+
+
+class _FakeMinimaxResponse:
+    """Async context-managed response object used by _FakeMinimaxSession."""
+
+    def __init__(self, status: int, payload: dict | None = None, body: str = ""):
+        self.status = status
+        self._payload = payload or {}
+        self._body = body
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_a):
+        return None
+
+    async def json(self):
+        return self._payload
+
+    async def text(self):
+        return self._body
+
+
+class _FakeMinimaxSession:
+    """Mock aiohttp.ClientSession. Captures the last request so tests
+    can assert URL/headers/payload, returns a configurable response."""
+
+    last_request: dict[str, Any] = {}
+    response_factory = staticmethod(
+        lambda: _FakeMinimaxResponse(
+            200,
+            payload={"data": {"audio": _FAKE_MINIMAX_HEX}, "extra_info": {"audio_format": "mp3"}},
+        )
+    )
+
+    def __init__(self, *_a, **_kw):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_a):
+        return None
+
+    def post(self, url: str, *, json: dict, headers: dict):
+        _FakeMinimaxSession.last_request = {"url": url, "json": json, "headers": headers}
+        return type(self).response_factory()
+
+
+def _install_fake_aiohttp(monkeypatch, session_cls=_FakeMinimaxSession):
+    """Inject a fake aiohttp module that exposes ClientSession + ClientError."""
+    import sys
+    import types
+
+    fake = types.ModuleType("aiohttp")
+    fake.ClientSession = session_cls  # type: ignore[attr-defined]
+    fake.ClientError = ConnectionError  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "aiohttp", fake)
+    _FakeMinimaxSession.last_request = {}
+    return fake
+
+
+@pytest.fixture
+def fake_aiohttp(monkeypatch: pytest.MonkeyPatch):
+    return _install_fake_aiohttp(monkeypatch)
+
+
+@pytest.fixture
+def minimax_env(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("MAIC_TTS_PROVIDER", "minimax")
+    monkeypatch.setenv("MINIMAX_API_KEY", "test-server-default-key")
+
+
+@pytest.mark.asyncio
+async def test_minimax_happy_path_decodes_hex(fake_aiohttp, minimax_env):
+    """Minimax returns hex-encoded MP3; service decodes to raw bytes,
+    then base64-encodes for the wire frame."""
+    result = await synthesize_speech("hello world", audio_id="aud-mm-1")
+    assert result.audio_id == "aud-mm-1"
+    assert result.format == "mp3"
+    assert base64.b64decode(result.audio_b64) == _FAKE_MINIMAX_MP3
+
+
+@pytest.mark.asyncio
+async def test_minimax_request_shape_matches_upstream(fake_aiohttp, minimax_env):
+    """Payload mirrors upstream lib/audio/tts-providers.ts:generateMiniMaxTTS
+    exactly — model, voice_setting, audio_setting, output_format hex."""
+    await synthesize_speech("welcome", audio_id="aud-mm-2", voice="male-qn-qingse", speed=1.1)
+    req = _FakeMinimaxSession.last_request
+    assert req["url"] == "https://api.minimaxi.com/v1/t2a_v2"
+    assert req["headers"]["Authorization"] == "Bearer test-server-default-key"
+    assert req["headers"]["Content-Type"].startswith("application/json")
+    body = req["json"]
+    assert body["text"] == "welcome"
+    assert body["model"] == "speech-2.8-hd"
+    assert body["output_format"] == "hex"
+    assert body["stream"] is False
+    assert body["language_boost"] == "auto"
+    assert body["voice_setting"]["voice_id"] == "male-qn-qingse"
+    assert body["voice_setting"]["speed"] == 1.1
+    assert body["audio_setting"]["format"] == "mp3"
+
+
+@pytest.mark.asyncio
+async def test_minimax_per_tenant_kwargs_override_env(fake_aiohttp, minimax_env):
+    """Per-tenant api_key / base_url / model passed at call time
+    override env defaults — this is the path the director uses with
+    TenantAIConfig.resolve_tts_config()."""
+    await synthesize_speech(
+        "hi",
+        audio_id="aud-mm-3",
+        api_key="tenant-specific-key",
+        base_url="https://custom-minimax.example.com/",
+        model="speech-2.5-turbo",
+    )
+    req = _FakeMinimaxSession.last_request
+    assert req["url"] == "https://custom-minimax.example.com/v1/t2a_v2"
+    assert req["headers"]["Authorization"] == "Bearer tenant-specific-key"
+    assert req["json"]["model"] == "speech-2.5-turbo"
+
+
+@pytest.mark.asyncio
+async def test_minimax_provider_arg_overrides_env(fake_aiohttp, monkeypatch):
+    """provider= kwarg overrides MAIC_TTS_PROVIDER even when the env says edge."""
+    monkeypatch.setenv("MAIC_TTS_PROVIDER", "edge")
+    monkeypatch.setenv("MINIMAX_API_KEY", "k")
+    result = await synthesize_speech("x", audio_id="aud-mm-4", provider="minimax")
+    assert base64.b64decode(result.audio_b64) == _FAKE_MINIMAX_MP3
+
+
+@pytest.mark.asyncio
+async def test_minimax_missing_api_key_raises(fake_aiohttp, monkeypatch):
+    """No api_key (kwarg or env) → SpeechSynthesisError, no HTTP call."""
+    monkeypatch.setenv("MAIC_TTS_PROVIDER", "minimax")
+    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+    with pytest.raises(SpeechSynthesisError, match="api_key required"):
+        await synthesize_speech("x", audio_id="aud-mm-5")
+    assert _FakeMinimaxSession.last_request == {}
+
+
+@pytest.mark.asyncio
+async def test_minimax_http_error_wrapped(monkeypatch, minimax_env):
+    """Non-200 status → SpeechSynthesisError with the body as context."""
+
+    class _Err500Session(_FakeMinimaxSession):
+        response_factory = staticmethod(
+            lambda: _FakeMinimaxResponse(500, body="Internal upstream failure")
+        )
+
+    _install_fake_aiohttp(monkeypatch, session_cls=_Err500Session)
+    with pytest.raises(SpeechSynthesisError, match="HTTP 500"):
+        await synthesize_speech("x", audio_id="aud-mm-6")
+
+
+@pytest.mark.asyncio
+async def test_minimax_no_audio_in_response_raises(monkeypatch, minimax_env):
+    """200 but `data.audio` missing → SpeechSynthesisError, not silent zero-byte frame."""
+
+    class _NoAudioSession(_FakeMinimaxSession):
+        response_factory = staticmethod(
+            lambda: _FakeMinimaxResponse(200, payload={"data": {}})
+        )
+
+    _install_fake_aiohttp(monkeypatch, session_cls=_NoAudioSession)
+    with pytest.raises(SpeechSynthesisError, match="no audio"):
+        await synthesize_speech("x", audio_id="aud-mm-7")
+
+
+@pytest.mark.asyncio
+async def test_minimax_invalid_hex_raises(monkeypatch, minimax_env):
+    """Odd-length hex → SpeechSynthesisError, not ValueError leak."""
+
+    class _OddHexSession(_FakeMinimaxSession):
+        response_factory = staticmethod(
+            lambda: _FakeMinimaxResponse(200, payload={"data": {"audio": "abc"}})
+        )
+
+    _install_fake_aiohttp(monkeypatch, session_cls=_OddHexSession)
+    with pytest.raises(SpeechSynthesisError, match="invalid hex"):
+        await synthesize_speech("x", audio_id="aud-mm-8")
+
+
+@pytest.mark.asyncio
+async def test_minimax_network_error_wrapped(monkeypatch, minimax_env):
+    """aiohttp.ClientError (e.g. DNS failure) → SpeechSynthesisError."""
+
+    class _NetworkErrorSession(_FakeMinimaxSession):
+        def post(self, *_a, **_kw):
+            raise ConnectionError("simulated DNS resolve failure")
+
+    _install_fake_aiohttp(monkeypatch, session_cls=_NetworkErrorSession)
+    with pytest.raises(SpeechSynthesisError, match="minimax synthesis failed"):
+        await synthesize_speech("x", audio_id="aud-mm-9")
+
+
+@pytest.mark.asyncio
+async def test_minimax_default_voice_when_unset(fake_aiohttp, minimax_env):
+    """When voice= is not passed, falls back to upstream's
+    DEFAULT_VOICES_BY_PROVIDER['minimax-tts'] = 'female-yujie'."""
+    await synthesize_speech("x", audio_id="aud-mm-10")
+    req = _FakeMinimaxSession.last_request
+    assert req["json"]["voice_setting"]["voice_id"] == "female-yujie"
+
+
+@pytest.mark.asyncio
+async def test_minimax_empty_text_short_circuits(fake_aiohttp, minimax_env):
+    """Empty text — no HTTP call, no api_key check; mirrors edge path."""
+    result = await synthesize_speech("", audio_id="aud-mm-11")
+    assert result.audio_b64 == ""
+    assert _FakeMinimaxSession.last_request == {}

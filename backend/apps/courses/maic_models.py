@@ -36,6 +36,7 @@ class TenantAIConfig(models.Model):
         ("openai", "OpenAI TTS"),
         ("elevenlabs", "ElevenLabs"),
         ("azure", "Azure TTS"),
+        ("minimax", "MiniMax TTS"),
         ("edge", "Edge TTS (free)"),
         ("disabled", "Disabled"),
     ]
@@ -78,6 +79,10 @@ class TenantAIConfig(models.Model):
     tts_voice_id = models.CharField(
         max_length=100, blank=True, default="",
         help_text="Voice identifier for the chosen TTS provider",
+    )
+    tts_base_url = models.URLField(
+        max_length=500, blank=True, default="",
+        help_text="Custom TTS endpoint (proxies, self-hosted VoxCPM2 in Phase 9, etc.)",
     )
 
     # ─── Image ────────────────────────────────────────────────────────────
@@ -133,6 +138,23 @@ class TenantAIConfig(models.Model):
 
     def get_image_api_key(self) -> str:
         return decrypt_value(self.image_api_key_encrypted)
+
+    # ─── TTS resolver (MAIC-501) ──────────────────────────────────────────
+
+    def resolve_tts_config(self) -> dict:
+        """Return kwargs for apps.maic.tts.synthesize_speech.
+
+        Decrypts the per-tenant API key (empty string if unset) and bundles
+        provider/voice/base_url so the director can pass `**cfg` through to
+        the synthesizer. Cloud providers fall back to env-var defaults
+        when api_key is empty (e.g. MINIMAX_API_KEY for shared deployments).
+        """
+        return {
+            "provider": self.tts_provider or None,
+            "api_key": self.get_tts_api_key() if self.tts_api_key_encrypted else "",
+            "base_url": self.tts_base_url or None,
+            "voice": self.tts_voice_id or None,
+        }
 
 
 class MAICClassroom(models.Model):
