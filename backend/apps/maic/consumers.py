@@ -119,17 +119,24 @@ def _resolve_tts_config_for_tenant(tenant_id) -> dict | None:
     runs without sync DB hits.
 
     Returns None when:
-      - tenant_id is None (probe / unauthenticated)
-      - no TenantAIConfig row exists for the tenant
-      - the DB query itself fails (test env without django_db, DB outage,
-        decryption error)
+      - `tenant_id` is None (probe / unauthenticated path)
+      - no `TenantAIConfig` row exists for the tenant
+      - the DB itself is unreachable (`OperationalError` / `InterfaceError`)
 
-    None falls through to edge_tts + Aria via the voice resolver, so
-    a DB blip never breaks audio entirely — it just degrades to the
-    free default provider.
+    Other exceptions — Fernet decrypt failures from a rotated
+    SECRET_KEY, schema drift, code bugs — propagate. Production
+    deployments should see real config errors loudly so an admin can
+    fix them, not silently fall back to edge_tts and ship the wrong
+    voice to every classroom.
+
+    Tests that exercise the WS consumer without a Django test DB should
+    monkeypatch this helper directly (see tests_consumers.py
+    `mock_tts_resolver` fixture) rather than rely on broad swallowing.
     """
     if tenant_id is None:
         return None
+    from django.db.utils import DatabaseError, InterfaceError, OperationalError
+
     try:
         from apps.courses.maic_models import TenantAIConfig
 
@@ -141,9 +148,13 @@ def _resolve_tts_config_for_tenant(tenant_id) -> dict | None:
         if cfg is None:
             return None
         return cfg.resolve_tts_config()
-    except Exception as exc:  # noqa: BLE001 — graceful degradation
+    except (OperationalError, InterfaceError, DatabaseError) as exc:
+        # DB outage / connection refused / network blip — degrade to
+        # edge_tts so audio still plays. Real config bugs (Fernet,
+        # schema, code) are NOT swallowed; they propagate.
         logger.warning(
-            "MAIC v2 WS: TTS config lookup failed for tenant=%s: %s; falling back to edge",
+            "MAIC v2 WS: DB error resolving TTS config for tenant=%s: %s; "
+            "falling back to edge",
             tenant_id, exc,
         )
         return None

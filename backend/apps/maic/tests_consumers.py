@@ -352,6 +352,13 @@ async def test_start_action_spawns_tracked_task_and_records_state(monkeypatch):
         "apps.maic.consumers._resolve_or_create_session", _fake_resolve,
     )
 
+    async def _fake_tts_resolve(_tenant_id):
+        return None
+
+    monkeypatch.setattr(
+        "apps.maic.consumers._resolve_tts_config_for_tenant", _fake_tts_resolve,
+    )
+
     # Stub stream_classroom so the test doesn't depend on the full
     # LangGraph + edge_tts pipeline. We yield one frame then await
     # forever so the task stays in-flight while we assert.
@@ -418,6 +425,18 @@ def _make_long_stream_monkeypatches(monkeypatch, *, frames: list[dict] | None = 
 
     monkeypatch.setattr(
         "apps.maic.consumers._resolve_or_create_session", _fake_resolve,
+    )
+
+    # MAIC-502: bypass the per-tenant TTS config DB lookup so consumer
+    # flow tests don't need @django_db. Production code's narrow
+    # OperationalError catch wouldn't help here — pytest-django's safety
+    # net raises RuntimeError, not OperationalError. Stubbing at the
+    # helper boundary is the cleaner test isolation.
+    async def _fake_tts_resolve(_tenant_id):
+        return None
+
+    monkeypatch.setattr(
+        "apps.maic.consumers._resolve_tts_config_for_tenant", _fake_tts_resolve,
     )
 
     frames = frames or [
@@ -657,6 +676,13 @@ async def test_user_message_appends_to_state_and_restarts_stream(monkeypatch):
         "apps.maic.consumers._resolve_or_create_session", _fake_resolve,
     )
 
+    async def _fake_tts_resolve(_tenant_id):
+        return None
+
+    monkeypatch.setattr(
+        "apps.maic.consumers._resolve_tts_config_for_tenant", _fake_tts_resolve,
+    )
+
     # Capture the state passed to each stream invocation so we can
     # assert the user's message landed in state.messages on the
     # *second* call (the one triggered by user_message).
@@ -817,6 +843,13 @@ async def test_resume_restarts_stream_from_saved_state(monkeypatch):
 
     monkeypatch.setattr(
         "apps.maic.consumers._resolve_or_create_session", _fake_resolve,
+    )
+
+    async def _fake_tts_resolve(_tenant_id):
+        return None
+
+    monkeypatch.setattr(
+        "apps.maic.consumers._resolve_tts_config_for_tenant", _fake_tts_resolve,
     )
 
     observed_states: list[dict] = []

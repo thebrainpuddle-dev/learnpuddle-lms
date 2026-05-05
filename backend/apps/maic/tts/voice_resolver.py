@@ -49,6 +49,56 @@ _FALLBACK_PROVIDER: Final = "edge"
 _FALLBACK_VOICE: Final = _DEFAULT_VOICE_BY_PROVIDER[_FALLBACK_PROVIDER]
 
 
+# ── Per-provider voice rotation for multi-agent differentiation ──────
+#
+# Mirrors upstream lib/audio/voice-resolver.ts:resolveAgentVoice's
+# `availableProviders[0].voices[agentIndex % first.voices.length]`
+# fallback (lines 53-60). Without this, six default classroom agents
+# with no per-agent voiceConfig would all share the tenant's single
+# voice — bad UX. We hash the agent.id deterministically into a small
+# voice rotation so each agent gets a distinct voice without requiring
+# an `agentIndex` parameter at the call site.
+#
+# Voice ids are taken from upstream OpenMAIC `lib/audio/constants.ts`
+# (TTS_PROVIDERS['minimax-tts'].voices and TTS_PROVIDERS['azure-tts']
+# / Edge — same Microsoft Neural catalog). These are the same voice
+# slugs that ship with upstream so listening parity holds.
+_VOICE_ROTATION_BY_PROVIDER: Final[dict[str, tuple[str, ...]]] = {
+    "minimax": (
+        "female-yujie",          # warm mature female — slot 0 (teacher)
+        "male-qn-jingying",      # confident male — slot 1 (assistant)
+        "female-shaonv",         # bright young female — slot 2
+        "male-qn-qingse",        # younger male — slot 3
+        "audiobook_female_1",    # narrator female — slot 4
+        "audiobook_male_1",      # narrator male — slot 5
+    ),
+    "edge": (
+        "en-US-AriaNeural",      # warm female
+        "en-US-GuyNeural",       # neutral male
+        "en-US-JennyNeural",     # friendly female
+        "en-US-DavisNeural",     # warm male
+        "en-US-AmberNeural",     # bright female
+        "en-US-BrandonNeural",   # young male
+    ),
+}
+
+
+def _rotate_voice(provider: str, agent_id: str) -> str | None:
+    """Pick a voice from the provider's rotation deterministically by
+    agent_id. Returns None when the provider has no rotation configured
+    (caller should fall back to provider default). Uses hashlib.md5 (not
+    Python's built-in hash) so the assignment is stable across Python
+    invocations — important for cross-session consistency."""
+    import hashlib
+
+    rotation = _VOICE_ROTATION_BY_PROVIDER.get(provider)
+    if not rotation:
+        return None
+    digest = hashlib.md5(agent_id.encode("utf-8")).digest()
+    idx = int.from_bytes(digest[:4], "big") % len(rotation)
+    return rotation[idx]
+
+
 # ── Public types ──────────────────────────────────────────────────────
 
 
@@ -107,11 +157,23 @@ def resolve_agent_voice(
             base_url=base_url,
         )
 
-    # 2. Tenant provider + tenant voice (or provider default voice).
+    # 2. Tenant provider + tenant voice (or rotated voice for multi-
+    # agent classrooms when tenant didn't pin a voice).
     if tenant_provider:
-        voice = tenant_voice or _DEFAULT_VOICE_BY_PROVIDER.get(
-            tenant_provider, _FALLBACK_VOICE,
-        )
+        if tenant_voice:
+            # Tenant explicitly pinned a voice — every agent gets it.
+            # This is the right call for single-tutor or branded
+            # deployments where consistency matters.
+            voice = tenant_voice
+        else:
+            # No tenant voice → distribute the provider's voice catalog
+            # across agents so each one sounds distinct (mirrors
+            # upstream's agentIndex % first.voices.length pattern).
+            # Falls back to the provider's static default when no
+            # rotation is configured for that provider.
+            voice = _rotate_voice(tenant_provider, agent.id) or (
+                _DEFAULT_VOICE_BY_PROVIDER.get(tenant_provider, _FALLBACK_VOICE)
+            )
         return ResolvedVoice(
             provider=tenant_provider,
             voice=voice,
@@ -120,9 +182,11 @@ def resolve_agent_voice(
             base_url=base_url,
         )
 
-    # 3. Global fallback — edge_tts. No tenant, no agent override → this
-    # is the Phase 1 default path; preserves backwards compat for tests
-    # that don't pass any tenant context.
+    # 3. Global fallback — edge_tts + Aria. No tenant context means we
+    # may be in a probe, a unit test, or a misconfigured deployment.
+    # Default to a single predictable voice rather than rotating; multi-
+    # agent rotation only kicks in once a tenant has *opted into* a
+    # provider but skipped pinning a voice (the level-2 branch above).
     return ResolvedVoice(
         provider=_FALLBACK_PROVIDER,
         voice=_FALLBACK_VOICE,

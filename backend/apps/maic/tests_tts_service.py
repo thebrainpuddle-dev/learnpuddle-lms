@@ -452,3 +452,42 @@ async def test_minimax_empty_text_short_circuits(fake_aiohttp, minimax_env):
     result = await synthesize_speech("", audio_id="aud-mm-11")
     assert result.audio_b64 == ""
     assert _FakeMinimaxSession.last_request == {}
+
+
+# ── Manual / live Minimax smoke (gated by env flag) ──────────────────
+
+
+@pytest.mark.skipif(
+    os.environ.get("MAIC_MINIMAX_LIVE_SMOKE") != "1"
+    or not os.environ.get("MINIMAX_API_KEY"),
+    reason=(
+        "live minimax smoke disabled (set MAIC_MINIMAX_LIVE_SMOKE=1 and "
+        "MINIMAX_API_KEY=<your key> to enable — calls api.minimaxi.com "
+        "with real auth, costs a few cents per run)"
+    ),
+)
+@pytest.mark.asyncio
+async def test_live_minimax_smoke_returns_real_mp3(monkeypatch):
+    """Manual cert: actually hits the real Minimax /v1/t2a_v2 endpoint.
+
+    Validates that the upstream-derived payload shape (model, voice_setting,
+    audio_setting, output_format=hex, language_boost=auto) is accepted
+    by a live Minimax account, and that the hex→bytes decoding produces
+    a real MP3 frame.
+
+    Run with:
+        MAIC_MINIMAX_LIVE_SMOKE=1 MINIMAX_API_KEY=<key> \\
+            pytest apps/maic/tests_tts_service.py -k live_minimax \\
+                --no-migrations
+    """
+    monkeypatch.setenv("MAIC_TTS_PROVIDER", "minimax")
+    result = await synthesize_speech(
+        "Welcome to today's lesson on photosynthesis.",
+        audio_id="live-minimax-smoke-1",
+    )
+    decoded = base64.b64decode(result.audio_b64)
+    assert len(decoded) > 1000, f"smoke audio too short: {len(decoded)} bytes"
+    # MP3 frame header: ID3v2 tag (b"ID3") OR MPEG sync (0xFF 0xFB / 0xFA / etc.)
+    assert decoded[:3] == b"ID3" or decoded[:1] == b"\xff", (
+        f"unexpected MP3 header: {decoded[:4]!r}"
+    )

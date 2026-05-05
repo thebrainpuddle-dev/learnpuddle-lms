@@ -85,16 +85,20 @@ def test_tenant_provider_and_voice_used():
     assert resolved.base_url == "https://custom.example.com"
 
 
-def test_tenant_provider_without_voice_uses_provider_default():
+def test_tenant_provider_without_voice_picks_from_rotation():
     """Tenant pinned a provider but didn't pick a voice — resolver
-    fills in the provider's documented default voice."""
-    agent = _agent(voice_config=None)
+    selects from the provider's voice rotation (deterministic per
+    agent.id). The static `_DEFAULT_VOICE_BY_PROVIDER` only kicks in
+    when the provider has no rotation configured (covered by
+    test_unknown_provider_uses_static_default_not_rotation)."""
+    agent = _agent(voice_config=None)  # id="default-1"
     resolved = resolve_agent_voice(
         agent,
         tenant_tts_config={"provider": "minimax", "voice": "", "api_key": "k"},
     )
     assert resolved.provider == "minimax"
-    assert resolved.voice == "female-yujie"  # _DEFAULT_VOICE_BY_PROVIDER["minimax"]
+    from apps.maic.tts.voice_resolver import _VOICE_ROTATION_BY_PROVIDER
+    assert resolved.voice in _VOICE_ROTATION_BY_PROVIDER["minimax"]
 
 
 # ── Level 4: global fallback (no agent voice, no tenant) ──────────────
@@ -164,3 +168,82 @@ def test_to_synthesize_kwargs_drops_empty_string_api_key():
     kwargs = to_synthesize_kwargs(resolved)
     assert "api_key" not in kwargs
     assert "base_url" not in kwargs
+
+
+# ── Multi-agent voice rotation (upstream parity, audit follow-up) ─────
+
+
+def _agent_with_id(agent_id: str) -> AgentConfig:
+    """Helper — same agent shape but parametric id, so we can verify
+    that the rotation distributes voices across the 6 default agent ids."""
+    return AgentConfig(
+        id=agent_id,
+        name=agent_id.title(),
+        role="STUDENT",
+        persona="x",
+        avatar="🤖",
+        color="#000",
+        allowedActions=["speech"],
+        priority=5,
+        voiceConfig=None,
+    )
+
+
+def test_voice_rotation_differentiates_agents_when_tenant_pins_provider_only():
+    """When tenant has provider=minimax + voice='', each agent.id hashes
+    deterministically into a distinct voice. Without this, all 6 default
+    classroom agents would speak with the SAME voice — a real UX
+    regression vs upstream OpenMAIC."""
+    tenant_cfg = {"provider": "minimax", "voice": "", "api_key": "k"}
+    voices = {
+        agent_id: resolve_agent_voice(
+            _agent_with_id(agent_id), tenant_tts_config=tenant_cfg,
+        ).voice
+        for agent_id in (
+            "default-1", "default-2", "default-3",
+            "default-4", "default-5", "default-6",
+        )
+    }
+    # At least 4 distinct voices across the 6 default classroom agents.
+    # We don't assert all 6 are unique because md5 mod 6 can collide,
+    # but the assignment is much better than the all-share-one regression.
+    assert len(set(voices.values())) >= 4, voices
+    # Every voice belongs to the documented Minimax rotation
+    from apps.maic.tts.voice_resolver import _VOICE_ROTATION_BY_PROVIDER
+    valid = set(_VOICE_ROTATION_BY_PROVIDER["minimax"])
+    assert set(voices.values()).issubset(valid), voices
+
+
+def test_voice_rotation_is_deterministic_across_calls():
+    """Same agent.id → same voice every time. Cross-session stability
+    depends on hashlib.md5 (not Python's salted hash())."""
+    agent = _agent_with_id("default-1")
+    tenant_cfg = {"provider": "minimax", "voice": ""}
+    first = resolve_agent_voice(agent, tenant_tts_config=tenant_cfg).voice
+    for _ in range(5):
+        again = resolve_agent_voice(agent, tenant_tts_config=tenant_cfg).voice
+        assert again == first
+
+
+def test_tenant_voice_pin_overrides_rotation():
+    """When tenant explicitly pins a voice, rotation is bypassed —
+    every agent shares that one voice. This is the right call for
+    branded single-voice deployments."""
+    tenant_cfg = {"provider": "minimax", "voice": "branded-voice"}
+    for agent_id in ("default-1", "default-3", "default-6"):
+        resolved = resolve_agent_voice(
+            _agent_with_id(agent_id), tenant_tts_config=tenant_cfg,
+        )
+        assert resolved.voice == "branded-voice"
+
+
+def test_unknown_provider_uses_static_default_not_rotation():
+    """Provider that isn't in _VOICE_ROTATION_BY_PROVIDER falls back
+    to the provider's static default voice (or global fallback)."""
+    tenant_cfg = {"provider": "elevenlabs", "voice": ""}
+    resolved = resolve_agent_voice(
+        _agent_with_id("default-1"), tenant_tts_config=tenant_cfg,
+    )
+    # elevenlabs default lives in _DEFAULT_VOICE_BY_PROVIDER
+    assert resolved.provider == "elevenlabs"
+    assert resolved.voice == "EXAVITQu4vr4xnSDxMaL"
