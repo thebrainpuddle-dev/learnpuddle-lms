@@ -15,6 +15,7 @@ import { describe, test, expect, vi, beforeEach } from 'vitest';
 
 import { ActionEngine, applyEditOperation } from '../action-engine';
 import type { Action } from '../action-types';
+import { useWidgetIframeStore } from '../widget-iframe-store';
 import type {
   CodeLine,
   WhiteboardController,
@@ -364,18 +365,157 @@ describe('ActionEngine — deferred actions resolve immediately', () => {
     ).resolves.toBeUndefined();
   });
 
-  test('widget_* and play_video resolve (Phase 6 fills these)', async () => {
+  test('widget_* without registered iframe warns + still resolves; play_video stays deferred', async () => {
+    // MAIC-606 wired widget_* through the widget-iframe-store. With
+    // no scene/iframe registered, dispatch logs a warning and the
+    // action still resolves so the playback loop's pacing stays
+    // consistent across active and non-interactive scenes.
     const engine = new ActionEngine({ delay: noDelay() });
-    const phase6Actions: Action[] = [
+    const actions: Action[] = [
       { id: '1', type: 'widget_highlight', target: '#x' },
       { id: '2', type: 'widget_setState', state: { foo: 1 } },
       { id: '3', type: 'widget_annotation', target: '#x' },
       { id: '4', type: 'widget_reveal', target: '#x' },
-      { id: '5', type: 'play_video', elementId: 'v' },
+      { id: '5', type: 'play_video', elementId: 'v' },  // still deferred
     ];
-    for (const a of phase6Actions) {
+    for (const a of actions) {
       await expect(engine.execute(a)).resolves.toBeUndefined();
     }
+  });
+});
+
+
+// ── MAIC-606: widget_* dispatch through widget-iframe-store ──────────
+
+
+describe('ActionEngine — widget_* dispatch (MAIC-606)', () => {
+  // Reset the widget-iframe-store between tests since it's a singleton.
+  function resetWidgetStore() {
+    const state = useWidgetIframeStore.getState();
+    Object.keys(state.sendMessageByScene).forEach((sceneId) => {
+      state.registerIframe(sceneId, null);
+    });
+    state.setActiveScene(null);
+  }
+
+  beforeEach(resetWidgetStore);
+
+  test('widget_highlight posts HIGHLIGHT_ELEMENT to active iframe', async () => {
+    const sent: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    useWidgetIframeStore.getState().registerIframe('s1', (type, payload) => {
+      sent.push({ type, payload });
+    });
+    useWidgetIframeStore.getState().setActiveScene('s1');
+
+    const engine = new ActionEngine({ delay: noDelay() });
+    await engine.execute({ id: 'a1', type: 'widget_highlight', target: '#answer-A' });
+
+    expect(sent).toEqual([
+      { type: 'HIGHLIGHT_ELEMENT', payload: { target: '#answer-A' } },
+    ]);
+  });
+
+  test('widget_setState posts SET_WIDGET_STATE with state payload', async () => {
+    const sent: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    useWidgetIframeStore.getState().registerIframe('s1', (type, payload) => {
+      sent.push({ type, payload });
+    });
+    useWidgetIframeStore.getState().setActiveScene('s1');
+
+    const engine = new ActionEngine({ delay: noDelay() });
+    await engine.execute({
+      id: 'a2',
+      type: 'widget_setState',
+      state: { numerator: 3, denominator: 7 },
+    });
+
+    expect(sent).toEqual([
+      {
+        type: 'SET_WIDGET_STATE',
+        payload: { state: { numerator: 3, denominator: 7 } },
+      },
+    ]);
+  });
+
+  test('widget_annotation posts ANNOTATE_ELEMENT', async () => {
+    const sent: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    useWidgetIframeStore.getState().registerIframe('s1', (type, payload) => {
+      sent.push({ type, payload });
+    });
+    useWidgetIframeStore.getState().setActiveScene('s1');
+
+    const engine = new ActionEngine({ delay: noDelay() });
+    await engine.execute({ id: 'a3', type: 'widget_annotation', target: '#step-2' });
+
+    expect(sent).toEqual([
+      { type: 'ANNOTATE_ELEMENT', payload: { target: '#step-2' } },
+    ]);
+  });
+
+  test('widget_reveal posts REVEAL_ELEMENT', async () => {
+    const sent: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    useWidgetIframeStore.getState().registerIframe('s1', (type, payload) => {
+      sent.push({ type, payload });
+    });
+    useWidgetIframeStore.getState().setActiveScene('s1');
+
+    const engine = new ActionEngine({ delay: noDelay() });
+    await engine.execute({ id: 'a4', type: 'widget_reveal', target: '#hidden-hint' });
+
+    expect(sent).toEqual([
+      { type: 'REVEAL_ELEMENT', payload: { target: '#hidden-hint' } },
+    ]);
+  });
+
+  test('widget action with no registered iframe is a warn-but-continue no-op', async () => {
+    // No registerIframe call: getSendMessage() returns null.
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const engine = new ActionEngine({ delay: noDelay() });
+
+    await expect(
+      engine.execute({ id: 'a5', type: 'widget_highlight', target: '#x' }),
+    ).resolves.toBeUndefined();
+
+    // Warning fired
+    expect(warnSpy).toHaveBeenCalled();
+    const msg = warnSpy.mock.calls.flat().join(' ');
+    expect(msg).toMatch(/no widget-iframe callback/i);
+    warnSpy.mockRestore();
+  });
+
+  test('uses ACTIVE iframe when multiple scenes are registered', async () => {
+    // Two scenes registered; setActiveScene picks the destination.
+    const sentToA: Array<string> = [];
+    const sentToB: Array<string> = [];
+    useWidgetIframeStore.getState().registerIframe('a', (type) => sentToA.push(type));
+    useWidgetIframeStore.getState().registerIframe('b', (type) => sentToB.push(type));
+    useWidgetIframeStore.getState().setActiveScene('b');
+
+    const engine = new ActionEngine({ delay: noDelay() });
+    await engine.execute({ id: 'a6', type: 'widget_highlight', target: '#x' });
+
+    expect(sentToA).toEqual([]);
+    expect(sentToB).toEqual(['HIGHLIGHT_ELEMENT']);
+  });
+
+  test('all four widget actions dispatched in order', async () => {
+    // Mirrors a real classroom turn: highlight → setState → annotation → reveal.
+    const sent: Array<string> = [];
+    useWidgetIframeStore.getState().registerIframe('s1', (type) => sent.push(type));
+    useWidgetIframeStore.getState().setActiveScene('s1');
+
+    const engine = new ActionEngine({ delay: noDelay() });
+    await engine.execute({ id: '1', type: 'widget_highlight', target: '#a' });
+    await engine.execute({ id: '2', type: 'widget_setState', state: { x: 1 } });
+    await engine.execute({ id: '3', type: 'widget_annotation', target: '#b' });
+    await engine.execute({ id: '4', type: 'widget_reveal', target: '#c' });
+
+    expect(sent).toEqual([
+      'HIGHLIGHT_ELEMENT',
+      'SET_WIDGET_STATE',
+      'ANNOTATE_ELEMENT',
+      'REVEAL_ELEMENT',
+    ]);
   });
 });
 

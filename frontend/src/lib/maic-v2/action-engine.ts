@@ -35,13 +35,20 @@
  *   - frontend/src/components/maic-v2/Stage.tsx — constructs us with a
  *     controller from WhiteboardProvider (MAIC-217 wires this).
  */
-import type { Action } from './action-types';
+import type {
+  Action,
+  WidgetAnnotationAction,
+  WidgetHighlightAction,
+  WidgetRevealAction,
+  WidgetSetStateAction,
+} from './action-types';
 import type {
   CodeLine,
   WhiteboardCodeElement,
   WhiteboardController,
   WhiteboardElement,
 } from './whiteboard-state';
+import { useWidgetIframeStore } from './widget-iframe-store';
 
 
 // ── Animation timings (mirror upstream lib/action/engine.ts) ──────
@@ -55,6 +62,7 @@ const WB_CLEAR_PER_ELEMENT_MS = 55;
 const WB_CLEAR_CAP_MS = 1400;
 const WB_DRAW_COMPONENT_MS = 800;  // upstream:371,396,512,545 — fade-in for text/shape/line/table
 const WB_EDIT_CODE_MS = 600;       // upstream:638 — line-edit transition
+const WIDGET_ACTION_MS = 300;      // upstream:693,700,708,714 — quick post-dispatch settle
 
 
 // ── Options ────────────────────────────────────────────────────────
@@ -137,13 +145,25 @@ export class ActionEngine {
         await this.executeWbEditCode(action);
         return;
 
-      // Phase 6 deferrals — left as no-ops with a debug log.
+      // MAIC-606: widget interaction surface. Each action dispatches
+      // a postMessage to the active interactive iframe via the
+      // widget-iframe-store, then waits a short settle window
+      // matching upstream lib/action/engine.ts:693,700,708,714.
       case 'widget_highlight':
+        await this.executeWidgetHighlight(action);
+        return;
       case 'widget_setState':
+        await this.executeWidgetSetState(action);
+        return;
       case 'widget_annotation':
+        await this.executeWidgetAnnotation(action);
+        return;
       case 'widget_reveal':
+        await this.executeWidgetReveal(action);
+        return;
+
       case 'play_video':
-        // DEFERRED: widget surface — Phase 6 (MAIC-606)
+        // DEFERRED: video playback surface — Phase 6+ (cross-cuts widget)
         return;
 
       // Defensive: never reaches here under Phase-1 routing, but the
@@ -303,6 +323,61 @@ export class ActionEngine {
       lines: newLines,
     } as Partial<WhiteboardElement>);
     await this.delay(WB_EDIT_CODE_MS);
+  }
+
+  // ── widget_* dispatch (MAIC-606) ─────────────────────────────────
+  // Routes through useWidgetIframeStore.getSendMessage() so the
+  // postMessage hits the active interactive iframe even when scenes
+  // overlap. Wire format mirrors upstream lib/action/engine.ts:679-715
+  // exactly (HIGHLIGHT_ELEMENT / SET_WIDGET_STATE / ANNOTATE_ELEMENT /
+  // REVEAL_ELEMENT) so generated widget HTML works without changes.
+  // No callback registered → log a warning + still resolve so the
+  // playback loop's pacing stays consistent across active and
+  // non-interactive scenes.
+
+  private async executeWidgetHighlight(
+    action: WidgetHighlightAction,
+  ): Promise<void> {
+    this.dispatchToWidget('HIGHLIGHT_ELEMENT', { target: action.target });
+    await this.delay(WIDGET_ACTION_MS);
+  }
+
+  private async executeWidgetSetState(
+    action: WidgetSetStateAction,
+  ): Promise<void> {
+    this.dispatchToWidget('SET_WIDGET_STATE', { state: action.state });
+    await this.delay(WIDGET_ACTION_MS);
+  }
+
+  private async executeWidgetAnnotation(
+    action: WidgetAnnotationAction,
+  ): Promise<void> {
+    this.dispatchToWidget('ANNOTATE_ELEMENT', { target: action.target });
+    await this.delay(WIDGET_ACTION_MS);
+  }
+
+  private async executeWidgetReveal(
+    action: WidgetRevealAction,
+  ): Promise<void> {
+    this.dispatchToWidget('REVEAL_ELEMENT', { target: action.target });
+    await this.delay(WIDGET_ACTION_MS);
+  }
+
+  /** Resolve the active iframe's sendMessage callback and post.
+   * Warn-but-continue when no callback is registered so a misordered
+   * (widget action before scene mounted) playback doesn't deadlock. */
+  private dispatchToWidget(
+    type: string,
+    payload: Record<string, unknown>,
+  ): void {
+    const send = useWidgetIframeStore.getState().getSendMessage();
+    if (send) {
+      send(type, payload);
+    } else {
+      console.warn(
+        `[ActionEngine] ${type}: no widget-iframe callback registered — skipping`,
+      );
+    }
   }
 
   /**
