@@ -89,6 +89,7 @@ INSTALLED_APPS = [
     'apps.users',
     'apps.courses',
     'apps.maic',                    # AI Classroom v2 (MAIC) — Phase 0+, see docs/AI_CLASSROOM_BLUEPRINT.md
+    'apps.maic_pbl',                # AI Classroom v2 PBL — Phase 7, see phase-7-pbl/ in obsidian-vault brain
     'apps.progress',
     'apps.uploads',
     'apps.media',
