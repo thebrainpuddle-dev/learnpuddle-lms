@@ -23,7 +23,18 @@ are the underlying Python objects, the Tools are the LLM-facing
 adapters.
 """
 
+from apps.maic_pbl.mcp.agent_mcp import AgentMCP
+from apps.maic_pbl.mcp.agent_templates import (
+    get_judge_agent_prompt,
+    get_question_agent_prompt,
+)
 from apps.maic_pbl.mcp.mode_mcp import ModeMCP
 from apps.maic_pbl.mcp.project_mcp import ProjectMCP
 
-__all__ = ["ModeMCP", "ProjectMCP"]
+__all__ = [
+    "AgentMCP",
+    "ModeMCP",
+    "ProjectMCP",
+    "get_judge_agent_prompt",
+    "get_question_agent_prompt",
+]
