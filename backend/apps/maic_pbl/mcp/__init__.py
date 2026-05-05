@@ -24,5 +24,6 @@ adapters.
 """
 
 from apps.maic_pbl.mcp.mode_mcp import ModeMCP
+from apps.maic_pbl.mcp.project_mcp import ProjectMCP
 
-__all__ = ["ModeMCP"]
+__all__ = ["ModeMCP", "ProjectMCP"]
