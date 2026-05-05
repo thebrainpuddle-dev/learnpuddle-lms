@@ -30,7 +30,18 @@ from pydantic import BaseModel, ConfigDict
 
 PBLMode = Literal["project_info", "agent", "issueboard", "idle"]
 
+# Module-level constants for the four loop modes. Use these instead
+# of raw strings so a typo in design_graph.py or a tool wrapper
+# surfaces at import time rather than as a runtime mode-gate failure.
+MODE_PROJECT_INFO: PBLMode = "project_info"
+MODE_AGENT: PBLMode = "agent"
+MODE_ISSUEBOARD: PBLMode = "issueboard"
+MODE_IDLE: PBLMode = "idle"
+
 PBLRoleDivision = Literal["management", "development"]
+
+ROLE_DIVISION_MANAGEMENT: PBLRoleDivision = "management"
+ROLE_DIVISION_DEVELOPMENT: PBLRoleDivision = "development"
 
 
 # ── Project info ───────────────────────────────────────────────────────

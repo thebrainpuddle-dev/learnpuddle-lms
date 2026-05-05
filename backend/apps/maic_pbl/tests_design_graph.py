@@ -13,7 +13,6 @@ returning a scripted AIMessage sequence.
 from __future__ import annotations
 
 from typing import Any, Iterator
-from unittest.mock import patch
 
 import pytest
 from langchain_core.messages import AIMessage, BaseMessage
@@ -322,7 +321,7 @@ async def test_loop_records_error_when_model_raises():
 
 
 @pytest.mark.asyncio
-async def test_language_directive_propagates_to_system_prompt(monkeypatch):
+async def test_language_directive_propagates_to_system_prompt():
     """The system prompt builder interpolates language_directive; we
     don't re-test build_pbl_system_prompt here (covered in tests_types
     + the prompt_loader infra) — instead assert the FIRST message the
@@ -344,6 +343,71 @@ async def test_language_directive_propagates_to_system_prompt(monkeypatch):
 
 
 # ── Tool-result feedback loop ─────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_update_issue_via_tool_does_not_clobber_parent_issue():
+    """Regression test for the LangChain-StructuredTool /
+    Pydantic-default interaction: when the LLM calls update_issue
+    with title only, parent_issue must NOT be silently cleared.
+    set_issue_parent is the dedicated tool for FK changes (see
+    issueboard_mcp.py docstring on update_issue)."""
+    script = [
+        # Create parent + child via direct MCP-tool calls
+        _ai_with_tool_calls({"name": "set_mode", "args": {"mode": "issueboard"}, "id": "1"}),
+        _ai_with_tool_calls({
+            "name": "create_issue",
+            "args": {"title": "Parent", "description": "p", "person_in_charge": "dev"},
+            "id": "2",
+        }),
+        _ai_with_tool_calls({
+            "name": "create_issue",
+            "args": {
+                "title": "Child", "description": "c", "person_in_charge": "dev",
+                "parent_issue": "issue_1",
+            },
+            "id": "3",
+        }),
+        # NOW the failing case: LLM patches title only via update_issue
+        _ai_with_tool_calls({
+            "name": "update_issue",
+            "args": {"issue_id": "issue_2", "title": "Renamed Child"},
+            "id": "4",
+        }),
+        _ai_with_tool_calls({"name": "set_mode", "args": {"mode": "idle"}, "id": "5"}),
+        AIMessage(content="welcome"),
+    ]
+    model = _ScriptedChatModel(script)
+    result = await generate_pbl_project(_config(), model)
+
+    issues = result.project_config["issueboard"]["issues"]
+    child = next(i for i in issues if i["id"] == "issue_2")
+    assert child["title"] == "Renamed Child"
+    # The load-bearing assertion: parent_issue NOT silently cleared
+    assert child["parent_issue"] == "issue_1"
+
+
+@pytest.mark.asyncio
+async def test_tool_exception_surfaces_as_tool_message_not_loop_kill():
+    """Regression test: if a single tool raises, the loop must NOT
+    abort. The LLM gets a ToolMessage with the error and can adapt
+    on the next step."""
+    # Force a tool exception by passing args that fail Pydantic validation
+    # at the StructuredTool layer (StructuredTool.ainvoke handles this
+    # by raising — we verify the loop catches it).
+    script = [
+        # Try to call update_title with no args (missing required `title`)
+        _ai_with_tool_calls({"name": "update_title", "args": {}, "id": "1"}),
+        # Loop should continue and the LLM can call set_mode('idle')
+        _ai_with_tool_calls({"name": "set_mode", "args": {"mode": "idle"}, "id": "2"}),
+    ]
+    model = _ScriptedChatModel(script)
+    result = await generate_pbl_project(_config(), model)
+
+    # The loop continued past the failing tool call → reached_idle
+    assert result.reached_idle is True
+    # And no loop-killing error was recorded
+    assert result.error is None or "schema validation" in result.error
 
 
 @pytest.mark.asyncio

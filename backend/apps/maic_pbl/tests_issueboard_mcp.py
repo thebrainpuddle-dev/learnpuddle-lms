@@ -194,41 +194,66 @@ def test_update_issue_missing_returns_error():
     assert result.error == 'Issue "ghost" not found.'
 
 
-def test_update_issue_parent_change_validates_existence():
-    config, _, board = _fresh_setup()
-    board.create_issue(title="Real", description="d", person_in_charge="dev")
-    board.create_issue(title="Other", description="d", person_in_charge="dev")
-    result = board.update_issue(
-        issue_id="issue_2", parent_issue="ghost", parent_issue_set=True,
-    )
-    assert result.success is False
-    assert "ghost" in (result.error or "")
-
-
-def test_update_issue_parent_change_to_existing_works():
+def test_set_issue_parent_to_existing_works():
+    """set_issue_parent is the dedicated tool for FK changes —
+    update_issue can't safely accept parent_issue because the
+    LangChain StructuredTool layer can't distinguish field-omitted
+    from field-set-to-null."""
     config, _, board = _fresh_setup()
     board.create_issue(title="A", description="d", person_in_charge="dev")
     board.create_issue(title="B", description="d", person_in_charge="dev")
-    result = board.update_issue(
-        issue_id="issue_2", parent_issue="issue_1", parent_issue_set=True,
-    )
+    result = board.set_issue_parent(issue_id="issue_2", parent_issue="issue_1")
     assert result.success is True
     assert config["issueboard"]["issues"][1]["parent_issue"] == "issue_1"
 
 
-def test_update_issue_parent_to_null_clears():
-    """parent_issue_set=True + parent_issue=None must clear the FK."""
+def test_set_issue_parent_to_null_clears():
+    """parent_issue=None clears the FK."""
     config, _, board = _fresh_setup()
     board.create_issue(title="A", description="d", person_in_charge="dev")
     board.create_issue(
         title="B", description="d", person_in_charge="dev",
         parent_issue="issue_1",
     )
-    result = board.update_issue(
-        issue_id="issue_2", parent_issue=None, parent_issue_set=True,
-    )
+    result = board.set_issue_parent(issue_id="issue_2", parent_issue=None)
     assert result.success is True
     assert config["issueboard"]["issues"][1]["parent_issue"] is None
+
+
+def test_set_issue_parent_validates_target_exists():
+    _, _, board = _fresh_setup()
+    board.create_issue(title="X", description="d", person_in_charge="dev")
+    result = board.set_issue_parent(issue_id="issue_1", parent_issue="ghost")
+    assert result.success is False
+    assert "ghost" in (result.error or "")
+
+
+def test_set_issue_parent_validates_issue_exists():
+    _, _, board = _fresh_setup()
+    result = board.set_issue_parent(issue_id="ghost", parent_issue=None)
+    assert result.success is False
+    assert "ghost" in (result.error or "")
+
+
+def test_set_issue_parent_rejects_self_parent_cycle():
+    """Defensive: an issue can't be its own parent (would create a
+    cycle in the parent chain). New invariant added with the API split."""
+    _, _, board = _fresh_setup()
+    board.create_issue(title="X", description="d", person_in_charge="dev")
+    result = board.set_issue_parent(issue_id="issue_1", parent_issue="issue_1")
+    assert result.success is False
+    assert "own parent" in (result.error or "").lower()
+
+
+def test_update_issue_no_longer_accepts_parent_issue():
+    """parent_issue is gone from update_issue per the LangChain-layer
+    fix. Calling with parent_issue= raises TypeError (kwargs)."""
+    _, _, board = _fresh_setup()
+    board.create_issue(title="X", description="d", person_in_charge="dev")
+    with pytest.raises(TypeError):
+        board.update_issue(  # type: ignore[call-arg]
+            issue_id="issue_1", parent_issue="should-not-work",
+        )
 
 
 # ── delete_issue ─────────────────────────────────────────────────────

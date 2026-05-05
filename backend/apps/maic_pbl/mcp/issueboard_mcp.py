@@ -103,13 +103,18 @@ class IssueboardMCP:
         description: str,
         person_in_charge: str,
         participants: list[str] | None = None,
-        notes: str = "",
+        notes: str | None = None,
         parent_issue: str | None = None,
-        index: int = 0,
+        index: int | None = None,
     ) -> PBLToolResult:
         """Append a new issue. Auto-spawns Question + Judge agents
         named "Question Agent - issue_N" and "Judge Agent - issue_N"
         (matches upstream).
+
+        Coerces None → "" / [] / 0 for the optional fields so a
+        LangChain StructuredTool call with Pydantic-defaulted None
+        values still produces a schema-valid PBLIssue (notes/index
+        are non-nullable in PBLIssue per upstream's TS shape).
 
         Rejects:
           - empty title
@@ -117,6 +122,8 @@ class IssueboardMCP:
           - parent_issue referencing a non-existent issue
         """
         participants = participants or []
+        notes = notes if notes is not None else ""
+        index = index if index is not None else 0
 
         if not title or not title.strip():
             return PBLToolResult(success=False, error="Title cannot be empty.")
@@ -203,17 +210,16 @@ class IssueboardMCP:
         person_in_charge: str | None = None,
         participants: list[str] | None = None,
         notes: str | None = None,
-        parent_issue: str | None = None,
-        parent_issue_set: bool = False,
         index: int | None = None,
     ) -> PBLToolResult:
         """Patch one issue. Optional fields stay unchanged when omitted.
 
-        `parent_issue` distinguishes "not provided" from "set to null"
-        via the `parent_issue_set` flag (Python kwargs can't represent
-        TS's `undefined` vs `null` natively). Caller passes
-        parent_issue_set=True to actually mutate parent_issue (including
-        clearing it via parent_issue=None).
+        Note: parent_issue is intentionally NOT in this method. The
+        LangChain StructuredTool layer can't distinguish "field omitted"
+        from "field set to None" (Pydantic's model_dump fills defaults),
+        so a single update_issue call wired through a tool would always
+        clobber parent_issue to None. set_issue_parent below is the
+        dedicated tool the design loop uses to mutate the FK.
         """
         issues = self._config["issueboard"]["issues"]
         issue = next((i for i in issues if i["id"] == issue_id), None)
@@ -221,14 +227,6 @@ class IssueboardMCP:
             return PBLToolResult(
                 success=False, error=f'Issue "{issue_id}" not found.',
             )
-
-        # Validate parent_issue change before applying any mutation
-        if parent_issue_set and parent_issue is not None:
-            if not any(i["id"] == parent_issue for i in issues):
-                return PBLToolResult(
-                    success=False,
-                    error=f'Parent issue "{parent_issue}" not found.',
-                )
 
         if title is not None:
             issue["title"] = title
@@ -240,12 +238,50 @@ class IssueboardMCP:
             issue["participants"] = list(participants)
         if notes is not None:
             issue["notes"] = notes
-        if parent_issue_set:
-            issue["parent_issue"] = parent_issue
         if index is not None:
             issue["index"] = index
 
         return PBLToolResult(success=True, message="Issue updated successfully.")
+
+    def set_issue_parent(
+        self, *, issue_id: str, parent_issue: str | None,
+    ) -> PBLToolResult:
+        """Set or clear an issue's parent_issue FK.
+
+        parent_issue=None clears the FK; passing a string sets it
+        (must reference an existing issue). Split out from update_issue
+        so the LangChain tool layer can distinguish "I want to clear
+        the parent" from "I'm patching other fields and parent should
+        stay alone" — see update_issue's docstring for the upstream
+        TS-undefined-vs-null asymmetry that motivated the split.
+        """
+        issues = self._config["issueboard"]["issues"]
+        issue = next((i for i in issues if i["id"] == issue_id), None)
+        if issue is None:
+            return PBLToolResult(
+                success=False, error=f'Issue "{issue_id}" not found.',
+            )
+        if parent_issue is not None and not any(
+            i["id"] == parent_issue for i in issues
+        ):
+            return PBLToolResult(
+                success=False,
+                error=f'Parent issue "{parent_issue}" not found.',
+            )
+        if parent_issue == issue_id:
+            return PBLToolResult(
+                success=False,
+                error="An issue cannot be its own parent.",
+            )
+        issue["parent_issue"] = parent_issue
+        return PBLToolResult(
+            success=True,
+            message=(
+                f'Issue "{issue_id}" parent set to {parent_issue!r}.'
+                if parent_issue is not None
+                else f'Issue "{issue_id}" parent cleared.'
+            ),
+        )
 
     def delete_issue(self, issue_id: str) -> PBLToolResult:
         """Remove an issue. Cascades: child issues whose parent_issue
