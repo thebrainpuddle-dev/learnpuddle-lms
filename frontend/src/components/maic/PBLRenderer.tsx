@@ -29,6 +29,7 @@ import type { MAICPBLContent } from '../../types/maic-scenes';
 import type { PBLAgent, PBLIssue } from '../../types/pbl';
 import { cn } from '../../lib/utils';
 import { maicChatUrl, type MAICRole } from '../../lib/maic/endpoints';
+import { useMaicPBLChannel } from '../../hooks/useMaicPBLChannel';
 
 // ─── Issue Board Types ───────────────────────────────────────────────────────
 
@@ -50,6 +51,13 @@ interface PBLRendererProps {
   mode?: 'autonomous' | 'playback';
   /** Role-aware URL selection. Defaults to 'teacher' for backward compatibility. */
   role?: MAICRole;
+  /** Phase 7: when set, chat is driven by the PBL WS at
+   *  `/ws/maic/pbl/<id>/` (apps/maic_pbl/consumers.py). When unset,
+   *  the legacy SSE path is used (kept for any pre-Phase-7 callers). */
+  pblSessionId?: string;
+  /** Phase 7: model id for the WS chat. Required when `pblSessionId`
+   *  is set; ignored otherwise. Same scheme as the create endpoint. */
+  languageModelId?: string;
 }
 
 interface ChatMessage {
@@ -84,10 +92,13 @@ export const PBLRenderer = React.memo<PBLRendererProps>(function PBLRenderer({
   sceneId,
   mode: _mode = 'autonomous',
   role,
+  pblSessionId,
+  languageModelId,
 }) {
   const accessToken = useAuthStore((s) => s.accessToken);
   const config = content.projectConfig;
   const projectInfo = config.projectInfo;
+  const wsMode = Boolean(pblSessionId);
 
   const [selectedRole, setSelectedRole] = useState<string | null>(
     config.selectedRole ?? null,
@@ -140,9 +151,54 @@ export const PBLRenderer = React.memo<PBLRendererProps>(function PBLRenderer({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
 
+  // ─── WS chat hook (Phase 7, MAIC-706/707) ──────────────────────────────
+  // autoConnect is gated on pblSessionId — when this prop is unset we
+  // fall back to the legacy SSE path. The hook always returns a stable
+  // value so we can call it unconditionally and keep React's hook order.
+
+  const wsChannel = useMaicPBLChannel({
+    sessionId: pblSessionId ?? '',
+    autoConnect: wsMode,
+  });
+  const [wsUserMessages, setWsUserMessages] = useState<ChatMessage[]>([]);
+
+  // Merge user-sent messages (local) with assistant turns (from hook)
+  // into a single chronological list. We trust insertion order since
+  // user sends are recorded synchronously before the WS replies.
+  const wsMergedMessages = useMemo<ChatMessage[]>(() => {
+    if (!wsMode) return [];
+    const assistant: ChatMessage[] = wsChannel.messages.map((m, i) => ({
+      id: `ws-asst-${i}`,
+      role: 'assistant',
+      content: m.content || (m.finished ? '' : '…'),
+    }));
+    // Interleave: each user message is followed by the next assistant
+    // turn in order. With N user msgs and M assistant turns we render
+    // u0, a0, u1, a1, ... and any trailing items in the longer list.
+    const out: ChatMessage[] = [];
+    const max = Math.max(wsUserMessages.length, assistant.length);
+    for (let i = 0; i < max; i++) {
+      if (i < wsUserMessages.length) out.push(wsUserMessages[i]);
+      if (i < assistant.length) out.push(assistant[i]);
+    }
+    return out;
+  }, [wsMode, wsUserMessages, wsChannel.messages]);
+
+  // The chat panel reads from one source. wsMode → merged WS view.
+  const displayedMessages: ChatMessage[] = wsMode ? wsMergedMessages : chatMessages;
+
+  // isSending in wsMode = there's a turn in flight (last assistant
+  // unfinished) OR there are more user msgs than assistant turns.
+  const wsBusy =
+    wsMode &&
+    (wsUserMessages.length > wsChannel.messages.length ||
+      (wsChannel.messages.length > 0 &&
+        !wsChannel.messages[wsChannel.messages.length - 1].finished));
+  const effectiveSending = wsMode ? wsBusy : isSending;
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [chatMessages.length]);
+  }, [displayedMessages.length]);
 
   useEffect(() => {
     return () => {
@@ -150,13 +206,35 @@ export const PBLRenderer = React.memo<PBLRendererProps>(function PBLRenderer({
     };
   }, []);
 
-  // ─── Chat (legacy SSE; MAIC-706 swaps in WS) ───────────────────────────
+  // ─── Chat send (branches WS vs SSE) ─────────────────────────────────────
 
   const handleSendChat = useCallback(async () => {
     const trimmed = chatInput.trim();
-    if (!trimmed || isSending || !accessToken) return;
+    if (!trimmed || effectiveSending || !accessToken) return;
 
     setChatInput('');
+
+    // ── WS path (Phase 7) ────────────────────────────────────────────
+    if (wsMode) {
+      if (wsChannel.status !== 'open') return;
+      const userMsg: ChatMessage = {
+        id: `ws-user-${Date.now()}`,
+        role: 'user',
+        content: trimmed,
+      };
+      setWsUserMessages((prev) => [...prev, userMsg]);
+      wsChannel.send({
+        action: 'chat',
+        data: {
+          message: trimmed,
+          userRole: selectedRole ?? '',
+          languageModelId: languageModelId ?? '',
+        },
+      });
+      return;
+    }
+
+    // ── SSE legacy path ──────────────────────────────────────────────
     setIsSending(true);
 
     const userMsg: ChatMessage = {
@@ -206,7 +284,10 @@ export const PBLRenderer = React.memo<PBLRendererProps>(function PBLRenderer({
     });
 
     setIsSending(false);
-  }, [chatInput, isSending, accessToken, sceneId, selectedRole, completedIssueIds, role]);
+  }, [
+    chatInput, effectiveSending, accessToken, sceneId, selectedRole,
+    completedIssueIds, role, wsMode, wsChannel, languageModelId,
+  ]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -323,13 +404,13 @@ export const PBLRenderer = React.memo<PBLRendererProps>(function PBLRenderer({
 
           {/* Messages */}
           <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3" aria-live="polite">
-            {chatMessages.length === 0 && (
+            {displayedMessages.length === 0 && (
               <p className="text-xs text-gray-400 text-center mt-8">
                 Ask a question to get guidance on your project.
               </p>
             )}
 
-            {chatMessages.map((msg) => (
+            {displayedMessages.map((msg) => (
               <div
                 key={msg.id}
                 className={cn('flex', msg.role === 'user' ? 'justify-end' : 'justify-start')}
@@ -347,7 +428,7 @@ export const PBLRenderer = React.memo<PBLRendererProps>(function PBLRenderer({
               </div>
             ))}
 
-            {isSending && (
+            {effectiveSending && (
               <div className="flex justify-start">
                 <div className="bg-white rounded-2xl rounded-bl-md px-4 py-2.5 border border-gray-200">
                   <div className="flex items-center gap-1.5">
@@ -371,7 +452,7 @@ export const PBLRenderer = React.memo<PBLRendererProps>(function PBLRenderer({
                 onKeyDown={handleKeyDown}
                 placeholder="Ask the AI mentor..."
                 rows={1}
-                disabled={isSending}
+                disabled={effectiveSending}
                 className={cn(
                   'flex-1 resize-none rounded-lg border border-gray-200 px-3 py-2 text-sm',
                   'placeholder:text-gray-400 bg-white',
@@ -384,7 +465,11 @@ export const PBLRenderer = React.memo<PBLRendererProps>(function PBLRenderer({
               <button
                 type="button"
                 onClick={handleSendChat}
-                disabled={!chatInput.trim() || isSending}
+                disabled={
+                  !chatInput.trim() ||
+                  effectiveSending ||
+                  (wsMode && wsChannel.status !== 'open')
+                }
                 className={cn(
                   'shrink-0 h-9 w-9 rounded-lg flex items-center justify-center',
                   'bg-indigo-600 text-white hover:bg-indigo-700',
@@ -393,7 +478,7 @@ export const PBLRenderer = React.memo<PBLRendererProps>(function PBLRenderer({
                 )}
                 aria-label="Send message"
               >
-                {isSending ? (
+                {effectiveSending ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
                 ) : (
                   <Send className="h-4 w-4" />

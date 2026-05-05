@@ -33,6 +33,7 @@ import { LoginPage } from './pages/auth/LoginPage';
 import { PageLoader } from './components/PageLoader';
 import { featureFlags } from './config/featureFlags';
 import MaicV2Probe from './pages/dev/MaicV2Probe';
+import MaicPBLDevPage from './pages/dev/MaicPBLDevPage';
 
 // ─── Lazy-loaded page components ────────────────────────────────────────────
 // Auth
@@ -469,6 +470,14 @@ function AppContent() {
           obsidian-vault/.../maic-rebuild/. Removed in Phase 8. */}
       {featureFlags.maicV2Enabled && (
         <Route path="/dev/maic-v2" element={<RoutePage><MaicV2Probe /></RoutePage>} />
+      )}
+      {/* Phase 7 (MAIC-707): PBL session probe — render PBLRenderer
+          against a real MaicPBLSession id with real WS chat. */}
+      {featureFlags.maicV2Enabled && (
+        <Route
+          path="/dev/pbl/:sessionId"
+          element={<RoutePage><MaicPBLDevPage /></RoutePage>}
+        />
       )}
 
       {/* Public Routes — Super Admin login (platform admin) */}

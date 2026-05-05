@@ -27,6 +27,7 @@ import logging
 from typing import Any
 
 from rest_framework import status
+from rest_framework.exceptions import NotFound
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -224,3 +225,59 @@ def _build_language_directive(language: str) -> str:
     if not lang or lang in {"en", "en-us", "en-gb"}:
         return ""
     return f"All generated content must be in language code: {language}."
+
+
+class PBLProjectRetrieveView(APIView):
+    """GET /api/maic/v2/pbl/projects/<session_id>/ — read-back a PBL
+    session by id, tenant-scoped.
+
+    Used by the dev probe (MAIC-707) so the frontend can hydrate
+    `MAICPBLContent` from a previously-created session without re-
+    running the design loop.
+
+    Response 200:
+      {
+        session_id: str,
+        ws_url:     str,
+        status:     "draft"|"active"|"completed"|"failed"|"archived",
+        topic:      str,
+        language:   str,
+        project_config: PBLProjectConfig,
+        chat_messages: list[PBLChatMessage],
+      }
+
+    Response 404 — session not found OR cross-tenant (we collapse the
+    two so an attacker cannot enumerate session ids).
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request: Request, session_id: str) -> Response:
+        user = request.user
+        tenant_id = getattr(user, "tenant_id", None)
+        if tenant_id is None:
+            return Response(
+                {"error": "user has no tenant"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        sess = (
+            MaicPBLSession.objects.all_tenants()
+            .filter(id=session_id, tenant_id=tenant_id)
+            .first()
+        )
+        if sess is None:
+            raise NotFound("PBL session not found")
+
+        return Response(
+            {
+                "session_id": str(sess.id),
+                "ws_url": _build_pbl_chat_ws_url(request, str(sess.id)),
+                "status": sess.status,
+                "topic": sess.topic,
+                "language": sess.language,
+                "project_config": sess.project_config,
+                "chat_messages": sess.chat_messages,
+            },
+            status=status.HTTP_200_OK,
+        )

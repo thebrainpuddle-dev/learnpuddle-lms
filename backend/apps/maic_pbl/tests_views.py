@@ -257,3 +257,81 @@ def test_language_directive_built_from_iso_code():
     assert _build_language_directive("EN-GB") == ""
     assert "es" in _build_language_directive("es")
     assert "ja" in _build_language_directive("ja")
+
+
+# ── PBLProjectRetrieveView (MAIC-707) ─────────────────────────────────
+
+
+def _seed_session(user, tenant, **overrides):
+    """Create a real MaicPBLSession row for retrieve-view tests."""
+    defaults = {
+        "tenant_id": tenant.id,
+        "owner_id": user.id,
+        "topic": "Fractions",
+        "language": "en",
+        "agent_count": 3,
+        "status": MaicPBLSession.STATUS_ACTIVE,
+        "project_config": {
+            "projectInfo": {"title": "Math Tutor", "description": "d"},
+            "agents": [],
+            "issueboard": {"agent_ids": [], "issues": [], "current_issue_id": None},
+            "chat": {"messages": []},
+        },
+        "chat_messages": [],
+    }
+    defaults.update(overrides)
+    return MaicPBLSession.objects.create(**defaults)
+
+
+@pytest.mark.django_db
+def test_retrieve_anonymous_returns_401():
+    c = APIClient()
+    res = c.get("/api/maic/v2/pbl/projects/00000000-0000-0000-0000-000000000000/")
+    assert res.status_code == 401
+
+
+@pytest.mark.django_db
+def test_retrieve_no_tenant_returns_400():
+    from apps.users.models import User
+    u = User.objects.create(email="orphan@dev.local", is_active=True, first_name="X")
+    res = _client_for(u).get(
+        "/api/maic/v2/pbl/projects/00000000-0000-0000-0000-000000000000/"
+    )
+    assert res.status_code == 400
+
+
+@pytest.mark.django_db
+def test_retrieve_returns_session_payload():
+    u, t = _make_user_with_tenant("t-ret-ok")
+    sess = _seed_session(u, t)
+    res = _client_for(u).get(f"/api/maic/v2/pbl/projects/{sess.id}/")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["session_id"] == str(sess.id)
+    assert body["status"] == "active"
+    assert body["topic"] == "Fractions"
+    assert body["language"] == "en"
+    assert body["project_config"]["projectInfo"]["title"] == "Math Tutor"
+    assert body["chat_messages"] == []
+    assert body["ws_url"].endswith(f"/ws/maic/pbl/{sess.id}/")
+
+
+@pytest.mark.django_db
+def test_retrieve_unknown_session_returns_404():
+    u, _ = _make_user_with_tenant("t-ret-404")
+    res = _client_for(u).get(
+        "/api/maic/v2/pbl/projects/00000000-0000-0000-0000-000000000000/"
+    )
+    assert res.status_code == 404
+
+
+@pytest.mark.django_db
+def test_retrieve_cross_tenant_collapses_to_404():
+    """A session belonging to tenant A cannot be read by user from
+    tenant B — and the response must be 404, not 403, so an attacker
+    cannot enumerate session ids by probing for permission errors."""
+    u_a, t_a = _make_user_with_tenant("t-ret-a")
+    sess = _seed_session(u_a, t_a)
+    u_b, _ = _make_user_with_tenant("t-ret-b")
+    res = _client_for(u_b).get(f"/api/maic/v2/pbl/projects/{sess.id}/")
+    assert res.status_code == 404

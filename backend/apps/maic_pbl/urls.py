@@ -6,7 +6,7 @@ apps.maic.urls).
 """
 from django.urls import path
 
-from apps.maic_pbl.views import PBLProjectCreateView
+from apps.maic_pbl.views import PBLProjectCreateView, PBLProjectRetrieveView
 
 
 app_name = "maic_pbl"
@@ -16,5 +16,10 @@ urlpatterns = [
         "projects/",
         PBLProjectCreateView.as_view(),
         name="project-create",
+    ),
+    path(
+        "projects/<uuid:session_id>/",
+        PBLProjectRetrieveView.as_view(),
+        name="project-retrieve",
     ),
 ]
