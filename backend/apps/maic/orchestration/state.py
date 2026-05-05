@@ -120,6 +120,13 @@ class OrchestratorState(TypedDict, total=False):
     triggerAgentId: str | None
     userProfile: dict[str, Any] | None                # shape: {nickname?, bio?}
     agentConfigOverrides: dict[str, dict[str, Any]]   # request-scoped agent configs
+    ttsConfig: dict[str, Any] | None                  # MAIC-502: pre-resolved per-tenant
+                                                      # TTS bundle (provider, api_key,
+                                                      # base_url, voice). Resolved once
+                                                      # at WS handshake to avoid sync DB
+                                                      # calls inside the async stream.
+                                                      # Shape: dict from
+                                                      # TenantAIConfig.resolve_tts_config().
 
     # ── Mutable scalars (overwritten by nodes) ──
     currentAgentId: str | None

@@ -168,3 +168,130 @@ async def test_no_speech_audio_when_text_is_empty(monkeypatch):
     assert "speech_audio" not in types_seq
     assert "action" in types_seq
     assert "agent_end" in types_seq
+
+
+# ── MAIC-502: tenant TTS config flows through state ───────────────────
+
+
+class _CapturingCommunicate:
+    """Captures the args its constructor was called with so we can
+    verify the resolver+state path picked the right voice/provider.
+    Used only by the edge-fallback assertion path."""
+
+    last_args: dict[str, Any] = {}
+
+    def __init__(self, text: str, voice: str, rate: str = "+0%"):
+        _CapturingCommunicate.last_args = {"text": text, "voice": voice, "rate": rate}
+
+    async def stream(self):
+        yield {"type": "audio", "data": b"\xff\xfb\x90"}
+
+
+@pytest.fixture
+def capturing_edge_tts(monkeypatch):
+    fake = types.ModuleType("edge_tts")
+    fake.Communicate = _CapturingCommunicate  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "edge_tts", fake)
+    _CapturingCommunicate.last_args = {}
+    yield fake
+
+
+@pytest.mark.asyncio
+async def test_tenant_ttsconfig_with_edge_pins_voice(capturing_edge_tts):
+    """When state carries ttsConfig with provider=edge + a custom voice,
+    the resolver picks it up and edge_tts is called with that voice."""
+    state = build_initial_state(
+        tts_config={
+            "provider": "edge",
+            "voice": "en-GB-RyanNeural",
+            "api_key": "",
+            "base_url": "",
+        },
+    )
+    [_ async for _ in stream_classroom(state)]
+    assert _CapturingCommunicate.last_args["voice"] == "en-GB-RyanNeural"
+
+
+@pytest.mark.asyncio
+async def test_no_ttsconfig_falls_back_to_edge_aria(capturing_edge_tts):
+    """No state["ttsConfig"] → resolver returns global fallback (edge +
+    Aria). Backwards compat for existing call sites that don't pass
+    tts_config."""
+    state = build_initial_state()
+    assert state.get("ttsConfig") is None
+    [_ async for _ in stream_classroom(state)]
+    assert _CapturingCommunicate.last_args["voice"] == "en-US-AriaNeural"
+
+
+@pytest.mark.asyncio
+async def test_tenant_ttsconfig_routes_to_minimax_provider(monkeypatch):
+    """When state carries ttsConfig with provider=minimax, the director
+    routes through the minimax branch — edge_tts is NEVER touched.
+    Asserts both: minimax path ran (we can see a speech_audio frame
+    with a known fake-payload) AND edge wasn't called."""
+    # Inject fake aiohttp at the minimax provider boundary.
+    fake_aiohttp = types.ModuleType("aiohttp")
+
+    class _FakeResp:
+        status = 200
+        async def __aenter__(self): return self
+        async def __aexit__(self, *_a): return None
+        async def json(self):
+            # Tiny hex-encoded MP3-shaped payload
+            return {"data": {"audio": "ffaabb"}}
+        async def text(self): return ""
+
+    captured: dict[str, Any] = {}
+
+    class _FakeSession:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *_a): return None
+        def post(self, url, *, json, headers):
+            captured["url"] = url
+            captured["headers"] = headers
+            captured["json"] = json
+            return _FakeResp()
+
+    fake_aiohttp.ClientSession = _FakeSession  # type: ignore[attr-defined]
+    fake_aiohttp.ClientError = ConnectionError  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "aiohttp", fake_aiohttp)
+
+    # Inject a sentinel edge_tts that would blow up if called.
+    blown = types.ModuleType("edge_tts")
+
+    class _NotCalled:
+        def __init__(self, *_a, **_kw):
+            raise AssertionError("edge_tts must not be called when minimax is configured")
+        async def stream(self):  # pragma: no cover — defensive
+            yield {}
+
+    blown.Communicate = _NotCalled  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "edge_tts", blown)
+
+    state = build_initial_state(
+        tts_config={
+            "provider": "minimax",
+            "voice": "english-female-narrator",
+            "api_key": "tenant-key-abc",
+            "base_url": "https://api.minimaxi.com",
+        },
+    )
+    events = [e async for e in stream_classroom(state)]
+    types_seq = [e["type"] for e in events]
+    assert "speech_audio" in types_seq, types_seq
+    # Tenant-supplied auth + voice landed in the request
+    assert captured["url"].endswith("/v1/t2a_v2")
+    assert captured["headers"]["Authorization"] == "Bearer tenant-key-abc"
+    assert captured["json"]["voice_setting"]["voice_id"] == "english-female-narrator"
+
+
+@pytest.mark.asyncio
+async def test_empty_ttsconfig_dict_uses_global_fallback(capturing_edge_tts):
+    """resolve_tts_config() returns all-empty values when a
+    TenantAIConfig row exists but the tenant hasn't configured TTS yet.
+    Must NOT explode — global fallback (edge + Aria) wins."""
+    state = build_initial_state(
+        tts_config={"provider": None, "voice": None, "api_key": "", "base_url": None},
+    )
+    [_ async for _ in stream_classroom(state)]
+    assert _CapturingCommunicate.last_args["voice"] == "en-US-AriaNeural"

@@ -114,14 +114,19 @@ def test_safe_writer_handles_none_writer():
 # ── build_initial_state ────────────────────────────────────────────────
 
 
-def test_initial_state_has_all_16_fields():
-    """Mirror of OrchestratorState 16-field set; if these drift, MAIC-004
-    regression test catches it first, but this is the runtime confirm."""
+def test_initial_state_has_all_17_fields():
+    """Runtime state from build_initial_state() — 16 fields at Phase 1,
+    +ttsConfig in Phase 5 MAIC-502 = 17. The TypedDict declares
+    `directorModelId` but build_initial_state doesn't populate it
+    (TypedDict total=False), so the runtime keyset stays one less than
+    the annotation count. The annotation-count lock lives in
+    tests_orchestration.test_total_field_count_is_eighteen."""
     state = build_initial_state()
     expected = {
         "messages", "storeState", "availableAgentIds", "maxTurns",
         "languageModelId", "thinkingConfig", "discussionContext",
         "triggerAgentId", "userProfile", "agentConfigOverrides",
+        "ttsConfig",
         "currentAgentId", "turnCount", "shouldEnd", "totalActions",
         "agentResponses", "whiteboardLedger",
     }

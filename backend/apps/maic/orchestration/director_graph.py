@@ -656,22 +656,24 @@ async def _agent_generate_node(
 
     # ── TTS: synthesize the agent's spoken text into a speech_audio frame ──
     # Phase 1 contract: one audio per agent turn (concatenated text).
-    # MAIC-501.2. Phase 5 (VoxCPM2) may split per text-item for better
-    # interleaving with actions in long turns.
+    # MAIC-501.2 added the provider abstraction; MAIC-502 wires the
+    # per-tenant config through the orchestrator state.
     if full_text.strip():
         try:
             from apps.maic.tts import SpeechSynthesisError, synthesize_speech
+            from apps.maic.tts.voice_resolver import (
+                resolve_agent_voice, to_synthesize_kwargs,
+            )
 
-            voice_id = (
-                agent.voiceConfig.voiceId
-                if agent.voiceConfig is not None
-                else None
+            resolved = resolve_agent_voice(
+                agent,
+                tenant_tts_config=state.get("ttsConfig"),
             )
             audio_id = f"speech-{uuid.uuid4().hex[:12]}"
             speech = await synthesize_speech(
                 full_text,
                 audio_id=audio_id,
-                voice=voice_id,
+                **to_synthesize_kwargs(resolved),
             )
             write({
                 "type": "speech_audio",
@@ -743,6 +745,7 @@ def build_initial_state(
     messages: list[dict[str, Any]] | None = None,
     available_agent_ids: list[str] | None = None,
     max_turns: int = 1,
+    tts_config: dict[str, Any] | None = None,
 ) -> OrchestratorState:
     """Mirror of upstream buildInitialState at director-graph.ts:500-547.
 
@@ -754,6 +757,13 @@ def build_initial_state(
         empty list. The director then applies its `'default-1'` fallback
         rule from upstream director-graph.ts:122 — never overwrite
         caller intent here.
+
+    `tts_config` is the dict returned by
+    `TenantAIConfig.resolve_tts_config()` — pre-resolved at the WS
+    handshake (MAIC-502) so the agent_generate node doesn't do a sync
+    DB query inside the async stream. None means "no tenant context"
+    (probe / tests / no MAIC config row); the resolver falls back to
+    edge_tts + Aria.
     """
     if available_agent_ids is None:
         available_agent_ids = ["default-1"]
@@ -769,6 +779,7 @@ def build_initial_state(
         "triggerAgentId": None,
         "userProfile": None,
         "agentConfigOverrides": {},
+        "ttsConfig": tts_config,
         "currentAgentId": None,
         "turnCount": 0,
         "shouldEnd": False,

@@ -111,6 +111,44 @@ def _resolve_or_create_session(session_id: str, user) -> tuple[Any, bool]:
     return session, False
 
 
+@database_sync_to_async
+def _resolve_tts_config_for_tenant(tenant_id) -> dict | None:
+    """Load and decrypt TenantAIConfig.resolve_tts_config() for one tenant.
+
+    MAIC-502: called once at WS `start` action so the orchestration loop
+    runs without sync DB hits.
+
+    Returns None when:
+      - tenant_id is None (probe / unauthenticated)
+      - no TenantAIConfig row exists for the tenant
+      - the DB query itself fails (test env without django_db, DB outage,
+        decryption error)
+
+    None falls through to edge_tts + Aria via the voice resolver, so
+    a DB blip never breaks audio entirely — it just degrades to the
+    free default provider.
+    """
+    if tenant_id is None:
+        return None
+    try:
+        from apps.courses.maic_models import TenantAIConfig
+
+        manager = TenantAIConfig.objects
+        qs = (
+            manager.all_tenants() if hasattr(manager, "all_tenants") else manager
+        ).filter(tenant_id=tenant_id)
+        cfg = qs.first()
+        if cfg is None:
+            return None
+        return cfg.resolve_tts_config()
+    except Exception as exc:  # noqa: BLE001 — graceful degradation
+        logger.warning(
+            "MAIC v2 WS: TTS config lookup failed for tenant=%s: %s; falling back to edge",
+            tenant_id, exc,
+        )
+        return None
+
+
 class ClassroomConsumer(AsyncJsonWebsocketConsumer):
     """WebSocket consumer for an AI Classroom session.
 
@@ -283,10 +321,15 @@ class ClassroomConsumer(AsyncJsonWebsocketConsumer):
             await self._cancel_in_flight()
 
             data = content.get("data") or {}
+            # MAIC-502: pre-resolve per-tenant TTS config once per session
+            # start so the async orchestration loop doesn't do sync DB
+            # calls. Falls back to None when no TenantAIConfig row exists.
+            tts_config = await _resolve_tts_config_for_tenant(self.tenant_id)
             initial_state = build_initial_state(
                 messages=data.get("messages"),
                 available_agent_ids=data.get("agentIds"),
                 max_turns=int(data.get("maxTurns", 1)),
+                tts_config=tts_config,
             )
             self._state = initial_state
             self._classroom_task = asyncio.create_task(

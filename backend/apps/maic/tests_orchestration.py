@@ -27,16 +27,17 @@ from apps.maic.orchestration.state import (
 def test_orchestrator_state_field_set_locked():
     """The 17 fields must all be present.
 
-    Phase 1 had 16 fields. Phase 3 (MAIC-104.2) added `directorModelId`
-    so the multi-agent director can use a separate (faster/cheaper)
-    routing model from the agents' generation model.
+    Phase 1 had 16 fields. Phase 3 (MAIC-104.2) added `directorModelId`.
+    Phase 5 (MAIC-502) added `ttsConfig` so per-tenant TTS provider/key
+    pre-resolved at WS handshake flows through the orchestration loop
+    without sync-DB calls inside the async stream.
 
     If this fails because the spec genuinely changed, sync the upstream
     counterpart first, then update this list (and OrchestratorState)
     in lockstep. Do NOT relax the assertion to make a stray field pass.
     """
     expected = {
-        # 11 inputs (was 10 in Phase 1; +directorModelId in MAIC-104.2)
+        # 12 inputs (was 11 at Phase 3; +ttsConfig in MAIC-502)
         "messages",
         "storeState",
         "availableAgentIds",
@@ -48,6 +49,7 @@ def test_orchestrator_state_field_set_locked():
         "triggerAgentId",
         "userProfile",
         "agentConfigOverrides",
+        "ttsConfig",
         # 4 mutable scalars
         "currentAgentId",
         "turnCount",
@@ -64,13 +66,13 @@ def test_orchestrator_state_field_set_locked():
     )
 
 
-def test_total_field_count_is_seventeen():
-    """Sanity check: 11 inputs + 4 scalars + 2 reducer-lists = 17.
+def test_total_field_count_is_eighteen():
+    """Sanity check: 12 inputs + 4 scalars + 2 reducer-lists = 18.
 
-    Phase 3 (MAIC-104.2) bumped the count from 16 → 17 with the
-    addition of `directorModelId`.
+    Phase 3 (MAIC-104.2) bumped the count from 16 → 17 with `directorModelId`.
+    Phase 5 (MAIC-502) bumped the count from 17 → 18 with `ttsConfig`.
     """
-    assert len(OrchestratorState.__annotations__) == 17
+    assert len(OrchestratorState.__annotations__) == 18
 
 
 # ── Reducer-merge fields use Annotated[..., add] ───────────────────────
