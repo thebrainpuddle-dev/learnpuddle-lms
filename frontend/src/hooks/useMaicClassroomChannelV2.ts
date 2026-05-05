@@ -68,7 +68,20 @@ export type MaicSendMessage =
   // MAIC-410.2 / MAIC-110.5: live-mode user reply. Backend appends
   // `{role:"user", content:text}` to state.messages and respawns the
   // LangGraph stream with a small live-mode budget.
-  | { action: 'user_message'; data: { text: string; maxTurns?: number } };
+  | { action: 'user_message'; data: { text: string; maxTurns?: number } }
+  // MAIC-607: interactive-widget iframe forwarded an event (student
+  // dragged a slider, clicked an answer, completed a step). Backend
+  // (MAIC-603) buffers onto OrchestratorState.pendingWidgetEvents
+  // for the next director-turn entry.
+  | {
+      action: 'widget_event';
+      data: {
+        sceneId: string;
+        widgetId?: string;
+        event: string;
+        payload?: Record<string, unknown>;
+      };
+    };
 
 export interface UseMaicChannelV2Options {
   /** Session id — used in the WS path. */

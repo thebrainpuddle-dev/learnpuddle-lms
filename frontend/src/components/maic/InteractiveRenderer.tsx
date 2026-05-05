@@ -29,10 +29,23 @@ interface InteractiveRendererProps {
    *  Omitted is fine — the iframe's internal JS still reads its own
    *  `<script id="widget-config">` block to bootstrap. */
   widgetConfig?: WidgetConfig;
+  /** MAIC-607 uplink: optional callback invoked when the iframe
+   *  posts a message back to the parent. The parent (typically the
+   *  WS hook owner) forwards as `{action:'widget_event', ...}` so
+   *  the backend's pendingWidgetEvents buffer (MAIC-603) sees the
+   *  student's interaction. Filtered to messages whose source ===
+   *  this iframe's contentWindow — never trusts random posters. */
+  onWidgetEvent?: (event: string, payload: Record<string, unknown>) => void;
 }
 
 export const InteractiveRenderer = React.memo<InteractiveRendererProps>(
-  function InteractiveRenderer({ html, url, sceneId, widgetConfig: _widgetConfig }) {
+  function InteractiveRenderer({
+    html,
+    url,
+    sceneId,
+    widgetConfig: _widgetConfig,
+    onWidgetEvent,
+  }) {
     const [isLoading, setIsLoading] = useState(true);
     const [hasError, setHasError] = useState(false);
     const iframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -75,6 +88,32 @@ export const InteractiveRenderer = React.memo<InteractiveRendererProps>(
         }
       };
     }, [sceneId]);
+
+    // MAIC-607: parent listens for postMessage from this iframe and
+    // forwards via onWidgetEvent. Filtered by event.source so only
+    // messages from THIS iframe's contentWindow are accepted —
+    // critical security boundary in a sandboxed-iframe setting where
+    // any other window could try to drive the WS uplink.
+    useEffect(() => {
+      if (!onWidgetEvent) return;
+
+      const handler = (e: MessageEvent) => {
+        const win = iframeRef.current?.contentWindow;
+        if (!win || e.source !== win) return;
+        const data = e.data;
+        if (typeof data !== 'object' || data === null) return;
+        const eventName = (data as { type?: unknown }).type;
+        if (typeof eventName !== 'string' || !eventName) return;
+        // Strip `type` from the payload so the backend gets a clean
+        // `event + payload` shape (mirrors the wire format defined
+        // in MAIC-603's WidgetEvent TypedDict).
+        const { type: _t, ...payload } = data as Record<string, unknown>;
+        onWidgetEvent(eventName, payload);
+      };
+
+      window.addEventListener('message', handler);
+      return () => window.removeEventListener('message', handler);
+    }, [onWidgetEvent]);
 
     if (hasError) {
       return (

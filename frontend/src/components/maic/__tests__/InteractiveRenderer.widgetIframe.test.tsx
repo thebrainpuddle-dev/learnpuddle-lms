@@ -153,3 +153,164 @@ describe('InteractiveRenderer — widget-iframe-store integration', () => {
     expect(useWidgetIframeStore.getState().sendMessageByScene['scene-with-config']).toBeDefined();
   });
 });
+
+describe('InteractiveRenderer — onWidgetEvent uplink (MAIC-607)', () => {
+  test('forwards messages from the registered iframe to onWidgetEvent', () => {
+    const onWidgetEvent = vi.fn();
+    const { container } = render(
+      <InteractiveRenderer
+        html="<html></html>"
+        sceneId="scene-up-1"
+        onWidgetEvent={onWidgetEvent}
+      />,
+    );
+    const iframe = container.querySelector('iframe') as HTMLIFrameElement;
+    // Pin a stable contentWindow we can spoof as the message source.
+    const fakeWin = {} as Window;
+    Object.defineProperty(iframe, 'contentWindow', {
+      configurable: true,
+      get: () => fakeWin,
+    });
+
+    // Dispatch a message-event whose source matches the iframe's window.
+    const evt = new MessageEvent('message', {
+      data: { type: 'click', target: '#answer-A', payloadKey: 'value' },
+      source: fakeWin,
+    });
+    window.dispatchEvent(evt);
+
+    expect(onWidgetEvent).toHaveBeenCalledTimes(1);
+    expect(onWidgetEvent).toHaveBeenCalledWith('click', {
+      target: '#answer-A',
+      payloadKey: 'value',
+    });
+  });
+
+  test('drops messages from other windows (security: not trusting any sender)', () => {
+    const onWidgetEvent = vi.fn();
+    const { container } = render(
+      <InteractiveRenderer
+        html="<html></html>"
+        sceneId="scene-up-2"
+        onWidgetEvent={onWidgetEvent}
+      />,
+    );
+    const iframe = container.querySelector('iframe') as HTMLIFrameElement;
+    const realWin = {} as Window;
+    Object.defineProperty(iframe, 'contentWindow', {
+      configurable: true,
+      get: () => realWin,
+    });
+
+    // Hostile message — source is some OTHER window.
+    const fakeOtherWin = {} as Window;
+    const evt = new MessageEvent('message', {
+      data: { type: 'click', target: '#hijack' },
+      source: fakeOtherWin,
+    });
+    window.dispatchEvent(evt);
+
+    expect(onWidgetEvent).not.toHaveBeenCalled();
+  });
+
+  test('ignores messages without a string `type` field (malformed payload)', () => {
+    const onWidgetEvent = vi.fn();
+    const { container } = render(
+      <InteractiveRenderer
+        html="<html></html>"
+        sceneId="scene-up-3"
+        onWidgetEvent={onWidgetEvent}
+      />,
+    );
+    const iframe = container.querySelector('iframe') as HTMLIFrameElement;
+    const fakeWin = {} as Window;
+    Object.defineProperty(iframe, 'contentWindow', {
+      configurable: true,
+      get: () => fakeWin,
+    });
+
+    // Various malformed payloads — none should reach onWidgetEvent.
+    for (const data of [
+      null,
+      undefined,
+      'string-not-object',
+      42,
+      { type: null },
+      { type: '' },
+      { notATypeField: 'click' },
+    ] as unknown[]) {
+      window.dispatchEvent(new MessageEvent('message', { data, source: fakeWin }));
+    }
+    expect(onWidgetEvent).not.toHaveBeenCalled();
+  });
+
+  test('strips `type` from payload before forwarding (clean event/payload split)', () => {
+    const onWidgetEvent = vi.fn();
+    const { container } = render(
+      <InteractiveRenderer
+        html="<html></html>"
+        sceneId="scene-up-4"
+        onWidgetEvent={onWidgetEvent}
+      />,
+    );
+    const iframe = container.querySelector('iframe') as HTMLIFrameElement;
+    const fakeWin = {} as Window;
+    Object.defineProperty(iframe, 'contentWindow', {
+      configurable: true,
+      get: () => fakeWin,
+    });
+
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        data: { type: 'submit', answer: 42, score: 1 },
+        source: fakeWin,
+      }),
+    );
+
+    expect(onWidgetEvent).toHaveBeenCalledWith('submit', { answer: 42, score: 1 });
+    // `type` must NOT leak into the payload — that's the verb, not data.
+    const payload = onWidgetEvent.mock.calls[0][1];
+    expect(payload).not.toHaveProperty('type');
+  });
+
+  test('removes the listener on unmount (no leak across scene changes)', () => {
+    const onWidgetEvent = vi.fn();
+    const { container, unmount } = render(
+      <InteractiveRenderer
+        html="<html></html>"
+        sceneId="scene-up-5"
+        onWidgetEvent={onWidgetEvent}
+      />,
+    );
+    const iframe = container.querySelector('iframe') as HTMLIFrameElement;
+    const fakeWin = {} as Window;
+    Object.defineProperty(iframe, 'contentWindow', {
+      configurable: true,
+      get: () => fakeWin,
+    });
+
+    unmount();
+
+    // Post-unmount message must not invoke the callback.
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        data: { type: 'click' },
+        source: fakeWin,
+      }),
+    );
+    expect(onWidgetEvent).not.toHaveBeenCalled();
+  });
+
+  test('without onWidgetEvent prop, no listener is attached (zero overhead default)', () => {
+    // Spy on addEventListener to verify we don't register when no
+    // callback is provided. Avoids a useless listener in non-uplink
+    // playback contexts (e.g. read-only embeds).
+    const addSpy = vi.spyOn(window, 'addEventListener');
+    render(<InteractiveRenderer html="<html></html>" sceneId="scene-up-6" />);
+    const messageRegistrations = addSpy.mock.calls.filter(
+      (c) => c[0] === 'message',
+    );
+    expect(messageRegistrations.length).toBe(0);
+    addSpy.mockRestore();
+  });
+});
