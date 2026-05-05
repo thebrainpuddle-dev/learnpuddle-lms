@@ -90,6 +90,38 @@ class WhiteboardActionRecord(TypedDict):
     params: dict[str, Any]
 
 
+class WidgetEvent(TypedDict, total=False):
+    """One event emitted by an interactive widget iframe and forwarded
+    to the backend over the WS as `{action: 'widget_event', data: {...}}`.
+
+    Phase 6 (MAIC-603): the consumer buffers these into
+    `OrchestratorState.pendingWidgetEvents`. Phase 7's PBL agentic
+    loop reads the buffer at each director-turn entry to surface
+    student widget interactions to the next agent's prompt context
+    (e.g. "the student set numerator to 3 and clicked apply").
+
+    Shape:
+      - sceneId : the active scene's id (correlates to the iframe
+        registered via widget-iframe-store.ts on the frontend).
+      - widgetId: optional intra-scene widget identifier (when one
+        scene hosts multiple widgets — rare in Phase 6, reserved).
+      - event   : a short verb describing what happened
+        (e.g. 'click', 'change', 'submit', 'complete').
+      - payload : free-form JSON dict with event details. Whatever
+        the widget HTML chose to postMessage; the backend doesn't
+        prescribe a schema since each widget type emits different
+        signal shapes.
+      - receivedAt: ISO-8601 server timestamp of when the consumer
+        accepted the frame. Useful for ordering and stale-event
+        filtering on the director side.
+    """
+    sceneId: str
+    widgetId: str | None
+    event: str
+    payload: dict[str, Any]
+    receivedAt: str
+
+
 # ── OrchestratorState — the LangGraph state ────────────────────────────
 
 
@@ -140,3 +172,9 @@ class OrchestratorState(TypedDict, total=False):
     # work under langgraph 1.1.10 in MAIC-001 cert.
     agentResponses: Annotated[list[AgentTurnSummary], add]
     whiteboardLedger: Annotated[list[WhiteboardActionRecord], add]
+    pendingWidgetEvents: Annotated[list[WidgetEvent], add]    # MAIC-603: widget
+                                                              # iframe events forwarded
+                                                              # by the WS consumer; the
+                                                              # director reads + drains
+                                                              # these at next turn entry
+                                                              # (Phase 7 PBL will use).

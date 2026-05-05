@@ -927,4 +927,120 @@ async def test_resume_without_prior_start_returns_error(monkeypatch):
     assert err["type"] == "error"
     assert "prior start" in err["data"]["message"].lower()
 
+
+# ── MAIC-603: widget_event uplink ─────────────────────────────────────
+
+
+@pytest.mark.asyncio
+@override_settings(ALLOWED_HOSTS=["*"])
+async def test_widget_event_buffers_into_pending_widget_events(monkeypatch):
+    """An interactive widget iframe forwards a postMessage as a
+    `widget_event` WS frame; the consumer buffers it onto
+    `state.pendingWidgetEvents` so the next director-turn entry can
+    drain. Phase 7 PBL agentic loop is the primary consumer."""
+    import asyncio
+    _make_long_stream_monkeypatches(monkeypatch)
+
+    import importlib
+    from config import asgi as asgi_mod
+    importlib.reload(asgi_mod)
+
+    communicator = WebsocketCommunicator(
+        asgi_mod.application, "/ws/maic/v2/classroom/widget-evt/",
+    )
+    connected, _ = await communicator.connect()
+    assert connected is True
+
+    # Start a stream so consumer._state is populated.
+    await communicator.send_json_to({"action": "start"})
+    _ = await communicator.receive_json_from(timeout=2)  # first frame
+
+    # Send a widget_event with full payload.
+    await communicator.send_json_to({
+        "action": "widget_event",
+        "data": {
+            "sceneId": "scene-1",
+            "widgetId": "frac-bar",
+            "event": "drag",
+            "payload": {"numerator": 3, "denominator": 7},
+        },
+    })
+
+    # widget_event has NO response frame by design — it's a pure
+    # state-mutation uplink. Verify nothing surfaces (no error
+    # frame, no echo). The consumer's INFO log line in the captured
+    # output is the production observability signal that the buffer
+    # was written.
+    nothing = await communicator.receive_nothing(timeout=0.3)
+    assert nothing is True, (
+        "widget_event should produce no response frame — protocol is "
+        "fire-and-forget into pendingWidgetEvents"
+    )
+
+    await communicator.disconnect()
+
+
+@pytest.mark.asyncio
+@override_settings(ALLOWED_HOSTS=["*"])
+async def test_widget_event_before_start_is_dropped_silently(monkeypatch):
+    """A widget can't have been mounted without an active stream, so a
+    widget_event before any `start` action is a client bug. Drop it
+    silently with a warning log — don't surface an error frame to the
+    user (the widget itself, if it ever existed, is already wrong)."""
+    import asyncio  # noqa: F401 — used by infra during teardown
+    _make_long_stream_monkeypatches(monkeypatch)
+
+    import importlib
+    from config import asgi as asgi_mod
+    importlib.reload(asgi_mod)
+
+    communicator = WebsocketCommunicator(
+        asgi_mod.application, "/ws/maic/v2/classroom/widget-cold/",
+    )
+    connected, _ = await communicator.connect()
+    assert connected is True
+
+    await communicator.send_json_to({
+        "action": "widget_event",
+        "data": {"sceneId": "s1", "event": "click"},
+    })
+    # No frame should arrive — drop is silent.
+    nothing = await communicator.receive_nothing(timeout=0.3)
+    assert nothing is True
+    await communicator.disconnect()
+
+
+@pytest.mark.asyncio
+@override_settings(ALLOWED_HOSTS=["*"])
+async def test_widget_event_missing_sceneid_or_event_returns_error(monkeypatch):
+    """sceneId + event are required — without them, the buffered
+    record can't be correlated to anything useful. Return a structured
+    error frame so the iframe author can debug."""
+    import asyncio  # noqa: F401
+    _make_long_stream_monkeypatches(monkeypatch)
+
+    import importlib
+    from config import asgi as asgi_mod
+    importlib.reload(asgi_mod)
+
+    communicator = WebsocketCommunicator(
+        asgi_mod.application, "/ws/maic/v2/classroom/widget-bad/",
+    )
+    connected, _ = await communicator.connect()
+    assert connected is True
+
+    await communicator.send_json_to({"action": "start"})
+    _ = await communicator.receive_json_from(timeout=2)
+
+    # Missing event
+    await communicator.send_json_to({
+        "action": "widget_event",
+        "data": {"sceneId": "scene-1"},
+    })
+    err = await communicator.receive_json_from(timeout=1)
+    assert err["type"] == "error"
+    assert "sceneid" in err["data"]["message"].lower() or "event" in err["data"]["message"].lower()
+
+    await communicator.disconnect()
+
     await communicator.disconnect()

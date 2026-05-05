@@ -114,13 +114,14 @@ def test_safe_writer_handles_none_writer():
 # ── build_initial_state ────────────────────────────────────────────────
 
 
-def test_initial_state_has_all_17_fields():
+def test_initial_state_has_all_18_fields():
     """Runtime state from build_initial_state() — 16 fields at Phase 1,
-    +ttsConfig in Phase 5 MAIC-502 = 17. The TypedDict declares
-    `directorModelId` but build_initial_state doesn't populate it
-    (TypedDict total=False), so the runtime keyset stays one less than
-    the annotation count. The annotation-count lock lives in
-    tests_orchestration.test_total_field_count_is_eighteen."""
+    +ttsConfig in Phase 5 MAIC-502 = 17, +pendingWidgetEvents in Phase 6
+    MAIC-603 = 18. The TypedDict declares `directorModelId` but
+    build_initial_state doesn't populate it (TypedDict total=False), so
+    the runtime keyset stays one less than the annotation count. The
+    annotation-count lock lives in
+    tests_orchestration.test_total_field_count_is_nineteen."""
     state = build_initial_state()
     expected = {
         "messages", "storeState", "availableAgentIds", "maxTurns",
@@ -128,7 +129,7 @@ def test_initial_state_has_all_17_fields():
         "triggerAgentId", "userProfile", "agentConfigOverrides",
         "ttsConfig",
         "currentAgentId", "turnCount", "shouldEnd", "totalActions",
-        "agentResponses", "whiteboardLedger",
+        "agentResponses", "whiteboardLedger", "pendingWidgetEvents",
     }
     assert set(state.keys()) == expected
 

@@ -416,6 +416,52 @@ class ClassroomConsumer(AsyncJsonWebsocketConsumer):
             )
             return
 
+        if action == "widget_event":
+            # MAIC-603: an interactive widget iframe emitted an event
+            # (student dragged a slider, clicked an answer, completed
+            # a step). Buffer it onto state.pendingWidgetEvents so the
+            # next director-turn entry can read + drain. Phase 7's PBL
+            # agentic loop is the primary consumer.
+            #
+            # Defensive: drop silently if no `start` has run yet — a
+            # widget can't have been mounted without an active stream.
+            if self._state is None:
+                logger.warning(
+                    "MAIC v2 WS: widget_event before start session=%s",
+                    self.session_id,
+                )
+                return
+
+            data = content.get("data") or {}
+            scene_id = (data.get("sceneId") or "").strip()
+            event_name = (data.get("event") or "").strip()
+            if not scene_id or not event_name:
+                await self._safe_send_json({
+                    "type": "error",
+                    "data": {"message": "widget_event requires data.sceneId and data.event"},
+                })
+                return
+
+            from datetime import datetime, timezone
+            buffered = {
+                "sceneId": scene_id,
+                "widgetId": data.get("widgetId"),
+                "event": event_name,
+                "payload": data.get("payload") or {},
+                "receivedAt": datetime.now(timezone.utc).isoformat(),
+            }
+            # Append, not extend — pendingWidgetEvents is a reducer
+            # field on the state TypedDict but inside the consumer we
+            # mutate it directly because we're outside the LangGraph
+            # node boundary. The next director-turn entry will pick
+            # this up when the graph resumes.
+            self._state.setdefault("pendingWidgetEvents", []).append(buffered)
+            logger.info(
+                "MAIC v2 WS widget_event session=%s scene=%s event=%s",
+                self.session_id, scene_id, event_name,
+            )
+            return
+
         if action == "resume":
             # MAIC-110.5: restart the stream from the saved state
             # without appending a user message. Useful for "continue

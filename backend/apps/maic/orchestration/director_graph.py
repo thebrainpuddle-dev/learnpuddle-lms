@@ -786,6 +786,7 @@ def build_initial_state(
         "totalActions": 0,
         "agentResponses": [],
         "whiteboardLedger": [],
+        "pendingWidgetEvents": [],
     }
 
 

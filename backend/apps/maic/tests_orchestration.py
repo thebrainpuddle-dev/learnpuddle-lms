@@ -31,6 +31,9 @@ def test_orchestrator_state_field_set_locked():
     Phase 5 (MAIC-502) added `ttsConfig` so per-tenant TTS provider/key
     pre-resolved at WS handshake flows through the orchestration loop
     without sync-DB calls inside the async stream.
+    Phase 6 (MAIC-603) added `pendingWidgetEvents` reducer-list so
+    interactive widget iframe events buffer for the next director turn
+    (Phase 7 PBL agentic loop reads/drains).
 
     If this fails because the spec genuinely changed, sync the upstream
     counterpart first, then update this list (and OrchestratorState)
@@ -55,9 +58,10 @@ def test_orchestrator_state_field_set_locked():
         "turnCount",
         "shouldEnd",
         "totalActions",
-        # 2 reducer-accumulated lists
+        # 3 reducer-accumulated lists (was 2; +pendingWidgetEvents in MAIC-603)
         "agentResponses",
         "whiteboardLedger",
+        "pendingWidgetEvents",
     }
     actual = set(OrchestratorState.__annotations__.keys())
     assert actual == expected, (
@@ -66,13 +70,14 @@ def test_orchestrator_state_field_set_locked():
     )
 
 
-def test_total_field_count_is_eighteen():
-    """Sanity check: 12 inputs + 4 scalars + 2 reducer-lists = 18.
+def test_total_field_count_is_nineteen():
+    """Sanity check: 12 inputs + 4 scalars + 3 reducer-lists = 19.
 
     Phase 3 (MAIC-104.2) bumped the count from 16 → 17 with `directorModelId`.
     Phase 5 (MAIC-502) bumped the count from 17 → 18 with `ttsConfig`.
+    Phase 6 (MAIC-603) bumped the count from 18 → 19 with `pendingWidgetEvents`.
     """
-    assert len(OrchestratorState.__annotations__) == 18
+    assert len(OrchestratorState.__annotations__) == 19
 
 
 # ── Reducer-merge fields use Annotated[..., add] ───────────────────────
