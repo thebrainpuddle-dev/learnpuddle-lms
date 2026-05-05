@@ -64,6 +64,9 @@ from apps.maic.generation.scene_builder import (
     build_complete_scene,
     uniquify_media_element_ids,
 )
+from apps.maic.generation.widget_types import (
+    validate_widget_config as _validate_widget_config,
+)
 from apps.maic.generation.types import GenerationCallbacks
 from apps.maic.generation.types import (
     AgentInfo,
@@ -688,6 +691,20 @@ async def _generate_widget_content(
         return None
 
     widget_config = _extract_widget_config(html)
+
+    # MAIC-602: quality-gate the embedded widget-config JSON against
+    # the Pydantic types ported from upstream `lib/types/widgets.ts`.
+    # Failure logs a warning but does NOT replace `widget_config` —
+    # the widget still renders with the raw dict. The gate exists to
+    # catch schema regressions in generation, not to transform the
+    # wire payload.
+    if widget_config is not None:
+        ok, reason = _validate_widget_config(widget_type, widget_config)
+        if not ok:
+            _logger.warning(
+                "Widget config validation failed for %s/%s: %s",
+                widget_type, outline.get("title", "?"), reason,
+            )
 
     # MAIC-422.7: optional second LLM call to produce Ultra Mode
     # teacher actions. None on missing template OR LLM failure OR
