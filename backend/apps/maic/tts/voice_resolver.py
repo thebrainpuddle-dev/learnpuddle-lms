@@ -80,6 +80,18 @@ _VOICE_ROTATION_BY_PROVIDER: Final[dict[str, tuple[str, ...]]] = {
         "en-US-AmberNeural",     # bright female
         "en-US-BrandonNeural",   # young male
     ),
+    # ElevenLabs free-tier-safe voices, taken from upstream
+    # constants.ts:'elevenlabs-tts'.voices. Account-specific custom
+    # voices (cloned, designed) override this rotation when the tenant
+    # pins tts_voice_id explicitly.
+    "elevenlabs": (
+        "EXAVITQu4vr4xnSDxMaL",  # Sarah   — warm female (en-US)  — slot 0
+        "CwhRBWXzGAHq8TQ4Fs17",  # Roger   — friendly male (en-US) — slot 1
+        "Xb7hH8MSUJpSbSDYk0k2",  # Alice   — British female        — slot 2
+        "cjVigY5qzO86Huf0OWal",  # Eric    — smooth male (en-US)   — slot 3
+        "XrExE9yKIg1WjnnlVkGX",  # Matilda — upbeat female lecturer
+        "onwK4e9ZLuTAKqWW03F9",  # Daniel  — British broadcaster male
+    ),
 }
 
 

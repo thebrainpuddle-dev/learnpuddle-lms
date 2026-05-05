@@ -239,11 +239,36 @@ def test_tenant_voice_pin_overrides_rotation():
 
 def test_unknown_provider_uses_static_default_not_rotation():
     """Provider that isn't in _VOICE_ROTATION_BY_PROVIDER falls back
-    to the provider's static default voice (or global fallback)."""
-    tenant_cfg = {"provider": "elevenlabs", "voice": ""}
+    to the provider's static default voice (or global fallback).
+
+    Phase 5+: when ElevenLabs rotation was added (MAIC-501.B), this
+    test was repointed to a still-unmapped provider so it keeps
+    exercising the static-default branch."""
+    tenant_cfg = {"provider": "openai", "voice": ""}
     resolved = resolve_agent_voice(
         _agent_with_id("default-1"), tenant_tts_config=tenant_cfg,
     )
-    # elevenlabs default lives in _DEFAULT_VOICE_BY_PROVIDER
-    assert resolved.provider == "elevenlabs"
-    assert resolved.voice == "EXAVITQu4vr4xnSDxMaL"
+    # openai default lives in _DEFAULT_VOICE_BY_PROVIDER
+    assert resolved.provider == "openai"
+    assert resolved.voice == "alloy"
+
+
+def test_voice_rotation_for_elevenlabs_distributes_across_default_agents():
+    """Six ElevenLabs voices (Sarah, Roger, Alice, Eric, Matilda, Daniel)
+    distribute across the 6 default classroom agent ids when the tenant
+    pins provider=elevenlabs but no voice. Without this rotation, all
+    six agents would speak with Sarah."""
+    tenant_cfg = {"provider": "elevenlabs", "voice": "", "api_key": "k"}
+    voices = {
+        agent_id: resolve_agent_voice(
+            _agent_with_id(agent_id), tenant_tts_config=tenant_cfg,
+        ).voice
+        for agent_id in (
+            "default-1", "default-2", "default-3",
+            "default-4", "default-5", "default-6",
+        )
+    }
+    from apps.maic.tts.voice_resolver import _VOICE_ROTATION_BY_PROVIDER
+    valid = set(_VOICE_ROTATION_BY_PROVIDER["elevenlabs"])
+    assert set(voices.values()).issubset(valid), voices
+    assert len(set(voices.values())) >= 4, f"too few distinct voices: {voices}"

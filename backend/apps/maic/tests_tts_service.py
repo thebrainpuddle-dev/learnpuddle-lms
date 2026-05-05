@@ -728,6 +728,42 @@ async def test_elevenlabs_empty_text_short_circuits(fake_elevenlabs_aiohttp, ele
 
 
 @pytest.mark.skipif(
+    os.environ.get("MAIC_ELEVENLABS_LIVE_SMOKE") != "1"
+    or not os.environ.get("ELEVENLABS_API_KEY"),
+    reason=(
+        "live elevenlabs smoke disabled (set MAIC_ELEVENLABS_LIVE_SMOKE=1 "
+        "and ELEVENLABS_API_KEY=<your key> to enable — calls "
+        "api.elevenlabs.io with real auth, ~1k chars from free tier per run)"
+    ),
+)
+@pytest.mark.asyncio
+async def test_live_elevenlabs_smoke_returns_real_mp3(monkeypatch):
+    """Manual cert: actually hits the real ElevenLabs /v1/text-to-speech
+    endpoint with the documented Sarah voice + eleven_multilingual_v2.
+
+    Validates that the upstream-derived shape (xi-api-key auth,
+    voice_id in URL, output_format query, voice_settings body) is
+    accepted by a live ElevenLabs account, and that the raw MP3 bytes
+    have a real frame header.
+
+    Run with:
+        MAIC_ELEVENLABS_LIVE_SMOKE=1 ELEVENLABS_API_KEY=<key> \\
+            pytest apps/maic/tests_tts_service.py -k live_elevenlabs \\
+                --no-migrations
+    """
+    monkeypatch.setenv("MAIC_TTS_PROVIDER", "elevenlabs")
+    result = await synthesize_speech(
+        "Welcome to today's lesson on photosynthesis.",
+        audio_id="live-elevenlabs-smoke-1",
+    )
+    decoded = base64.b64decode(result.audio_b64)
+    assert len(decoded) > 1000, f"smoke audio too short: {len(decoded)} bytes"
+    assert decoded[:3] == b"ID3" or decoded[:1] == b"\xff", (
+        f"unexpected MP3 header: {decoded[:4]!r}"
+    )
+
+
+@pytest.mark.skipif(
     os.environ.get("MAIC_MINIMAX_LIVE_SMOKE") != "1"
     or not os.environ.get("MINIMAX_API_KEY"),
     reason=(
