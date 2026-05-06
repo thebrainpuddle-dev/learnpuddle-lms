@@ -518,7 +518,9 @@ describe('DemoBookingsPage', () => {
       const bodyTextarea = document.querySelector('textarea') as HTMLTextAreaElement;
       await userEvent.type(bodyTextarea, 'Hi Alice, just following up on your demo request.');
 
-      await userEvent.click(screen.getByRole('button', { name: /Send Email/i }));
+      // Exact-match string (no regex) disambiguates the modal's "Send
+      // Email" submit from the row's title="Send email" envelope icon.
+      await userEvent.click(screen.getByRole('button', { name: 'Send Email' }));
 
       await waitFor(() => {
         expect(mockedService.sendDemoBookingEmail).toHaveBeenCalledWith(
@@ -538,7 +540,9 @@ describe('DemoBookingsPage', () => {
       const bodyTextarea = document.querySelector('textarea') as HTMLTextAreaElement;
       await userEvent.type(bodyTextarea, 'Some body content.');
 
-      await userEvent.click(screen.getByRole('button', { name: /Send Email/i }));
+      // Exact-match string (no regex) disambiguates the modal's "Send
+      // Email" submit from the row's title="Send email" envelope icon.
+      await userEvent.click(screen.getByRole('button', { name: 'Send Email' }));
 
       await waitFor(() => {
         expect(
