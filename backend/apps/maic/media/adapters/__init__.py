@@ -19,3 +19,4 @@ from . import minimax_image # noqa: F401  - side-effect: register_adapter (MAIC-
 from . import nano_banana   # noqa: F401  - side-effect: register_adapter (MAIC-907)
 from . import seedream      # noqa: F401  - side-effect: register_adapter (MAIC-908)
 from . import stability     # noqa: F401  - side-effect: register_adapter (MAIC-909)
+from . import veo           # noqa: F401  - side-effect: register_adapter (MAIC-910)
