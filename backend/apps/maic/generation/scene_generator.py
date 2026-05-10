@@ -62,6 +62,7 @@ from apps.maic.generation.prompt_formatters import (
 from apps.maic.generation.prompt_loader import load_generation_prompt
 from apps.maic.generation.scene_builder import (
     build_complete_scene,
+    resolve_scene_media,
     uniquify_media_element_ids,
 )
 from apps.maic.generation.widget_types import (
@@ -1839,6 +1840,7 @@ async def _generate_single_scene(
     user_profile: str,
     ctx: SceneGenerationContext | None,
     stage_id: str,
+    tenant_config: Any | None = None,
 ) -> dict[str, Any] | None:
     """Two-step single-scene generator.
 
@@ -1846,6 +1848,10 @@ async def _generate_single_scene(
         Step 3.1: generate_scene_content
         Step 3.2: generate_scene_actions
     Then assembles via `build_complete_scene`.
+    Then resolves `gen_img_*` / `gen_vid_*` placeholders via the
+    Phase 9 media orchestrator (MAIC-915) when ``tenant_config`` is
+    supplied. A None tenant_config is the "no media gen" opt-out;
+    placeholders are preserved verbatim in the scene.
 
     Returns None when content generation fails (caller drops the
     scene + emits an onError). Actions failure → falls back to the
@@ -1880,4 +1886,9 @@ async def _generate_single_scene(
         "Generated %d actions for: %s", len(actions), outline.get("title", "?")
     )
 
-    return build_complete_scene(outline, content, actions, stage_id)
+    scene = build_complete_scene(outline, content, actions, stage_id)
+    # Phase 9 MAIC-915: dispatch media orchestrator to resolve any
+    # gen_img_*/gen_vid_* placeholders. No-op when tenant_config is
+    # None or scene type is non-slide; failures preserve placeholders.
+    scene = await resolve_scene_media(scene, outline, tenant_config)
+    return scene

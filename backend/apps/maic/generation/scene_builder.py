@@ -30,6 +30,7 @@ Used by:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import secrets
 from typing import Any
@@ -214,6 +215,147 @@ def build_complete_scene(
         list(content.keys()),
     )
     return None
+
+
+# ── Media resolution (Phase 9, MAIC-915) ──────────────────────────
+
+
+async def resolve_scene_media(
+    scene: dict[str, Any] | None,
+    outline: SceneOutline,
+    tenant_config: Any | None,
+) -> dict[str, Any] | None:
+    """Resolve `gen_img_<id>` and `gen_vid_<id>` placeholders in a
+    built slide scene by dispatching the media orchestrator (Phase 9).
+
+    Walks every element in the slide canvas. For each element whose
+    ``src`` starts with ``gen_img_`` or ``gen_vid_``, looks up the
+    matching prompt from ``outline.mediaGenerations`` and asks the
+    orchestrator for a real provider-generated asset. The placeholder
+    ``src`` is replaced in place with the resolved URL.
+
+    Discipline:
+      - **scene type != "slide"** → return unchanged (no media in quiz/PBL/interactive)
+      - **tenant_config is None** → return unchanged (caller opted out / no tenant context)
+      - **placeholder has no matching mediaGenerations entry with a prompt**
+        → preserve placeholder (the LLM emitted an unresolvable ref;
+        out-of-scope to fix here)
+      - **orchestrator raises (MaicConfigError, MaicProviderError, etc)**
+        → preserve placeholder, log warning, continue with other
+        elements. One bad image must NEVER fail the whole scene.
+      - All image + video tasks for a scene run in parallel via
+        ``asyncio.gather`` — the orchestrator's own bounded-retry +
+        timeout protects against any single hang.
+
+    Returns:
+        The (possibly-mutated) scene dict, OR None if the input scene
+        was None.
+    """
+    if scene is None:
+        return None
+    if scene.get("type") != "slide":
+        return scene
+    if tenant_config is None:
+        return scene
+
+    canvas = scene.get("content", {}).get("canvas", {})
+    elements = canvas.get("elements") or []
+    if not elements:
+        return scene
+
+    # Build prompt lookup keyed by elementId
+    media_gens = outline.get("mediaGenerations") or []
+    prompts_by_id: dict[str, dict[str, Any]] = {}
+    for mg in media_gens:
+        if not isinstance(mg, dict):
+            continue
+        elem_id = mg.get("elementId")
+        if isinstance(elem_id, str):
+            prompts_by_id[elem_id] = mg
+
+    # Identify placeholder elements
+    image_tasks: list[tuple[int, str, str]] = []  # (idx, placeholder, prompt)
+    video_tasks: list[tuple[int, str, str]] = []
+    for idx, elem in enumerate(elements):
+        if not isinstance(elem, dict):
+            continue
+        src = elem.get("src")
+        if not isinstance(src, str) or not src:
+            continue
+        if src.startswith("gen_img_"):
+            mg = prompts_by_id.get(src)
+            prompt = (mg or {}).get("prompt")
+            if isinstance(prompt, str) and prompt:
+                image_tasks.append((idx, src, prompt))
+        elif src.startswith("gen_vid_"):
+            mg = prompts_by_id.get(src)
+            prompt = (mg or {}).get("prompt")
+            if isinstance(prompt, str) and prompt:
+                video_tasks.append((idx, src, prompt))
+
+    if not image_tasks and not video_tasks:
+        return scene
+
+    scene_id: str = scene.get("id", "") or ""
+
+    # Lazy import — adapters/orchestrator module side-effect-registers
+    # provider adapters at import time. Lazy here so test-only fake
+    # adapters can be registered BEFORE this function imports the
+    # orchestrator module (mirrors apps/maic/tts/service.py pattern).
+    from apps.maic.media.orchestrator import generate_image, generate_video
+    from apps.maic.media.types import (
+        ImageGenerationRequest,
+        VideoGenerationRequest,
+    )
+
+    async def _resolve_image(
+        idx: int, placeholder: str, prompt: str,
+    ) -> tuple[int, str, str | None]:
+        try:
+            req = ImageGenerationRequest(
+                prompt=prompt,
+                tenant_id=str(getattr(tenant_config, "tenant_id", "")),
+                scene_id=scene_id or None,
+            )
+            result = await generate_image(req, tenant_config)
+            return (idx, placeholder, result.url)
+        except Exception as exc:  # noqa: BLE001 — boundary; preserve placeholder
+            _logger.warning(
+                "resolve_scene_media: image gen failed for %s (scene=%s): %s",
+                placeholder, scene_id, exc,
+            )
+            return (idx, placeholder, None)
+
+    async def _resolve_video(
+        idx: int, placeholder: str, prompt: str,
+    ) -> tuple[int, str, str | None]:
+        try:
+            req = VideoGenerationRequest(
+                prompt=prompt,
+                tenant_id=str(getattr(tenant_config, "tenant_id", "")),
+                scene_id=scene_id or None,
+            )
+            result = await generate_video(req, tenant_config)
+            return (idx, placeholder, result.url)
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning(
+                "resolve_scene_media: video gen failed for %s (scene=%s): %s",
+                placeholder, scene_id, exc,
+            )
+            return (idx, placeholder, None)
+
+    all_results = await asyncio.gather(
+        *[_resolve_image(*t) for t in image_tasks],
+        *[_resolve_video(*t) for t in video_tasks],
+    )
+
+    # Apply resolved URLs in place. Failures (url is None) leave the
+    # placeholder src — frontend sees `gen_img_<id>` and shows a skeleton.
+    for idx, _placeholder, url in all_results:
+        if url:
+            elements[idx]["src"] = url
+
+    return scene
 
 
 # ── Internal helpers ──────────────────────────────────────────────
