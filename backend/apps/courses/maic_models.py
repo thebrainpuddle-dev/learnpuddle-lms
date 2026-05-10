@@ -65,6 +65,11 @@ class TenantAIConfig(models.Model):
         ("disabled", "Disabled"),
     ]
 
+    PDF_PROVIDER_CHOICES = [
+        ("mineru", "Mineru Cloud"),
+        ("disabled", "Disabled"),
+    ]
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     tenant = models.OneToOneField(
         "tenants.Tenant",
@@ -159,6 +164,23 @@ class TenantAIConfig(models.Model):
         help_text="Default clip duration in seconds (provider-clamped at dispatch).",
     )
 
+    # ─── PDF Ingest (Phase 10, MAIC-1001) ─────────────────────────────────
+    # Defaults to disabled — opt-in per tenant. Mineru cloud is the only
+    # provider in the first cut; per-tenant base_url overrides allow
+    # self-hosted Mineru or regional endpoints.
+    pdf_provider = models.CharField(
+        max_length=20, choices=PDF_PROVIDER_CHOICES, default="disabled",
+    )
+    mineru_api_key_encrypted = models.TextField(blank=True, default="")
+    mineru_base_url = models.URLField(
+        max_length=500, blank=True, default="",
+        help_text=(
+            "Custom Mineru endpoint — self-hosted instance or regional "
+            "endpoint. Empty means use the public Mineru Cloud URL. "
+            "SSRF-guarded at request time."
+        ),
+    )
+
     # ─── Feature Gating ───────────────────────────────────────────────────
     maic_enabled = models.BooleanField(
         default=False,
@@ -213,6 +235,16 @@ class TenantAIConfig(models.Model):
         if not self.video_api_key_encrypted:
             return ""
         return decrypt_value(self.video_api_key_encrypted)
+
+    def set_mineru_api_key(self, plaintext: str) -> None:
+        """Encrypt + store the Mineru API key. Phase 10 / MAIC-1001."""
+        self.mineru_api_key_encrypted = encrypt_value(plaintext)
+
+    def get_mineru_api_key(self) -> str:
+        """Decrypt + return the Mineru API key. Returns "" when unset."""
+        if not self.mineru_api_key_encrypted:
+            return ""
+        return decrypt_value(self.mineru_api_key_encrypted)
 
     # ─── TTS resolver (MAIC-501) ──────────────────────────────────────────
 
