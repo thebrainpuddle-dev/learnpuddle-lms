@@ -13,3 +13,4 @@ Phase 9 ships one reference adapter (OpenAI image, MAIC-903) and 10
 sibling adapters (MAIC-904 → MAIC-913) that copy its shape.
 """
 from . import openai_image  # noqa: F401  - side-effect: register_adapter
+from . import grok_image    # noqa: F401  - side-effect: register_adapter (MAIC-905)
