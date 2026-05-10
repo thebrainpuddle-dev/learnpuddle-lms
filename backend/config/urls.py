@@ -50,6 +50,10 @@ _api_patterns = [
     # PBL subsystem (Phase 7 MAIC-704). HTTP at /api/maic/v2/pbl/projects/;
     # WS at /ws/maic/pbl/<session_id>/ (mounted in config/asgi.py).
     path('maic/v2/pbl/', include('apps.maic_pbl.urls', namespace='maic_pbl')),
+    # Media generation (Phase 9 MAIC-914) — POST /api/maic/v2/media/
+    # generate-{image,video}/. Provider adapters auto-register on import
+    # (apps/maic/media/adapters/__init__.py).
+    path('maic/v2/media/', include('apps.maic.media.urls', namespace='maic_media')),
     # Content versioning (TASK-048) — admin-only revisions/restore endpoints.
     path('admin/', include('apps.courses.versioning_urls')),
     # SCORM 1.2 export (TASK-052) — admin-only export endpoints.
