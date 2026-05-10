@@ -16,4 +16,5 @@ from . import openai_image  # noqa: F401  - side-effect: register_adapter
 from . import qwen_image    # noqa: F401  - side-effect: register_adapter (MAIC-904)
 from . import grok_image    # noqa: F401  - side-effect: register_adapter (MAIC-905)
 from . import minimax_image # noqa: F401  - side-effect: register_adapter (MAIC-906)
+from . import nano_banana   # noqa: F401  - side-effect: register_adapter (MAIC-907)
 from . import seedream      # noqa: F401  - side-effect: register_adapter (MAIC-908)
