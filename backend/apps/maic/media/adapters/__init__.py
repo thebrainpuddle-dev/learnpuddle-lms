@@ -21,3 +21,4 @@ from . import seedream      # noqa: F401  - side-effect: register_adapter (MAIC-
 from . import stability     # noqa: F401  - side-effect: register_adapter (MAIC-909)
 from . import veo           # noqa: F401  - side-effect: register_adapter (MAIC-910)
 from . import kling         # noqa: F401  - side-effect: register_adapter (MAIC-911)
+from . import minimax_video # noqa: F401  - side-effect: register_adapter (MAIC-912)
