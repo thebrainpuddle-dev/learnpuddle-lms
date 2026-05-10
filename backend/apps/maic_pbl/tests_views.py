@@ -17,16 +17,20 @@ from apps.maic_pbl.design_graph import GeneratePBLResult
 from apps.maic_pbl.models import MaicPBLSession
 
 
-def _make_tenant(slug: str = "t-views"):
+def _make_tenant(slug: str = "t-views", feature_maic_v2: bool = True):
+    """Create a Tenant with the v2 flag ON by default — tests assume the
+    tenant can reach v2 routes unless they explicitly opt out (the
+    MAIC-800 gating tests do)."""
     from apps.tenants.models import Tenant
     return Tenant.objects.create(
         name=slug.upper(), slug=slug, subdomain=slug, is_active=True,
+        feature_maic_v2=feature_maic_v2,
     )
 
 
-def _make_user_with_tenant(slug: str = "t-views"):
+def _make_user_with_tenant(slug: str = "t-views", feature_maic_v2: bool = True):
     from apps.users.models import User
-    t = _make_tenant(slug)
+    t = _make_tenant(slug, feature_maic_v2=feature_maic_v2)
     return User.objects.create(
         email=f"{slug}@dev.local", tenant=t, is_active=True, first_name="T",
     ), t
@@ -47,15 +51,18 @@ def test_anonymous_returns_401():
 
 
 @pytest.mark.django_db
-def test_user_with_no_tenant_returns_400():
+def test_user_with_no_tenant_returns_403():
+    """User with no tenant fails the MaicV2TenantPermission gate (MAIC-800)
+    BEFORE the view-level tenant_id check fires. Result is 403 (Forbidden)
+    rather than 400. The earlier-firing gate is more secure: it does not
+    distinguish 'no tenant' from 'tenant flag off' to a probing client."""
     from apps.users.models import User
     u = User.objects.create(email="orphan@dev.local", is_active=True, first_name="X")
     res = _client_for(u).post(
         "/api/maic/v2/pbl/projects/", data={"topic": "X", "languageModelId": "claude-x"},
         format="json",
     )
-    assert res.status_code == 400
-    assert "tenant" in res.json().get("error", "")
+    assert res.status_code == 403
 
 
 @pytest.mark.django_db
@@ -291,13 +298,15 @@ def test_retrieve_anonymous_returns_401():
 
 
 @pytest.mark.django_db
-def test_retrieve_no_tenant_returns_400():
+def test_retrieve_no_tenant_returns_403():
+    """Same as the create-view variant — MaicV2TenantPermission catches
+    no-tenant users before the view-level check (MAIC-800)."""
     from apps.users.models import User
     u = User.objects.create(email="orphan@dev.local", is_active=True, first_name="X")
     res = _client_for(u).get(
         "/api/maic/v2/pbl/projects/00000000-0000-0000-0000-000000000000/"
     )
-    assert res.status_code == 400
+    assert res.status_code == 403
 
 
 @pytest.mark.django_db
@@ -335,3 +344,83 @@ def test_retrieve_cross_tenant_collapses_to_404():
     u_b, _ = _make_user_with_tenant("t-ret-b")
     res = _client_for(u_b).get(f"/api/maic/v2/pbl/projects/{sess.id}/")
     assert res.status_code == 404
+
+
+# ── MAIC-800: per-tenant feature_maic_v2 gating ──────────────────────
+
+
+@pytest.mark.django_db
+def test_create_view_403_when_tenant_v2_flag_off():
+    """Tenant exists, user authenticated, but tenant.feature_maic_v2 is
+    False → DRF MaicV2TenantPermission returns False → 403. Distinct
+    from 401 (anonymous) and 400 (no tenant)."""
+    u, _ = _make_user_with_tenant("t-flag-off-create", feature_maic_v2=False)
+    res = _client_for(u).post(
+        "/api/maic/v2/pbl/projects/",
+        data={"topic": "X", "languageModelId": "claude-x"},
+        format="json",
+    )
+    assert res.status_code == 403
+
+
+@pytest.mark.django_db
+def test_retrieve_view_403_when_tenant_v2_flag_off():
+    """Same gating on the retrieve endpoint — symmetric so the cleanup
+    deletion doesn't accidentally leave one of the two endpoints open."""
+    u, _ = _make_user_with_tenant("t-flag-off-retrieve", feature_maic_v2=False)
+    res = _client_for(u).get(
+        "/api/maic/v2/pbl/projects/00000000-0000-0000-0000-000000000000/"
+    )
+    assert res.status_code == 403
+
+
+@pytest.mark.django_db
+def test_create_view_passes_when_tenant_v2_flag_on():
+    """Default fixture sets feature_maic_v2=True. A failed-validation
+    request still returns 400 (not 403) — proves the v2 gate is permissive
+    for an enabled tenant and the deeper validation runs."""
+    u, _ = _make_user_with_tenant("t-flag-on")
+    res = _client_for(u).post(
+        "/api/maic/v2/pbl/projects/", data={}, format="json",
+    )
+    # Missing topic → 400 from validation, NOT 403 from the v2 gate.
+    assert res.status_code == 400
+    assert "topic" in res.json().get("error", "")
+
+
+# ── MAIC-800: permission helpers themselves ─────────────────────────
+
+
+def test_tenant_has_v2_access_helper_logic():
+    """Helper returns False for None / inactive / unflagged; True for
+    active+flagged. Pure unit test, no DB."""
+    from types import SimpleNamespace
+    from apps.maic.permissions import tenant_has_v2_access
+
+    assert tenant_has_v2_access(None) is False
+    assert tenant_has_v2_access(
+        SimpleNamespace(is_active=False, feature_maic_v2=True)
+    ) is False
+    assert tenant_has_v2_access(
+        SimpleNamespace(is_active=True, feature_maic_v2=False)
+    ) is False
+    assert tenant_has_v2_access(
+        SimpleNamespace(is_active=True, feature_maic_v2=True)
+    ) is True
+
+
+def test_require_tenant_v2_raises_when_disabled():
+    """The hard-fail variant raises MaicTenantError, used by WS consumers
+    that need an exception path rather than a False return."""
+    from types import SimpleNamespace
+    from apps.maic.exceptions import MaicTenantError
+    from apps.maic.permissions import require_tenant_v2
+
+    with pytest.raises(MaicTenantError):
+        require_tenant_v2(
+            SimpleNamespace(is_active=True, feature_maic_v2=False)
+        )
+    # Should not raise when flag is on
+    require_tenant_v2(
+        SimpleNamespace(is_active=True, feature_maic_v2=True)
+    )

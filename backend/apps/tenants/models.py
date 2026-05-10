@@ -121,7 +121,16 @@ class Tenant(models.Model):
     )
     feature_2fa = models.BooleanField(default=False)
     feature_students = models.BooleanField(default=False, help_text="Enable student portal")
-    feature_maic = models.BooleanField(default=False, help_text="Enable OpenMAIC AI Classroom feature")
+    feature_maic = models.BooleanField(default=False, help_text="Enable OpenMAIC AI Classroom feature (v1, legacy)")
+    feature_maic_v2 = models.BooleanField(
+        default=False,
+        help_text=(
+            "Enable MAIC v2 — the rebuilt multi-agent classroom + PBL stack "
+            "(Phases 0–7). Independent of feature_maic; both can be on during "
+            "rollout. Production gate is the global MAIC_V2_ENABLED env var "
+            "(deploy kill-switch); this field is the per-tenant access gate."
+        ),
+    )
 
     # Student limits
     max_students = models.PositiveIntegerField(default=50, help_text="Max student accounts")
@@ -328,6 +337,7 @@ class Tenant(models.Model):
             "ai_studio": self.feature_ai_studio,
             "students": self.feature_students,
             "maic": self.feature_maic,
+            "maic_v2": self.feature_maic_v2,
         }
 
 

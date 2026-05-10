@@ -34,6 +34,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.maic.exceptions import MaicConfigError
+from apps.maic.permissions import MaicV2TenantPermission
 from apps.maic_pbl.design_graph import (
     GeneratePBLConfig,
     generate_pbl_project,
@@ -87,7 +88,7 @@ class PBLProjectCreateView(APIView):
     Response 500 — design loop crashed for an unexpected reason.
     """
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, MaicV2TenantPermission]
 
     def post(self, request: Request) -> Response:
         user = request.user
@@ -250,7 +251,7 @@ class PBLProjectRetrieveView(APIView):
     two so an attacker cannot enumerate session ids).
     """
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, MaicV2TenantPermission]
 
     def get(self, request: Request, session_id: str) -> Response:
         user = request.user
