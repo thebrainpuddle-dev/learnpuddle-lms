@@ -38,6 +38,8 @@ media/
 # Phase 9 (MAIC-901+): media generation Python module — must not be
 # excluded by the global media/ rule above.
 !backend/apps/maic/media/
+# Phase 9 (MAIC-916): frontend media client + types + hooks.
+!frontend/src/lib/media/
 
 # Environment variables
 .env
