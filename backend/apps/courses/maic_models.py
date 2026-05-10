@@ -42,8 +42,26 @@ class TenantAIConfig(models.Model):
     ]
 
     IMAGE_PROVIDER_CHOICES = [
-        ("openai", "DALL-E"),
+        # NB: existing choices kept for migration safety. Phase 9 adds
+        # the upstream-compatible roster so per-tenant config can pick
+        # any of the 7 providers we ship adapters for.
+        ("openai", "DALL-E / gpt-image-1"),
         ("stability", "Stability AI"),
+        ("qwen", "Qwen (Alibaba)"),
+        ("grok", "Grok (xAI)"),
+        ("minimax", "Minimax"),
+        ("nano_banana", "Nano-Banana"),
+        ("seedream", "Seedream"),
+        ("pollinations", "Pollinations (legacy v1 default)"),
+        ("disabled", "Disabled"),
+    ]
+
+    VIDEO_PROVIDER_CHOICES = [
+        ("veo", "Google Veo"),
+        ("kling", "Kling"),
+        ("minimax_video", "Minimax Video"),
+        ("seedance", "Seedance"),
+        ("grok_video", "Grok Video"),
         ("disabled", "Disabled"),
     ]
 
@@ -85,14 +103,61 @@ class TenantAIConfig(models.Model):
         help_text="Custom TTS endpoint (proxies, self-hosted VoxCPM2 in Phase 9, etc.)",
     )
 
-    # ─── Image ────────────────────────────────────────────────────────────
+    # ─── Image (Phase 9, MAIC-901+) ───────────────────────────────────────
     # New tenants default to Pollinations (free, no API key required, via
-    # the fallback chain in image_service). Existing tenants keep whatever
-    # was previously stamped on their row — we do NOT backfill.
+    # the v1 fallback chain). Existing tenants keep whatever was previously
+    # stamped on their row — we do NOT backfill. Phase 9 adds the rest of
+    # the per-provider config: model id, base URL (for self-hosted/proxy),
+    # and default size/quality.
     image_provider = models.CharField(
         max_length=20, choices=IMAGE_PROVIDER_CHOICES, default="pollinations",
     )
     image_api_key_encrypted = models.TextField(blank=True, default="")
+    image_model = models.CharField(
+        max_length=100, blank=True, default="",
+        help_text=(
+            "Model identifier for the chosen provider, e.g. dall-e-3, "
+            "gpt-image-1, qwen-image-plus, stable-diffusion-3.5. Empty "
+            "means use the adapter's default."
+        ),
+    )
+    image_base_url = models.URLField(
+        max_length=500, blank=True, default="",
+        help_text=(
+            "Custom base URL for the image provider — proxies, regional "
+            "endpoints, self-hosted Stability, etc. Validated through "
+            "apps/integrations_chat/ssrf_guard.py at request time."
+        ),
+    )
+    image_default_size = models.CharField(
+        max_length=12, default="1024x1024",
+        help_text="Default WxH used when a request omits explicit dimensions.",
+    )
+    image_default_quality = models.CharField(
+        max_length=20, default="standard",
+        help_text="Default quality tier passed to the adapter (standard|high).",
+    )
+
+    # ─── Video (Phase 9, MAIC-901+) ───────────────────────────────────────
+    # Default disabled — video generation is opt-in per tenant because
+    # provider costs are an order of magnitude higher than image
+    # generation (Veo: $0.50+/clip; Kling: $0.30+/clip).
+    video_provider = models.CharField(
+        max_length=20, choices=VIDEO_PROVIDER_CHOICES, default="disabled",
+    )
+    video_api_key_encrypted = models.TextField(blank=True, default="")
+    video_model = models.CharField(
+        max_length=100, blank=True, default="",
+        help_text="Model identifier, e.g. veo-3, kling-v1.6, T2V-01.",
+    )
+    video_base_url = models.URLField(
+        max_length=500, blank=True, default="",
+        help_text="Custom base URL for the video provider; SSRF-guarded.",
+    )
+    video_default_duration = models.PositiveSmallIntegerField(
+        default=5,
+        help_text="Default clip duration in seconds (provider-clamped at dispatch).",
+    )
 
     # ─── Feature Gating ───────────────────────────────────────────────────
     maic_enabled = models.BooleanField(
@@ -138,6 +203,16 @@ class TenantAIConfig(models.Model):
 
     def get_image_api_key(self) -> str:
         return decrypt_value(self.image_api_key_encrypted)
+
+    def set_video_api_key(self, plaintext: str) -> None:
+        """Encrypt + store the video provider API key. Phase 9 / MAIC-901."""
+        self.video_api_key_encrypted = encrypt_value(plaintext)
+
+    def get_video_api_key(self) -> str:
+        """Decrypt + return the video provider API key. Returns "" when unset."""
+        if not self.video_api_key_encrypted:
+            return ""
+        return decrypt_value(self.video_api_key_encrypted)
 
     # ─── TTS resolver (MAIC-501) ──────────────────────────────────────────
 
