@@ -325,7 +325,7 @@ export function useMAICGeneration(): UseMAICGenerationReturn {
           type: sceneType,
           title: outlineScene.title,
           order: i + 1,
-          content: buildSceneContent(sceneType, primarySlide, res.data),
+          content: buildSceneContent(sceneType, primarySlide, res.data, sceneSlides),
           actions: [],
           multiAgent: outlineScene.agentIds.length > 0
             ? { enabled: true, agentIds: outlineScene.agentIds }
@@ -664,6 +664,7 @@ function buildSceneContent(
   slide: MAICSlide | undefined,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   responseData: any,
+  sceneSlides: MAICSlide[] = slide ? [slide] : [],
 ): MAICScene['content'] {
   if (sceneType === 'quiz' && responseData?.questions) {
     return {
@@ -684,6 +685,7 @@ function buildSceneContent(
   return {
     type: 'slide',
     elements: slide?.elements || [],
+    slides: sceneSlides,
     background: slide?.background,
     speakerScript: slide?.speakerScript,
     audioUrl: slide?.audioUrl,
@@ -722,47 +724,42 @@ function buildFallbackActions(scene: MAICScene, agents: MAICAgent[]): MAICAction
   const speakerB = assignedIds[1] || agents.find((a) => a.id !== speakerA)?.id || speakerA;
   if (!speakerA) return actions;
 
-  const script = slideContent.speakerScript?.trim() ?? '';
-  const elements = slideContent.elements ?? [];
-  const firstEl = elements[0]?.id;
-  const secondEl = elements[1]?.id;
+  const slides = slideContent.slides?.length
+    ? slideContent.slides
+    : [{
+        id: `${scene.id}-fallback-slide`,
+        title: scene.title,
+        elements: slideContent.elements ?? [],
+        speakerScript: slideContent.speakerScript,
+      }];
 
-  // Split the speakerScript into at most 3 chunks on sentence punctuation
-  // so each agent gets a bite rather than A monologuing the whole thing.
-  const chunks = script
-    .split(/(?<=[.!?])\s+/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-  const partA = chunks.slice(0, Math.max(1, Math.ceil(chunks.length / 3))).join(' ');
-  const partB = chunks.slice(partA ? 1 : 0, Math.max(2, Math.ceil((chunks.length * 2) / 3))).join(' ');
-  const partC = chunks.slice(Math.max(2, Math.ceil((chunks.length * 2) / 3))).join(' ');
+  slides.forEach((slide, index) => {
+    const elements = slide.elements ?? [];
+    const firstEl = elements[0]?.id;
+    const secondEl = elements[1]?.id;
+    const speakerId = index % 2 === 0 ? speakerA : speakerB;
+    const followUpId = speakerId === speakerA ? speakerB : speakerA;
+    const script = slide.speakerScript?.trim() || `Let's examine ${slide.title || scene.title}.`;
 
-  if (partA) {
-    actions.push({ type: 'speech', agentId: speakerA, text: partA });
-  }
-  if (firstEl) {
-    actions.push({ type: 'spotlight', elementId: firstEl, duration: 2500 });
-  }
-  actions.push({ type: 'pause', duration: 200 });
-  if (partB && speakerB) {
-    actions.push({ type: 'speech', agentId: speakerB, text: partB });
-  }
-  if (secondEl) {
-    actions.push({ type: 'highlight', elementId: secondEl, color: '#DBEAFE' });
-    actions.push({ type: 'pause', duration: 300 });
-  }
-  if (partC) {
-    actions.push({ type: 'speech', agentId: speakerA, text: partC });
-  } else if (!partB && !partC && partA && speakerB) {
-    // Short scripts — we only got partA. Add a closing acknowledgment
-    // from the second speaker so the scene ends on a hand-off beat
-    // rather than a single line.
-    actions.push({
-      type: 'speech',
-      agentId: speakerB,
-      text: 'Good framing — let\u2019s move on.',
-    });
-  }
+    if (index > 0) {
+      actions.push({ type: 'transition', slideIndex: index });
+    }
+    actions.push({ type: 'speech', agentId: speakerId, text: script });
+    if (firstEl) {
+      actions.push({ type: 'spotlight', elementId: firstEl, duration: 2500 });
+      actions.push({ type: 'laser', elementId: firstEl, color: '#2563EB', duration: 1200 });
+    }
+    if (secondEl) {
+      actions.push({ type: 'highlight', elementId: secondEl, color: '#DBEAFE' });
+    }
+    if (followUpId && followUpId !== speakerId && index < slides.length - 1) {
+      actions.push({
+        type: 'speech',
+        agentId: followUpId,
+        text: `That gives us the next anchor for ${slides[index + 1]?.title || scene.title}.`,
+      });
+    }
+  });
 
   return actions;
 }

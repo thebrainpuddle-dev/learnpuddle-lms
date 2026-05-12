@@ -92,6 +92,33 @@ describe('SlideRenderer — body-image-right template (F4)', () => {
     expect(imgs[0].getAttribute('alt')).toBe('Diagram of photosynthesis');
   });
 
+  test('maps backing element ids onto slot DOM nodes for action targeting', () => {
+    const slide: MAICSlide = {
+      id: 'tpl-targetable-slots',
+      title: 'Targetable slots',
+      template: 'body-image-right',
+      elements: [
+        { type: 'text', id: 'el-title', x: 0, y: 0, width: 100, height: 40, content: 'Title' },
+        { type: 'text', id: 'el-body', x: 0, y: 50, width: 100, height: 100, content: 'Body' },
+        { type: 'image', id: 'el-image', x: 100, y: 50, width: 100, height: 100, content: 'Parabola graph', src: '' },
+        { type: 'text', id: 'el-footer', x: 0, y: 170, width: 100, height: 30, content: 'Footer' },
+      ],
+      slots: {
+        title: { text: 'Quadratic launch' },
+        body: { text: 'Use the graph to reason about roots.' },
+        image: { src: 'https://images.example.com/graph.jpg', alt: 'Parabola graph' },
+        footer: { text: 'Practice checkpoint' },
+      },
+    };
+
+    render(<SlideRenderer slide={slide} />);
+
+    expect(document.querySelector('[data-testid="slide-slot-title"]')?.id).toBe('el-title');
+    expect(document.querySelector('[data-testid="slide-slot-body"]')?.id).toBe('el-body');
+    expect(document.querySelector('[data-testid="slide-slot-image"]')?.id).toBe('el-image');
+    expect(document.querySelector('[data-testid="slide-slot-footer"]')?.id).toBe('el-footer');
+  });
+
   test('shows shimmer skeleton when image src is empty AND imagesPending=true', () => {
     const slide: MAICSlide = {
       id: 'tpl-slide-2',

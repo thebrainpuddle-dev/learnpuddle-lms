@@ -191,12 +191,13 @@ describe('ImageWithFallbacks — render branches', () => {
     expect(screen.queryByText('AI images disabled')).toBeNull();
   });
 
-  test('returns null when src is empty and no other state is active', () => {
-    const { container } = render(
-      <ImageWithFallbacks src="" alt="x" />,
-    );
-    // No skeleton, no placeholder, no <img>. Caller is expected to provide
-    // a fallback (e.g. Unsplash) before invoking the helper in this case.
-    expect(container.firstChild).toBeNull();
+  test('renders an honest unavailable placeholder when src is empty and no other state is active', () => {
+    render(<ImageWithFallbacks src="" alt="Quadratic diagram" />);
+    expect(
+      document.querySelector('[data-testid="image-empty-placeholder"]'),
+    ).not.toBeNull();
+    expect(screen.getByText('Image unavailable')).toBeDefined();
+    expect(screen.getByText('Quadratic diagram')).toBeDefined();
+    expect(document.querySelector('img')).toBeNull();
   });
 });

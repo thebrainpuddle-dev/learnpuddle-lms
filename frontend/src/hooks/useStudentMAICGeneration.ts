@@ -312,7 +312,7 @@ export function useStudentMAICGeneration(): UseStudentMAICGenerationReturn {
             type: sceneType,
             title: outlineScene.title,
             order: i + 1,
-            content: buildSceneContent(sceneType, primarySlide, res.data),
+            content: buildSceneContent(sceneType, primarySlide, res.data, sceneSlides),
             actions: [],
             multiAgent: outlineScene.agentIds.length > 0
               ? { enabled: true, agentIds: outlineScene.agentIds }
@@ -447,6 +447,7 @@ function buildSceneContent(
   slide: MAICSlide | undefined,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   responseData: any,
+  sceneSlides: MAICSlide[] = [],
 ): MAICScene['content'] {
   if (sceneType === 'quiz' && responseData?.questions) {
     return { type: 'quiz', questions: responseData.questions } as MAICQuizContent;
@@ -457,6 +458,7 @@ function buildSceneContent(
   return {
     type: 'slide',
     elements: slide?.elements || [],
+    slides: sceneSlides,
     background: slide?.background,
     speakerScript: slide?.speakerScript,
     audioUrl: slide?.audioUrl,
@@ -467,13 +469,36 @@ function buildFallbackActions(scene: MAICScene, agents: MAICAgent[]): MAICAction
   const actions: MAICAction[] = [];
   if (scene.content.type === 'slide') {
     const slideContent = scene.content as MAICSlideContent;
-    const speakerId = scene.multiAgent?.agentIds[0] || agents[0]?.id;
-    if (slideContent.speakerScript && speakerId) {
-      actions.push({ type: 'speech', agentId: speakerId, text: slideContent.speakerScript });
-    }
-    if (slideContent.elements.length > 0) {
-      actions.push({ type: 'spotlight', elementId: slideContent.elements[0].id, duration: 3000 });
-    }
+    const assignedIds = scene.multiAgent?.agentIds ?? [];
+    const speakerA = assignedIds[0] || agents[0]?.id;
+    const speakerB = assignedIds[1] || agents.find((a) => a.id !== speakerA)?.id || speakerA;
+    if (!speakerA) return actions;
+
+    const slides = slideContent.slides?.length
+      ? slideContent.slides
+      : [{
+          id: `${scene.id}-fallback-slide`,
+          title: scene.title,
+          elements: slideContent.elements ?? [],
+          speakerScript: slideContent.speakerScript,
+        }];
+
+    slides.forEach((slide, index) => {
+      const speakerId = index % 2 === 0 ? speakerA : speakerB;
+      const elements = slide.elements ?? [];
+      const script = slide.speakerScript?.trim() || `Let's examine ${slide.title || scene.title}.`;
+      if (index > 0) {
+        actions.push({ type: 'transition', slideIndex: index });
+      }
+      actions.push({ type: 'speech', agentId: speakerId, text: script });
+      if (elements[0]?.id) {
+        actions.push({ type: 'spotlight', elementId: elements[0].id, duration: 2500 });
+        actions.push({ type: 'laser', elementId: elements[0].id, color: '#2563EB', duration: 1200 });
+      }
+      if (elements[1]?.id) {
+        actions.push({ type: 'highlight', elementId: elements[1].id, color: '#DBEAFE' });
+      }
+    });
   }
   return actions;
 }

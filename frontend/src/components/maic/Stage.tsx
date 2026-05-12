@@ -46,8 +46,7 @@ interface StageProps {
   /**
    * CG-P0-3: forwarded from the classroom detail response.  When true the
    * Celery image-fill task is still running; image elements with empty src
-   * show a "fetching image…" skeleton instead of an immediate Unsplash
-   * fallback photo.
+   * show a "fetching image…" skeleton.
    */
   imagesPending?: boolean;
 }
@@ -759,6 +758,7 @@ export const Stage: React.FC<StageProps> = ({ role, imagesPending }) => {
             {/* Laser pointer effect (driven by store) */}
             <LaserPointer
               active={!!laserElementId}
+              targetElementId={laserElementId}
               color={laserColor || '#ef4444'}
             />
 

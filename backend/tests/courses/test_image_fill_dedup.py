@@ -371,6 +371,32 @@ def test_service_fill_image_urls_disabled_provider_stamps_meta():
     assert el.get("meta", {}).get("imageProviderDisabled") is True
 
 
+def test_service_fill_image_urls_strips_placeholder_hosts():
+    """LLM responses must not bypass the tenant image pipeline with generic
+    placeholder CDN URLs or random external fallbacks."""
+    from apps.courses import maic_generation_service as svc
+
+    parsed = {
+        "slides": [
+            {
+                "id": "slide-1",
+                "elements": [
+                    {"type": "image", "id": "img-placehold", "src": "https://placehold.co/800x450"},
+                    {"type": "image", "id": "img-unsplash", "src": "https://source.unsplash.com/800x450/?math"},
+                    {"type": "image", "id": "img-media", "src": "/media/tenant/1/videos/asset.jpg"},
+                ],
+            }
+        ]
+    }
+
+    svc._fill_image_urls(parsed, scene_id="scene-1", image_provider="pollinations")
+
+    elements = parsed["slides"][0]["elements"]
+    assert elements[0]["src"] == ""
+    assert elements[1]["src"] == ""
+    assert elements[2]["src"] == "/media/tenant/1/videos/asset.jpg"
+
+
 # ---------------------------------------------------------------------------
 # 4. View-layer duplicate _fill_image_urls is gone.
 # ---------------------------------------------------------------------------

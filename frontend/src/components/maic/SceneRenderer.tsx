@@ -33,7 +33,7 @@ interface SceneRendererProps {
   /**
    * CG-P0-3: forwarded from the classroom detail response. When true the
    * Celery image-fill task is still running; SlideRenderer shows a
-   * "fetching image…" skeleton instead of an immediate Unsplash fallback.
+   * "fetching image…" skeleton.
    */
   imagesPending?: boolean;
   /**

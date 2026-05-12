@@ -21,7 +21,7 @@ export interface MAICSlideElement {
   /** Optional bag for element-level backend signals. Image elements
    *  carry `imageProviderDisabled: true` when the tenant has opted
    *  out of AI image generation — the renderer uses this to show an
-   *  honest placeholder instead of falling back to random stock photos. */
+   *  honest placeholder. */
   meta?: {
     imageProviderDisabled?: boolean;
     [k: string]: unknown;
@@ -59,7 +59,7 @@ export interface SlideSlots {
   body?: { text?: string; bullets?: string[] };
   /** Image slot — `src` may be empty while the Celery image-fill task is
    *  still running (CG-P0-3); renderer shows the fetching skeleton in that
-   *  case and falls back to placeholder/Unsplash policy when not pending. */
+   *  case and an unavailable placeholder when not pending. */
   image?: { src?: string; alt?: string; meta?: Record<string, unknown> };
   /** Bottom-row footer caption. */
   footer?: { text: string };

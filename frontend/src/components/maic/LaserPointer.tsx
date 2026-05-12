@@ -17,6 +17,7 @@ interface TrailPoint {
 
 export interface LaserPointerProps {
   active: boolean;
+  targetElementId?: string | null;
   color?: string;  // default: '#ef4444' (red)
   size?: number;   // default: 12
 }
@@ -24,7 +25,7 @@ export interface LaserPointerProps {
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export const LaserPointer = React.memo<LaserPointerProps>(
-  function LaserPointer({ active, color = '#ef4444', size = 12 }) {
+  function LaserPointer({ active, targetElementId, color = '#ef4444', size = 12 }) {
     const [position, setPosition] = useState({ x: 0, y: 0 });
     const [trail, setTrail] = useState<TrailPoint[]>([]);
     const idRef = useRef(0);
@@ -47,6 +48,22 @@ export const LaserPointer = React.memo<LaserPointerProps>(
         return;
       }
 
+      if (targetElementId) {
+        const target = document.getElementById(targetElementId);
+        if (target) {
+          const rect = target.getBoundingClientRect();
+          const next = {
+            x: rect.left + rect.width / 2,
+            y: rect.top + rect.height / 2,
+          };
+          setPosition(next);
+          idRef.current += 1;
+          const point: TrailPoint = { ...next, id: idRef.current };
+          trailRef.current = [...trailRef.current.slice(-7), point];
+          setTrail([...trailRef.current]);
+        }
+      }
+
       window.addEventListener('mousemove', handleMouseMove);
       return () => {
         window.removeEventListener('mousemove', handleMouseMove);
@@ -54,7 +71,7 @@ export const LaserPointer = React.memo<LaserPointerProps>(
           cancelAnimationFrame(rafRef.current);
         }
       };
-    }, [active, handleMouseMove]);
+    }, [active, targetElementId, handleMouseMove]);
 
     if (!active) return null;
 

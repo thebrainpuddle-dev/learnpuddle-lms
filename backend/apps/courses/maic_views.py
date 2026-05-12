@@ -52,6 +52,7 @@ from apps.courses.maic_generation_service import (
     director_next_turn,
     AgentValidationError,
     AGENT_VOICE_MAP,
+    find_prompt_placeholder_texts,
 )
 from apps.courses.maic_voices import AZURE_IN_VOICES, pick_fallback_voice
 
@@ -90,6 +91,10 @@ _MAIC_MISSING_CONTENT_ERROR = (
     "This classroom is marked ready, but no generated scenes or slides are saved. "
     "Regenerate it before using it in class."
 )
+_MAIC_PLACEHOLDER_CONTENT_ERROR = (
+    "This classroom contains prompt placeholder text from an earlier generation. "
+    "Regenerate it before using it in class."
+)
 
 
 def _maic_has_playable_content(classroom: MAICClassroom) -> bool:
@@ -115,6 +120,16 @@ def _maic_response_status(classroom: MAICClassroom) -> tuple[str, str]:
     """Return user-facing status/error without letting bad legacy rows look playable."""
     if classroom.status == "READY" and not _maic_has_playable_content(classroom):
         return "FAILED", _MAIC_MISSING_CONTENT_ERROR
+    if classroom.status == "READY":
+        legacy = classroom.content if isinstance(classroom.content, dict) else {}
+        quality_payload = {
+            "scenes": classroom.content_scenes or [],
+            "slides": (classroom.content_meta or {}).get("slides", []),
+            "legacyScenes": legacy.get("scenes", []),
+            "legacySlides": legacy.get("slides", []),
+        }
+        if find_prompt_placeholder_texts(quality_payload):
+            return "FAILED", _MAIC_PLACEHOLDER_CONTENT_ERROR
     return classroom.status, classroom.error_message
 
 
@@ -787,7 +802,19 @@ def teacher_maic_generate_scene_content(request):
     # Try sidecar first
     result = _proxy_json(request, "/api/generate/scene-content", config)
     if result.status_code != 502:
-        return result
+        placeholders = find_prompt_placeholder_texts(getattr(result, "data", None))
+        if not placeholders:
+            return result
+        logger.warning(
+            "Sidecar scene-content response copied prompt placeholders; falling back direct placeholders=%s",
+            placeholders[:5],
+            extra=log_extra(
+                MAICPhase.GENERATE_SCENE_CONTENT,
+                metric="scene_content_sidecar_quality_gate",
+                outcome="placeholder_rejected",
+                audience="teacher",
+            ),
+        )
 
     # Direct LLM fallback
     logger.info(
@@ -1079,11 +1106,11 @@ def teacher_maic_classroom_detail(request, classroom_id):
     #
     # Escape hatch: `?full=1` forces the full payload (used by admin tools
     # or one-shot backfill scripts).
-    want_full = request.query_params.get("full") == "1" or classroom.status in (
-        "READY",
-        "FAILED",
-        "ARCHIVED",
-    )
+    invalid_ready_content = classroom.status == "READY" and response_status == "FAILED"
+    want_full = (
+        request.query_params.get("full") == "1"
+        or classroom.status in ("READY", "FAILED", "ARCHIVED")
+    ) and not invalid_ready_content
     # PERF-P0-4: use composed_content property which prefers shards over legacy field.
     content_payload = classroom.composed_content if want_full else {}
     audio_manifest = content_payload.get("audioManifest") if want_full else None
@@ -1225,6 +1252,21 @@ def teacher_maic_classroom_update(request, classroom_id):
             updated_fields.append("started_at")
         classroom.last_progress_at = now
         updated_fields.append("last_progress_at")
+
+    if request.data.get("status") == "READY":
+        quality_payload = {
+            "scenes": classroom.content_scenes or [],
+            "slides": (classroom.content_meta or {}).get("slides", []),
+        }
+        placeholders = find_prompt_placeholder_texts(quality_payload)
+        if placeholders:
+            return Response(
+                {
+                    "error": "Generated classroom still contains prompt placeholder text.",
+                    "placeholders": placeholders[:5],
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
     if updated_fields:
         # Deduplicate while preserving order (dict.fromkeys is O(n) and ordered).
@@ -1370,9 +1412,21 @@ def finalize_partial_classroom(classroom) -> dict:
             "error": "Cannot finalize: no scenes have been saved yet.",
         }
 
+    quality_payload = {
+        "scenes": scenes,
+        "slides": (getattr(classroom, "content_meta", None) or {}).get("slides", []),
+    }
+    placeholders = find_prompt_placeholder_texts(quality_payload)
+    if placeholders:
+        return {
+            "ok": False,
+            "error": "Cannot finalize: generated content still contains prompt placeholder text.",
+            "placeholders": placeholders[:5],
+        }
+
     # Flip status + recompute counts from saved scenes. We trust scenes
-    # already in the shard — they passed through scrubSlideDataUrls and
-    # buildFallbackActions on the wizard side, so they're playable.
+    # already in the shard only after the quality gate above has ruled out
+    # copied prompt examples.
     classroom.status = "READY"
     classroom.scenes_ready = len(scenes)
     classroom.scene_count = len(scenes)
@@ -2530,7 +2584,19 @@ def student_maic_generate_scene_content(request):
 
     result = _proxy_json(request, "/api/generate/scene-content", config)
     if result.status_code != 502:
-        return result
+        placeholders = find_prompt_placeholder_texts(getattr(result, "data", None))
+        if not placeholders:
+            return result
+        logger.warning(
+            "Sidecar scene-content response copied prompt placeholders; falling back direct placeholders=%s",
+            placeholders[:5],
+            extra=log_extra(
+                MAICPhase.GENERATE_SCENE_CONTENT,
+                metric="scene_content_sidecar_quality_gate",
+                outcome="placeholder_rejected",
+                audience="student",
+            ),
+        )
 
     # Direct fallback
     logger.info(

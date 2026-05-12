@@ -1791,9 +1791,16 @@ export class MAICActionEngine {
     this.effectTimers.push(timer);
   }
 
-  private executeLaser(_action: LaserAction): void {
-    // Laser pointer removed — skip for legacy compatibility
-    console.debug('Laser action skipped (deprecated)');
+  private executeLaser(action: LaserAction): void {
+    const duration = action.duration ?? EFFECT_AUTO_CLEAR_MS;
+    this.stageStore.getState().setLaser(action.elementId, action.color);
+
+    const timer = setTimeout(() => {
+      if (!this.disposed) {
+        this.stageStore.getState().setLaser(null);
+      }
+    }, duration);
+    this.effectTimers.push(timer);
   }
 
   // ─── Video ──────────────────────────────────────────────────────────

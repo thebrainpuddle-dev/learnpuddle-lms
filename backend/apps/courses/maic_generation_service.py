@@ -40,7 +40,9 @@ import io
 import json
 import logging
 import os
+import re
 import uuid
+from urllib.parse import urlparse
 
 import requests as http_requests
 from json_repair import repair_json
@@ -71,6 +73,87 @@ from utils.metrics import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+_PROMPT_PLACEHOLDER_TEXTS = {
+    "main title text",
+    "a compelling subtitle or tagline",
+    "brief overview of what we will cover in this lesson...",
+    "first key point explained clearly",
+    "second key point with detail",
+    "third key point with example",
+    "fourth key point with application",
+    "descriptive prompt for a relevant diagram or illustration",
+    "welcome everyone! today we are going to explore a fascinating topic...",
+}
+_PLACEHOLDER_IMAGE_HOSTS = {
+    "placehold.co",
+    "placeholder.com",
+    "via.placeholder.com",
+    "source.unsplash.com",
+}
+
+
+def _plain_prompt_text(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip().lower()
+
+
+def is_prompt_placeholder_text(value: object) -> bool:
+    """Return True when an LLM copied an example string from our prompt.
+
+    Small local models sometimes produce valid JSON by copying the schema
+    example verbatim. That content is syntactically valid but not classroom
+    content, so it must fail quality gates before the row can become READY.
+    """
+    return _plain_prompt_text(value) in _PROMPT_PLACEHOLDER_TEXTS
+
+
+def find_prompt_placeholder_texts(payload: object) -> list[str]:
+    """Return prompt-example strings found anywhere in a generated payload."""
+    found: list[str] = []
+
+    def walk(value: object) -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if key in {"content", "text", "title", "speakerScript", "alt"}:
+                    if is_prompt_placeholder_text(child):
+                        found.append(str(child))
+                walk(child)
+            return
+        if isinstance(value, list):
+            for item in value:
+                walk(item)
+
+    walk(payload)
+    return found
+
+
+def _has_prompt_placeholders(payload: object) -> bool:
+    return bool(find_prompt_placeholder_texts(payload))
+
+
+def _should_strip_generated_image_src(src: object) -> bool:
+    """Return True for unsafe or known placeholder image URLs.
+
+    Fresh LLM/sidecar responses should not smuggle random placeholder URLs
+    around the tenant image pipeline. Valid persisted media paths are allowed;
+    empty values are handled by the deferred image-fill task.
+    """
+    value = str(src or "").strip()
+    if not value:
+        return False
+    if value.startswith("/media/"):
+        return False
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"}:
+        return True
+    host = (parsed.hostname or "").lower()
+    return host in _PLACEHOLDER_IMAGE_HOSTS
 
 # ─── Scene Content Length Budgets ────────────────────────────────────────────
 #
@@ -1890,29 +1973,32 @@ def _fill_image_urls(parsed: dict, scene_id: str, *,
                      tenant_id: str | None = None,
                      classroom_id: str | None = None,
                      scene_idx: int | None = None) -> dict:
-    """Post-process slides to fill in image URLs using image_service.
+    """Scrub image fields before deferred media generation.
 
-    When `image_provider == 'disabled'`, skip the fetch entirely and stamp
-    `meta.imageProviderDisabled = true` on each image element so the
-    frontend renders an honest "AI images off" placeholder rather than a
-    random Unsplash photo. Any fetch error is logged (not silenced) so
-    ops can see what providers are failing.
-
-    CG-P0-9: when ``tenant_id`` + ``classroom_id`` + ``scene_idx`` are all
-    provided, ``fetch_scene_image`` will save Imagen/Nano-Banana bytes to
-    ``default_storage`` (real /media URL) instead of returning a base64
-    ``data:`` URL that the frontend strips. Per-slide ``slide_idx`` is
-    appended into the storage path so multi-slide scenes don't collide.
+    The Celery ``fill_classroom_images`` task is the only place that should
+    call image providers. This helper keeps the synchronous generation
+    response lean and safe: unsafe/placeholder URLs are stripped, disabled
+    providers are stamped honestly, and empty ``src`` values are left empty
+    for the deferred task to fill.
     """
-    from apps.courses.image_service import fetch_scene_image
 
     disabled = (image_provider or "disabled").lower() == "disabled"
     slides = parsed.get("slides", [])
-    have_storage_ctx = bool(tenant_id and classroom_id and scene_idx is not None)
+    # Context args are retained for API compatibility with old callers.
+    _ = (tenant_id, classroom_id, scene_idx)
     for slide_idx, slide in enumerate(slides):
         for element in slide.get("elements", []):
             if element.get("type") != "image":
                 continue
+            if _should_strip_generated_image_src(element.get("src")):
+                logger.warning(
+                    "scrubbing generated image src scene=%s slide=%d element=%s src=%r",
+                    scene_id,
+                    slide_idx,
+                    element.get("id"),
+                    element.get("src"),
+                )
+                element["src"] = ""
             if element.get("src"):
                 continue
             if disabled:
@@ -1920,31 +2006,6 @@ def _fill_image_urls(parsed: dict, scene_id: str, *,
                 # placeholder instead of guessing at stock photos.
                 meta = element.setdefault("meta", {})
                 meta["imageProviderDisabled"] = True
-                continue
-            keyword = element.get("content", "educational illustration")
-            try:
-                if have_storage_ctx:
-                    # Compose a unique scene_index per (scene_idx, slide_idx)
-                    # so multiple images in the same scene don't overwrite
-                    # each other in storage. 100 slides per scene is far
-                    # beyond anything we generate so the multiplier is safe.
-                    composite_idx = (scene_idx * 100) + slide_idx
-                    url = fetch_scene_image(
-                        keyword,
-                        tenant_id=tenant_id,
-                        lesson_id=classroom_id,
-                        scene_index=composite_idx,
-                    )
-                else:
-                    url = fetch_scene_image(keyword)
-                element["src"] = url
-            except Exception as exc:  # noqa: BLE001 — log + fail open
-                logger.warning(
-                    "image fill failed scene=%s slide=%d keyword=%r err=%s",
-                    scene_id, slide_idx, keyword, exc,
-                )
-                # src stays empty; frontend falls back to the generic
-                # broken-image placeholder (not the Unsplash random).
     return parsed
 
 
@@ -2129,7 +2190,11 @@ Generate exactly {slide_count} slides following the layout guidelines (title sli
             return isinstance(p, dict) and "questions" in p
     else:
         def _scene_content_validator(p):
-            return isinstance(p, dict) and ("slides" in p or "slide" in p)
+            return (
+                isinstance(p, dict)
+                and ("slides" in p or "slide" in p)
+                and not _has_prompt_placeholders(p)
+            )
 
     parsed, _raw = _call_llm_with_json_retry(
         config, scene_system_prompt, user_prompt,
@@ -2221,6 +2286,18 @@ Generate exactly {slide_count} slides following the layout guidelines (title sli
             slide.pop("template", None)
             slide.pop("slots", None)
         parsed["slides"] = [slide]
+
+    placeholders = find_prompt_placeholder_texts(parsed)
+    if placeholders:
+        logger.warning(
+            "scene-content rejected copied prompt placeholders scene=%s placeholders=%s",
+            scene_id,
+            placeholders[:5],
+        )
+        maic_scene_generation_total.labels(
+            scene_type=scene_type, outcome="fallback"
+        ).inc()
+        return _fallback_scene_content(scene, image_provider=image_provider)
 
     _fill_image_urls(
         parsed,
@@ -2500,8 +2577,8 @@ Return a valid JSON object:
 ACTION TYPES (14 types — use all of these for maximum engagement):
 
 1. speech       — Agent speaks (requires: agentId, text). 1-3 sentences each.
-2. spotlight    — Highlight element glow (requires: elementId, duration in ms)
-3. highlight    — Color overlay on element (requires: elementId, color hex like "#DBEAFE")
+2. spotlight    — Sustained focus on the element being explained (requires: elementId, duration in ms)
+3. highlight    — Brief color emphasis on a key element (requires: elementId, color hex like "#DBEAFE")
 4. transition   — Advance to next slide (requires: slideIndex — 0-based index of the target slide). CRITICAL for multi-slide scenes.
 5. wb_open      — Open whiteboard overlay (no params)
 6. wb_draw_text — Draw text on whiteboard (requires: text, x, y, fontSize, color)
@@ -2512,7 +2589,7 @@ ACTION TYPES (14 types — use all of these for maximum engagement):
 11. wb_edit_code  — Mutate an existing code block (requires: targetId matching a prior wb_draw_code id, operation ["insert_after"|"replace_lines"|"delete_lines"], lineStart, optional lineEnd, optional content[]). Use to make code appear a few lines at a time, interleaved with speech, so the agent is "typing" the code live.
 12. wb_close    — Close whiteboard overlay (no params)
 13. wb_clear    — Clear whiteboard content (no params)
-14. discussion  — Start discussion segment (requires: sessionType ["qa"|"roundtable"], topic, agentIds)
+14. discussion  — Optional teacher-led discussion marker (requires: sessionType ["qa"|"roundtable"], topic, agentIds, triggerMode:"manual")
 
 CRITICAL RULES:
 - VOICE DISCIPLINE: You MUST write speech text that reflects each agent's `speakingStyle` through ENGLISH register only — warm vs crisp, Socratic vs supportive, formal vs informal. Each agent's lines should be identifiable as that agent's voice without relying on non-English words.
@@ -2542,11 +2619,11 @@ CRITICAL RULES:
     speech ("…equals the net force acting on the body.")
     wb_close
   For code walkthroughs, prefer wb_draw_code (seed) + a sequence of wb_edit_code inserts so the code appears a few lines at a time, each chunk narrated by a brief speech action. That produces the "typing code live" feel.
-- Discussion segments: if you include a "discussion" action, set `"triggerMode": "manual"` so the panel only opens when the teacher clicks the Roundtable button. Never rely on discussions auto-popping mid-scene.
+- Discussion segments: use at most ONE discussion action per scene, only at a natural checkpoint. Always set `"triggerMode": "manual"` so playback continues and the teacher opens Roundtable explicitly.
 - Speech text should feel like a real conversation, not reading from notes
 - Each speech should be 1-3 sentences (short, punchy, conversational)
 - Use the speaker's role style: professors explain authoritatively, assistants ask clarifying questions, student reps voice common confusions
-- Spotlight the heading element first, then key content elements on each slide
+- Spotlight the heading element first, then key content elements on each slide. Use laser sparingly for quick directional pointing at diagrams, images, or formula terms.
 - Speaker handoff: rely on natural TTS cadence between speakers. Do NOT insert beat/spacer actions between turns — the playback engine reflows audio with its own micro-gap.
 - For introduction scenes: each agent introduces themselves personally
 - Use element IDs from the slide content for spotlight/highlight actions
@@ -2651,11 +2728,11 @@ Agents in this scene:
 {agent_details}
 
 IMPORTANT:
-- Generate 15-25 actions with rich variety (speech, spotlight, highlight, whiteboard, discussion, transitions)
+- Generate 15-25 actions with rich variety (speech, spotlight, laser, highlight, whiteboard, transitions)
 - Include a "transition" action (with slideIndex) between EACH slide. First slide (index 0) is shown by default.
 - ALL agents must participate in dialogue — each agent speaks at least 3 times
 - Use whiteboard (wb_open, wb_draw_text/shape, wb_close) at least once for a key concept
-- Include at least one discussion action
+- Include a discussion action only when this scene has a genuine teacher-facilitated checkpoint; otherwise skip it
 - Create back-and-forth conversation, not monologue
 - Reference element IDs from the slides for spotlight and highlight actions
 """
@@ -2697,7 +2774,9 @@ IMPORTANT:
             scene_type="scene_actions", outcome="fallback"
         ).inc()
         fallback = _fallback_actions(scene, assigned_agents)
-        _stamp_action_durations(fallback.get("actions", []))
+        fallback_actions = fallback.get("actions", [])
+        _normalize_scene_actions(fallback_actions, assigned_agents)
+        _stamp_action_durations(fallback_actions)
         return fallback
 
     _normalize_scene_actions(parsed["actions"], assigned_agents)
@@ -2756,6 +2835,9 @@ _SPEECHLIKE_ACTION_TYPES = {
 _ACTION_TYPE_ALIASES = {
     "slide_transition": "transition",
     "transition_to_slide": "transition",
+    "laser_pointer": "laser",
+    "point": "laser",
+    "pointer": "laser",
     "whiteboard_open": "wb_open",
     "whiteboard_close": "wb_close",
     "draw_text": "wb_draw_text",
@@ -2801,11 +2883,89 @@ def _normalize_scene_actions(actions: list, agents: list[dict]) -> None:
         else:
             action["type"] = action_type
 
-        if action["type"] == "wb_draw_shape" and action.get("shape") == "rect":
-            action["shape"] = "rectangle"
+        _normalize_action_fields(action, len(normalized))
+        if action.get("type") == "laser" and not action.get("elementId"):
+            continue
         normalized.append(action)
 
     actions[:] = normalized
+
+
+def _normalize_action_fields(action: dict, index: int) -> None:
+    """Normalize common LLM parameter variants to the frontend contract."""
+    action_type = action.get("type")
+
+    if action_type in {"spotlight", "highlight", "laser", "play_video", "wb_delete"}:
+        for alias in ("element_id", "elementID", "targetId", "target_id", "target", "element"):
+            value = action.get(alias)
+            if not action.get("elementId") and value:
+                action["elementId"] = value
+
+    if action_type == "laser" and not action.get("elementId"):
+        # A laser without a target is visually meaningless in the element-
+        # based classroom runtime, so let the caller skip it cleanly.
+        return
+
+    if (
+        isinstance(action_type, str)
+        and action_type.startswith("wb_")
+        and action_type not in {"wb_open", "wb_close", "wb_clear"}
+    ):
+        action.setdefault("id", f"wb-{index + 1}")
+
+    if action_type in {"wb_draw_text", "wb_draw_shape", "wb_draw_chart", "wb_draw_latex", "wb_draw_table"}:
+        if "left" not in action and "x" in action:
+            action["left"] = action.get("x")
+        if "top" not in action and "y" in action:
+            action["top"] = action.get("y")
+
+    if action_type == "wb_draw_text":
+        action.setdefault("left", 160)
+        action.setdefault("top", 90)
+        action.setdefault("width", 520)
+        action.setdefault("height", 48)
+
+    if action_type == "wb_draw_shape":
+        if action.get("color") and not action.get("stroke"):
+            action["stroke"] = action.get("color")
+        if action.get("shape") == "rect":
+            action["shape"] = "rectangle"
+        if action.get("shape") == "arrow":
+            left = _number_or(action.get("left", action.get("x")), 160)
+            top = _number_or(action.get("top", action.get("y")), 120)
+            width = _number_or(action.get("width"), 220)
+            height = _number_or(action.get("height"), 0)
+            color = action.get("color") or action.get("stroke") or "#DC2626"
+            stroke_width = _number_or(action.get("strokeWidth"), 3)
+            action.clear()
+            action.update({
+                "type": "wb_draw_line",
+                "id": f"wb-{index + 1}",
+                "start": [left, top],
+                "end": [left + width, top + height],
+                "color": color,
+                "width": stroke_width,
+            })
+            return
+        action.setdefault("left", 160)
+        action.setdefault("top", 120)
+        action.setdefault("width", 220)
+        action.setdefault("height", 90)
+
+    if action_type == "wb_draw_line":
+        if "start" not in action and {"x1", "y1"}.issubset(action):
+            action["start"] = [action.get("x1"), action.get("y1")]
+        if "end" not in action and {"x2", "y2"}.issubset(action):
+            action["end"] = [action.get("x2"), action.get("y2")]
+        if "width" not in action and "strokeWidth" in action:
+            action["width"] = action.get("strokeWidth")
+
+
+def _number_or(value: object, fallback: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return fallback
 
 
 def _extract_action_text(action: dict) -> str:

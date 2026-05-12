@@ -53,7 +53,7 @@ export function resolveImageSrc(rawSrc: string | undefined): string | null {
 
 interface ImageWithFallbacksProps {
   /** The resolved image src to render once non-empty. Pass empty string when
-   *  no src is available (Unsplash-or-skeleton policy is applied by caller). */
+   *  no src is available; this helper then renders a clear placeholder. */
   src: string;
   alt: string;
   /** Legacy `imagesPending` flag — when true and src is empty AND no task is
@@ -77,15 +77,15 @@ interface ImageWithFallbacksProps {
 }
 
 /**
- * Renders an image cell with one of four states:
+ * Renders an image cell with one of five states:
  *   1. Task `pending`/`generating` → shimmer + "Fetching image…" caption.
  *   2. Task `failed` → "Image unavailable" placeholder + disabled retry.
  *   3. Provider disabled (no src) → "AI images disabled" honest placeholder.
  *   4. Empty src + imagesPending → legacy fetching skeleton (CG-P0-3).
  *   5. Otherwise → the actual <img> (with optional on-load shimmer).
  *
- * Note: empty `src` with no other state set falls through to nothing — the
- * caller is expected to supply a fallback (Unsplash or empty cell).
+ * Note: empty `src` with no other state set renders an honest unavailable
+ * placeholder. The renderer must not invent random remote images.
  */
 export function ImageWithFallbacks({
   src,
@@ -223,10 +223,27 @@ export function ImageWithFallbacks({
     );
   }
 
-  // 5. nothing to render — caller (e.g. F4 template's empty image slot when
-  // provider disabled is false and no fallback applies) gets null.
+  // 5. no usable src — honest empty state. Do not fall back to random remote
+  // photos; production images must come from the tenant media pipeline.
   if (!src) {
-    return null;
+    return (
+      <div
+        className={cn('relative h-full w-full', className)}
+        data-testid="image-empty-placeholder"
+      >
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-br from-slate-100 to-slate-200 rounded-lg p-3 text-center">
+          <svg className="h-8 w-8 text-slate-400 mb-2" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909M3.75 21h16.5a2.25 2.25 0 0 0 2.25-2.25V6.75a2.25 2.25 0 0 0-2.25-2.25H3.75A2.25 2.25 0 0 0 1.5 6.75v13.5A2.25 2.25 0 0 0 3.75 21Z" />
+          </svg>
+          <span className="text-[10px] font-medium text-slate-500 mb-0.5">
+            Image unavailable
+          </span>
+          <span className="text-[9px] text-slate-400 line-clamp-2">
+            {alt}
+          </span>
+        </div>
+      </div>
+    );
   }
 
   // Success path — render the <img>. Free-form path uses an on-load shimmer
@@ -312,8 +329,7 @@ interface SlideRendererProps {
   /**
    * CG-P0-3: When true the Celery image-fill task is still running.
    * Image elements with an empty src should show a "fetching image…"
-   * skeleton rather than immediately falling back to a random Unsplash
-   * photo (which would be replaced anyway once the task completes).
+   * skeleton rather than a broken/empty image frame.
    *
    * F2 (P0): legacy / fallback path. The new per-element media-task store
    * is the primary source of truth when `sceneIndex` + `slideIndex` are
@@ -390,8 +406,7 @@ function ImageElement({
   // `done`, prefer its src over `el.src`. The server eventually mirrors
   // task.src into el.src via the F4 mirror, but WS lets users see the new
   // image instantly. CG-P0-3: an empty `el.src` while `imagesPending=true`
-  // suppresses the Unsplash fallback so the renderer can show the fetching
-  // skeleton instead.
+  // shows the fetching skeleton instead of the unavailable placeholder.
   const resolvedSrc = React.useMemo(() => {
     if (task?.status === 'done') {
       const taskResolved = resolveImageSrc(task.src);
@@ -401,8 +416,7 @@ function ImageElement({
     if (elResolved) return elResolved;
     if (providerDisabled) return '';
     if (imagesPending) return '';
-    const keyword = encodeURIComponent((el.content || 'education').slice(0, 80));
-    return `https://source.unsplash.com/800x450/?${keyword}`;
+    return '';
   }, [el.src, el.content, providerDisabled, imagesPending, task?.status, task?.src]);
 
   return (
@@ -820,6 +834,12 @@ interface BodyImageRightTemplateProps {
   slots: SlideSlots;
   background?: string;
   imagesPending?: boolean;
+  elementIds?: {
+    title?: string;
+    body?: string;
+    image?: string;
+    footer?: string;
+  };
   /** F2 (P0): when supplied, BodyImageRightTemplate subscribes to the
    *  per-element media-task store via this key. F4's mirror still copies
    *  task.src into slots.image.src eventually; F2 just lets the user see
@@ -836,16 +856,15 @@ function BodyImageRightTemplate({
   slots,
   background,
   imagesPending,
+  elementIds,
   imageElementKey,
   slideTitle,
 }: BodyImageRightTemplateProps): React.ReactElement {
   const { title, body, image, footer } = slots;
 
   // WAVE-6-F4-F3: an empty `image: {}` object should NOT trigger the right
-  // column or the Unsplash fallback. Require at least one of `src` / `alt`.
-  // This keeps the `imageProviderDisabled` honest-placeholder honest, and
-  // avoids painting random Unsplash photos for slides that never asked for
-  // imagery.
+  // column. Require at least one of `src` / `alt`.
+  // This keeps the `imageProviderDisabled` honest-placeholder honest.
   const hasImage = !!image && !!(image.src || image.alt);
   const imageSrc = (image?.src || '').trim();
   const imageAlt = image?.alt || 'Slide image';
@@ -864,14 +883,8 @@ function BodyImageRightTemplate({
     }
     const elResolved = resolveImageSrc(imageSrc);
     if (elResolved) return elResolved;
-    if (providerDisabled) return '';
-    if (imagesPending) return '';
-    // No usable src AND no signal to suppress — fall back to Unsplash.
-    // (`hasImage` guards keep this branch unreachable for the empty-image
-    //  case after F4-F3.)
-    const keyword = encodeURIComponent((imageAlt || 'education').slice(0, 80));
-    return `https://source.unsplash.com/800x450/?${keyword}`;
-  }, [imageSrc, imageAlt, providerDisabled, imagesPending, taskStatus, task?.src]);
+    return '';
+  }, [imageSrc, taskStatus, task?.src]);
 
   // WAVE-6-F4-F6: prefer slot title; fall back to outer slide.title when the
   // LLM payload is missing the slot but the generator still committed an
@@ -890,6 +903,7 @@ function BodyImageRightTemplate({
     >
       {titleText && (
         <div
+          id={elementIds?.title}
           data-testid="slide-slot-title"
           className="col-span-full text-2xl font-semibold text-slate-900"
         >
@@ -899,6 +913,7 @@ function BodyImageRightTemplate({
 
       {body && (
         <div
+          id={elementIds?.body}
           data-testid="slide-slot-body"
           className="row-start-2 col-start-1 text-base text-slate-700 space-y-2 overflow-auto"
         >
@@ -915,6 +930,7 @@ function BodyImageRightTemplate({
 
       {hasImage && (
         <div
+          id={elementIds?.image}
           data-testid="slide-slot-image"
           className="row-start-2 col-start-2 relative h-full w-full overflow-hidden rounded-lg"
         >
@@ -937,6 +953,7 @@ function BodyImageRightTemplate({
 
       {footer?.text && (
         <div
+          id={elementIds?.footer}
           data-testid="slide-slot-footer"
           className="col-span-full text-xs text-slate-500"
         >
@@ -984,6 +1001,18 @@ export const SlideRenderer = React.memo<SlideRendererProps>(function SlideRender
   const useBodyImageRight =
     slide.template === 'body-image-right' && !!slide.slots;
 
+  const slotElementIds = React.useMemo(() => {
+    const textElements = slide.elements.filter((el) => el.type === 'text');
+    const imageElement = slide.elements.find((el) => el.type === 'image');
+
+    return {
+      title: textElements[0]?.id,
+      body: textElements[1]?.id,
+      image: imageElement?.id,
+      footer: textElements.length > 2 ? textElements[textElements.length - 1]?.id : undefined,
+    };
+  }, [slide.elements]);
+
   const updateScale = useCallback(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -1027,6 +1056,7 @@ export const SlideRenderer = React.memo<SlideRendererProps>(function SlideRender
               background={slide.background}
               imagesPending={imagesPending}
               slideTitle={slide.title}
+              elementIds={slotElementIds}
               imageElementKey={
                 /* F2 (P0): the body-image-right template's image slot has
                    no element_id of its own, so we synthesize one. The
@@ -1076,8 +1106,7 @@ export const SlideRenderer = React.memo<SlideRendererProps>(function SlideRender
               );
 
               // For image elements, pass imagesPending so the renderer can
-              // show the "fetching image…" skeleton (CG-P0-3) rather than
-              // immediately falling back to a random Unsplash photo.
+              // show the "fetching image…" skeleton (CG-P0-3).
               const renderer = el.type === 'image'
                 ? () => (
                     <ImageElement

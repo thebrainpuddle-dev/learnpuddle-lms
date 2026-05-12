@@ -34,7 +34,7 @@ describe('MAICPlaybackEngine checkpoint', () => {
       actions: [
         { type: 'speech', agentId: 'a1', text: 'one' },
         { type: 'speech', agentId: 'a1', text: 'two' },
-        { type: 'discussion', sessionType: 'qa', topic: 't', agentIds: ['a1'] },
+        { type: 'discussion', sessionType: 'qa', topic: 't', agentIds: ['a1'], triggerMode: 'auto' },
         { type: 'speech', agentId: 'a1', text: 'three' },
       ],
     } as any);

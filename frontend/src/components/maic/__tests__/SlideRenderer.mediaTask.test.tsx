@@ -6,7 +6,7 @@
 //   - task `pending`/`generating` shows the shimmer skeleton;
 //   - task `failed` shows the "Image unavailable" placeholder + retry;
 //   - missing task (legacy callers / classrooms generated before F2) falls
-//     through to the existing `imagesPending` / Unsplash behaviour.
+//     through to `imagesPending` or an honest unavailable placeholder.
 
 import React from 'react';
 import { describe, test, expect, vi, beforeEach } from 'vitest';
@@ -167,7 +167,7 @@ describe('SlideRenderer — F2 per-element media task', () => {
     ).not.toBeNull();
   });
 
-  test('sceneIndex/slideIndex supplied but no task entry → falls through to legacy imagesPending', () => {
+  test('sceneIndex/slideIndex supplied but no task entry → empty placeholder when not pending', () => {
     // Empty store but sceneIndex+slideIndex provided.
     render(
       <SlideRenderer
@@ -178,13 +178,14 @@ describe('SlideRenderer — F2 per-element media task', () => {
       />,
     );
 
-    // No skeleton (imagesPending=false) and Unsplash fallback engages.
+    // No skeleton (imagesPending=false), no random remote fallback.
     expect(
       document.querySelector('[data-testid="image-fetching-skeleton"]'),
     ).toBeNull();
-    const imgs = document.querySelectorAll('img');
-    expect(imgs.length).toBeGreaterThan(0);
-    expect(imgs[0].getAttribute('src') || '').toContain('unsplash.com');
+    expect(
+      document.querySelector('[data-testid="image-empty-placeholder"]'),
+    ).not.toBeNull();
+    expect(document.querySelector('img')).toBeNull();
   });
 
   test('task `done` with a non-allowlisted src is rejected, falls through to el.src', () => {
