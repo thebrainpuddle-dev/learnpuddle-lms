@@ -145,6 +145,7 @@ export const SceneRenderer = React.memo<SceneRendererProps>(function SceneRender
             sceneId={scene.id}
             mode={mode}
             role={role}
+            pblSessionId={pblContent.pblSessionId}
           />
         );
       }

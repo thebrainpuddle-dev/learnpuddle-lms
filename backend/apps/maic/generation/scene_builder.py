@@ -206,6 +206,16 @@ def build_complete_scene(
             "content": {
                 "type": "pbl",
                 "projectConfig": content["projectConfig"],
+                **(
+                    {"pblSessionId": content["pblSessionId"]}
+                    if content.get("pblSessionId")
+                    else {}
+                ),
+                **(
+                    {"pblWsPath": content["pblWsPath"]}
+                    if content.get("pblWsPath")
+                    else {}
+                ),
             },
         }
 

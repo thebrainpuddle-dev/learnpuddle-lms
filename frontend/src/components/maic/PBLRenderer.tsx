@@ -5,7 +5,7 @@
 // Reads upstream's `PBLProjectConfig` shape from
 // `content.projectConfig` (lifted from THU-MAIC/OpenMAIC's
 // `lib/pbl/types.ts` under ADR-001a). Three panels:
-//   1. Role selector  — built from agents where `is_user_role` is true
+//   1. Role selector  — built from non-system development agents
 //   2. Issue board    — 3 columns driven by `is_active` / `is_done`
 //   3. Chat panel     — sends to legacy SSE endpoint until MAIC-706
 //                       swaps in the WS hook for /ws/maic/pbl/<id>/
@@ -82,6 +82,21 @@ function _toBoardIssue(i: PBLIssue): BoardIssue {
   };
 }
 
+function _selectableAgents(agents: PBLAgent[]): PBLAgent[] {
+  const developmentAgents = agents.filter(
+    (a) => a.role_division === 'development' && a.is_system_agent !== true,
+  );
+  if (developmentAgents.length > 0) return developmentAgents;
+
+  // Legacy configs predate role_division/is_system_agent semantics and
+  // used is_user_role as the only "student can pick this" marker.
+  return agents.filter((a) => a.is_user_role && a.is_system_agent !== true);
+}
+
+function _agentInitial(agent: PBLAgent): string {
+  return agent.name.trim().charAt(0).toUpperCase() || '?';
+}
+
 // ─── Main Component ──────────────────────────────────────────────────────────
 
 export const PBLRenderer = React.memo<PBLRendererProps>(function PBLRenderer({
@@ -105,11 +120,11 @@ export const PBLRenderer = React.memo<PBLRendererProps>(function PBLRenderer({
 
   // ─── Derived data ───────────────────────────────────────────────────────
 
-  // Roles are agents flagged is_user_role:true (upstream design loop
-  // marks one human-driven agent per project). actor_role is the
-  // displayed label; system_prompt seeds the description blurb.
+  // Match OpenMAIC: students pick non-system development agents. Older
+  // LearnPuddle configs only flagged human roles with is_user_role, so
+  // use that as a fallback when no development roles exist.
   const userRoles = useMemo<PBLAgent[]>(
-    () => config.agents.filter((a) => a.is_user_role),
+    () => _selectableAgents(config.agents),
     [config.agents],
   );
 
@@ -141,6 +156,26 @@ export const PBLRenderer = React.memo<PBLRendererProps>(function PBLRenderer({
     () => issues.filter((i) => i.status === 'done').map((i) => i.id),
     [issues],
   );
+
+  const initialMessages = useMemo<ChatMessage[]>(() => {
+    const history = config.chat.messages.map((m) => ({
+      id: m.id,
+      role: m.agent_name === selectedRole ? 'user' as const : 'assistant' as const,
+      content: m.message,
+    }));
+    if (history.length > 0) return history;
+
+    const activeIssue = config.issueboard.issues.find((i) => i.is_active);
+    if (!activeIssue?.generated_questions) return [];
+
+    return [
+      {
+        id: `pbl-welcome-${activeIssue.id}`,
+        role: 'assistant',
+        content: activeIssue.generated_questions,
+      },
+    ];
+  }, [config.chat.messages, config.issueboard.issues, selectedRole]);
 
   // ─── Refs / effects ─────────────────────────────────────────────────────
 
@@ -181,7 +216,9 @@ export const PBLRenderer = React.memo<PBLRendererProps>(function PBLRenderer({
   }, [wsMode, wsUserMessages, wsChannel.messages]);
 
   // The chat panel reads from one source. wsMode → merged WS view.
-  const displayedMessages: ChatMessage[] = wsMode ? wsMergedMessages : chatMessages;
+  const displayedMessages: ChatMessage[] = wsMode
+    ? [...initialMessages, ...wsMergedMessages]
+    : [...initialMessages, ...chatMessages];
 
   // isSending in wsMode = there's a turn in flight (last assistant
   // unfinished) OR there are more user msgs than assistant turns.
@@ -191,6 +228,32 @@ export const PBLRenderer = React.memo<PBLRendererProps>(function PBLRenderer({
       (wsChannel.messages.length > 0 &&
         !wsChannel.messages[wsChannel.messages.length - 1].finished));
   const effectiveSending = wsMode ? wsBusy : isSending;
+  const wsUnavailable = wsMode && wsChannel.status !== 'open';
+
+  let emptyChatText = 'Ask a question to get guidance on your project.';
+  if (wsMode) {
+    if (wsChannel.status === 'idle') {
+      emptyChatText = 'Preparing the project mentor...';
+    } else if (wsChannel.status === 'connecting') {
+      emptyChatText = 'Connecting to the project mentor...';
+    } else if (wsChannel.status === 'error') {
+      emptyChatText = 'Project mentor connection failed. Try again after reconnecting.';
+    } else if (wsChannel.status === 'closed') {
+      emptyChatText = 'Project mentor disconnected. Refresh to reconnect.';
+    }
+  }
+
+  const chatSubtitle = wsMode
+    ? wsChannel.status === 'open'
+      ? 'Live project guidance'
+      : emptyChatText
+    : 'Ask questions about the project';
+
+  const chatPlaceholder = wsUnavailable
+    ? wsChannel.status === 'idle' || wsChannel.status === 'connecting'
+      ? 'Connecting...'
+      : 'Mentor unavailable'
+    : 'Ask the AI mentor...';
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -207,12 +270,12 @@ export const PBLRenderer = React.memo<PBLRendererProps>(function PBLRenderer({
   const handleSendChat = useCallback(async () => {
     const trimmed = chatInput.trim();
     if (!trimmed || effectiveSending || !accessToken) return;
+    if (wsUnavailable) return;
 
     setChatInput('');
 
     // ── WS path (Phase 7) ────────────────────────────────────────────
     if (wsMode) {
-      if (wsChannel.status !== 'open') return;
       const userMsg: ChatMessage = {
         id: `ws-user-${Date.now()}`,
         role: 'user',
@@ -281,7 +344,7 @@ export const PBLRenderer = React.memo<PBLRendererProps>(function PBLRenderer({
     setIsSending(false);
   }, [
     chatInput, effectiveSending, accessToken, sceneId, selectedRole,
-    completedIssueIds, role, wsMode, wsChannel,
+    completedIssueIds, role, wsMode, wsChannel, wsUnavailable,
   ]);
 
   const handleKeyDown = useCallback(
@@ -326,8 +389,19 @@ export const PBLRenderer = React.memo<PBLRendererProps>(function PBLRenderer({
                         : 'border-gray-200 hover:border-indigo-300 hover:bg-indigo-50/50',
                     )}
                   >
-                    <p className="text-sm font-medium text-gray-900">{agent.actor_role}</p>
-                    <p className="text-xs text-gray-500 mt-0.5">{agent.name}</p>
+                    <div className="flex items-start gap-2">
+                      <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-indigo-100 text-xs font-bold text-indigo-700">
+                        {_agentInitial(agent)}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium text-gray-900">{agent.name}</p>
+                        {agent.actor_role && (
+                          <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">
+                            {agent.actor_role}
+                          </p>
+                        )}
+                      </div>
+                    </div>
                   </button>
                 ))}
               </div>
@@ -394,14 +468,14 @@ export const PBLRenderer = React.memo<PBLRendererProps>(function PBLRenderer({
         <div className="hidden md:flex flex-col w-72 shrink-0 border-l border-gray-200 bg-gray-50">
           <div className="shrink-0 px-4 py-3 border-b border-gray-100">
             <h3 className="text-sm font-semibold text-gray-800">AI Mentor</h3>
-            <p className="text-xs text-gray-400">Ask questions about the project</p>
+            <p className="text-xs text-gray-400">{chatSubtitle}</p>
           </div>
 
           {/* Messages */}
           <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3" aria-live="polite">
             {displayedMessages.length === 0 && (
               <p className="text-xs text-gray-400 text-center mt-8">
-                Ask a question to get guidance on your project.
+                {emptyChatText}
               </p>
             )}
 
@@ -445,9 +519,9 @@ export const PBLRenderer = React.memo<PBLRendererProps>(function PBLRenderer({
                 value={chatInput}
                 onChange={(e) => setChatInput(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="Ask the AI mentor..."
+                placeholder={chatPlaceholder}
                 rows={1}
-                disabled={effectiveSending}
+                disabled={effectiveSending || wsUnavailable}
                 className={cn(
                   'flex-1 resize-none rounded-lg border border-gray-200 px-3 py-2 text-sm',
                   'placeholder:text-gray-400 bg-white',
@@ -463,7 +537,7 @@ export const PBLRenderer = React.memo<PBLRendererProps>(function PBLRenderer({
                 disabled={
                   !chatInput.trim() ||
                   effectiveSending ||
-                  (wsMode && wsChannel.status !== 'open')
+                  wsUnavailable
                 }
                 className={cn(
                   'shrink-0 h-9 w-9 rounded-lg flex items-center justify-center',

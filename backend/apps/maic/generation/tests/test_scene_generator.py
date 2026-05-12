@@ -10,6 +10,7 @@ MAIC-422.2 / 422.4 / 422.5 (Sessions 3-4).
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -75,8 +76,8 @@ async def test_dispatcher_routes_interactive_to_widget_content():
 
 
 @pytest.mark.asyncio
-async def test_dispatcher_routes_pbl_to_stub():
-    """PBL outlines hit the programmatic STUB (MAIC-422.4) — no LLM."""
+async def test_dispatcher_routes_stub_model_pbl_to_deterministic_fallback():
+    """Stub-model PBL outlines stay deterministic for credential-free tests."""
     outline = {
         "type": "pbl",
         "title": "Build a Mini-LMS",
@@ -1178,7 +1179,7 @@ def test_format_questions_for_prompt_omits_options_when_absent():
     assert "Options:" not in out
 
 
-# ── PBL content STUB (MAIC-422.4) ─────────────────────────────────
+# ── PBL content (MAIC-422.4) ──────────────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -1215,6 +1216,63 @@ async def test_pbl_content_stub_does_not_call_llm():
         content = await generate_scene_content(outline, language_model_id="stub")
     assert content is not None
     assert "projectConfig" in content
+
+
+@pytest.mark.asyncio
+async def test_pbl_content_live_model_uses_design_graph_with_classroom_context():
+    outline = {
+        "type": "pbl",
+        "title": "outer-title",
+        "description": "Scene guide from Step 2",
+        "keyPoints": ["Evidence gathering", "Peer critique"],
+        "pblConfig": {
+            "projectTopic": "Water quality investigation",
+            "projectDescription": "Students investigate water quality.",
+            "targetSkills": ["sampling", "data analysis"],
+            "issueCount": 4,
+        },
+    }
+    captured = {}
+
+    async def _fake_generate(cfg, model):
+        captured["cfg"] = cfg
+        captured["model"] = model
+        return SimpleNamespace(
+            project_config={
+                "projectInfo": {"title": cfg.project_topic, "description": "ok"},
+                "agents": [],
+                "issueboard": {"agent_ids": [], "issues": [], "current_issue_id": None},
+                "chat": {"messages": []},
+            },
+            error=None,
+            schema_valid=True,
+        )
+
+    model = object()
+    with patch(
+        "apps.maic.orchestration.ai_adapter.resolve_chat_model",
+        return_value=model,
+    ), patch(
+        "apps.maic_pbl.design_graph.generate_pbl_project",
+        new=_fake_generate,
+    ):
+        content = await generate_scene_content(
+            outline,
+            language_model_id="openai/gpt-4.1",
+            options={"languageDirective": "Teach in English."},
+        )
+
+    assert content is not None
+    assert content["projectConfig"]["projectInfo"]["title"] == "Water quality investigation"
+    assert captured["model"] is model
+    cfg = captured["cfg"]
+    assert cfg.project_topic == "Water quality investigation"
+    assert "Students investigate water quality." in cfg.project_description
+    assert "Scene guide from Step 2" in cfg.project_description
+    assert "Evidence gathering" in cfg.project_description
+    assert cfg.target_skills == ["sampling", "data analysis"]
+    assert cfg.issue_count == 4
+    assert cfg.language_directive == "Teach in English."
 
 
 # ── PBL actions branch (MAIC-422.4) ───────────────────────────────

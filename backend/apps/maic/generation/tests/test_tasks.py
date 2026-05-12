@@ -32,6 +32,7 @@ from apps.maic.generation.tasks import (
 )
 from apps.maic.generation.tests.parity.llm_router import PromptRoutedStub
 from apps.maic.models import MaicGenerationJob
+from apps.maic_pbl.models import MaicPBLSession
 from apps.courses.maic_models import MAICClassroom
 from apps.courses.models import Content, Course, Module
 from apps.tenants.models import Tenant
@@ -321,6 +322,88 @@ def test_finalize_task_materializes_course_content_idempotently(
     assert content.title == "Ratios classroom"
     assert content.content_type == "AI_CLASSROOM"
     assert str(content.maic_classroom_id) == saved.result["classroomId"]
+
+
+def test_finalize_task_attaches_durable_pbl_session(db, tenant, user):
+    job = create_job_session(
+        tenant_id=tenant.id,
+        user_id=user.id,
+        requirements={
+            "topic": "Water quality",
+            "contentTitle": "Water quality classroom",
+            "language": "English",
+            "languageModelId": "stub",
+        },
+    )
+    scenes = [
+        {
+            "id": "pbl-scene-1",
+            "title": "Water project",
+            "order": 1,
+            "type": "pbl",
+            "content": {
+                "type": "pbl",
+                "projectConfig": {
+                    "projectInfo": {
+                        "title": "Water Quality Investigation",
+                        "description": "Investigate water quality.",
+                    },
+                    "agents": [],
+                    "issueboard": {
+                        "agent_ids": [],
+                        "issues": [
+                            {
+                                "id": "issue_1",
+                                "title": "Collect samples",
+                                "description": "Plan sampling.",
+                                "person_in_charge": "Researcher",
+                                "participants": [],
+                                "notes": "",
+                                "parent_issue": None,
+                                "index": 0,
+                                "is_done": False,
+                                "is_active": True,
+                                "generated_questions": "",
+                                "question_agent_name": "Question Agent - issue_1",
+                                "judge_agent_name": "Judge Agent - issue_1",
+                            }
+                        ],
+                        "current_issue_id": "issue_1",
+                    },
+                    "chat": {
+                        "messages": [
+                            {
+                                "id": "msg_welcome",
+                                "agent_name": "Question Agent - issue_1",
+                                "message": "Welcome.",
+                                "timestamp": 1.0,
+                                "read_by": [],
+                            }
+                        ]
+                    },
+                },
+            },
+            "actions": [],
+        }
+    ]
+
+    finalize_task({"job_id": job.id, "scenes": scenes})
+
+    saved = MaicGenerationJob.objects.get(pk=job.id)
+    scene = saved.result["scenes"][0]
+    session_id = scene["content"]["pblSessionId"]
+    assert scene["content"]["pblWsPath"] == f"/ws/maic/pbl/{session_id}/"
+
+    session = MaicPBLSession.objects.all_tenants().get(pk=session_id)
+    assert session.tenant_id == tenant.id
+    assert session.owner_id == user.id
+    assert session.status == MaicPBLSession.STATUS_ACTIVE
+    assert session.topic == "Water Quality Investigation"
+    assert session.agent_count == 1
+    assert session.chat_messages[0]["message"] == "Welcome."
+
+    classroom = MAICClassroom.all_objects.get(pk=saved.result["classroomId"])
+    assert classroom.content_scenes[0]["content"]["pblSessionId"] == session_id
 
 
 # ── mark_job_failed ───────────────────────────────────────────────

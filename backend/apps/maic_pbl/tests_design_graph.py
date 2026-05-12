@@ -59,7 +59,12 @@ def _ai_with_tool_calls(*tcs: dict) -> AIMessage:
     return AIMessage(
         content="",
         tool_calls=[
-            {"id": tc.get("id", f"tc-{i}"), "name": tc["name"], "args": tc.get("args", {}), "type": "tool_call"}
+            {
+                "id": tc.get("id", f"tc-{i}"),
+                "name": tc["name"],
+                "args": tc.get("args", {}),
+                "type": "tool_call",
+            }
             for i, tc in enumerate(tcs)
         ],
     )
@@ -166,13 +171,20 @@ async def test_design_loop_produces_complete_project_config():
     assert cfg["projectInfo"]["description"] == "Build a CLI fraction calculator."
 
     # 1 developer + 2 issues × (Question + Judge) = 5 agents
-    agent_names = {a["name"] for a in cfg["agents"]}
+    agents_by_name = {a["name"]: a for a in cfg["agents"]}
+    agent_names = set(agents_by_name)
     assert "Developer" in agent_names
     assert "Question Agent - issue_1" in agent_names
     assert "Judge Agent - issue_1" in agent_names
     assert "Question Agent - issue_2" in agent_names
     assert "Judge Agent - issue_2" in agent_names
     assert len(cfg["agents"]) == 5
+    assert agents_by_name["Developer"]["is_user_role"] is True
+    assert agents_by_name["Developer"]["is_system_agent"] is False
+    assert agents_by_name["Question Agent - issue_1"]["is_user_role"] is False
+    assert agents_by_name["Question Agent - issue_1"]["is_system_agent"] is True
+    assert agents_by_name["Judge Agent - issue_1"]["is_user_role"] is False
+    assert agents_by_name["Judge Agent - issue_1"]["is_system_agent"] is True
 
     assert len(cfg["issueboard"]["issues"]) == 2
     # First issue is active + has the generated welcome
@@ -302,6 +314,7 @@ async def test_loop_records_error_when_model_raises():
     """If the model raises, the error is recorded but the function
     still returns whatever partial state was reached. Caller decides
     whether to persist the partial config."""
+
     class _RaisingModel:
         def bind_tools(self, _tools):
             return self
@@ -355,25 +368,33 @@ async def test_update_issue_via_tool_does_not_clobber_parent_issue():
     script = [
         # Create parent + child via direct MCP-tool calls
         _ai_with_tool_calls({"name": "set_mode", "args": {"mode": "issueboard"}, "id": "1"}),
-        _ai_with_tool_calls({
-            "name": "create_issue",
-            "args": {"title": "Parent", "description": "p", "person_in_charge": "dev"},
-            "id": "2",
-        }),
-        _ai_with_tool_calls({
-            "name": "create_issue",
-            "args": {
-                "title": "Child", "description": "c", "person_in_charge": "dev",
-                "parent_issue": "issue_1",
-            },
-            "id": "3",
-        }),
+        _ai_with_tool_calls(
+            {
+                "name": "create_issue",
+                "args": {"title": "Parent", "description": "p", "person_in_charge": "dev"},
+                "id": "2",
+            }
+        ),
+        _ai_with_tool_calls(
+            {
+                "name": "create_issue",
+                "args": {
+                    "title": "Child",
+                    "description": "c",
+                    "person_in_charge": "dev",
+                    "parent_issue": "issue_1",
+                },
+                "id": "3",
+            }
+        ),
         # NOW the failing case: LLM patches title only via update_issue
-        _ai_with_tool_calls({
-            "name": "update_issue",
-            "args": {"issue_id": "issue_2", "title": "Renamed Child"},
-            "id": "4",
-        }),
+        _ai_with_tool_calls(
+            {
+                "name": "update_issue",
+                "args": {"issue_id": "issue_2", "title": "Renamed Child"},
+                "id": "4",
+            }
+        ),
         _ai_with_tool_calls({"name": "set_mode", "args": {"mode": "idle"}, "id": "5"}),
         AIMessage(content="welcome"),
     ]

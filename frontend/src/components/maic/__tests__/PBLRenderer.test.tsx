@@ -122,11 +122,38 @@ describe('PBLRenderer (MAIC-705)', () => {
     ).toBeInTheDocument();
   });
 
-  test('shows only is_user_role agents in the role selector', () => {
+  test('falls back to legacy is_user_role agents when no development roles exist', () => {
     render(<PBLRenderer content={_content()} sceneId="scene-1" />);
-    // Designer is_user_role:true → present (actor_role label)
+    // Designer is_user_role:true -> present (actor_role label)
     expect(screen.getByText('Lead Designer')).toBeInTheDocument();
-    // Helper is_user_role:false → NOT present
+    // Helper is system-owned -> NOT present
+    expect(screen.queryByText('Question Agent')).not.toBeInTheDocument();
+  });
+
+  test('prefers non-system development agents over legacy is_user_role roles', () => {
+    const cfg = _config();
+    cfg.agents.push({
+      name: 'Developer',
+      actor_role: 'Software Engineer',
+      role_division: 'development',
+      system_prompt: 'You build.',
+      default_mode: 'chat',
+      delay_time: 0,
+      env: {},
+      is_user_role: false,
+      is_active: true,
+      is_system_agent: false,
+    });
+
+    render(
+      <PBLRenderer
+        content={{ type: 'pbl', projectConfig: cfg }}
+        sceneId="scene-1"
+      />,
+    );
+
+    expect(screen.getByText('Software Engineer')).toBeInTheDocument();
+    expect(screen.queryByText('Lead Designer')).not.toBeInTheDocument();
     expect(screen.queryByText('Question Agent')).not.toBeInTheDocument();
   });
 
@@ -194,6 +221,45 @@ describe('PBLRenderer (MAIC-705)', () => {
     ).toBeInTheDocument();
   });
 
+  test('renders existing project chat history before the empty-state hint', () => {
+    const cfg = _config();
+    cfg.chat.messages = [
+      {
+        id: 'welcome-1',
+        agent_name: 'Question Agent - i-2',
+        message: 'What should the first prototype prove?',
+        timestamp: 1,
+        read_by: [],
+      },
+    ];
+
+    render(
+      <PBLRenderer
+        content={{ type: 'pbl', projectConfig: cfg }}
+        sceneId="scene-1"
+      />,
+    );
+
+    expect(screen.getByText('What should the first prototype prove?')).toBeInTheDocument();
+    expect(
+      screen.queryByText('Ask a question to get guidance on your project.'),
+    ).not.toBeInTheDocument();
+  });
+
+  test('uses active issue generated_questions as the initial mentor message', () => {
+    const cfg = _config();
+    cfg.issueboard.issues[1].generated_questions = 'Start by naming the key interaction.';
+
+    render(
+      <PBLRenderer
+        content={{ type: 'pbl', projectConfig: cfg }}
+        sceneId="scene-1"
+      />,
+    );
+
+    expect(screen.getByText('Start by naming the key interaction.')).toBeInTheDocument();
+  });
+
   test('honors initial selectedRole from projectConfig', () => {
     const cfg = _config();
     cfg.selectedRole = 'Designer';
@@ -207,7 +273,7 @@ describe('PBLRenderer (MAIC-705)', () => {
     expect(btn.className).toContain('ring-indigo-500');
   });
 
-  test('hides role selector when no agents flagged is_user_role', () => {
+  test('hides role selector when no selectable agents exist', () => {
     const cfg = _config();
     cfg.agents = cfg.agents.map((a) => ({ ...a, is_user_role: false }));
     render(

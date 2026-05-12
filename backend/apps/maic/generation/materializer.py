@@ -12,6 +12,7 @@ from apps.courses.maic_models import MAICClassroom
 from apps.courses.models import Content, Course, Module
 from apps.maic.models import MaicGenerationJob
 from apps.maic.orchestration.registry import DEFAULT_AGENTS
+from apps.maic_pbl.models import MaicPBLSession
 
 
 logger = logging.getLogger("apps.maic.generation.materializer")
@@ -49,12 +50,11 @@ def materialize_generation_artifact(
         )
         return {}
 
+    caller_scenes = scenes
     requirements = dict(job.requirements or {})
     prior_result = dict(job.result or {})
     agents = _resolve_agents(requirements)
     scenes = _normalize_scenes_for_playback(scenes, agents)
-    slides, scene_slide_bounds = _extract_slides_and_bounds(scenes)
-    speech_count = _count_speech_actions(scenes)
     topic = _clean_title(requirements.get("topic") or "AI Classroom", max_len=500)
     title = _clean_title(
         requirements.get("contentTitle") or requirements.get("title") or topic,
@@ -62,6 +62,14 @@ def materialize_generation_artifact(
     )
 
     with transaction.atomic():
+        scenes = _attach_pbl_sessions(job, scenes, prior_result)
+        # `finalize_task` has already placed the incoming list object
+        # into job.result["scenes"]. Keep that contract intact by
+        # replacing the list contents with the normalized/materialized
+        # scenes, including pblSessionId attachments.
+        caller_scenes[:] = scenes
+        slides, scene_slide_bounds = _extract_slides_and_bounds(scenes)
+        speech_count = _count_speech_actions(scenes)
         classroom = _get_existing_classroom(prior_result, job.tenant_id)
         module = _resolve_module(requirements.get("moduleId"), job.tenant_id)
         course = _resolve_course(requirements.get("courseId"), job.tenant_id)
@@ -241,6 +249,140 @@ def _materialize_content(
             ]
         )
     return content
+
+
+def _attach_pbl_sessions(
+    job: MaicGenerationJob,
+    scenes: list[dict[str, Any]],
+    prior_result: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Attach durable PBL sessions to generated PBL scenes.
+
+    Generation produces an OpenMAIC-shaped `projectConfig`. SaaS playback
+    needs a tenant-scoped row too so the frontend can use the real PBL
+    WebSocket and issue/chat progress can persist across refreshes. This
+    runs during materialization where tenant and creator are known.
+    """
+    prior_session_ids = _prior_pbl_session_ids_by_scene_id(prior_result)
+    attached: list[dict[str, Any]] = []
+
+    for scene in scenes:
+        if not isinstance(scene, dict) or scene.get("type") != "pbl":
+            attached.append(scene)
+            continue
+
+        content = scene.get("content")
+        if not isinstance(content, dict):
+            attached.append(scene)
+            continue
+
+        project_config = content.get("projectConfig")
+        if not isinstance(project_config, dict):
+            attached.append(scene)
+            continue
+
+        scene_id = str(scene.get("id") or "")
+        existing_session_id = (
+            content.get("pblSessionId")
+            or prior_session_ids.get(scene_id)
+        )
+        session = _get_existing_pbl_session(existing_session_id, job.tenant_id)
+        if session is None:
+            session = MaicPBLSession.objects.create(
+                tenant_id=job.tenant_id,
+                owner_id=job.created_by_id,
+                topic=_pbl_topic(project_config, scene),
+                language=_language_code((job.requirements or {}).get("language")),
+                agent_count=_pbl_issue_count(project_config),
+                status=MaicPBLSession.STATUS_ACTIVE,
+                project_config=project_config,
+                chat_messages=_pbl_initial_chat(project_config),
+            )
+        else:
+            session.project_config = project_config
+            session.topic = _pbl_topic(project_config, scene)
+            session.agent_count = _pbl_issue_count(project_config)
+            if session.status in {
+                MaicPBLSession.STATUS_DRAFT,
+                MaicPBLSession.STATUS_FAILED,
+            }:
+                session.status = MaicPBLSession.STATUS_ACTIVE
+            if session.owner_id is None:
+                session.owner_id = job.created_by_id
+            session.save(
+                update_fields=[
+                    "project_config",
+                    "topic",
+                    "agent_count",
+                    "status",
+                    "owner",
+                    "updated_at",
+                ]
+            )
+
+        next_scene = dict(scene)
+        next_content = dict(content)
+        next_content["pblSessionId"] = str(session.id)
+        next_content["pblWsPath"] = f"/ws/maic/pbl/{session.id}/"
+        next_scene["content"] = next_content
+        attached.append(next_scene)
+
+    return attached
+
+
+def _prior_pbl_session_ids_by_scene_id(
+    prior_result: dict[str, Any],
+) -> dict[str, str]:
+    ids: dict[str, str] = {}
+    prior_scenes = prior_result.get("scenes")
+    if not isinstance(prior_scenes, list):
+        return ids
+    for scene in prior_scenes:
+        if not isinstance(scene, dict):
+            continue
+        content = scene.get("content")
+        if not isinstance(content, dict):
+            continue
+        session_id = content.get("pblSessionId")
+        scene_id = scene.get("id")
+        if isinstance(scene_id, str) and isinstance(session_id, str):
+            ids[scene_id] = session_id
+    return ids
+
+
+def _get_existing_pbl_session(
+    session_id: Any,
+    tenant_id: int,
+) -> MaicPBLSession | None:
+    if not session_id:
+        return None
+    return (
+        MaicPBLSession.objects
+        .all_tenants()
+        .filter(pk=session_id, tenant_id=tenant_id)
+        .first()
+    )
+
+
+def _pbl_topic(
+    project_config: dict[str, Any],
+    scene: dict[str, Any],
+) -> str:
+    info = project_config.get("projectInfo")
+    title = info.get("title") if isinstance(info, dict) else None
+    return _clean_title(title or scene.get("title") or "PBL Project", max_len=500)
+
+
+def _pbl_issue_count(project_config: dict[str, Any]) -> int:
+    board = project_config.get("issueboard")
+    issues = board.get("issues") if isinstance(board, dict) else None
+    return len(issues) if isinstance(issues, list) else 0
+
+
+def _pbl_initial_chat(project_config: dict[str, Any]) -> list[dict[str, Any]]:
+    chat = project_config.get("chat")
+    messages = chat.get("messages") if isinstance(chat, dict) else None
+    return list(messages) if isinstance(messages, list) else []
 
 
 def _resolve_course(course_id: Any, tenant_id: int) -> Course | None:

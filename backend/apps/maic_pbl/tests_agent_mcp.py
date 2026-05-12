@@ -85,6 +85,36 @@ def test_create_agent_happy_path():
     assert config["agents"][0]["env"]["chat"]["system_prompt"] == "Implement the UI."
     assert config["agents"][0]["env"]["chat"]["max_tokens"] == 4096
     assert config["agents"][0]["is_active"] is False
+    assert config["agents"][0]["is_user_role"] is True
+
+
+def test_create_agent_defaults_development_non_system_to_user_role():
+    """Generated development roles are selectable by the student unless
+    explicitly marked as system agents."""
+    config: dict = {"agents": []}
+    mcp = AgentMCP(config)
+    result = mcp.create_agent(
+        name="Developer",
+        system_prompt="Build the project.",
+        default_mode="idle",
+    )
+    assert result.success is True
+    assert config["agents"][0]["role_division"] == "development"
+    assert config["agents"][0]["is_system_agent"] is False
+    assert config["agents"][0]["is_user_role"] is True
+
+
+def test_create_agent_management_non_system_is_not_user_role():
+    config: dict = {"agents": []}
+    mcp = AgentMCP(config)
+    result = mcp.create_agent(
+        name="Coordinator",
+        system_prompt="Coordinate the project.",
+        default_mode="idle",
+        role_division="management",
+    )
+    assert result.success is True
+    assert config["agents"][0]["is_system_agent"] is False
     assert config["agents"][0]["is_user_role"] is False
 
 
@@ -103,13 +133,34 @@ def test_create_agent_with_system_agent_flag():
     )
     assert config["agents"][0]["is_system_agent"] is True
     assert config["agents"][0]["role_division"] == "management"
+    assert config["agents"][0]["is_user_role"] is False
+
+
+def test_create_agent_development_system_agent_is_not_user_role():
+    """Question agents can live in the development division upstream,
+    but system agents are never selectable user roles."""
+    config: dict = {"agents": []}
+    mcp = AgentMCP(config)
+    mcp.create_agent(
+        name="Question Agent - issue_1",
+        system_prompt=get_question_agent_prompt(),
+        default_mode="idle",
+        actor_role="Question Assistant for Issue",
+        role_division="development",
+        is_system_agent=True,
+    )
+    assert config["agents"][0]["role_division"] == "development"
+    assert config["agents"][0]["is_system_agent"] is True
+    assert config["agents"][0]["is_user_role"] is False
 
 
 @pytest.mark.parametrize("bad_name", ["", "   ", "\t\n"])
 def test_create_agent_rejects_empty_or_whitespace_name(bad_name):
     mcp = AgentMCP(_fresh_config())
     result = mcp.create_agent(
-        name=bad_name, system_prompt="x", default_mode="idle",
+        name=bad_name,
+        system_prompt="x",
+        default_mode="idle",
     )
     assert result.success is False
     assert result.error == "Agent name cannot be empty."
@@ -146,6 +197,22 @@ def test_update_agent_patches_only_provided_fields():
     assert config["agents"][0]["env"]["chat"]["system_prompt"] == "new prompt"
     # default_mode untouched
     assert config["agents"][0]["default_mode"] == "idle"
+
+
+def test_update_agent_role_division_keeps_user_role_semantics():
+    config: dict = {"agents": []}
+    mcp = AgentMCP(config)
+    mcp.create_agent(name="X", system_prompt="x", default_mode="idle")
+
+    result = mcp.update_agent(name="X", role_division="management")
+    assert result.success is True
+    assert config["agents"][0]["role_division"] == "management"
+    assert config["agents"][0]["is_user_role"] is False
+
+    result = mcp.update_agent(name="X", role_division="development")
+    assert result.success is True
+    assert config["agents"][0]["role_division"] == "development"
+    assert config["agents"][0]["is_user_role"] is True
 
 
 def test_update_agent_rename_happy_path():

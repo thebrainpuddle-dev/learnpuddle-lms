@@ -9,8 +9,9 @@ grows incrementally:
   MAIC-422.1:              slide-actions branch
   MAIC-422.2:              quiz-content branch
   MAIC-422.3:              quiz-actions branch
-  MAIC-422.4:              pbl-content + pbl-actions (STUBs per
-                           MAIC-432 research; real port Phase 5+)
+  MAIC-422.4:              pbl-content + pbl-actions (real PBL design
+                           loop for live models; deterministic stub for
+                           stub/dev model ids)
   MAIC-422.5:              interactive umbrella content (5 widget
                            types via switch on widgetType)
   MAIC-422.6:              unified scene-actions dispatcher
@@ -141,7 +142,7 @@ async def generate_scene_content(
       - GeneratedSlideContent: {elements, background, remark}
       - GeneratedQuizContent: {questions}        (MAIC-422.2)
       - GeneratedInteractiveContent: {html, ...}  (MAIC-422.5)
-      - GeneratedPBLContent: {projectConfig}     (MAIC-422.4 STUB)
+      - GeneratedPBLContent: {projectConfig}     (MAIC-422.4)
 
     Returns None when:
       - The scene type doesn't match any branch (defensive).
@@ -197,9 +198,13 @@ async def generate_scene_content(
             language_directive=options.get("languageDirective", ""),
         )
 
-    # ── PBL branch — MAIC-422.4 STUB ──
+    # ── PBL branch (MAIC-422.4) ──
     if scene_type == "pbl":
-        return _generate_pbl_content_stub(outline)
+        return await _generate_pbl_content(
+            outline,
+            language_model_id=language_model_id,
+            language_directive=options.get("languageDirective", ""),
+        )
 
     _logger.warning(
         "generate_scene_content: unknown scene type %r — returning None",
@@ -539,29 +544,133 @@ def _normalize_quiz_answer(
     return [str(raw)]
 
 
-# ── PBL content STUB (MAIC-422.4) ─────────────────────────────────
+# ── PBL content (MAIC-422.4) ──────────────────────────────────────
+
+
+async def _generate_pbl_content(
+    outline: SceneOutline,
+    *,
+    language_model_id: str,
+    language_directive: str = "",
+) -> dict[str, Any] | None:
+    """Generate a PBLProjectConfig through the real PBL design loop.
+
+    `stub` and malformed outlines keep the old deterministic fallback so
+    unit/dev smoke paths remain credential-free. Production model ids run
+    the tool-calling design graph ported from OpenMAIC and fail loudly
+    enough for the scene to be dropped if the model cannot produce a
+    schema-valid PBL config.
+    """
+    if language_model_id in {"stub", "stub-director"}:
+        return _generate_pbl_content_stub(outline)
+
+    pbl_config = outline.get("pblConfig") or {}
+    if not isinstance(pbl_config, dict):
+        _logger.error(
+            'PBL outline "%s" has non-object pblConfig; dropping scene',
+            outline.get("title", "?"),
+        )
+        return None
+
+    project_topic = str(
+        pbl_config.get("projectTopic") or outline.get("title") or ""
+    ).strip()
+    if not project_topic:
+        _logger.error("PBL outline missing project topic; dropping scene")
+        return None
+
+    target_skills = pbl_config.get("targetSkills") or []
+    if not isinstance(target_skills, list):
+        target_skills = []
+    target_skills = [str(s).strip() for s in target_skills if str(s).strip()]
+
+    issue_count_raw = pbl_config.get("issueCount", 3)
+    try:
+        issue_count = int(issue_count_raw)
+    except (TypeError, ValueError):
+        issue_count = 3
+    issue_count = max(1, min(issue_count, 10))
+
+    try:
+        from apps.maic.orchestration.ai_adapter import resolve_chat_model
+        from apps.maic_pbl.design_graph import GeneratePBLConfig, generate_pbl_project
+    except Exception as exc:  # noqa: BLE001 — import/runtime boundary
+        _logger.exception("PBL design imports failed: %s", exc)
+        return None
+
+    try:
+        model = resolve_chat_model(language_model_id)
+    except MaicConfigError as exc:
+        _logger.error(
+            "PBL design cannot resolve model %r for %r: %s",
+            language_model_id,
+            project_topic,
+            exc,
+        )
+        return None
+
+    project_description = _build_pbl_project_description(outline, pbl_config)
+    try:
+        result = await generate_pbl_project(
+            GeneratePBLConfig(
+                project_topic=project_topic,
+                project_description=project_description,
+                target_skills=target_skills,
+                issue_count=issue_count,
+                language_directive=language_directive,
+            ),
+            model,
+        )
+    except Exception as exc:  # noqa: BLE001 — model/tool loop boundary
+        _logger.exception(
+            "PBL design loop crashed for outline=%r: %s",
+            outline.get("title", "?"),
+            exc,
+        )
+        return None
+
+    if result.error or not result.schema_valid:
+        _logger.error(
+            "PBL design returned unusable config for %r: error=%r schema_valid=%s",
+            outline.get("title", "?"),
+            result.error,
+            result.schema_valid,
+        )
+        return None
+
+    return {"projectConfig": result.project_config}
+
+
+def _build_pbl_project_description(
+    outline: SceneOutline,
+    pbl_config: dict[str, Any],
+) -> str:
+    """Compose the design-loop description from classroom context.
+
+    OpenMAIC feeds the PBL generator with the project description. In a
+    teacher-created SaaS classroom we also have scene intent and key
+    points from the class guide/outline. Folding those in is what makes
+    the generated issueboard feel in-context rather than attached later.
+    """
+    parts: list[str] = []
+    for value in (
+        pbl_config.get("projectDescription"),
+        outline.get("description"),
+    ):
+        if isinstance(value, str) and value.strip() and value.strip() not in parts:
+            parts.append(value.strip())
+
+    key_points = outline.get("keyPoints") or []
+    if isinstance(key_points, list):
+        clean_points = [str(p).strip() for p in key_points if str(p).strip()]
+        if clean_points:
+            parts.append("Lesson focus points: " + "; ".join(clean_points[:6]))
+
+    return "\n\n".join(parts)
 
 
 def _generate_pbl_content_stub(outline: SceneOutline) -> dict[str, Any]:
-    """STUB — programmatic PBL content (no LLM call).
-
-    The real PBL content generator is upstream's
-    `lib/pbl/generate-pbl.ts` (414 LoC + 4 MCP modules: project-info,
-    agent, issueboard, chat). It runs an agentic tool-calling loop
-    that incrementally constructs a `PBLProjectConfig`. Per MAIC-432
-    research, that work is **deferred to Phase 5+**.
-
-    Phase 4 produces a minimal-but-well-formed `projectConfig` so
-    the playback engine can render a placeholder PBL scene without
-    a runtime crash. The output uses outline.title /
-    outline.description / outline.pblConfig (when present) to seed
-    `projectInfo`. Agents + issueboard + chat ship as empty lists —
-    the frontend treats this as "PBL not configured yet".
-
-    Returns a `{"projectConfig": ...}` dict matching the
-    GeneratedPBLContent shape upstream's pbl-actions branch + scene-
-    builder both expect.
-    """
+    """Deterministic PBL fallback for stub/dev model ids."""
     pbl_config = outline.get("pblConfig") or {}
     project_topic = pbl_config.get("projectTopic") or outline.get("title", "")
     project_description = (

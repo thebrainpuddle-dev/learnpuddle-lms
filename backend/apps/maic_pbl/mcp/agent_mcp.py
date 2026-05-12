@@ -23,7 +23,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from apps.maic_pbl.types import PBLToolResult
+from apps.maic_pbl.types import PBLToolResult, ROLE_DIVISION_DEVELOPMENT
+
+
+def _is_selectable_user_role(role_division: str, is_system_agent: bool) -> bool:
+    return role_division == ROLE_DIVISION_DEVELOPMENT and not is_system_agent
 
 
 class AgentMCP:
@@ -57,30 +61,41 @@ class AgentMCP:
         system_prompt: str,
         default_mode: str,
         delay_time: float = 0,
-        actor_role: str = "",
-        role_division: str = "development",
+        actor_role: str | None = "",
+        role_division: str | None = ROLE_DIVISION_DEVELOPMENT,
         is_system_agent: bool = False,
     ) -> PBLToolResult:
         """Append a new agent. Rejects:
-          - empty name
-          - empty system_prompt
-          - duplicate name
+        - empty name
+        - empty system_prompt
+        - duplicate name
         """
         if not name or not name.strip():
             return PBLToolResult(success=False, error="Agent name cannot be empty.")
         if not system_prompt or not system_prompt.strip():
             return PBLToolResult(
-                success=False, error="System prompt cannot be empty.",
+                success=False,
+                error="System prompt cannot be empty.",
             )
         if any(a["name"] == name for a in self._config["agents"]):
             return PBLToolResult(
-                success=False, error=f'Agent "{name}" already exists.',
+                success=False,
+                error=f'Agent "{name}" already exists.',
             )
+
+        resolved_role_division = (
+            role_division if role_division is not None else ROLE_DIVISION_DEVELOPMENT
+        )
+        resolved_actor_role = actor_role if actor_role is not None else ""
+        is_user_role = _is_selectable_user_role(
+            resolved_role_division,
+            is_system_agent,
+        )
 
         new_agent: dict[str, Any] = {
             "name": name,
-            "actor_role": actor_role,
-            "role_division": role_division,
+            "actor_role": resolved_actor_role,
+            "role_division": resolved_role_division,
             "system_prompt": system_prompt,
             "default_mode": default_mode,
             "delay_time": delay_time,
@@ -93,13 +108,14 @@ class AgentMCP:
                     "system_prompt": system_prompt,
                 },
             },
-            "is_user_role": False,
+            "is_user_role": is_user_role,
             "is_active": False,
             "is_system_agent": is_system_agent,
         }
         self._config["agents"].append(new_agent)
         return PBLToolResult(
-            success=True, message=f'Agent "{name}" created successfully.',
+            success=True,
+            message=f'Agent "{name}" created successfully.',
         )
 
     def update_agent(
@@ -116,7 +132,8 @@ class AgentMCP:
         """Patch an agent by name. Optional fields stay unchanged when
         omitted. Rejects rename to an already-taken name."""
         agent = next(
-            (a for a in self._config["agents"] if a["name"] == name), None,
+            (a for a in self._config["agents"] if a["name"] == name),
+            None,
         )
         if agent is None:
             return PBLToolResult(success=False, error=f'Agent "{name}" not found.')
@@ -147,6 +164,10 @@ class AgentMCP:
             agent["actor_role"] = actor_role
         if role_division is not None:
             agent["role_division"] = role_division
+            agent["is_user_role"] = _is_selectable_user_role(
+                role_division,
+                agent.get("is_system_agent", False),
+            )
 
         return PBLToolResult(success=True, message="Agent updated successfully.")
 
@@ -157,6 +178,7 @@ class AgentMCP:
             if a["name"] == name:
                 agents.pop(i)
                 return PBLToolResult(
-                    success=True, message="Agent deleted successfully.",
+                    success=True,
+                    message="Agent deleted successfully.",
                 )
         return PBLToolResult(success=False, error=f'Agent "{name}" not found.')
