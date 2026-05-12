@@ -13,12 +13,34 @@ import pytest
 from django.contrib.auth import get_user_model
 
 from apps.maic.models import MaicGenerationJob
+from apps.courses.maic_models import TenantAIConfig
+from apps.courses.models import Course, Module
 from apps.tenants.models import Tenant
+
+
+@pytest.fixture(autouse=True)
+def _enable_maic_v2(settings):
+    settings.MAIC_V2_ENABLED = True
+    settings.MAIC_V2_ALLOW_STUB = False
+    settings.MAIC_V2_ALLOW_REQUEST_MODEL_OVERRIDE = False
 
 
 @pytest.fixture
 def tenant(db):
-    return Tenant.objects.create(name="test-tenant", slug="test-tenant")
+    tenant = Tenant.objects.create(
+        name="test-tenant",
+        slug="test-tenant",
+        feature_maic_v2=True,
+    )
+    cfg = TenantAIConfig.objects.create(
+        tenant=tenant,
+        maic_enabled=True,
+        llm_provider="openrouter",
+        llm_model="openai/gpt-4o-mini",
+    )
+    cfg.set_llm_api_key("test-openrouter-key")
+    cfg.save(update_fields=["llm_api_key_encrypted"])
+    return tenant
 
 
 @pytest.fixture
@@ -104,8 +126,21 @@ def test_user_with_no_tenant_rejected(db):
     res = client.post(
         "/api/maic/v2/generate/", data={"topic": "T"}, format="json"
     )
-    assert res.status_code == 400
-    assert "tenant" in res.data["error"].lower()
+    assert res.status_code == 403
+
+
+def test_tenant_v2_flag_off_rejected(db, user, tenant):
+    from rest_framework.test import APIClient
+
+    tenant.feature_maic_v2 = False
+    tenant.save(update_fields=["feature_maic_v2"])
+    client = APIClient()
+    client.force_authenticate(user=user)
+
+    res = client.post(
+        "/api/maic/v2/generate/", data={"topic": "T"}, format="json"
+    )
+    assert res.status_code == 403
 
 
 # ── Happy path: row inserted + chain enqueued ─────────────────────
@@ -147,6 +182,63 @@ def test_post_inserts_row_and_returns_job_id(db, authed_client, tenant, user):
     enqueue.assert_called_once_with(saved.id)
 
 
+def test_post_accepts_valid_lms_targets(db, authed_client, tenant, user):
+    course = Course.objects.create(
+        tenant=tenant,
+        title="Biology",
+        description="Biology course",
+        created_by=user,
+    )
+    module = Module.objects.create(course=course, title="Cells", order=1)
+
+    with patch(
+        "apps.maic.generation.tasks.enqueue_generation_chain"
+    ):
+        res = authed_client.post(
+            "/api/maic/v2/generate/",
+            data={
+                "topic": "Cell division",
+                "courseId": str(course.id),
+                "moduleId": str(module.id),
+                "contentTitle": "Mitosis classroom",
+                "isPublic": True,
+            },
+            format="json",
+        )
+
+    assert res.status_code == 202, f"got {res.status_code}: {res.data}"
+    saved = MaicGenerationJob.objects.all_tenants().get(pk=res.data["job_id"])
+    assert saved.requirements["courseId"] == str(course.id)
+    assert saved.requirements["moduleId"] == str(module.id)
+    assert saved.requirements["contentTitle"] == "Mitosis classroom"
+    assert saved.requirements["isPublic"] is True
+
+
+def test_post_rejects_cross_tenant_lms_target(db, authed_client, user):
+    other = Tenant.objects.create(
+        name="other",
+        slug="other",
+        subdomain="other",
+        feature_maic_v2=True,
+    )
+    course = Course.objects.create(
+        tenant=other,
+        title="Other Course",
+        description="Nope",
+        created_by=user,
+    )
+    module = Module.objects.create(course=course, title="Other Module", order=1)
+
+    res = authed_client.post(
+        "/api/maic/v2/generate/",
+        data={"topic": "T", "moduleId": str(module.id)},
+        format="json",
+    )
+
+    assert res.status_code == 400
+    assert "moduleId" in res.data["error"]
+
+
 def test_post_uses_defaults_when_optional_fields_omitted(db, authed_client):
     with patch(
         "apps.maic.generation.tasks.enqueue_generation_chain"
@@ -162,7 +254,42 @@ def test_post_uses_defaults_when_optional_fields_omitted(db, authed_client):
     assert saved.requirements["language"] == "English"
     assert saved.requirements["level"] == "intermediate"
     assert saved.requirements["specifications"] == ""
-    assert saved.requirements["languageModelId"] == "stub"
+    assert saved.requirements["languageModelId"] == "openrouter/openai/gpt-4o-mini"
+
+
+def test_post_rejects_stub_language_model_in_production(db, authed_client):
+    res = authed_client.post(
+        "/api/maic/v2/generate/",
+        data={"topic": "T", "languageModelId": "stub"},
+        format="json",
+    )
+    assert res.status_code == 400
+    assert "stub" in res.data["error"]
+
+
+def test_post_rejects_model_override_in_production(db, authed_client):
+    res = authed_client.post(
+        "/api/maic/v2/generate/",
+        data={"topic": "T", "languageModelId": "openrouter/anthropic/claude-3.5-sonnet"},
+        format="json",
+    )
+    assert res.status_code == 400
+    assert "TenantAIConfig" in res.data["error"]
+
+
+def test_post_rejects_missing_tenant_llm_key(db, authed_client, tenant):
+    cfg = tenant.ai_config
+    cfg.llm_api_key_encrypted = ""
+    cfg.save(update_fields=["llm_api_key_encrypted"])
+
+    res = authed_client.post(
+        "/api/maic/v2/generate/",
+        data={"topic": "T"},
+        format="json",
+    )
+
+    assert res.status_code == 400
+    assert "llm_api_key" in res.data["error"]
 
 
 def test_post_returns_503_when_broker_unavailable(db, authed_client):
@@ -202,3 +329,37 @@ def test_ws_url_uses_request_host(db, authed_client):
         )
     assert res.status_code == 202
     assert res.data["ws_url"].startswith("ws://example.test/ws/maic/generation/")
+
+
+def test_get_generation_job_poll_response_strips_heavy_result(
+    db, authed_client, tenant, user
+):
+    job = MaicGenerationJob.objects.create(
+        id="jobpoll1",
+        tenant=tenant,
+        created_by=user,
+        requirements={"topic": "T"},
+        status=MaicGenerationJob.STATUS_SUCCEEDED,
+        progress={
+            "stage": 3,
+            "completed": 1,
+            "total": 1,
+            "message": "Generation complete!",
+        },
+        result={
+            "scenes": [{"id": "s1"}],
+            "outlines": [{"title": "S1"}],
+            "classroomId": "classroom-1",
+            "url": "/teacher/ai-classroom/classroom-1",
+            "scenesCount": 1,
+        },
+    )
+
+    res = authed_client.get(f"/api/maic/v2/generate/{job.id}/")
+
+    assert res.status_code == 200
+    assert res.data["done"] is True
+    assert res.data["scenesGenerated"] == 1
+    assert res.data["result"]["classroomId"] == "classroom-1"
+    assert "scenes" not in res.data["result"]
+    assert "outlines" not in res.data["result"]

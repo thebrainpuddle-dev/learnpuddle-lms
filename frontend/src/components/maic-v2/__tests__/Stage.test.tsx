@@ -56,6 +56,10 @@ class MockWebSocket extends EventTarget {
     });
   }
 
+  error() {
+    this.onerror?.();
+  }
+
   send(data: string) {
     this.sent.push(data);
   }
@@ -222,6 +226,42 @@ describe('Stage — buffered render', () => {
     expect(screen.getByTestId('maic-v2-transcript-line-m1')).toHaveTextContent(
       'Welcome, students. Today we discuss fractions.',
     );
+  });
+
+  test('keeps prior transcript lines when a second agent starts', () => {
+    render(<Stage sessionId="s1" baseUrl="ws://test" />);
+    const ws = MockWebSocket.instances[0];
+    act(() => ws.open());
+    act(() => {
+      ws.receive({
+        type: 'agent_start',
+        data: {
+          messageId: 'm1',
+          agentId: 'teacher',
+          agentName: 'AI Teacher',
+          agentAvatar: null,
+          agentColor: '#2563eb',
+        },
+      });
+      ws.receive({ type: 'text_delta', data: { content: 'First turn.', messageId: 'm1' } });
+      ws.receive({
+        type: 'agent_start',
+        data: {
+          messageId: 'm2',
+          agentId: 'coach',
+          agentName: 'Practice Coach',
+          agentAvatar: null,
+          agentColor: '#16a34a',
+        },
+      });
+      ws.receive({ type: 'text_delta', data: { content: 'Second turn.', messageId: 'm2' } });
+    });
+
+    expect(screen.getByTestId('maic-v2-transcript-line-m1')).toHaveTextContent('First turn.');
+    expect(screen.getByTestId('maic-v2-transcript-line-m2')).toHaveTextContent('Second turn.');
+    expect(screen.getByTestId('maic-v2-transcript-agent-m1')).toHaveTextContent('AI Teacher');
+    expect(screen.getByTestId('maic-v2-transcript-agent-m2')).toHaveTextContent('Practice Coach');
+    expect(screen.getByTestId('maic-v2-agent-name')).toHaveTextContent('Practice Coach');
   });
 });
 
@@ -398,6 +438,17 @@ describe('Stage — error surfacing', () => {
     });
     expect(screen.getByTestId('maic-v2-stage-error')).toHaveTextContent(
       'graph blew up',
+    );
+  });
+
+  test('renders a visible channel error when the websocket errors', () => {
+    render(<Stage sessionId="s1" baseUrl="ws://test" />);
+    const ws = MockWebSocket.instances[0];
+    act(() => {
+      ws.error();
+    });
+    expect(screen.getByTestId('maic-v2-channel-error')).toHaveTextContent(
+      /could not connect/i,
     );
   });
 });

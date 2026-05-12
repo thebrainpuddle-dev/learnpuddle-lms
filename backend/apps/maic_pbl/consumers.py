@@ -30,6 +30,7 @@ Close codes:
   4003 — cross-tenant (session belongs to another tenant)
   4004 — session not found
   4040 — user has no tenant_id
+  4403 — MAIC v2 disabled globally or for this tenant
 """
 from __future__ import annotations
 
@@ -50,6 +51,14 @@ logger = logging.getLogger(__name__)
 
 
 _MENTION_RE = re.compile(r"@(question|judge)\b", re.IGNORECASE)
+
+
+@database_sync_to_async
+def _user_has_maic_v2_access(user) -> bool:
+    """Run the shared MAIC v2 gate in a DB-safe sync context."""
+    from apps.maic.permissions import user_has_maic_v2_access
+
+    return user_has_maic_v2_access(user)
 
 
 @database_sync_to_async
@@ -79,6 +88,13 @@ def _load_session(session_id: str, user) -> tuple[Any, int]:
         )
         return sess, 4003
     return sess, 0
+
+
+@database_sync_to_async
+def _resolve_llm_config_for_tenant(tenant_id) -> dict:
+    from apps.maic.llm_config import resolve_tenant_llm_runtime_config
+
+    return resolve_tenant_llm_runtime_config(tenant_id=tenant_id)
 
 
 @database_sync_to_async
@@ -239,6 +255,15 @@ class PBLChatConsumer(AsyncJsonWebsocketConsumer):
             await self.close(code=4040)
             return
 
+        if not await _user_has_maic_v2_access(self.user):
+            logger.warning(
+                "PBL WS: user %s tenant=%s failed v2 access gate",
+                self.user.id,
+                self.tenant_id,
+            )
+            await self.close(code=4403)
+            return
+
         sess, code = await _load_session(self.session_id, self.user)
         if code != 0:
             await self.close(code=code)
@@ -290,10 +315,9 @@ class PBLChatConsumer(AsyncJsonWebsocketConsumer):
                 })
                 return
             user_role = data.get("userRole") or ""
-            language_model_id = data.get("languageModelId", "stub")
             await self._cancel_in_flight()
             self._chat_task = asyncio.create_task(
-                self._run_chat_turn(message, user_role, language_model_id),
+                self._run_chat_turn(message, user_role),
             )
             return
 
@@ -307,9 +331,7 @@ class PBLChatConsumer(AsyncJsonWebsocketConsumer):
             "data": {"message": f"unknown action: {action!r}"},
         })
 
-    async def _run_chat_turn(
-        self, message: str, user_role: str, language_model_id: str,
-    ) -> None:
+    async def _run_chat_turn(self, message: str, user_role: str) -> None:
         """Run one chat turn: pick agent, stream LLM, persist."""
         # Re-load the session so any persisted issueboard mutations
         # from prior turns (issue completed, next activated) are
@@ -331,18 +353,13 @@ class PBLChatConsumer(AsyncJsonWebsocketConsumer):
             })
             return
 
-        if language_model_id == "stub":
-            await self._safe_send_json({
-                "type": "error",
-                "data": {"message": "languageModelId 'stub' is for tests; pick a real provider"},
-            })
-            return
-
         try:
             from apps.maic.exceptions import MaicConfigError
             from apps.maic.orchestration.ai_adapter import resolve_chat_model
             try:
-                model = resolve_chat_model(language_model_id)
+                llm_config = await _resolve_llm_config_for_tenant(sess.tenant_id)
+                language_model_id = str(llm_config["language_model_id"])
+                model = resolve_chat_model(language_model_id, llm_config=llm_config)
             except MaicConfigError as exc:
                 await self._safe_send_json({
                     "type": "error",

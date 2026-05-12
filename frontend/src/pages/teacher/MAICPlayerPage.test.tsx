@@ -412,6 +412,35 @@ describe('MAICPlayerPage — ARCHIVED status', () => {
   });
 });
 
+describe('MAICPlayerPage — DRAFT status', () => {
+  test('renders a non-spinning draft state when no content exists', async () => {
+    const { unmount } = mountPage({
+      queryData: makeClassroom('DRAFT', {
+        content: { slides: [], scenes: [], sceneSlideBounds: [] },
+      }),
+    });
+    await flushEffects();
+
+    expect(screen.getByText('Classroom Draft')).toBeInTheDocument();
+    expect(screen.getByText('Create New Classroom')).toBeInTheDocument();
+    expect(screen.queryByText('Preparing classroom')).not.toBeInTheDocument();
+    unmount();
+  });
+
+  test('draft create button navigates to /teacher/ai-classroom/new', async () => {
+    const { unmount } = mountPage({
+      queryData: makeClassroom('DRAFT', {
+        content: { slides: [], scenes: [], sceneSlideBounds: [] },
+      }),
+    });
+    await flushEffects();
+
+    fireEvent.click(screen.getByText('Create New Classroom'));
+    expect(mockNavigate).toHaveBeenCalledWith('/teacher/ai-classroom/new');
+    unmount();
+  });
+});
+
 describe('MAICPlayerPage — GENERATING state (no content)', () => {
   test('renders "Generating your classroom" heading', async () => {
     const { unmount } = mountPage({

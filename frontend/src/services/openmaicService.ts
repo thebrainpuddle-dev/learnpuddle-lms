@@ -44,6 +44,14 @@ export interface MAICVoice {
   suits: string[];
 }
 
+export interface MAICGenerationContextPayload {
+  grade_level?: string;
+  subject?: string;
+  syllabus_board?: string;
+  audience_role?: 'teacher' | 'student';
+  class_guide?: string;
+}
+
 // ─── MAIC AI Classroom API (Teacher) ─────────────────────────────────────────
 
 export const maicApi = {
@@ -75,7 +83,7 @@ export const maicApi = {
     language: string;
     classroomId?: string;
     sceneIdx?: number;
-  }) => api.post('/v1/teacher/maic/generate/scene-content/', data),
+  } & MAICGenerationContextPayload) => api.post('/v1/teacher/maic/generate/scene-content/', data),
 
   generateImage: (data: { prompt: string; style?: string }) =>
     api.post('/v1/teacher/maic/generate/image/', data),
@@ -103,7 +111,8 @@ export const maicApi = {
     scene: { id: string; type: string; title: string; content: MAICScene['content'] };
     agents: MAICAgent[];
     language: string;
-  }) =>
+    classroomId?: string;
+  } & MAICGenerationContextPayload) =>
     api.post<{ actions: MAICAction[] }>('/v1/teacher/maic/generate/scene-actions/', data),
 
   generateAgentProfiles: (data: GenerateAgentProfilesRequest) =>

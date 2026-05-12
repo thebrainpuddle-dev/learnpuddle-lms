@@ -27,6 +27,8 @@
 import { useMAICStageStore } from '../stores/maicStageStore';
 import { useMAICCanvasStore } from '../stores/maicCanvasStore';
 import { useMAICSettingsStore } from '../stores/maicSettingsStore';
+import { refreshAccessTokenForRequests } from '../config/api';
+import { getAccessToken } from '../utils/authSession';
 import { cacheAudio, getCachedAudio } from './maicDb';
 import { resolveVoiceForAgent } from './voiceResolver';
 import type { MAICAction } from '../types/maic-actions';
@@ -980,18 +982,18 @@ export class MAICActionEngine {
       return cached;
     }
 
-    const baseUrl = import.meta.env.VITE_API_BASE_URL || '';
-    const url = `${baseUrl}${this.ttsEndpoint}`;
-    const headers = this.buildTtsHeaders();
+    const durableCached = await this.tryOfflineAudioFallback(cacheKey, token);
+    if (durableCached) {
+      this.ttsUnavailableNotified = false;
+      return durableCached;
+    }
 
     this.currentFetchController = new AbortController();
     try {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ text, voiceId, voice_id: voiceId }),
-        signal: this.currentFetchController.signal,
-      });
+      const baseUrl = import.meta.env.VITE_API_BASE_URL || '';
+      const url = `${baseUrl}${this.ttsEndpoint}`;
+      const body = JSON.stringify({ text, voiceId, voice_id: voiceId });
+      const res = await this.postTts(url, body, this.currentFetchController.signal);
       if (token !== this.generationToken) return null;
       if (res.status === 204 || !res.ok) {
         return await this.tryOfflineAudioFallback(cacheKey, token);
@@ -1010,7 +1012,7 @@ export class MAICActionEngine {
       this.ttsUnavailableNotified = false;
       return URL.createObjectURL(blob);
     } catch (err) {
-      if (err instanceof DOMException && err.name === 'AbortError') return null;
+      if (this.isAbortError(err)) return null;
       console.warn('TTS fetch failed:', err);
       // Offline-audio-durability re-wire (2026-04-26): the network is
       // truly down. If we previously prefetched this utterance and
@@ -1058,12 +1060,15 @@ export class MAICActionEngine {
 
   /**
    * Build HTTP headers used by BOTH the main TTS fetch and prefetch
-   * fetches. Centralized so tenant-subdomain injection stays in sync.
+   * fetches. Reads the current stored token on every call so a long-running
+   * classroom does not keep using the access token captured when this engine
+   * was constructed.
    */
-  private buildTtsHeaders(): Record<string, string> {
+  private buildTtsHeaders(tokenOverride?: string): Record<string, string> {
+    const token = tokenOverride || getAccessToken() || this.token;
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${this.token}`,
+      Authorization: `Bearer ${token}`,
     };
     if (typeof window !== 'undefined') {
       const hostname = window.location.hostname;
@@ -1085,6 +1090,81 @@ export class MAICActionEngine {
       }
     }
     return headers;
+  }
+
+  private makeAbortError(): DOMException {
+    if (typeof DOMException !== 'undefined') {
+      return new DOMException('aborted', 'AbortError');
+    }
+    const err = new Error('aborted') as Error & { name: string };
+    err.name = 'AbortError';
+    return err as unknown as DOMException;
+  }
+
+  private isAbortError(err: unknown): boolean {
+    return Boolean(
+      err &&
+      typeof err === 'object' &&
+      'name' in err &&
+      (err as { name?: string }).name === 'AbortError',
+    );
+  }
+
+  private async postTts(
+    url: string,
+    body: string,
+    signal: AbortSignal,
+  ): Promise<Response> {
+    const request = (tokenOverride?: string) =>
+      fetch(url, {
+        method: 'POST',
+        headers: this.buildTtsHeaders(tokenOverride),
+        body,
+        signal,
+      });
+
+    let res = await request();
+    if (!(await this.shouldRefreshTtsResponse(res))) {
+      return res;
+    }
+
+    if (signal.aborted) {
+      throw this.makeAbortError();
+    }
+
+    const refreshedToken = await refreshAccessTokenForRequests();
+    if (signal.aborted) {
+      throw this.makeAbortError();
+    }
+
+    res = await request(refreshedToken);
+    return res;
+  }
+
+  private async shouldRefreshTtsResponse(res: Response): Promise<boolean> {
+    if (res.status === 401) return true;
+    if (res.status !== 403) return false;
+
+    try {
+      const data = await res.clone().json();
+      const detail = String(data?.error || data?.detail || '').toLowerCase();
+      const code = String(data?.code || '').toLowerCase();
+      const messages = Array.isArray(data?.messages)
+        ? data.messages.map((item: any) => String(item?.message || '')).join(' ').toLowerCase()
+        : '';
+      return (
+        code.includes('token_not_valid') ||
+        (detail.includes('token') && (detail.includes('expired') || detail.includes('invalid'))) ||
+        messages.includes('token')
+      );
+    } catch {
+      try {
+        const text = (await res.clone().text()).toLowerCase();
+        return text.includes('token') && (text.includes('expired') || text.includes('invalid'));
+      } catch {
+        return false;
+      }
+    }
   }
 
   /**
@@ -1166,13 +1246,35 @@ export class MAICActionEngine {
 
     const baseUrl = import.meta.env.VITE_API_BASE_URL || '';
     const url = `${baseUrl}${this.ttsEndpoint}`;
-    fetch(url, {
-      method: 'POST',
-      headers: this.buildTtsHeaders(),
-      body: JSON.stringify({ text, voiceId, voice_id: voiceId }),
-      signal: controller.signal,
-    })
+    const body = JSON.stringify({ text, voiceId, voice_id: voiceId });
+    this.tryOfflineAudioFallback(key, myToken)
+      .then((cachedUrl) => {
+        if (!cachedUrl) return null;
+        if (
+          myToken !== this.generationToken ||
+          this.disposed ||
+          this.prefetchCache.has(key) ||
+          !this.prefetchControllers.has(key)
+        ) {
+          URL.revokeObjectURL(cachedUrl);
+          return true;
+        }
+        this.prefetchCache.set(key, cachedUrl);
+        return true;
+      })
+      .then((usedDurableCache) => {
+        if (usedDurableCache) return null;
+        if (
+          myToken !== this.generationToken ||
+          this.disposed ||
+          !this.prefetchControllers.has(key)
+        ) {
+          return null;
+        }
+        return this.postTts(url, body, controller.signal);
+      })
       .then(async (res) => {
+        if (!res) return;
         if (myToken !== this.generationToken) return;  // scene changed
         if (res.status === 204 || !res.ok) return;
         const blob = await res.blob();
@@ -1217,7 +1319,7 @@ export class MAICActionEngine {
         }
       })
       .catch((err) => {
-        if (err instanceof DOMException && err.name === 'AbortError') return;
+        if (this.isAbortError(err)) return;
         // Silent — prefetch is best-effort.
       })
       .finally(() => {

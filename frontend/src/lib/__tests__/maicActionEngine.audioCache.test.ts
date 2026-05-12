@@ -7,8 +7,8 @@
 //      fetch.
 //   2. prefetchSpeech does NOT persist if the AV-P0-2 controller-presence
 //      recheck fails (the prefetch was aborted between fetch + then).
-//   3. The live-TTS path falls back to the IDB-cached buffer when the
-//      live fetch fails (network off / non-2xx).
+//   3. The live-TTS path reads the IDB-cached buffer before hitting the
+//      network, preventing reload-time duplicate synthesis.
 //   4. The read path (IDB cache hit during fetchTtsBlob) does NOT call
 //      cacheAudio again — no double-write loop.
 
@@ -227,10 +227,51 @@ describe('MAICActionEngine.prefetchSpeech — IDB persistence', () => {
 
     engine.dispose();
   });
+
+  test('uses IDB cache during prefetch without issuing a duplicate TTS fetch', async () => {
+    await saveClassroom(makeClassroom('classroom-prefetch-cache'));
+
+    const voiceId = 'en-IN-PrabhatNeural';
+    const text = 'Already synthesized before reload';
+    const key = `${voiceId}::${text}`;
+    await cacheAudio('classroom-prefetch-cache', key, new Uint8Array([0xff, 0xfb]).buffer);
+
+    const fetchMock = vi.fn().mockRejectedValue(new Error('network should not be touched'));
+    // @ts-expect-error browser global
+    global.fetch = fetchMock;
+
+    const engine = new MAICActionEngine({
+      ttsEndpoint: '/tts',
+      token: 't',
+      classroomId: 'classroom-prefetch-cache',
+    });
+
+    engine.prefetchSpeech({
+      type: 'speech',
+      agentId: 'a1',
+      text,
+    } as any);
+
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    const promise = engine.execute({
+      type: 'speech',
+      agentId: 'a1',
+      text,
+    } as any);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(fetchMock).not.toHaveBeenCalled();
+    mockAudios[mockAudios.length - 1]?.endNow();
+    await promise;
+
+    engine.dispose();
+  });
 });
 
-describe('MAICActionEngine.executeSpeech — IDB fallback on fetch failure', () => {
-  test('falls back to IDB-cached buffer when the live fetch fails', async () => {
+describe('MAICActionEngine.executeSpeech — IDB cache-first playback', () => {
+  test('uses IDB-cached buffer before attempting live fetch', async () => {
     await saveClassroom(makeClassroom('classroom-3'));
 
     // Pre-seed IDB with a buffer that the engine will look up by its
@@ -251,7 +292,7 @@ describe('MAICActionEngine.executeSpeech — IDB fallback on fetch failure', () 
     expect(seeded).toBeDefined();
     expect(seeded!.byteLength).toBe(4);
 
-    // Now make fetch fail (offline-mid-class).
+    // A cache hit should avoid live TTS entirely.
     const fetchMock = vi.fn().mockRejectedValue(new Error('network off'));
     // @ts-expect-error browser global
     global.fetch = fetchMock;
@@ -271,11 +312,12 @@ describe('MAICActionEngine.executeSpeech — IDB fallback on fetch failure', () 
     // Let the failed fetch + IDB lookup + audio.play() pipeline settle.
     await new Promise((r) => setTimeout(r, 30));
 
-    // The engine should have built an Audio element — IDB fallback hit.
+    // The engine should have built an Audio element from the durable cache.
     expect(mockAudios.length).toBeGreaterThanOrEqual(1);
     const audio = mockAudios[mockAudios.length - 1];
     expect(audio.src.startsWith('blob:mock-')).toBe(true);
     expect(audio.play).toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
 
     audio.endNow();
     await promise;

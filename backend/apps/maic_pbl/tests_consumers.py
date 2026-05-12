@@ -15,6 +15,17 @@ from channels.testing import WebsocketCommunicator
 from django.test import override_settings
 
 
+@pytest.fixture(autouse=True)
+def _allow_maic_v2_ws_access(monkeypatch):
+    async def _allow(_user):
+        return True
+
+    monkeypatch.setattr(
+        "apps.maic_pbl.consumers._user_has_maic_v2_access",
+        _allow,
+    )
+
+
 # ── Pure unit tests (no DB, no env-var prerequisite) ───────────────────
 
 
@@ -238,6 +249,42 @@ async def test_no_tenant_user_rejected_with_4040(monkeypatch):
     connected, code = await communicator.connect()
     assert connected is False
     assert code == 4040
+
+
+@pytest.mark.asyncio
+@override_settings(ALLOWED_HOSTS=["*"])
+async def test_tenant_v2_gate_rejected_with_4403(monkeypatch):
+    """PBL chat socket denies before session lookup when the shared MAIC
+    v2 access gate is off."""
+    from types import SimpleNamespace
+
+    async def _fake_call(self, scope, receive, send):
+        scope["user"] = SimpleNamespace(
+            is_anonymous=False, id=42, tenant_id=222,
+        )
+        scope["accepted_subprotocol"] = None
+        return await self.inner(scope, receive, send)
+
+    from apps.notifications.middleware import JWTAuthMiddleware
+    monkeypatch.setattr(JWTAuthMiddleware, "__call__", _fake_call)
+
+    async def _deny(_user):
+        return False
+
+    monkeypatch.setattr(
+        "apps.maic_pbl.consumers._user_has_maic_v2_access",
+        _deny,
+    )
+
+    from config import asgi as asgi_mod
+    importlib.reload(asgi_mod)
+
+    communicator = WebsocketCommunicator(
+        asgi_mod.application, "/ws/maic/pbl/v2-gate-off/",
+    )
+    connected, code = await communicator.connect()
+    assert connected is False
+    assert code == 4403
 
 
 @pytest.mark.asyncio

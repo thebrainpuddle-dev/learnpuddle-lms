@@ -85,6 +85,38 @@ class TestICalBuilderRoundtrip(TestCase):
         self.assertEqual(str(cal.get("calscale")), "GREGORIAN")
         self.assertEqual(str(cal.get("method")), "PUBLISH")
 
+    def test_feed_includes_assignments_from_assigned_courses(self):
+        """Regression: calendar feeds now use Course assignment fields."""
+        from django.utils import timezone
+        from icalendar import Calendar
+        from apps.courses.models import Course
+        from apps.progress.models import Assignment
+
+        course = Course.objects.create(
+            tenant=self.tenant,
+            title="Assigned Calendar Course",
+            description="Calendar course",
+            is_published=True,
+            is_active=True,
+            created_by=self.user,
+        )
+        course.assigned_teachers.add(self.user)
+        assignment = Assignment.objects.create(
+            tenant=self.tenant,
+            course=course,
+            title="Assigned iCal due date",
+            description="Should appear in the feed.",
+            due_date=timezone.now() + timezone.timedelta(days=3),
+            is_active=True,
+        )
+
+        cal = Calendar.from_ical(build_ical_feed(user=self.user))
+        events = cal.walk("VEVENT")
+
+        self.assertEqual(len(events), 1)
+        self.assertIn("Assigned iCal due date", str(events[0].get("summary")))
+        self.assertIn(str(assignment.id), str(events[0].get("uid")))
+
 
 # ---------------------------------------------------------------------------
 # 2. Missing / invalid token → 404 (no 401, no leak)

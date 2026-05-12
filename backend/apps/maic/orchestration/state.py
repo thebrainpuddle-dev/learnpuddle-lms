@@ -152,6 +152,12 @@ class OrchestratorState(TypedDict, total=False):
     triggerAgentId: str | None
     userProfile: dict[str, Any] | None                # shape: {nickname?, bio?}
     agentConfigOverrides: dict[str, dict[str, Any]]   # request-scoped agent configs
+    llmConfig: dict[str, Any] | None                  # MAIC production runtime LLM
+                                                      # config resolved from
+                                                      # TenantAIConfig at the WS
+                                                      # boundary. May include a
+                                                      # decrypted API key; never
+                                                      # persist this state.
     ttsConfig: dict[str, Any] | None                  # MAIC-502: pre-resolved per-tenant
                                                       # TTS bundle (provider, api_key,
                                                       # base_url, voice). Resolved once

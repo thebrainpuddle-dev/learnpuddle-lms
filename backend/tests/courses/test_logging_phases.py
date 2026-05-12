@@ -378,6 +378,45 @@ def test_llm_call_empty_response_emits_structured_log(tenant, caplog):
     assert getattr(rec, "model", None) == "openrouter/auto"
 
 
+def test_llm_call_uses_operator_ollama_endpoint_without_api_key(tenant, monkeypatch):
+    """Legacy teacher-portal generation can run against real local Ollama.
+
+    The local/private URL comes from operator env, not tenant-editable
+    llm_base_url, so this does not loosen the outbound SSRF guard.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from apps.courses.maic_models import TenantAIConfig
+    from apps.courses import maic_generation_service as gen
+
+    cfg = TenantAIConfig.objects.create(
+        tenant=tenant,
+        llm_provider="ollama",
+        llm_model="ollama/llama3.2:3b",
+        llm_base_url="http://169.254.169.254",
+        tts_provider="disabled",
+    )
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+    monkeypatch.setenv("OLLAMA_TIMEOUT_SECONDS", "345")
+
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {
+        "choices": [{"message": {"content": "local ok"}}],
+    }
+    mock_resp.raise_for_status = MagicMock()
+
+    with patch.object(gen.http_requests, "post", return_value=mock_resp) as post:
+        result = gen._call_llm(cfg, "sys", "user")
+
+    assert result == "local ok"
+    url = post.call_args.args[0]
+    kwargs = post.call_args.kwargs
+    assert url == "http://127.0.0.1:11434/v1/chat/completions"
+    assert "Authorization" not in kwargs["headers"]
+    assert kwargs["json"]["model"] == "llama3.2:3b"
+    assert kwargs["timeout"] == 345
+
+
 # ---------------------------------------------------------------------------
 # SPRINT-2-BATCH-8-F1: log_extra sanitises caller-supplied kwargs
 # ---------------------------------------------------------------------------

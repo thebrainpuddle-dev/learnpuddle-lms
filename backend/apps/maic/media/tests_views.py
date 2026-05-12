@@ -27,6 +27,11 @@ from apps.maic.media.types import (
 # ── Fixtures ──────────────────────────────────────────────────────────
 
 
+@pytest.fixture(autouse=True)
+def _enable_maic_v2(settings):
+    settings.MAIC_V2_ENABLED = True
+
+
 def _make_tenant_with_ai_config(slug: str = "t-media", flag: bool = True):
     """Build a tenant + TenantAIConfig pair. Default feature_maic_v2=True
     so tests can exercise the success path; gating tests pass flag=False."""

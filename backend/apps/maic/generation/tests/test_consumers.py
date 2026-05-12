@@ -17,6 +17,17 @@ from channels.testing import WebsocketCommunicator
 from django.test import override_settings
 
 
+@pytest.fixture(autouse=True)
+def _allow_maic_v2_ws_access(monkeypatch):
+    async def _allow(_user):
+        return True
+
+    monkeypatch.setattr(
+        "apps.maic.generation.consumers._user_has_maic_v2_access",
+        _allow,
+    )
+
+
 # ── Static / shape tests (no DB) ──────────────────────────────────
 
 
@@ -77,6 +88,45 @@ async def test_anonymous_connection_rejected_with_4001():
 
     assert connected is False
     assert code == 4001
+
+
+@pytest.mark.asyncio
+@override_settings(ALLOWED_HOSTS=["*"])
+async def test_tenant_v2_gate_rejected_with_4403(monkeypatch):
+    """The generation progress socket must honor the same v2 gate as
+    the HTTP enqueue view before revealing job existence."""
+    from types import SimpleNamespace
+
+    async def _fake_call(self, scope, receive, send):
+        scope["user"] = SimpleNamespace(
+            is_anonymous=False, id=42, tenant_id=222,
+        )
+        scope["accepted_subprotocol"] = None
+        return await self.inner(scope, receive, send)
+
+    from apps.notifications.middleware import JWTAuthMiddleware
+    monkeypatch.setattr(JWTAuthMiddleware, "__call__", _fake_call)
+
+    async def _deny(_user):
+        return False
+
+    monkeypatch.setattr(
+        "apps.maic.generation.consumers._user_has_maic_v2_access",
+        _deny,
+    )
+
+    import importlib
+    from config import asgi as asgi_mod
+    importlib.reload(asgi_mod)
+
+    communicator = WebsocketCommunicator(
+        asgi_mod.application,
+        "/ws/maic/generation/some-job-id/",
+    )
+    connected, code = await communicator.connect()
+
+    assert connected is False
+    assert code == 4403
 
 
 # ── Channel-layer message handling (in-memory layer) ──────────────

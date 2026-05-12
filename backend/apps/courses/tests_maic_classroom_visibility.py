@@ -10,8 +10,12 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from django.contrib.auth import get_user_model
 
+from apps.courses.maic_models import MAICClassroom
 from apps.courses.maic_views import _student_can_view_classroom
+from apps.courses.models import Content, Course, Module
+from apps.tenants.models import Tenant
 
 
 # ─── Helpers ────────────────────────────────────────────────────────────────
@@ -150,3 +154,50 @@ class TestStudentCanViewClassroom:
         """Public classroom with no sections is visible to every student."""
         c = _make_classroom(sections=[], is_public=True)
         assert _student_can_view_classroom(_make_user(), c) is True
+
+
+@pytest.mark.django_db
+def test_private_classroom_linked_to_assigned_course_content_is_visible():
+    tenant = Tenant.objects.create(
+        name="course-gate",
+        slug="course-gate",
+        subdomain="course-gate",
+    )
+    User = get_user_model()
+    teacher = User.objects.create_user(
+        email="teacher-course-gate@example.com",
+        password="x",
+        tenant=tenant,
+        role="TEACHER",
+    )
+    student = User.objects.create_user(
+        email="student-course-gate@example.com",
+        password="x",
+        tenant=tenant,
+        role="STUDENT",
+    )
+    course = Course.objects.create(
+        tenant=tenant,
+        title="Assigned Course",
+        description="Course with AI classroom content",
+        is_published=True,
+        created_by=teacher,
+    )
+    course.assigned_students.add(student)
+    module = Module.objects.create(course=course, title="Module 1", order=1)
+    classroom = MAICClassroom.all_objects.create(
+        tenant=tenant,
+        creator=teacher,
+        title="Private Course Classroom",
+        status="READY",
+        is_public=False,
+        content_meta={"audioManifest": {"status": "partial"}},
+    )
+    Content.objects.create(
+        module=module,
+        title="AI Classroom",
+        content_type="AI_CLASSROOM",
+        maic_classroom=classroom,
+    )
+
+    assert _student_can_view_classroom(student, classroom) is True

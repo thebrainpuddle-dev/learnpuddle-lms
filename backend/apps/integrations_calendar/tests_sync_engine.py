@@ -21,7 +21,7 @@ from apps.integrations_calendar.models import (
     CalendarConnection,
     CalendarSyncedEvent,
 )
-from apps.integrations_calendar.sync_engine import push_events_for_connection
+from apps.integrations_calendar.sync_engine import _collect_lms_events, push_events_for_connection
 
 
 # ---------------------------------------------------------------------------
@@ -136,6 +136,41 @@ class TestSyncEngineSkipsInactive(TestCase):
         summary = push_events_for_connection(conn)
         self.assertEqual(summary["created"], 0)
         self.assertEqual(summary["errors"], 0)
+
+
+class TestSyncEngineCourseAssignments(TestCase):
+    def setUp(self):
+        from django.utils import timezone
+        from apps.courses.models import Course
+        from apps.progress.models import Assignment
+
+        self.tenant = make_tenant(subdomain="assigned-course-school")
+        self.user = make_user(self.tenant)
+        self.conn = make_connection(self.tenant, self.user)
+        self.course = Course.objects.create(
+            tenant=self.tenant,
+            title="Assigned Teacher Course",
+            description="Calendar source course",
+            is_published=True,
+            is_active=True,
+            created_by=self.user,
+        )
+        self.course.assigned_teachers.add(self.user)
+        self.assignment = Assignment.objects.create(
+            tenant=self.tenant,
+            course=self.course,
+            title="Assigned course due date",
+            description="Should sync through course assignment fields.",
+            due_date=timezone.now() + timezone.timedelta(days=2),
+            is_active=True,
+        )
+
+    def test_collect_lms_events_uses_course_assignment_fields(self):
+        events = _collect_lms_events(self.conn)
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["source_id"], str(self.assignment.id))
+        self.assertIn("Assigned course due date", events[0]["summary"])
 
 
 # ---------------------------------------------------------------------------

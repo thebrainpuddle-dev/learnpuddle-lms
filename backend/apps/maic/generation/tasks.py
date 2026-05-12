@@ -55,7 +55,10 @@ from apps.maic.generation.scene_generator import (
 from apps.maic.generation.outline_generator import (
     generate_scene_outlines_from_requirements,
 )
+from apps.maic.generation.materializer import materialize_generation_artifact
 from apps.maic.models import MaicGenerationJob
+from apps.maic.orchestration.ai_adapter import use_llm_runtime_config
+from apps.maic.llm_config import resolve_tenant_llm_runtime_config
 
 
 _logger = logging.getLogger("apps.maic.generation.tasks")
@@ -108,6 +111,7 @@ def outline_task(job_id: str) -> dict:
     job = MaicGenerationJob.objects.get(pk=job_id)
     requirements = job.requirements or {}
     language_model_id = requirements.get("languageModelId", "stub")
+    llm_config = _runtime_config_for_job(job, language_model_id)
 
     job.status = MaicGenerationJob.STATUS_IN_PROGRESS
     job.progress = {
@@ -127,7 +131,8 @@ def outline_task(job_id: str) -> dict:
             callbacks=None,
         )
 
-    result = asyncio.run(_run())
+    with use_llm_runtime_config(llm_config):
+        result = asyncio.run(_run())
     if not result.get("success") or "data" not in result:
         raise RuntimeError(result.get("error", "Stage 1 failed"))
 
@@ -306,7 +311,9 @@ def scene_task(
         )
 
     try:
-        scene = asyncio.run(_run())
+        llm_config = _runtime_config_for_job_id(job_id, language_model_id)
+        with use_llm_runtime_config(llm_config):
+            scene = asyncio.run(_run())
     except Exception as exc:  # noqa: BLE001
         _logger.error(
             "scene_task[%d] for %r failed: %s",
@@ -324,6 +331,22 @@ def scene_task(
     })
 
     return {"index": index, "scene": scene}
+
+
+def _runtime_config_for_job(job: MaicGenerationJob, language_model_id: str) -> dict | None:
+    if language_model_id in {"stub", "stub-director"}:
+        return None
+    return resolve_tenant_llm_runtime_config(
+        tenant_id=job.tenant_id,
+        requested=language_model_id,
+    )
+
+
+def _runtime_config_for_job_id(job_id: str, language_model_id: str) -> dict | None:
+    if language_model_id in {"stub", "stub-director"}:
+        return None
+    job = MaicGenerationJob.objects.only("tenant_id").get(pk=job_id)
+    return _runtime_config_for_job(job, language_model_id)
 
 
 @shared_task(
@@ -379,6 +402,10 @@ def finalize_task(stage2_payload: dict) -> dict:
     job = MaicGenerationJob.objects.get(pk=job_id)
     existing_result = job.result or {}
     existing_result["scenes"] = scenes
+    artifact = materialize_generation_artifact(job, scenes)
+    if artifact:
+        existing_result.update(artifact)
+        existing_result["artifact"] = artifact
 
     job.status = MaicGenerationJob.STATUS_SUCCEEDED
     job.result = existing_result
@@ -395,11 +422,16 @@ def finalize_task(stage2_payload: dict) -> dict:
         ]
     )
 
-    _emit_progress(job_id, "finalized", {
-        "sceneCount": len(scenes),
-    })
+    payload = {"sceneCount": len(scenes)}
+    if artifact:
+        payload.update({
+            "classroomId": artifact.get("classroomId"),
+            "contentId": artifact.get("contentId"),
+            "url": artifact.get("url"),
+        })
+    _emit_progress(job_id, "finalized", payload)
 
-    return {"job_id": job_id, "sceneCount": len(scenes)}
+    return {"job_id": job_id, "sceneCount": len(scenes), **artifact}
 
 
 # ── Failure path ──────────────────────────────────────────────────

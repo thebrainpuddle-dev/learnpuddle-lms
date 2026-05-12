@@ -30,6 +30,7 @@ class TenantAIConfig(models.Model):
         ("google", "Google AI"),
         ("openrouter", "OpenRouter"),
         ("azure", "Azure OpenAI"),
+        ("ollama", "Ollama / Self-hosted"),
     ]
 
     TTS_PROVIDER_CHOICES = [
@@ -83,7 +84,7 @@ class TenantAIConfig(models.Model):
     )
     llm_model = models.CharField(
         max_length=100, default="openai/gpt-4o-mini",
-        help_text="Model identifier, e.g. openai/gpt-4o-mini, google/gemini-2.5-flash-preview-05-20",
+        help_text="Model identifier, e.g. openai/gpt-4o-mini, openrouter/openai/gpt-4o-mini, ollama/llama3.2:3b",
     )
     llm_api_key_encrypted = models.TextField(
         blank=True, default="",

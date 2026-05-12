@@ -317,6 +317,13 @@ export interface MAICGenerationConfig {
   gradeLevel?: string;
   subject?: string;
   syllabusBoard?: string;
+  /**
+   * Teacher-authored preparation guide from Step 2 of the wizard. This is
+   * threaded through outline, scene-content, and action prompts so the class
+   * plan, misconceptions, checks, PBL/activity moments, and agent handovers
+   * stay consistent across the whole generated classroom.
+   */
+  classGuide?: string;
 }
 
 // ─── View Mode ────────────────────────────────────────────────────────────

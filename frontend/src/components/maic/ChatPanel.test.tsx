@@ -54,12 +54,19 @@ vi.mock('./StreamMarkdown', () => ({
 }));
 
 vi.mock('./PromptInput', () => ({
-  PromptInput: ({ placeholder }: { placeholder?: string }) =>
-    React.createElement('input', {
-      'data-testid': 'prompt-input',
-      placeholder,
-      readOnly: true,
-    }),
+  PromptInput: ({ placeholder, onSubmit }: { placeholder?: string; onSubmit?: (value: string) => void }) =>
+    React.createElement('div', null,
+      React.createElement('input', {
+        'data-testid': 'prompt-input',
+        placeholder,
+        readOnly: true,
+      }),
+      React.createElement('button', {
+        'data-testid': 'prompt-submit',
+        type: 'button',
+        onClick: () => onSubmit?.('Hello tutor'),
+      }, 'Send test'),
+    ),
 }));
 
 vi.mock('./ConversationContainer', () => ({
@@ -91,6 +98,7 @@ vi.mock('./ai-elements/CodeBlock', () => ({
 
 import { updateClassroomChat } from '../../lib/maicDb';
 import { persistChatToSession } from '../../lib/maicChatSession';
+import { streamMAIC } from '../../lib/maicSSE';
 
 const CLASSROOM_ID = 'classroom-test-1';
 
@@ -103,11 +111,12 @@ function makeMessages(count = 2): MAICChatMessage[] {
   }));
 }
 
-function renderChatPanel() {
+function renderChatPanel(extraProps: Partial<React.ComponentProps<typeof ChatPanel>> = {}) {
   return render(
     React.createElement(ChatPanel, {
       role: 'teacher',
       classroomId: CLASSROOM_ID,
+      ...extraProps,
     }),
   );
 }
@@ -123,6 +132,8 @@ describe('ChatPanel — clear-chat confirm path', () => {
     // Reset persistence mocks.
     vi.mocked(persistChatToSession).mockClear();
     vi.mocked(updateClassroomChat).mockClear();
+    vi.mocked(streamMAIC).mockReset();
+    vi.mocked(streamMAIC).mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -248,5 +259,23 @@ describe('ChatPanel — clear-chat confirm path', () => {
     // No side-effects
     expect(persistChatToSession).not.toHaveBeenCalled();
     expect(updateClassroomChat).not.toHaveBeenCalled();
+  });
+
+  it('resumes interrupted playback when the chat stream errors before onDone', async () => {
+    const onPlaybackInterrupt = vi.fn();
+    const onPlaybackResume = vi.fn();
+    vi.mocked(streamMAIC).mockImplementation(async (opts: any) => {
+      opts.onError(new Error('token expired'));
+    });
+
+    renderChatPanel({ onPlaybackInterrupt, onPlaybackResume });
+
+    fireEvent.click(screen.getByTestId('prompt-submit'));
+
+    await waitFor(() => {
+      expect(onPlaybackInterrupt).toHaveBeenCalledWith('Hello tutor');
+      expect(onPlaybackResume).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.getByText(/Couldn't reach the tutor: token expired/i)).toBeInTheDocument();
   });
 });

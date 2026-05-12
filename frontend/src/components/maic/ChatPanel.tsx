@@ -378,6 +378,9 @@ export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({
         }
       },
       onError: (err) => {
+        releaseCooldown();
+        setThinkingAgentId(null);
+        setStreamingMessageId(null);
         // Keep any partial assistant message already rendered; append a
         // visible error chip below so the user knows something went wrong
         // without losing the response.
@@ -390,6 +393,7 @@ export const ChatPanel = React.memo<ChatPanelProps>(function ChatPanel({
           timestamp: Date.now(),
         };
         addChatMessage(errorMsg);
+        onPlaybackResume?.();
       },
       onDone: () => {
         releaseCooldown();

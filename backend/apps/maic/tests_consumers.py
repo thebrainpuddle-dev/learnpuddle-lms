@@ -22,6 +22,24 @@ from channels.testing import WebsocketCommunicator
 from django.test import override_settings
 
 
+@pytest.fixture(autouse=True)
+def _allow_maic_v2_ws_access(monkeypatch):
+    async def _allow(_user):
+        return True
+
+    async def _tenant_llm(_tenant_id):
+        return {"language_model_id": "stub", "api_key": "", "base_url": None}
+
+    monkeypatch.setattr(
+        "apps.maic.consumers._user_has_maic_v2_access",
+        _allow,
+    )
+    monkeypatch.setattr(
+        "apps.maic.consumers._resolve_llm_config_for_tenant",
+        _tenant_llm,
+    )
+
+
 @pytest.mark.asyncio
 @override_settings(ALLOWED_HOSTS=["*"])
 async def test_anonymous_connection_rejected_with_4001():
@@ -73,6 +91,18 @@ def test_consumer_module_exports_classroom_consumer():
     # AsyncJsonWebsocketConsumer subclass — confirms we picked the right base
     from channels.generic.websocket import AsyncJsonWebsocketConsumer
     assert issubclass(ClassroomConsumer, AsyncJsonWebsocketConsumer)
+
+
+def test_max_turns_parser_rejects_invalid_values_and_clamps_large_values():
+    from apps.maic.consumers import _MAX_MAX_TURNS, _coerce_max_turns
+
+    assert _coerce_max_turns(None) == 1
+    assert _coerce_max_turns("5") == 5
+    assert _coerce_max_turns(10_000) == _MAX_MAX_TURNS
+    with pytest.raises(ValueError, match="integer"):
+        _coerce_max_turns("not-a-number")
+    with pytest.raises(ValueError, match="at least 1"):
+        _coerce_max_turns(0)
 
 
 def test_routing_module_publishes_classroom_and_generation_patterns():
@@ -128,6 +158,43 @@ async def test_no_tenant_id_user_rejected_with_4004(monkeypatch):
     connected, code = await communicator.connect()
     assert connected is False
     assert code == 4004
+
+
+@pytest.mark.asyncio
+@override_settings(ALLOWED_HOSTS=["*"])
+async def test_tenant_v2_gate_rejected_with_4403(monkeypatch):
+    """Authenticated + tenant-scoped user is still rejected when the
+    shared MAIC v2 access gate denies global/tenant access."""
+    from types import SimpleNamespace
+
+    async def _fake_call(self, scope, receive, send):
+        scope["user"] = SimpleNamespace(
+            is_anonymous=False, id=42, tenant_id=222,
+        )
+        scope["accepted_subprotocol"] = None
+        return await self.inner(scope, receive, send)
+
+    from apps.notifications.middleware import JWTAuthMiddleware
+    monkeypatch.setattr(JWTAuthMiddleware, "__call__", _fake_call)
+
+    async def _deny(_user):
+        return False
+
+    monkeypatch.setattr(
+        "apps.maic.consumers._user_has_maic_v2_access",
+        _deny,
+    )
+
+    import importlib
+    from config import asgi as asgi_mod
+    importlib.reload(asgi_mod)
+
+    communicator = WebsocketCommunicator(
+        asgi_mod.application, "/ws/maic/v2/classroom/v2-gate-off/",
+    )
+    connected, code = await communicator.connect()
+    assert connected is False
+    assert code == 4403
 
 
 @pytest.mark.asyncio

@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
+from types import SimpleNamespace
 
 import pytest
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -119,6 +121,11 @@ def test_resolve_openai_o_series_models(monkeypatch):
     assert isinstance(resolve_chat_model("o3"), ChatOpenAI)
 
 
+def test_resolve_ollama_is_direct_stream_path():
+    with pytest.raises(MaicConfigError, match="Ollama is handled directly"):
+        resolve_chat_model("ollama/qwen2.5:7b")
+
+
 # ── stream_text — error wrapping ──────────────────────────────────────
 
 
@@ -136,6 +143,119 @@ async def test_stream_text_anthropic_without_key_raises_config(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     with pytest.raises(MaicConfigError, match="ANTHROPIC_API_KEY"):
         async for _ in stream_text([HumanMessage(content="x")], "claude-sonnet-4-5"):
+            pass
+
+
+# ── Ollama direct HTTP path ───────────────────────────────────────────
+
+
+class _AsyncLineStream:
+    def __init__(self, lines):
+        self._lines = iter(lines)
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        try:
+            return next(self._lines)
+        except StopIteration as exc:
+            raise StopAsyncIteration from exc
+
+
+class _FakeOllamaResponse:
+    def __init__(self, *, status=200, lines=(), text=""):
+        self.status = status
+        self.content = _AsyncLineStream(lines)
+        self._text = text
+
+    async def text(self):
+        return self._text
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
+
+
+class _FakeOllamaSession:
+    def __init__(self, response, captured):
+        self._response = response
+        self._captured = captured
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
+
+    def post(self, url, *, json):
+        self._captured["url"] = url
+        self._captured["json"] = json
+        return self._response
+
+
+def _install_fake_aiohttp(monkeypatch, response):
+    captured = {}
+
+    class ClientSession:
+        def __init__(self, *, timeout):
+            captured["timeout"] = timeout
+
+        async def __aenter__(self):
+            return _FakeOllamaSession(response, captured)
+
+        async def __aexit__(self, *args):
+            return False
+
+    fake_aiohttp = SimpleNamespace(
+        ClientTimeout=lambda total: SimpleNamespace(total=total),
+        ClientSession=ClientSession,
+    )
+    monkeypatch.setitem(sys.modules, "aiohttp", fake_aiohttp)
+    return captured
+
+
+@pytest.mark.asyncio
+async def test_stream_text_ollama_posts_chat_payload_and_yields_chunks(monkeypatch):
+    response = _FakeOllamaResponse(
+        lines=[
+            b'{"message":{"content":"Hello"}}\n',
+            b'{"message":{"content":" world"},"done":true}\n',
+        ],
+    )
+    captured = _install_fake_aiohttp(monkeypatch, response)
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11434")
+
+    chunks = [
+        chunk
+        async for chunk in stream_text(
+            [SystemMessage(content="Be brief."), HumanMessage(content="Say hello")],
+            "ollama/qwen2.5:7b",
+            temperature=0.2,
+            max_tokens=32,
+        )
+    ]
+
+    assert "".join(chunks) == "Hello world"
+    assert captured["url"] == "http://localhost:11434/api/chat"
+    assert captured["json"]["model"] == "qwen2.5:7b"
+    assert captured["json"]["stream"] is True
+    assert captured["json"]["options"] == {"temperature": 0.2, "num_predict": 32}
+    assert captured["json"]["messages"] == [
+        {"role": "system", "content": "Be brief."},
+        {"role": "user", "content": "Say hello"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_stream_text_ollama_http_error_raises_provider_error(monkeypatch):
+    response = _FakeOllamaResponse(status=404, text="model not found")
+    _install_fake_aiohttp(monkeypatch, response)
+
+    with pytest.raises(MaicProviderError, match="HTTP 404"):
+        async for _ in stream_text([HumanMessage(content="x")], "ollama/missing"):
             pass
 
 

@@ -396,6 +396,32 @@ export const MAICPlayerPage: React.FC = () => {
       );
     }
 
+    if (classroom.status === 'DRAFT') {
+      return (
+        <div className="space-y-4 p-6">
+          <button
+            onClick={() => navigate('/teacher/ai-classroom')}
+            className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900"
+          >
+            <ArrowLeftIcon />
+            Back to Library
+          </button>
+          <div className="bg-gray-50 border border-gray-200 rounded-lg p-6 text-center">
+            <h3 className="text-lg font-medium text-gray-800 mb-2">Classroom Draft</h3>
+            <p className="text-sm text-gray-500">
+              This classroom has not generated scenes or slides yet.
+            </p>
+            <button
+              onClick={() => navigate('/teacher/ai-classroom/new')}
+              className="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 transition-colors"
+            >
+              Create New Classroom
+            </button>
+          </div>
+        </div>
+      );
+    }
+
     // No content yet — show honest generation progress.
     // Prefer live server-stamped progress from `progress.*` (set by the
     // wizard's pingClassroomProgress calls and by the update endpoint's
@@ -599,6 +625,32 @@ export const MAICPlayerPage: React.FC = () => {
             Finishing up — fetching slide images…
           </p>
         )}
+      </div>
+    );
+  }
+
+  if (storeReady && !hasContent) {
+    return (
+      <div className="space-y-4 p-6">
+        <button
+          onClick={() => navigate('/teacher/ai-classroom')}
+          className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900"
+        >
+          <ArrowLeftIcon />
+          Back to Library
+        </button>
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-6 text-center">
+          <h3 className="text-lg font-medium text-amber-900 mb-2">Classroom content unavailable</h3>
+          <p className="text-sm text-amber-700">
+            This classroom has no saved scenes or slides. Regenerate it before using it in class.
+          </p>
+          <button
+            onClick={() => navigate('/teacher/ai-classroom/new')}
+            className="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 transition-colors"
+          >
+            Create New Classroom
+          </button>
+        </div>
       </div>
     );
   }

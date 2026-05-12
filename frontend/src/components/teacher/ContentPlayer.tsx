@@ -24,6 +24,7 @@ interface ContentPlayerProps {
     duration?: number;
     has_transcript?: boolean;
     transcript_vtt_url?: string;
+    maic_classroom_id?: string | null;
   };
   initialProgress?: number;
   isCompleted?: boolean;
@@ -249,6 +250,7 @@ export const ContentPlayer: React.FC<ContentPlayerProps> = ({
 
   if (content.content_type === 'AI_CLASSROOM') {
     const rolePrefix = window.location.pathname.startsWith('/student') ? '/student' : '/teacher';
+    const classroomId = content.maic_classroom_id || content.id;
     return (
       <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
         <div className="p-4 sm:p-6 lg:p-8">
@@ -281,7 +283,7 @@ export const ContentPlayer: React.FC<ContentPlayerProps> = ({
 
           <div className="flex flex-wrap items-center gap-3">
             <a
-              href={`${rolePrefix}/ai-classroom/${content.id}`}
+              href={`${rolePrefix}/ai-classroom/${classroomId}`}
               className="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-violet-700"
             >
               Launch AI Classroom

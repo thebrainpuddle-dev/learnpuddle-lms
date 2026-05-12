@@ -51,7 +51,6 @@ export type PBLSendMessage =
       data: {
         message: string;
         userRole?: string;
-        languageModelId: string;
       };
     }
   | { action: 'interrupt' };

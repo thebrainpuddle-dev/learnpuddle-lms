@@ -15,6 +15,7 @@ from datetime import datetime, timezone as dt_timezone
 from typing import TYPE_CHECKING
 
 from django.conf import settings
+from django.db.models import Q
 from django.utils import timezone
 
 try:
@@ -58,7 +59,7 @@ def build_ical_feed(user: "User") -> bytes:
     Includes:
     - Assignment due dates
     - Quiz deadlines (via assignment)
-    - Enrollment deadlines (course enrollment_end_date)
+    - Assignment due dates for the user's assigned courses
 
     All events are DTSTART / DTEND / UID / SUMMARY / DESCRIPTION only.
     """
@@ -85,7 +86,7 @@ def build_ical_feed(user: "User") -> bytes:
     try:
         from apps.progress.models import Assignment
 
-        assignments = Assignment.objects.all_objects.filter(
+        assignments = Assignment.all_objects.filter(
             course__in=_user_course_ids(user),
             due_date__isnull=False,
             is_active=True,
@@ -105,37 +106,31 @@ def build_ical_feed(user: "User") -> bytes:
     except Exception:
         logger.exception("ical_builder: error collecting assignment events for user=%s", user.pk)
 
-    # --- Enrollment deadlines ---
-    try:
-        from apps.courses.models import Enrollment
-
-        enrollments = Enrollment.objects.filter(
-            user=user,
-            enrollment_end_date__isnull=False,
-        ).select_related("course")
-
-        for enrollment in enrollments:
-            due = _to_dt(enrollment.enrollment_end_date)
-            event = Event()
-            event.add("uid", _uid("deadline", str(enrollment.id), subdomain))
-            event.add("summary", f"[LearnPuddle] {enrollment.course.title} — Enrollment Ends")
-            event.add("description", f"Course enrollment ends on {enrollment.enrollment_end_date}.")
-            event.add("dtstart", due)
-            event.add("dtend", due)
-            event.add("dtstamp", timezone.now())
-            cal.add_component(event)
-            events_added += 1
-    except Exception:
-        logger.exception("ical_builder: error collecting enrollment events for user=%s", user.pk)
-
     logger.debug("ical_builder: built feed for user=%s events=%d", user.pk, events_added)
     return cal.to_ical()
 
 
 def _user_course_ids(user):
-    """Return queryset / list of course PKs the user is enrolled in or assigned to."""
-    try:
-        from apps.courses.models import Enrollment
-        return Enrollment.objects.filter(user=user).values_list("course_id", flat=True)
-    except Exception:
+    """Return course PKs the user is assigned to."""
+    tenant = getattr(user, "tenant", None)
+    if tenant is None:
         return []
+
+    from apps.courses.models import Course
+
+    qs = Course.objects.all_tenants().filter(
+        tenant=tenant,
+        is_active=True,
+        is_published=True,
+    )
+    if getattr(user, "role", None) == "STUDENT":
+        qs = qs.filter(
+            Q(assigned_to_all_students=True) | Q(assigned_students=user)
+        )
+    else:
+        qs = qs.filter(
+            Q(assigned_to_all=True)
+            | Q(assigned_teachers=user)
+            | Q(assigned_groups__in=user.teacher_groups.all())
+        )
+    return qs.distinct().values_list("id", flat=True)

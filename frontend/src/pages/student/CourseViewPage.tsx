@@ -408,6 +408,7 @@ export const CourseViewPage: React.FC = () => {
                   duration: selectedContent.duration ?? undefined,
                   has_transcript: selectedContent.has_transcript,
                   transcript_vtt_url: selectedContent.transcript_vtt_url,
+                  maic_classroom_id: selectedContent.maic_classroom_id,
                 }}
                 initialProgress={selectedContent.video_progress_seconds}
                 isCompleted={selectedContent.is_completed}

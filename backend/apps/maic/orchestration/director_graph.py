@@ -197,7 +197,11 @@ async def _director_llm_decide(state: OrchestratorState) -> DirectorDecision:
 
     try:
         chunks: list[str] = []
-        async for chunk in stream_text(messages, director_model_id):
+        async for chunk in stream_text(
+            messages,
+            director_model_id,
+            llm_config=state.get("llmConfig"),
+        ):
             chunks.append(chunk)
         full_text = "".join(chunks)
     except Exception:  # noqa: BLE001 — provider failure → safe fallback
@@ -556,7 +560,11 @@ async def _agent_generate_node(
     language_model_id = state.get("languageModelId") or "stub"
 
     try:
-        async for chunk in stream_text(lc_messages, language_model_id):
+        async for chunk in stream_text(
+            lc_messages,
+            language_model_id,
+            llm_config=state.get("llmConfig"),
+        ):
             result = parse_structured_chunk(chunk, parser_state)
             for entry in result.ordered:
                 if entry["type"] == "text":
@@ -745,6 +753,8 @@ def build_initial_state(
     messages: list[dict[str, Any]] | None = None,
     available_agent_ids: list[str] | None = None,
     max_turns: int = 1,
+    language_model_id: str = "stub",
+    llm_config: dict[str, Any] | None = None,
     tts_config: dict[str, Any] | None = None,
 ) -> OrchestratorState:
     """Mirror of upstream buildInitialState at director-graph.ts:500-547.
@@ -757,6 +767,11 @@ def build_initial_state(
         empty list. The director then applies its `'default-1'` fallback
         rule from upstream director-graph.ts:122 — never overwrite
         caller intent here.
+
+    `language_model_id` and `llm_config` are resolved at the HTTP/WS
+    boundary from the tenant's MAIC config in production. The default
+    exists for direct unit tests that exercise the deterministic
+    in-process stream.
 
     `tts_config` is the dict returned by
     `TenantAIConfig.resolve_tts_config()` — pre-resolved at the WS
@@ -773,12 +788,13 @@ def build_initial_state(
         "storeState": {"currentSceneId": None, "scenes": [], "whiteboardOpen": False},
         "availableAgentIds": available_agent_ids,
         "maxTurns": max_turns,
-        "languageModelId": "stub",
+        "languageModelId": language_model_id,
         "thinkingConfig": None,
         "discussionContext": None,
         "triggerAgentId": None,
         "userProfile": None,
         "agentConfigOverrides": {},
+        "llmConfig": llm_config,
         "ttsConfig": tts_config,
         "currentAgentId": None,
         "turnCount": 0,

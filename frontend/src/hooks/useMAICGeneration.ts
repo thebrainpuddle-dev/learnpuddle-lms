@@ -6,6 +6,7 @@ import { useMAICStageStore } from '../stores/maicStageStore';
 import { streamMAIC } from '../lib/maicSSE';
 import { saveClassroom } from '../lib/maicDb';
 import { maicApi } from '../services/openmaicService';
+import type { MAICGenerationContextPayload } from '../services/openmaicService';
 import { setGenerationActive } from '../utils/generationLock';
 import { setLastActivityTimestamp } from '../utils/authSession';
 import type {
@@ -30,6 +31,15 @@ async function withRetry<T>(fn: () => Promise<T>, retries = 2, baseDelayMs = 200
     }
   }
   throw new Error('Unreachable');
+}
+
+function generationContextFromConfig(config: MAICGenerationConfig): MAICGenerationContextPayload {
+  return {
+    ...(config.gradeLevel?.trim() ? { grade_level: config.gradeLevel.trim() } : {}),
+    ...(config.subject?.trim() ? { subject: config.subject.trim() } : {}),
+    ...(config.syllabusBoard?.trim() ? { syllabus_board: config.syllabusBoard.trim() } : {}),
+    ...(config.classGuide?.trim() ? { class_guide: config.classGuide.trim() } : {}),
+  };
 }
 
 export type GenerationStep = 'idle' | 'outlining' | 'editing' | 'generating' | 'complete' | 'error';
@@ -104,6 +114,7 @@ export function useMAICGeneration(): UseMAICGenerationReturn {
   }, []);
 
   const abortRef = useRef<AbortController | null>(null);
+  const generationContextRef = useRef<MAICGenerationContextPayload>({});
   const { accessToken } = useAuthStore();
   const { setSlides, setAgents, setScenes, setSceneSlideBounds } = useMAICStageStore();
 
@@ -123,6 +134,7 @@ export function useMAICGeneration(): UseMAICGenerationReturn {
     setError(null);
     setStartedAt(null);
     setFirstSceneReadyAt(null);
+    generationContextRef.current = {};
   }, [cancel]);
 
   const startOutlineGeneration = useCallback(
@@ -133,6 +145,8 @@ export function useMAICGeneration(): UseMAICGenerationReturn {
       setError(null);
       setProgress(0);
       setStartedAt(Date.now());
+      const generationContext = generationContextFromConfig(config);
+      generationContextRef.current = generationContext;
 
       const controller = new AbortController();
       abortRef.current = controller;
@@ -161,9 +175,7 @@ export function useMAICGeneration(): UseMAICGenerationReturn {
           // camelCase, but we send canonical snake_case here so the network
           // payload matches the documented API. Omit empty values entirely
           // so the backend's "Generic" / no-grade defaults apply.
-          ...(config.gradeLevel?.trim() ? { grade_level: config.gradeLevel.trim() } : {}),
-          ...(config.subject?.trim() ? { subject: config.subject.trim() } : {}),
-          ...(config.syllabusBoard?.trim() ? { syllabus_board: config.syllabusBoard.trim() } : {}),
+          ...generationContext,
           // When the wizard already picked a roster (WS-C), send it along so
           // the backend can reuse personality/voice mapping for outline prompts.
           ...(preSelectedAgents && preSelectedAgents.length > 0
@@ -285,6 +297,7 @@ export function useMAICGeneration(): UseMAICGenerationReturn {
             // that scrubSlideDataUrls then strips to empty.
             classroomId,
             sceneIdx: i,
+            ...generationContextRef.current,
           }),
         );
 
@@ -354,6 +367,8 @@ export function useMAICGeneration(): UseMAICGenerationReturn {
               },
               agents,
               language: outline.language,
+              classroomId,
+              ...generationContextRef.current,
             }),
           );
           if (actionsRes.data?.actions?.length) {
@@ -428,6 +443,7 @@ export function useMAICGeneration(): UseMAICGenerationReturn {
             scene_count: compactScenes.length,
             content: {
               slides: scrubSlideDataUrls(generatedSlides),
+              agents,
               scenes: playableScenes,
               sceneSlideBounds,
             },
@@ -487,6 +503,7 @@ export function useMAICGeneration(): UseMAICGenerationReturn {
             config: { agents, language: outline.language },
             content: {
               slides: scrubSlideDataUrls(generatedSlides),
+              agents,
               scenes: generatedScenes,
               sceneSlideBounds,
             },
@@ -549,6 +566,7 @@ export function useMAICGeneration(): UseMAICGenerationReturn {
         },
         agents: outline.agents,
         language: outline.language,
+        ...generationContextRef.current,
       });
       const fresh = { ...target, actions: actionsRes.data?.actions ?? [] };
       if (fresh.actions.length === 0) {

@@ -45,25 +45,9 @@ export default function Phase3MultiAgentDemo() {
     () => `phase3-demo-${Math.random().toString(36).slice(2, 10)}`,
   );
 
-  // Two modes via query params:
-  //   ?model=<id>            → real LLM for both agent + director
-  //                            (e.g. ?model=openrouter/anthropic/claude-3.5-sonnet)
-  //   ?director=<id>         → override director only (default is stub-director)
-  //   (no params)            → stub for agents + stub-director for director
-  //                            so the 3-agent chain runs visibly without
-  //                            burning LLM credits.
-  const params =
-    typeof window !== 'undefined'
-      ? new URLSearchParams(window.location.search)
-      : null;
-  const modelParam = params?.get('model') ?? null;
-  const directorParam = params?.get('director') ?? null;
-
   const startPayload: Record<string, unknown> = {
     agentIds: DEFAULT_DEMO_AGENT_IDS,
     maxTurns: DEFAULT_DEMO_MAX_TURNS,
-    languageModelId: modelParam ?? 'stub',
-    directorModelId: directorParam ?? (modelParam ?? 'stub-director'),
   };
 
   return (
@@ -81,22 +65,12 @@ export default function Phase3MultiAgentDemo() {
         action, the ProactiveCard appears 3s later — click Join to enter
         live mode and exchange messages with the responding agent.
       </p>
-      <p style={{ color: '#666', fontSize: 12, marginBottom: 16 }}>
-        Modes:
-        {' '}<code>?model=openrouter/anthropic/claude-3.5-sonnet</code> for real LLM
-        (needs <code>OPENROUTER_API_KEY</code> on daphne); no params for stub.
-      </p>
       <div style={{ marginBottom: 16, fontSize: 12, color: '#666' }}>
         Agent pool: <code>{DEFAULT_DEMO_AGENT_IDS.join(', ')}</code>
         {' · '}
         Max turns: <b>{DEFAULT_DEMO_MAX_TURNS}</b>
         {' · '}
         Session id: <code>{sessionId}</code>
-      </div>
-      <div style={{ marginBottom: 16, fontSize: 12, color: '#666' }}>
-        Agent model: <code>{String(startPayload.languageModelId)}</code>
-        {' · '}
-        Director model: <code>{String(startPayload.directorModelId)}</code>
       </div>
       <Stage sessionId={sessionId} startPayload={startPayload} />
     </div>

@@ -211,6 +211,22 @@ describe('MAICLibraryPage', () => {
     expect(await screen.findByText('DRAFT')).toBeInTheDocument();
   });
 
+  it('shows Not assigned for non-public classrooms without sections', async () => {
+    mockListClassrooms.mockResolvedValue({
+      data: [makeClassroom({ is_public: false, assigned_sections: [] })],
+    });
+    renderPage();
+    expect(await screen.findByText('Not assigned')).toBeInTheDocument();
+  });
+
+  it('shows All students only for public classrooms without sections', async () => {
+    mockListClassrooms.mockResolvedValue({
+      data: [makeClassroom({ is_public: true, assigned_sections: [] })],
+    });
+    renderPage();
+    expect(await screen.findByText('All students')).toBeInTheDocument();
+  });
+
   // ── Navigation ───────────────────────────────────────────────────────────────
 
   it('New Classroom button navigates to /teacher/ai-classroom/new', async () => {

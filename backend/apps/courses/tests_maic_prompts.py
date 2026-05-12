@@ -16,6 +16,7 @@ No LLM calls, no Django DB — pure string inspection. Run with:
 from __future__ import annotations
 
 from apps.courses.maic_generation_service import (
+    _normalize_scene_actions,
     build_actions_system_prompt,
     build_outline_system_prompt,
     build_scene_content_system_prompt,
@@ -44,8 +45,27 @@ def test_builders_accept_full_context():
             subject="Physics",
             syllabus_board="CBSE",
             audience_role="student",
+            class_guide="Use a misconception-first opening and one PBL checkpoint.",
         )
         assert isinstance(prompt, str) and prompt
+
+
+def test_class_guide_surfaces_in_all_prompt_builders():
+    guide = (
+        "Start with a classroom dilemma, include a misconception check, "
+        "then hand over to a PBL-style decision task."
+    )
+    for build in BUILDERS:
+        prompt = build(
+            grade_level="Grade 8",
+            subject="Science",
+            syllabus_board="CBSE",
+            audience_role="student",
+            class_guide=guide,
+        )
+        assert "TEACHER CLASS GUIDE" in prompt
+        assert "misconception check" in prompt
+        assert "PBL-style decision task" in prompt
 
 
 def test_grade_8_prompt_uses_accessible_register():
@@ -190,3 +210,27 @@ def test_scene_content_prompt_advertises_body_image_right_template():
         "scene-content prompt makes typed-slot emission sound mandatory; "
         "it must stay additive so legacy free-form slides keep working"
     )
+
+
+def test_action_normalizer_converts_speechlike_segments():
+    actions = [
+        {"type": "introduction", "agentId": "teacher", "text": "Welcome in."},
+        {"type": "recap", "content": "So the key idea is energy flow."},
+        {"type": "slide_transition", "slideIndex": 1},
+        {"type": "wb_draw_shape", "shape": "rect", "id": "box-1"},
+        {"type": "unknown_without_text"},
+    ]
+
+    _normalize_scene_actions(actions, [{"id": "teacher"}, {"id": "assistant"}])
+
+    assert actions == [
+        {"type": "speech", "agentId": "teacher", "text": "Welcome in."},
+        {
+            "type": "speech",
+            "content": "So the key idea is energy flow.",
+            "text": "So the key idea is energy flow.",
+            "agentId": "teacher",
+        },
+        {"type": "transition", "slideIndex": 1},
+        {"type": "wb_draw_shape", "shape": "rectangle", "id": "box-1"},
+    ]

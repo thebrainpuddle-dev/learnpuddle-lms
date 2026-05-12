@@ -25,12 +25,14 @@ from apps.maic.orchestration.state import (
 
 
 def test_orchestrator_state_field_set_locked():
-    """The 17 fields must all be present.
+    """The 20 fields must all be present.
 
     Phase 1 had 16 fields. Phase 3 (MAIC-104.2) added `directorModelId`.
     Phase 5 (MAIC-502) added `ttsConfig` so per-tenant TTS provider/key
     pre-resolved at WS handshake flows through the orchestration loop
     without sync-DB calls inside the async stream.
+    Phase 10.5 added `llmConfig` so per-tenant LLM provider/key follows
+    the same pattern without process-env mutation.
     Phase 6 (MAIC-603) added `pendingWidgetEvents` reducer-list so
     interactive widget iframe events buffer for the next director turn
     (Phase 7 PBL agentic loop reads/drains).
@@ -40,7 +42,7 @@ def test_orchestrator_state_field_set_locked():
     in lockstep. Do NOT relax the assertion to make a stray field pass.
     """
     expected = {
-        # 12 inputs (was 11 at Phase 3; +ttsConfig in MAIC-502)
+        # 13 inputs (was 12 at Phase 5; +llmConfig for tenant LLM runtime)
         "messages",
         "storeState",
         "availableAgentIds",
@@ -52,6 +54,7 @@ def test_orchestrator_state_field_set_locked():
         "triggerAgentId",
         "userProfile",
         "agentConfigOverrides",
+        "llmConfig",
         "ttsConfig",
         # 4 mutable scalars
         "currentAgentId",
@@ -70,14 +73,15 @@ def test_orchestrator_state_field_set_locked():
     )
 
 
-def test_total_field_count_is_nineteen():
-    """Sanity check: 12 inputs + 4 scalars + 3 reducer-lists = 19.
+def test_total_field_count_is_twenty():
+    """Sanity check: 13 inputs + 4 scalars + 3 reducer-lists = 20.
 
     Phase 3 (MAIC-104.2) bumped the count from 16 → 17 with `directorModelId`.
     Phase 5 (MAIC-502) bumped the count from 17 → 18 with `ttsConfig`.
     Phase 6 (MAIC-603) bumped the count from 18 → 19 with `pendingWidgetEvents`.
+    Tenant LLM runtime config bumps the count from 19 → 20.
     """
-    assert len(OrchestratorState.__annotations__) == 19
+    assert len(OrchestratorState.__annotations__) == 20
 
 
 # ── Reducer-merge fields use Annotated[..., add] ───────────────────────

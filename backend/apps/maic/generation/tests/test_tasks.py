@@ -32,6 +32,8 @@ from apps.maic.generation.tasks import (
 )
 from apps.maic.generation.tests.parity.llm_router import PromptRoutedStub
 from apps.maic.models import MaicGenerationJob
+from apps.courses.maic_models import MAICClassroom
+from apps.courses.models import Content, Course, Module
 from apps.tenants.models import Tenant
 
 
@@ -44,10 +46,13 @@ def tenant(db):
 @pytest.fixture
 def user(db, tenant):
     User = get_user_model()
-    return User.objects.create_user(
+    user = User.objects.create_user(
         email="test@example.com",
         password="x",
     )
+    user.tenant_id = tenant.id
+    user.save(update_fields=["tenant_id"])
+    return user
 
 
 @pytest.fixture
@@ -207,6 +212,115 @@ def test_finalize_task_marks_succeeded(db, tenant):
     assert saved.result["outlines"]  # preserved from earlier stage
     assert saved.completed_at is not None
     assert saved.progress["stage"] == 3
+
+
+def test_finalize_task_materializes_playable_classroom(db, tenant, user):
+    job = create_job_session(
+        tenant_id=tenant.id,
+        user_id=user.id,
+        requirements={
+            "topic": "Fractions",
+            "agentCount": 2,
+            "language": "English",
+            "languageModelId": "stub",
+        },
+    )
+    scenes = [
+        {
+            "id": "s1",
+            "title": "Intro",
+            "order": 1,
+            "type": "slide",
+            "content": {
+                "type": "slide",
+                "canvas": {
+                    "id": "canvas-1",
+                    "elements": [
+                        {
+                            "id": "el_title",
+                            "type": "text",
+                            "left": 40,
+                            "top": 50,
+                            "width": 900,
+                            "height": 80,
+                            "content": "<h1>Fractions</h1>",
+                        }
+                    ],
+                    "background": {"type": "solid", "color": "#ffffff"},
+                },
+            },
+            "actions": [
+                {"id": "a1", "type": "speech", "text": "Welcome."}
+            ],
+        }
+    ]
+
+    result = finalize_task({"job_id": job.id, "scenes": scenes})
+
+    saved = MaicGenerationJob.objects.get(pk=job.id)
+    classroom = MAICClassroom.all_objects.get(pk=saved.result["classroomId"])
+    assert result["classroomId"] == str(classroom.id)
+    assert classroom.tenant_id == tenant.id
+    assert classroom.creator_id == user.id
+    assert classroom.status == "READY"
+    assert classroom.content_scenes[0]["id"] == "s1"
+    assert classroom.content_scenes[0]["actions"][0]["agentId"] == "default-1"
+    assert classroom.content_meta["slides"][0]["elements"][0]["x"] == 40.0
+    assert classroom.content_meta["sceneSlideBounds"] == [
+        {"sceneIdx": 0, "startSlide": 0, "endSlide": 0}
+    ]
+    assert classroom.content_meta["audioManifest"]["status"] == "partial"
+    assert saved.result["url"] == f"/teacher/ai-classroom/{classroom.id}"
+
+
+def test_finalize_task_materializes_course_content_idempotently(
+    db, tenant, user
+):
+    course = Course.objects.create(
+        tenant=tenant,
+        title="Math",
+        description="Math course",
+        created_by=user,
+    )
+    module = Module.objects.create(course=course, title="Unit 1", order=1)
+    job = create_job_session(
+        tenant_id=tenant.id,
+        user_id=user.id,
+        requirements={
+            "topic": "Ratios",
+            "contentTitle": "Ratios classroom",
+            "courseId": str(course.id),
+            "moduleId": str(module.id),
+            "languageModelId": "stub",
+        },
+    )
+    payload = {
+        "job_id": job.id,
+        "scenes": [
+            {
+                "id": "s1",
+                "title": "Ratios",
+                "order": 1,
+                "type": "quiz",
+                "content": {"type": "quiz", "questions": []},
+                "actions": [],
+            }
+        ],
+    }
+
+    first = finalize_task(payload)
+    second = finalize_task(payload)
+
+    saved = MaicGenerationJob.objects.get(pk=job.id)
+    assert first["classroomId"] == second["classroomId"]
+    assert first["contentId"] == second["contentId"]
+    assert Content.all_objects.filter(maic_classroom_id=saved.result["classroomId"]).count() == 1
+
+    content = Content.all_objects.get(pk=saved.result["contentId"])
+    assert content.module_id == module.id
+    assert content.title == "Ratios classroom"
+    assert content.content_type == "AI_CLASSROOM"
+    assert str(content.maic_classroom_id) == saved.result["classroomId"]
 
 
 # ── mark_job_failed ───────────────────────────────────────────────

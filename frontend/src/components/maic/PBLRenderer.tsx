@@ -55,9 +55,6 @@ interface PBLRendererProps {
    *  `/ws/maic/pbl/<id>/` (apps/maic_pbl/consumers.py). When unset,
    *  the legacy SSE path is used (kept for any pre-Phase-7 callers). */
   pblSessionId?: string;
-  /** Phase 7: model id for the WS chat. Required when `pblSessionId`
-   *  is set; ignored otherwise. Same scheme as the create endpoint. */
-  languageModelId?: string;
 }
 
 interface ChatMessage {
@@ -93,7 +90,6 @@ export const PBLRenderer = React.memo<PBLRendererProps>(function PBLRenderer({
   mode: _mode = 'autonomous',
   role,
   pblSessionId,
-  languageModelId,
 }) {
   const accessToken = useAuthStore((s) => s.accessToken);
   const config = content.projectConfig;
@@ -228,7 +224,6 @@ export const PBLRenderer = React.memo<PBLRendererProps>(function PBLRenderer({
         data: {
           message: trimmed,
           userRole: selectedRole ?? '',
-          languageModelId: languageModelId ?? '',
         },
       });
       return;
@@ -286,7 +281,7 @@ export const PBLRenderer = React.memo<PBLRendererProps>(function PBLRenderer({
     setIsSending(false);
   }, [
     chatInput, effectiveSending, accessToken, sceneId, selectedRole,
-    completedIssueIds, role, wsMode, wsChannel, languageModelId,
+    completedIssueIds, role, wsMode, wsChannel,
   ]);
 
   const handleKeyDown = useCallback(

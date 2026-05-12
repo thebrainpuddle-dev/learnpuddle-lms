@@ -13,8 +13,16 @@ from unittest.mock import patch
 import pytest
 from rest_framework.test import APIClient
 
+from apps.courses.maic_models import TenantAIConfig
 from apps.maic_pbl.design_graph import GeneratePBLResult
 from apps.maic_pbl.models import MaicPBLSession
+
+
+@pytest.fixture(autouse=True)
+def _enable_maic_v2(settings):
+    settings.MAIC_V2_ENABLED = True
+    settings.MAIC_V2_ALLOW_STUB = False
+    settings.MAIC_V2_ALLOW_REQUEST_MODEL_OVERRIDE = False
 
 
 def _make_tenant(slug: str = "t-views", feature_maic_v2: bool = True):
@@ -22,10 +30,19 @@ def _make_tenant(slug: str = "t-views", feature_maic_v2: bool = True):
     tenant can reach v2 routes unless they explicitly opt out (the
     MAIC-800 gating tests do)."""
     from apps.tenants.models import Tenant
-    return Tenant.objects.create(
+    tenant = Tenant.objects.create(
         name=slug.upper(), slug=slug, subdomain=slug, is_active=True,
         feature_maic_v2=feature_maic_v2,
     )
+    cfg = TenantAIConfig.objects.create(
+        tenant=tenant,
+        maic_enabled=True,
+        llm_provider="anthropic",
+        llm_model="claude-sonnet-4-5-20250929",
+    )
+    cfg.set_llm_api_key("test-anthropic-key")
+    cfg.save(update_fields=["llm_api_key_encrypted"])
+    return tenant
 
 
 def _make_user_with_tenant(slug: str = "t-views", feature_maic_v2: bool = True):
@@ -170,7 +187,6 @@ def test_happy_path_creates_session_and_returns_ws_url():
             "/api/maic/v2/pbl/projects/",
             data={
                 "topic": "Fractions",
-                "languageModelId": "claude-x",
                 "issueCount": 2,
             },
             format="json",
@@ -216,7 +232,7 @@ def test_design_loop_error_persists_failed_status():
                return_value=object()):
         res = _client_for(u).post(
             "/api/maic/v2/pbl/projects/",
-            data={"topic": "X", "languageModelId": "claude-x"},
+            data={"topic": "X"},
             format="json",
         )
 
@@ -242,7 +258,7 @@ def test_design_loop_crash_500s_with_session_id():
                return_value=object()):
         res = _client_for(u).post(
             "/api/maic/v2/pbl/projects/",
-            data={"topic": "X", "languageModelId": "claude-x"},
+            data={"topic": "X"},
             format="json",
         )
 
@@ -364,6 +380,19 @@ def test_create_view_403_when_tenant_v2_flag_off():
 
 
 @pytest.mark.django_db
+def test_create_view_403_when_global_gate_off(settings):
+    """The deploy-level kill switch blocks even an enabled tenant."""
+    settings.MAIC_V2_ENABLED = False
+    u, _ = _make_user_with_tenant("t-global-off", feature_maic_v2=True)
+    res = _client_for(u).post(
+        "/api/maic/v2/pbl/projects/",
+        data={"topic": "X", "languageModelId": "claude-x"},
+        format="json",
+    )
+    assert res.status_code == 403
+
+
+@pytest.mark.django_db
 def test_retrieve_view_403_when_tenant_v2_flag_off():
     """Same gating on the retrieve endpoint — symmetric so the cleanup
     deletion doesn't accidentally leave one of the two endpoints open."""
@@ -424,3 +453,18 @@ def test_require_tenant_v2_raises_when_disabled():
     require_tenant_v2(
         SimpleNamespace(is_active=True, feature_maic_v2=True)
     )
+
+
+def test_user_has_maic_v2_access_checks_global_gate(settings):
+    """Combined helper requires both global env gate and tenant flag."""
+    from types import SimpleNamespace
+    from apps.maic.permissions import user_has_maic_v2_access
+
+    user = SimpleNamespace(
+        is_authenticated=True,
+        tenant=SimpleNamespace(is_active=True, feature_maic_v2=True),
+    )
+    settings.MAIC_V2_ENABLED = False
+    assert user_has_maic_v2_access(user) is False
+    settings.MAIC_V2_ENABLED = True
+    assert user_has_maic_v2_access(user) is True

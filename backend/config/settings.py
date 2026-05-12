@@ -163,6 +163,7 @@ WSGI_APPLICATION = 'config.wsgi.application'
 
 # Database
 # Using psycopg3 (modern PostgreSQL adapter)
+_DB_CONN_MAX_AGE_DEFAULT = 0 if DEBUG else 600
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
@@ -171,7 +172,11 @@ DATABASES = {
         'PASSWORD': config('DB_PASSWORD'),
         'HOST': config('DB_HOST'),
         'PORT': config('DB_PORT'),
-        'CONN_MAX_AGE': config('DB_CONN_MAX_AGE', default=600, cast=int),  # Reuse connections for 10 min
+        # Local/CI runs do not have PgBouncer, and concurrent teacher tabs can
+        # exhaust Postgres if every request thread parks an idle connection.
+        # Production can keep reuse enabled via DB_CONN_MAX_AGE behind pooling.
+        'CONN_MAX_AGE': config('DB_CONN_MAX_AGE', default=_DB_CONN_MAX_AGE_DEFAULT, cast=int),
+        'CONN_HEALTH_CHECKS': config('DB_CONN_HEALTH_CHECKS', default=True, cast=bool),
     }
 }
 
@@ -910,13 +915,18 @@ CHATBOT_OLLAMA_MODEL = config('CHATBOT_OLLAMA_MODEL', default='llama3')
 # See docs/AI_CLASSROOM_BLUEPRINT.md and the project brain at
 # obsidian-vault/agent-hq/projects/learnpuddle-lms/maic-rebuild/.
 MAIC_V2_ENABLED = config('MAIC_V2_ENABLED', default=False, cast=bool)
+# MAIC v2 must use a tenant's configured provider in production. The stub
+# stream is kept for explicit local/test probes only and is off by default.
+MAIC_V2_ALLOW_STUB = config('MAIC_V2_ALLOW_STUB', default=False, cast=bool)
+MAIC_V2_ALLOW_REQUEST_MODEL_OVERRIDE = config(
+    'MAIC_V2_ALLOW_REQUEST_MODEL_OVERRIDE',
+    default=False,
+    cast=bool,
+)
 
-# Phase 4 (MAIC-431) — generation pipeline v1→v2 gate. When True,
-# the legacy v1 generation routes in apps/courses/maic_urls.py are
-# NOT mounted; clients hit POST /api/maic/v2/generate/ instead.
-# When False (rollback path), the v1 path resumes serving without
-# a code change.
-#
-# Default True — Phase 4 closes with the v2 path as canonical.
-# Phase 8 deletes both this gate and apps/courses/maic_generation_service.py.
-MAIC_GENERATION_USE_V2 = config('MAIC_GENERATION_USE_V2', default=True, cast=bool)
+# Phase 4 (MAIC-431) — generation pipeline v1→v2 gate. The teacher portal
+# wizard still drives the legacy per-step generation endpoints; keep them
+# mounted by default until that UI is fully migrated to `/api/maic/v2/generate/`.
+# Deploys that have completed the migration can set this true to hide v1
+# generation routes.
+MAIC_GENERATION_USE_V2 = config('MAIC_GENERATION_USE_V2', default=False, cast=bool)

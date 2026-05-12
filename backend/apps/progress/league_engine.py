@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, timedelta
+from datetime import date, timedelta, timezone as dt_timezone
 from typing import Optional
 
 from django.db import transaction
@@ -43,7 +43,7 @@ def _iso_week_start(today: Optional[date] = None) -> date:
     Always uses UTC regardless of the ``TIME_ZONE`` Django setting so that
     league-week boundaries are consistent across tenants and server locale changes.
     """
-    today = today or timezone.now().astimezone(timezone.utc).date()
+    today = today or timezone.now().astimezone(dt_timezone.utc).date()
     return today - timedelta(days=today.weekday())
 
 

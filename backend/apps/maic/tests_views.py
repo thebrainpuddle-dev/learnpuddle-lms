@@ -16,6 +16,11 @@ from rest_framework.test import APIRequestFactory, force_authenticate
 from apps.maic.views import MaicSessionCreateView, _is_valid_session_id
 
 
+@pytest.fixture(autouse=True)
+def _enable_maic_v2(settings):
+    settings.MAIC_V2_ENABLED = True
+
+
 # ── _is_valid_session_id ──────────────────────────────────────────────
 
 
@@ -40,7 +45,7 @@ def test_session_id_regex_matches_route_pattern(session_id, expected):
 # ── POST /api/maic/v2/sessions/ ───────────────────────────────────────
 
 
-def _make_request_with_user(*, tenant_id=222, body=None):
+def _make_request_with_user(*, tenant_id=222, body=None, tenant_flag=True):
     factory = APIRequestFactory()
     request = factory.post(
         "/api/maic/v2/sessions/",
@@ -55,6 +60,11 @@ def _make_request_with_user(*, tenant_id=222, body=None):
         id=42,
         pk=42,
         tenant_id=tenant_id,
+        tenant=(
+            SimpleNamespace(id=tenant_id, is_active=True, feature_maic_v2=tenant_flag)
+            if tenant_id is not None
+            else None
+        ),
         is_authenticated=True,
         is_active=True,
     )
@@ -65,8 +75,13 @@ def _make_request_with_user(*, tenant_id=222, body=None):
 def test_session_create_requires_tenant():
     request = _make_request_with_user(tenant_id=None)
     response = MaicSessionCreateView.as_view()(request)
-    assert response.status_code == 400
-    assert "no tenant" in response.data["error"]
+    assert response.status_code == 403
+
+
+def test_session_create_403_when_tenant_v2_flag_off():
+    request = _make_request_with_user(tenant_flag=False)
+    response = MaicSessionCreateView.as_view()(request)
+    assert response.status_code == 403
 
 
 @patch("apps.maic.views.Tenant")

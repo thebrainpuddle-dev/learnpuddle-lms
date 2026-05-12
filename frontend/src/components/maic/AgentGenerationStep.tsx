@@ -13,6 +13,7 @@ import { AgentEditModal } from './AgentEditModal';
 import { AgentRevealModal } from './AgentRevealModal';
 import { ConfirmDialog } from '../common';
 import type { MAICAgent } from '../../types/maic';
+import type { GenerateAgentProfilesRequest, MAICRoleSlot } from '../../services/openmaicService';
 
 // Sprint 2 · A.3 — staggered 3D card-flip reveal. Parent orchestrates
 // the cadence; each child rotates from -90° around the Y axis into
@@ -39,16 +40,46 @@ const AGENT_CARD_VARIANTS = {
   },
 };
 
-/**
- * Default role split per the spec §8.3: 1 prof, 1 TA, 2 students = 4 agents.
- * The count can be tuned later; this keeps the voice roster diverse and the
- * roundtable balanced.
- */
-const DEFAULT_ROLE_SLOTS = [
-  { role: 'professor', count: 1 },
-  { role: 'teaching_assistant', count: 1 },
-  { role: 'student', count: 2 },
-];
+const agentProfileRequests = new Map<string, ReturnType<typeof maicApi.generateAgentProfiles>>();
+
+function buildRoleSlots(agentCount: number): MAICRoleSlot[] {
+  const count = Math.min(5, Math.max(2, Math.round(agentCount)));
+  if (count === 2) {
+    return [
+      { role: 'professor', count: 1 },
+      { role: 'student', count: 1 },
+    ];
+  }
+  return [
+    { role: 'professor', count: 1 },
+    { role: 'teaching_assistant', count: 1 },
+    { role: 'student', count: count - 2 },
+  ];
+}
+
+function agentProfileRequestKey(role: AgentGenerationStepProps['role'], request: GenerateAgentProfilesRequest) {
+  return JSON.stringify({
+    role,
+    topic: request.topic.trim(),
+    language: request.language,
+    roleSlots: request.roleSlots,
+  });
+}
+
+function generateAgentProfilesOnce(
+  api: Pick<typeof maicApi, 'generateAgentProfiles'>,
+  role: AgentGenerationStepProps['role'],
+  request: GenerateAgentProfilesRequest,
+) {
+  const key = agentProfileRequestKey(role, request);
+  const cached = agentProfileRequests.get(key);
+  if (cached) return cached;
+  const promise = api.generateAgentProfiles(request).finally(() => {
+    agentProfileRequests.delete(key);
+  });
+  agentProfileRequests.set(key, promise);
+  return promise;
+}
 
 /**
  * Canned sample sentence for voice preview. Short enough to be TTS-friendly,
@@ -62,6 +93,7 @@ export interface AgentGenerationStepProps {
   role: 'teacher' | 'student';
   onComplete: (agents: MAICAgent[]) => void;
   onBack: () => void;
+  agentCount?: number;
   /** Previously-approved agents. When provided (and non-empty), the step
    *  re-hydrates from them instead of regenerating. Lets users click "Back"
    *  from the outline step without losing the roster they already approved. */
@@ -74,6 +106,7 @@ export function AgentGenerationStep({
   role,
   onComplete,
   onBack,
+  agentCount = 4,
   initialAgents,
 }: AgentGenerationStepProps) {
   // Pick the right service surface based on caller role. The TTS-preview +
@@ -105,6 +138,7 @@ export function AgentGenerationStep({
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [previewInfo, setPreviewInfo] = useState<string | null>(null);
   const [confirmRegenOpen, setConfirmRegenOpen] = useState(false);
+  const roleSlots = useMemo(() => buildRoleSlots(agentCount), [agentCount]);
 
   // Shared audio element — only one preview plays at a time.
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -139,10 +173,10 @@ export function AgentGenerationStep({
     setError(null);
     stopPreview();
     try {
-      const response = await api.generateAgentProfiles({
+      const response = await generateAgentProfilesOnce(api, role, {
         topic,
         language,
-        roleSlots: DEFAULT_ROLE_SLOTS,
+        roleSlots,
       });
       const next = response.data?.agents ?? [];
       if (next.length === 0) {
@@ -165,7 +199,7 @@ export function AgentGenerationStep({
     } finally {
       setLoading(false);
     }
-  }, [api, language, stopPreview, topic, agents.length]);
+  }, [api, language, role, roleSlots, stopPreview, topic, agents.length]);
 
   // Load voices once. Uses the teacher-surface listVoices which is a tenant-
   // scoped read, so both wizards can call it.
@@ -329,7 +363,7 @@ export function AgentGenerationStep({
     setConfirmRegenOpen(true);
   }, []);
 
-  const agentCount = useMemo(() => agents.length, [agents.length]);
+  const visibleAgentCount = useMemo(() => agents.length, [agents.length]);
 
   // ── Render ──────────────────────────────────────────────────────────────
 
@@ -340,7 +374,7 @@ export function AgentGenerationStep({
           <Sparkles className="h-6 w-6 animate-pulse text-indigo-500" aria-hidden="true" />
         </div>
         <h2 className="text-lg font-semibold text-slate-900">Meeting your agents…</h2>
-        <p className="mt-1 text-sm text-slate-500">This takes about 10 seconds.</p>
+        <p className="mt-1 text-sm text-slate-500">Local models can take a minute or two.</p>
         <div className="mx-auto mt-5 flex w-32 justify-center gap-1" aria-hidden="true">
           <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-indigo-400 [animation-delay:-0.3s]" />
           <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-indigo-400 [animation-delay:-0.15s]" />
@@ -394,7 +428,7 @@ export function AgentGenerationStep({
         <p className="mt-1 text-sm text-slate-600">
           Your AI classroom has{' '}
           <span className="font-medium text-slate-900">
-            {agentCount} {agentCount === 1 ? 'agent' : 'agents'}
+            {visibleAgentCount} {visibleAgentCount === 1 ? 'agent' : 'agents'}
           </span>
           . Preview their voices, tweak personas, or regenerate.
         </p>

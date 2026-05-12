@@ -24,9 +24,8 @@ def _reload_maic_urls():
     return maic_urls
 
 
-def test_v1_generation_routes_not_mounted_by_default(settings):
-    """Default: MAIC_GENERATION_USE_V2 is True; v1 generate/* routes
-    are absent from teacher_urlpatterns."""
+def test_v1_generation_routes_not_mounted_when_v2_flag_enabled(settings):
+    """MAIC_GENERATION_USE_V2=True hides v1 generate/* routes for migrated clients."""
     settings.MAIC_GENERATION_USE_V2 = True
     maic_urls = _reload_maic_urls()
 
@@ -87,11 +86,10 @@ def test_student_v1_generation_routes_gated(settings):
     assert not any("generate/scene-actions" in p for p in student_paths)
 
 
-def test_default_v2_setting_is_true():
-    """The setting default flips v2 ON. Phase 4 close ships with v2
-    canonical; rollback requires explicit env override."""
+def test_default_v2_setting_keeps_teacher_wizard_compatible():
+    """Default keeps v1 generation mounted until the teacher wizard migrates."""
     from django.conf import settings
-    assert settings.MAIC_GENERATION_USE_V2 is True
+    assert settings.MAIC_GENERATION_USE_V2 is False
 
 
 def test_v1_service_module_carries_deprecation_marker():

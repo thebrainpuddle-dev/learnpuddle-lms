@@ -775,6 +775,20 @@ class Command(BaseCommand):
 
             # Link first 2 classrooms to courses if available
             linked_course = courses[i] if i < len(courses) else None
+            content_payload = data.get("content") if isinstance(data.get("content"), dict) else {}
+            has_playable_content = bool(
+                isinstance(content_payload.get("scenes"), list)
+                and content_payload.get("scenes")
+                and isinstance(content_payload.get("slides"), list)
+                and content_payload.get("slides")
+            )
+            status_value = data["status"]
+            scene_count = data.get("scene_count", 0)
+            estimated_minutes = data.get("estimated_minutes", 0)
+            if status_value == "READY" and not has_playable_content:
+                status_value = "DRAFT"
+                scene_count = 0
+                estimated_minutes = 0
 
             classroom, created = MAICClassroom.objects.all_tenants().get_or_create(
                 tenant=tenant,
@@ -784,15 +798,56 @@ class Command(BaseCommand):
                     "description": data["description"],
                     "topic": data["topic"],
                     "language": data.get("language", "en"),
-                    "status": data["status"],
+                    "status": status_value,
                     "is_public": data.get("is_public", False),
-                    "scene_count": data.get("scene_count", 0),
-                    "estimated_minutes": data.get("estimated_minutes", 0),
+                    "scene_count": scene_count,
+                    "estimated_minutes": estimated_minutes,
                     "config": data.get("config", {}),
                     "error_message": data.get("error_message", ""),
                     "course": linked_course if i < 2 else None,
                 },
             )
+            if content_payload:
+                classroom.content_scenes = content_payload.get("scenes") or []
+                classroom.content_agents = content_payload.get("agents") or []
+                classroom.content_meta = {
+                    k: v for k, v in content_payload.items() if k not in ("scenes", "agents")
+                }
+                update_fields = ["content_scenes", "content_agents", "content_meta", "updated_at"]
+                if classroom.status == "READY" and not has_playable_content:
+                    classroom.status = "DRAFT"
+                    classroom.is_public = False
+                    classroom.scene_count = 0
+                    classroom.estimated_minutes = 0
+                    update_fields.extend([
+                        "status",
+                        "is_public",
+                        "scene_count",
+                        "estimated_minutes",
+                    ])
+                classroom.save(update_fields=update_fields)
+            elif classroom.status == "READY":
+                meta = classroom.content_meta or {}
+                existing_has_playable_content = bool(
+                    classroom.content_scenes
+                    and isinstance(meta, dict)
+                    and isinstance(meta.get("slides"), list)
+                    and meta.get("slides")
+                )
+                if existing_has_playable_content:
+                    classrooms.append(classroom)
+                    continue
+                classroom.status = "DRAFT"
+                classroom.is_public = False
+                classroom.scene_count = 0
+                classroom.estimated_minutes = 0
+                classroom.save(update_fields=[
+                    "status",
+                    "is_public",
+                    "scene_count",
+                    "estimated_minutes",
+                    "updated_at",
+                ])
             classrooms.append(classroom)
 
         self.stdout.write(f"  MAIC Classrooms: {len(classrooms)} seeded")
@@ -906,15 +961,41 @@ class Command(BaseCommand):
         self.stdout.write(f"  Progress records: {progress_count} created")
 
     def _update_existing_classrooms(self, tenant):
-        """Make some existing READY classrooms public so students can browse them."""
-        updated = MAICClassroom.objects.all_tenants().filter(
+        """Make playable existing READY classrooms public so students can browse them."""
+        updated = 0
+        repaired = 0
+        for classroom in MAICClassroom.objects.all_tenants().filter(
             tenant=tenant,
             status="READY",
             is_public=False,
         ).exclude(
             title__in=[c["title"] for c in MAIC_CLASSROOMS],
-        ).update(is_public=True)
+        ):
+            meta = classroom.content_meta or {}
+            has_playable_content = bool(
+                classroom.content_scenes
+                and isinstance(meta, dict)
+                and isinstance(meta.get("slides"), list)
+                and meta.get("slides")
+            )
+            if not has_playable_content:
+                classroom.status = "DRAFT"
+                classroom.scene_count = 0
+                classroom.estimated_minutes = 0
+                classroom.save(update_fields=[
+                    "status",
+                    "scene_count",
+                    "estimated_minutes",
+                    "updated_at",
+                ])
+                repaired += 1
+                continue
+            classroom.is_public = True
+            classroom.save(update_fields=["is_public", "updated_at"])
+            updated += 1
 
+        if repaired:
+            self.stdout.write(f"  Moved {repaired} empty READY classrooms back to DRAFT")
         if updated:
             self.stdout.write(f"  Made {updated} existing READY classrooms public")
 

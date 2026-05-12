@@ -19,7 +19,7 @@
 //      on rewind/manual nav).
 
 import React from 'react';
-import { describe, test, expect, vi, beforeEach } from 'vitest';
+import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, act } from '@testing-library/react';
 import { useAuthStore } from '../../stores/authStore';
 import { useMAICStageStore } from '../../stores/maicStageStore';
@@ -80,6 +80,7 @@ function ClassroomCompleteHarness() {
 }
 
 beforeEach(() => {
+  vi.useRealTimers();
   // Auth token is required for the hook's init effect to instantiate the engines.
   useAuthStore.setState({ accessToken: 'test-token' } as any);
   useMAICStageStore.setState({
@@ -89,6 +90,11 @@ beforeEach(() => {
     currentSlideIndex: 0,
     agents: [{ id: 'a1', name: 'Prof', role: 'professor' } as any],
   });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+  delete (window as any).__maicEngine;
 });
 
 function makeScene(id: string, title: string): MAICScene {
@@ -205,5 +211,66 @@ describe('SPRINT-2-BATCH-9-F10 — classroom-complete testid', () => {
     });
 
     expect(screen.queryByTestId('classroom-complete')).not.toBeInTheDocument();
+  });
+
+  test('stop cancels queued startClass playback before delayed play fires', async () => {
+    vi.useFakeTimers();
+    const scene = makeScene('s1', 'Only scene');
+    act(() => {
+      useMAICStageStore.setState({
+        scenes: [scene],
+        currentSceneIndex: 0,
+      });
+    });
+
+    let hookApi: ReturnType<typeof usePlaybackEngine> | null = null;
+    function Capture() {
+      hookApi = usePlaybackEngine('teacher');
+      return (
+        <>
+          {hookApi.classroomComplete && (
+            <div data-testid="classroom-complete">Class complete</div>
+          )}
+        </>
+      );
+    }
+
+    render(<Capture />);
+
+    await act(async () => {
+      hookApi!.loadScene(scene);
+      hookApi!.startClass();
+      hookApi!.stop();
+      vi.advanceTimersByTime(350);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(hookApi!.isClassPlaying).toBe(false);
+    expect(useMAICStageStore.getState().isPlaying).toBe(false);
+    expect(screen.queryByTestId('classroom-complete')).not.toBeInTheDocument();
+  });
+
+  test('access-token rotation does not recreate the active playback engines', async () => {
+    let hookApi: ReturnType<typeof usePlaybackEngine> | null = null;
+    function Capture() {
+      hookApi = usePlaybackEngine('teacher');
+      return <span data-testid="mounted">mounted</span>;
+    }
+
+    render(<Capture />);
+    expect(screen.getByTestId('mounted')).toBeInTheDocument();
+
+    const firstEngine = (window as any).__maicEngine?.actionEngine;
+    expect(firstEngine).toBeTruthy();
+
+    await act(async () => {
+      useAuthStore.setState({ accessToken: 'rotated-token' } as any);
+      await Promise.resolve();
+    });
+
+    const secondEngine = (window as any).__maicEngine?.actionEngine;
+    expect(secondEngine).toBe(firstEngine);
+    expect(hookApi).not.toBeNull();
   });
 });

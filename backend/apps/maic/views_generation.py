@@ -13,6 +13,7 @@ generation completing; it watches the WS event stream instead.
 from __future__ import annotations
 
 import logging
+from uuid import UUID
 from typing import Any
 
 from rest_framework import status
@@ -20,6 +21,10 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
+
+from apps.maic.exceptions import MaicConfigError
+from apps.maic.llm_config import resolve_tenant_llm_runtime_config
+from apps.maic.permissions import MaicV2TenantPermission
 
 
 logger = logging.getLogger("apps.maic.views_generation")
@@ -45,10 +50,10 @@ class MaicGenerationCreateView(APIView):
       specifications: str (optional) — free-form text with extra
                        constraints / preferences (passed verbatim to
                        the outline-generation prompt).
-      languageModelId: str (optional, default "stub") — provider id;
-                        "stub" is the deterministic test path,
-                        anything else routes to OpenRouter / etc via
-                        ai_adapter.resolve_chat_model.
+      languageModelId: str (optional) — normally omitted. Production
+                        resolves from the school's TenantAIConfig; a
+                        request override is accepted only when the
+                        deploy explicitly enables it.
 
     Response 202:
       { job_id: str, ws_url: str, tenant_id: str|int }
@@ -60,7 +65,7 @@ class MaicGenerationCreateView(APIView):
     completed. The client opens ws_url to watch progress.
     """
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, MaicV2TenantPermission]
 
     def post(self, request: Request) -> Response:
         user = request.user
@@ -112,10 +117,54 @@ class MaicGenerationCreateView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        language_model_id = body.get("languageModelId", "stub")
-        if not isinstance(language_model_id, str):
+        content_title = body.get("contentTitle", None)
+        if content_title is not None and not isinstance(content_title, str):
             return Response(
-                {"error": "languageModelId must be a string"},
+                {"error": "contentTitle must be a string"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        is_public = body.get("isPublic", None)
+        if is_public is not None and not isinstance(is_public, bool):
+            return Response(
+                {"error": "isPublic must be a boolean"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        course_id, course_error = _optional_uuid(body.get("courseId"), "courseId")
+        if course_error:
+            return Response(
+                {"error": course_error},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        module_id, module_error = _optional_uuid(body.get("moduleId"), "moduleId")
+        if module_error:
+            return Response(
+                {"error": module_error},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        target_error, target_ids = _validate_lms_targets(
+            tenant_id=tenant_id,
+            course_id=course_id,
+            module_id=module_id,
+        )
+        if target_error:
+            return Response(
+                {"error": target_error},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            llm_config = resolve_tenant_llm_runtime_config(
+                tenant=getattr(user, "tenant", None),
+                tenant_id=tenant_id,
+                requested=body.get("languageModelId"),
+            )
+            language_model_id = str(llm_config["language_model_id"])
+        except MaicConfigError as exc:
+            return Response(
+                {"error": str(exc)},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -137,6 +186,11 @@ class MaicGenerationCreateView(APIView):
             "specifications": specifications,
             "languageModelId": language_model_id,
         }
+        if content_title is not None:
+            requirements["contentTitle"] = content_title.strip()
+        if is_public is not None:
+            requirements["isPublic"] = is_public
+        requirements.update(target_ids)
 
         job = create_job_session(
             tenant_id=tenant_id,
@@ -167,3 +221,143 @@ class MaicGenerationCreateView(APIView):
             },
             status=status.HTTP_202_ACCEPTED,
         )
+
+
+class MaicGenerationDetailView(APIView):
+    """GET /api/maic/v2/generate/<job_id>/ — poll job state.
+
+    Mirrors OpenMAIC's async contract while keeping the heavy classroom
+    artifact in ``MAICClassroom``. By default the response strips generated
+    scene blobs from ``result``; pass ``?full=1`` for operator/debug reads.
+    """
+
+    permission_classes = [IsAuthenticated, MaicV2TenantPermission]
+
+    def get(self, request: Request, job_id: str) -> Response:
+        tenant_id = getattr(request.user, "tenant_id", None)
+        if tenant_id is None:
+            return Response(
+                {"error": "user has no tenant"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        from apps.maic.models import MaicGenerationJob
+
+        try:
+            job = MaicGenerationJob.objects.all_tenants().get(
+                pk=job_id,
+                tenant_id=tenant_id,
+            )
+        except MaicGenerationJob.DoesNotExist:
+            return Response(
+                {"error": "generation job not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        include_full = request.query_params.get("full") == "1"
+        result = _public_result(job.result or {}, include_full=include_full)
+        progress = job.progress or {}
+        scenes_generated = _scene_count(job.result or {}, progress)
+        total_scenes = (
+            progress.get("total")
+            or result.get("scenesCount")
+            or scenes_generated
+        )
+
+        return Response(
+            {
+                "job_id": job.id,
+                "status": job.status,
+                "step": progress.get("stage"),
+                "progress": progress,
+                "message": progress.get("message", ""),
+                "scenesGenerated": scenes_generated,
+                "totalScenes": total_scenes,
+                "result": result,
+                "error": job.error or None,
+                "done": job.status in {
+                    MaicGenerationJob.STATUS_SUCCEEDED,
+                    MaicGenerationJob.STATUS_FAILED,
+                },
+                "created_at": job.created_at.isoformat(),
+                "updated_at": job.updated_at.isoformat(),
+                "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+def _optional_uuid(value: Any, field_name: str) -> tuple[str | None, str | None]:
+    if value in (None, ""):
+        return None, None
+    if not isinstance(value, str):
+        return None, f"{field_name} must be a UUID string"
+    try:
+        return str(UUID(value)), None
+    except ValueError:
+        return None, f"{field_name} must be a valid UUID"
+
+
+def _validate_lms_targets(
+    *,
+    tenant_id: int,
+    course_id: str | None,
+    module_id: str | None,
+) -> tuple[str | None, dict[str, str]]:
+    from apps.courses.models import Course, Module
+
+    resolved: dict[str, str] = {}
+    course = None
+    if course_id:
+        course = (
+            Course.all_objects.all_tenants()
+            .filter(pk=course_id, tenant_id=tenant_id, is_deleted=False)
+            .first()
+        )
+        if course is None:
+            return "courseId does not belong to this tenant", {}
+        resolved["courseId"] = str(course.id)
+
+    if module_id:
+        module = (
+            Module.objects.select_related("course")
+            .filter(
+                pk=module_id,
+                course__tenant_id=tenant_id,
+                course__is_deleted=False,
+            )
+            .first()
+        )
+        if module is None:
+            return "moduleId does not belong to this tenant", {}
+        if course is not None and module.course_id != course.id:
+            return "moduleId must belong to courseId", {}
+        resolved["moduleId"] = str(module.id)
+        resolved["courseId"] = str(module.course_id)
+
+    return None, resolved
+
+
+def _public_result(
+    result: dict[str, Any],
+    *,
+    include_full: bool,
+) -> dict[str, Any]:
+    if include_full:
+        return dict(result)
+    return {
+        key: value
+        for key, value in result.items()
+        if key not in {"scenes", "outlines"}
+    }
+
+
+def _scene_count(result: dict[str, Any], progress: dict[str, Any]) -> int:
+    scenes = result.get("scenes")
+    if isinstance(scenes, list):
+        return len(scenes)
+    completed = progress.get("completed")
+    try:
+        return int(completed)
+    except (TypeError, ValueError):
+        return 0

@@ -29,6 +29,11 @@ from rest_framework.views import APIView
 
 from apps.courses.models import Course
 from apps.maic.models import MaicSessionV2
+from apps.maic.permissions import MaicV2TenantPermission
+from apps.maic.runtime_gap_quiz import (
+    grade_quiz_payload,
+    normalize_quiz_grade_payload,
+)
 from apps.tenants.models import Tenant
 
 logger = logging.getLogger(__name__)
@@ -65,7 +70,7 @@ class MaicSessionCreateView(APIView):
       Course not found in the user's tenant.
     """
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, MaicV2TenantPermission]
 
     def post(self, request: Request) -> Response:
         user = request.user
@@ -167,3 +172,22 @@ def _is_valid_session_id(s: str) -> bool:
         return False
     import re
     return bool(re.fullmatch(r"[\w-]+", s))
+
+
+class MaicQuizGradeView(APIView):
+    """POST /api/maic/v2/quiz-grade/ — grade a MAIC v2 quiz answer."""
+
+    permission_classes = [IsAuthenticated, MaicV2TenantPermission]
+
+    def post(self, request: Request) -> Response:
+        tenant = getattr(request.user, "tenant", None)
+        payload, error = normalize_quiz_grade_payload(request.data)
+        if error:
+            return error
+
+        assert payload is not None
+        result, error = grade_quiz_payload(payload, tenant)
+        if error:
+            return error
+
+        return Response(result)

@@ -100,7 +100,7 @@ describe('MaicPBLDevPage (MAIC-707)', () => {
     await waitFor(() => {
       expect(screen.getByText('Probe Project')).toBeInTheDocument();
     });
-    expect(getSpy).toHaveBeenCalledWith('/api/maic/v2/pbl/projects/sess-abc/');
+    expect(getSpy).toHaveBeenCalledWith('/maic/v2/pbl/projects/sess-abc/');
     // Header strip surfaces the session id + status
     expect(screen.getByText('sess-abc')).toBeInTheDocument();
     expect(screen.getByText('status: active')).toBeInTheDocument();
@@ -140,7 +140,7 @@ describe('MaicPBLDevPage (MAIC-707)', () => {
     expect(screen.getByText(/missing session id/i)).toBeInTheDocument();
   });
 
-  test('honors ?model= override in the header strip', async () => {
+  test('does not expose client-side model override controls', async () => {
     vi.spyOn(api, 'get').mockResolvedValueOnce({
       data: {
         session_id: 'sess-z',
@@ -156,7 +156,7 @@ describe('MaicPBLDevPage (MAIC-707)', () => {
     _renderAt('/dev/pbl/sess-z?model=claude-opus');
 
     await waitFor(() => {
-      expect(screen.getByText('model: claude-opus')).toBeInTheDocument();
+      expect(screen.queryByText(/model:/i)).not.toBeInTheDocument();
     });
   });
 });

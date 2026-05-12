@@ -28,6 +28,7 @@ Student endpoints:
 import hashlib
 import json
 import logging
+import re
 
 import requests as http_requests
 from django.db import transaction
@@ -85,6 +86,45 @@ def _polling_state_label(classroom) -> str:
     return raw
 
 
+_MAIC_MISSING_CONTENT_ERROR = (
+    "This classroom is marked ready, but no generated scenes or slides are saved. "
+    "Regenerate it before using it in class."
+)
+
+
+def _maic_has_playable_content(classroom: MAICClassroom) -> bool:
+    """Return True when a READY classroom has both scene and slide payloads."""
+    scenes = classroom.content_scenes or []
+    meta = classroom.content_meta or {}
+    slides = meta.get("slides") if isinstance(meta, dict) else None
+    if isinstance(scenes, list) and scenes and isinstance(slides, list) and slides:
+        return True
+
+    legacy = classroom.content if isinstance(classroom.content, dict) else {}
+    legacy_scenes = legacy.get("scenes")
+    legacy_slides = legacy.get("slides")
+    return (
+        isinstance(legacy_scenes, list)
+        and bool(legacy_scenes)
+        and isinstance(legacy_slides, list)
+        and bool(legacy_slides)
+    )
+
+
+def _maic_response_status(classroom: MAICClassroom) -> tuple[str, str]:
+    """Return user-facing status/error without letting bad legacy rows look playable."""
+    if classroom.status == "READY" and not _maic_has_playable_content(classroom):
+        return "FAILED", _MAIC_MISSING_CONTENT_ERROR
+    return classroom.status, classroom.error_message
+
+
+def _maic_response_counts(classroom: MAICClassroom, response_status: str) -> tuple[int, int]:
+    """Return scene/minute counts that match the user-facing status."""
+    if classroom.status == "READY" and response_status == "FAILED":
+        return 0, 0
+    return classroom.scene_count, classroom.estimated_minutes
+
+
 # ─── Rate Limiting ────────────────────────────────────────────────────────────
 # StudentGenerationThrottle removed — no rate limit for student classroom generation
 
@@ -104,6 +144,9 @@ def _extract_generation_context(body: dict, request) -> dict:
         str(body.get("syllabus_board") or body.get("syllabusBoard") or "Generic").strip()
         or "Generic"
     )
+    class_guide = str(body.get("class_guide") or body.get("classGuide") or "").strip()
+    if len(class_guide) > 4000:
+        class_guide = class_guide[:4000]
 
     override = str(body.get("audience_role") or body.get("audienceRole") or "").strip().lower()
     if override in ("teacher", "student"):
@@ -119,6 +162,7 @@ def _extract_generation_context(body: dict, request) -> dict:
         "subject": subject,
         "syllabus_board": syllabus_board,
         "audience_role": audience_role,
+        "class_guide": class_guide,
     }
 
 
@@ -126,6 +170,8 @@ OPENMAIC_BASE = "http://openmaic:3000"
 # Connection timeout (seconds) for sidecar reachability check.
 # Low value so fallback to direct LLM is fast when sidecar is down.
 _SIDECAR_CONNECT_TIMEOUT = 2
+_TTS_MAX_TEXT_CHARS = 2000
+_TTS_VOICE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 
 
 # ======================================================================
@@ -163,7 +209,18 @@ def _build_proxy_headers(config):
     if api_key:
         headers["x-api-key"] = api_key
     if config.llm_base_url:
-        headers["x-base-url"] = config.llm_base_url
+        try:
+            headers["x-base-url"] = _validate_llm_base_url_for_sidecar(config.llm_base_url)
+        except ValueError as exc:
+            logger.warning(
+                "maic sidecar base URL rejected by SSRF guard: %s",
+                exc,
+                extra=log_extra(
+                    MAICPhase.SIDECAR_PROXY,
+                    metric="maic_sidecar_base_url_rejected",
+                    outcome="blocked",
+                ),
+            )
     if config.tts_provider and config.tts_provider != "disabled":
         headers["x-tts-provider"] = config.tts_provider
         tts_key = config.get_tts_api_key()
@@ -177,6 +234,62 @@ def _build_proxy_headers(config):
         if img_key:
             headers["x-image-api-key"] = img_key
     return headers
+
+
+def _validate_llm_base_url_for_sidecar(raw_url: str) -> str:
+    """Validate tenant LLM base URL before passing it to OpenMAIC."""
+    normalized = str(raw_url or "").strip().rstrip("/")
+    if not normalized:
+        return ""
+
+    from utils.url_safety import validate_outbound_url
+
+    validate_outbound_url(f"{normalized}/chat/completions")
+    return normalized
+
+
+def _extract_tts_payload(request):
+    """Validate and normalize live TTS request payloads before proxying.
+
+    This endpoint is hit during classroom playback, so failures should be
+    explicit and cheap. The sidecar/direct provider path only receives the
+    sanitized payload returned from this helper.
+    """
+    body = request.data if isinstance(request.data, dict) else {}
+    text = str(body.get("text") or "").strip()
+    if not text:
+        return None, Response(
+            {"error": "No text provided"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if len(text) > _TTS_MAX_TEXT_CHARS:
+        return None, Response(
+            {
+                "error": "TTS text is too long.",
+                "max_chars": _TTS_MAX_TEXT_CHARS,
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    voice_id = str(body.get("voiceId") or body.get("voice_id") or "").strip()
+    if voice_id and not _TTS_VOICE_ID_RE.match(voice_id):
+        return None, Response(
+            {"error": "Invalid voiceId."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    agent_role = str(body.get("agentRole") or body.get("agent_role") or "").strip()
+    if not voice_id and agent_role:
+        voice_id = AGENT_VOICE_MAP.get(agent_role, "")
+
+    payload = {
+        "text": text,
+        "voiceId": voice_id,
+        "voice_id": voice_id,
+    }
+    if agent_role:
+        payload["agentRole"] = agent_role
+    return payload, None
 
 
 def _proxy_sse(request, path, config):
@@ -282,15 +395,18 @@ def _proxy_json(request, path, config, method="POST"):
     return Response(data, status=upstream.status_code)
 
 
-def _proxy_binary(request, path, config):
+def _proxy_binary(request, path, config, body_override=None):
     """Forward a request and return binary (audio) data."""
     url = f"{OPENMAIC_BASE}{path}"
     headers = _build_proxy_headers(config)
 
-    try:
-        body = request.body.decode("utf-8") if request.body else "{}"
-    except UnicodeDecodeError:
-        body = "{}"
+    if body_override is not None:
+        body = json.dumps(body_override)
+    else:
+        try:
+            body = request.body.decode("utf-8") if request.body else "{}"
+        except UnicodeDecodeError:
+            body = "{}"
 
     try:
         upstream = http_requests.post(
@@ -733,8 +849,11 @@ def teacher_maic_generate_tts(request):
     config, err = _get_ai_config(request.tenant)
     if err:
         return err
+    payload, err = _extract_tts_payload(request)
+    if err:
+        return err
 
-    result = _proxy_binary(request, "/api/generate/tts", config)
+    result = _proxy_binary(request, "/api/generate/tts", config, body_override=payload)
     if result.status_code != 502:
         return result
 
@@ -748,25 +867,8 @@ def teacher_maic_generate_tts(request):
             audience="teacher",
         ),
     )
-    try:
-        body = json.loads(request.body) if request.body else {}
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        body = {}
-
-    text = body.get("text", "")
-    if not text:
-        return HttpResponse(
-            json.dumps({"error": "No text provided"}),
-            status=400,
-            content_type="application/json",
-        )
-
-    # Resolve per-agent voice: explicit voiceId > agent role mapping > tenant default
-    voice_id = body.get("voiceId")
-    if not voice_id:
-        agent_role = body.get("agentRole", "")
-        if agent_role:
-            voice_id = AGENT_VOICE_MAP.get(agent_role)
+    text = payload["text"]
+    voice_id = payload.get("voiceId") or None
 
     audio_bytes = generate_tts_audio(text, config, voice_id=voice_id)
     if audio_bytes:
@@ -831,16 +933,22 @@ def teacher_maic_classroom_list(request):
 
     classrooms = []
     for c in qs:
+        response_status, response_error = _maic_response_status(c)
+        response_scene_count, response_estimated_minutes = _maic_response_counts(
+            c,
+            response_status,
+        )
         classrooms.append(
             {
                 "id": str(c.id),
                 "title": c.title,
                 "description": c.description,
                 "topic": c.topic,
-                "status": c.status,
+                "status": response_status,
+                "error_message": response_error,
                 "is_public": c.is_public,
-                "scene_count": c.scene_count,
-                "estimated_minutes": c.estimated_minutes,
+                "scene_count": response_scene_count,
+                "estimated_minutes": response_estimated_minutes,
                 "course_id": str(c.course_id) if c.course_id else None,
                 "assigned_sections": [
                     {
@@ -952,6 +1060,11 @@ def teacher_maic_classroom_detail(request, classroom_id):
     maic_classroom_polls_total.labels(state=_polling_state_label(classroom)).inc()
 
     sections = classroom.assigned_sections.select_related("grade").all()
+    response_status, response_error = _maic_response_status(classroom)
+    response_scene_count, response_estimated_minutes = _maic_response_counts(
+        classroom,
+        response_status,
+    )
 
     # PERF-P0-1 (2026-04-23): strip the full `content` payload during the
     # DRAFT/GENERATING lifecycle. `content` can be 5-20 MB (slides + scenes
@@ -982,11 +1095,11 @@ def teacher_maic_classroom_detail(request, classroom_id):
             "description": classroom.description,
             "topic": classroom.topic,
             "language": classroom.language,
-            "status": classroom.status,
-            "error_message": classroom.error_message,
+            "status": response_status,
+            "error_message": response_error,
             "is_public": classroom.is_public,
-            "scene_count": classroom.scene_count,
-            "estimated_minutes": classroom.estimated_minutes,
+            "scene_count": response_scene_count,
+            "estimated_minutes": response_estimated_minutes,
             "course_id": str(classroom.course_id) if classroom.course_id else None,
             "assigned_sections": [
                 {"id": str(s.id), "name": s.name, "grade_name": s.grade.name if s.grade else None}
@@ -1076,9 +1189,15 @@ def teacher_maic_classroom_update(request, classroom_id):
             agents = raw_content.get("agents")
             meta = {k: v for k, v in raw_content.items() if k not in ("scenes", "agents")}
             classroom.content_scenes = scenes if isinstance(scenes, list) else []
-            classroom.content_agents = agents if isinstance(agents, list) else []
+            # Older clients may PATCH partial content without re-sending the
+            # agent roster. Preserve the existing roster in that case; publish
+            # depends on it to resolve per-agent voices.
+            if isinstance(agents, list):
+                classroom.content_agents = agents
             classroom.content_meta = meta
-            updated_fields.extend(["content_scenes", "content_agents", "content_meta"])
+            updated_fields.extend(["content_scenes", "content_meta"])
+            if isinstance(agents, list):
+                updated_fields.append("content_agents")
 
     # Auto-heartbeat: if the frontend saves partial content during
     # generation, infer progress from it so the MAICPlayerPage progress
@@ -1088,8 +1207,16 @@ def teacher_maic_classroom_update(request, classroom_id):
         now = timezone.now()
         # PERF-P0-4: read scenes from the shard we just populated above.
         scenes = classroom.content_scenes or []
-        # Count scenes that have BOTH slides (content) and actions arrays
-        ready = sum(1 for s in scenes if s.get("slides") and s.get("actions") is not None)
+        # Count scenes that have content and actions. Production stores the
+        # flat slide array under content_meta.slides, so scene["slides"] is
+        # usually absent even when the scene is playable.
+        ready = sum(
+            1
+            for s in scenes
+            if isinstance(s, dict)
+            and isinstance(s.get("content"), dict)
+            and s.get("actions") is not None
+        )
         if ready and ready != classroom.scenes_ready:
             classroom.scenes_ready = ready
             updated_fields.append("scenes_ready")
@@ -1858,7 +1985,9 @@ def _student_can_view_classroom(user, classroom) -> bool:
     2. **Audio manifest gate** — ``content.audioManifest.status`` must be
        ``"ready"`` or ``"partial"``.  Classrooms still encoding audio are
        hidden (consistent with the list endpoint queryset filter).
-    3. **Section/public gate** — if ``assigned_sections`` is non-empty the
+    3. **Course-content gate** — a private classroom linked to an assigned
+       course item is visible through that LMS course.
+    4. **Section/public gate** — if ``assigned_sections`` is non-empty the
        student's ``section_fk`` must be among them; otherwise the classroom
        must be ``is_public=True``.
     """
@@ -1880,12 +2009,36 @@ def _student_can_view_classroom(user, classroom) -> bool:
     if manifest_status not in ("ready", "partial"):
         return False
 
-    # 3. Section / public check.
+    # 3. Course-content gate. This lets generated AI Classroom content open
+    # from a student's assigned course without making the classroom broadly
+    # public in the browse library.
+    if _student_can_view_classroom_via_course_content(user, classroom):
+        return True
+
+    # 4. Section / public check.
     assigned = classroom.assigned_sections.all()
     student_section = getattr(user, "section_fk", None)
     if assigned.exists():
         return bool(student_section) and student_section in assigned
     return classroom.is_public
+
+
+def _student_can_view_classroom_via_course_content(user, classroom) -> bool:
+    if not isinstance(classroom, MAICClassroom):
+        return False
+
+    from django.db.models import Q
+
+    return classroom.content_items.filter(
+        is_active=True,
+        content_type="AI_CLASSROOM",
+        module__course__tenant_id=classroom.tenant_id,
+        module__course__is_active=True,
+        module__course__is_published=True,
+    ).filter(
+        Q(module__course__assigned_to_all_students=True)
+        | Q(module__course__assigned_students=user)
+    ).exists()
 
 
 # ─── Student detail view ──────────────────────────────────────────────────────
@@ -1918,6 +2071,11 @@ def student_maic_classroom_detail(request, classroom_id):
     # polls have a different lifecycle (READY-only access path) but the
     # state label disambiguates them on the dashboard.
     maic_classroom_polls_total.labels(state=_polling_state_label(classroom)).inc()
+    response_status, response_error = _maic_response_status(classroom)
+    response_scene_count, response_estimated_minutes = _maic_response_counts(
+        classroom,
+        response_status,
+    )
 
     return Response(
         {
@@ -1926,9 +2084,10 @@ def student_maic_classroom_detail(request, classroom_id):
             "description": classroom.description,
             "topic": classroom.topic,
             "language": classroom.language,
-            "status": classroom.status,
-            "scene_count": classroom.scene_count,
-            "estimated_minutes": classroom.estimated_minutes,
+            "status": response_status,
+            "error_message": response_error,
+            "scene_count": response_scene_count,
+            "estimated_minutes": response_estimated_minutes,
             "course_id": str(classroom.course_id) if classroom.course_id else None,
             "config": classroom.config,
             # PERF-P0-4: use composed_content property (prefers shards over legacy field).
@@ -2025,27 +2184,17 @@ def student_maic_generate_tts(request):
     config, err = _get_ai_config(request.tenant)
     if err:
         return err
+    payload, err = _extract_tts_payload(request)
+    if err:
+        return err
 
-    result = _proxy_binary(request, "/api/generate/tts", config)
+    result = _proxy_binary(request, "/api/generate/tts", config, body_override=payload)
     if result.status_code != 502:
         return result
 
     # Direct fallback
-    try:
-        body = json.loads(request.body) if request.body else {}
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        body = {}
-
-    text = body.get("text", "")
-    if not text:
-        return HttpResponse(status=204)
-
-    # Resolve per-agent voice: explicit voiceId > agent role mapping > tenant default
-    voice_id = body.get("voiceId")
-    if not voice_id:
-        agent_role = body.get("agentRole", "")
-        if agent_role:
-            voice_id = AGENT_VOICE_MAP.get(agent_role)
+    text = payload["text"]
+    voice_id = payload.get("voiceId") or None
 
     audio_bytes = generate_tts_audio(text, config, voice_id=voice_id)
     if audio_bytes:
@@ -2684,7 +2833,13 @@ def tenant_ai_config_view(request):
     if "llm_api_key" in data and data["llm_api_key"]:
         config.set_llm_api_key(data["llm_api_key"])
     if "llm_base_url" in data:
-        config.llm_base_url = data["llm_base_url"]
+        try:
+            config.llm_base_url = _validate_llm_base_url_for_sidecar(data["llm_base_url"])
+        except ValueError as exc:
+            return Response(
+                {"error": f"Unsafe llm_base_url: {exc}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
     if "tts_provider" in data:
         config.tts_provider = data["tts_provider"]
     if "tts_api_key" in data and data["tts_api_key"]:

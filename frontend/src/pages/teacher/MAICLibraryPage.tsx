@@ -207,7 +207,9 @@ function ClassroomCard({
             </span>
           ))
         ) : (
-          <span className="text-[10px] text-gray-400">All students</span>
+          <span className="text-[10px] text-gray-400">
+            {classroom.is_public ? 'All students' : 'Not assigned'}
+          </span>
         )}
         <button
           onClick={onAssignSections}

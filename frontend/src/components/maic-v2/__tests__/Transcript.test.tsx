@@ -70,6 +70,33 @@ describe('Transcript', () => {
     ]);
   });
 
+  test('renders agent identity for each message when metadata is present', () => {
+    render(
+      <Transcript
+        {...defaults({
+          status: 'streaming',
+          messageOrder: ['m1'],
+          textByMessageId: { m1: 'Teacher line.' },
+          agentsByMessageId: {
+            m1: {
+              agentId: 'teacher',
+              agentName: 'Math Coach',
+              agentAvatar: null,
+              agentColor: '#2563eb',
+              messageId: 'm1',
+            },
+          },
+        })}
+      />,
+    );
+    expect(screen.getByTestId('maic-v2-transcript-agent-m1')).toHaveTextContent(
+      'Math Coach',
+    );
+    expect(screen.getByTestId('maic-v2-transcript-row-m1')).toHaveStyle(
+      'border-left: 4px solid #2563eb',
+    );
+  });
+
   test('skips messageIds with empty text', () => {
     render(
       <Transcript

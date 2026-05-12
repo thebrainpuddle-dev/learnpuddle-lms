@@ -67,6 +67,7 @@ const VERIFY_SUCCESS = {
 describe('ParentVerifyPage', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    sessionStorage.clear();
     mockedUseParentStore.mockReturnValue({ setSession: mockSetSession });
     // Stub sessionStorage to avoid side-effects
     vi.spyOn(Storage.prototype, 'getItem').mockReturnValue(null);
@@ -164,10 +165,7 @@ describe('ParentVerifyPage', () => {
     });
 
     it('falls back to sessionStorage email when response has no parent_email', async () => {
-      vi.spyOn(Storage.prototype, 'getItem').mockImplementation((key) => {
-        if (key === 'parent_email') return 'stored@example.com';
-        return null;
-      });
+      sessionStorage.setItem('parent_email', 'stored@example.com');
       const dataWithoutEmail = { ...VERIFY_SUCCESS, parent_email: undefined };
       mockedVerifyToken.mockResolvedValue(dataWithoutEmail);
       renderPageWithToken('magic-abc-123');

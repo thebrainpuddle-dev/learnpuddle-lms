@@ -280,7 +280,7 @@ describe('useMaicPBLChannel', () => {
     act(() =>
       result.current.send({
         action: 'chat',
-        data: { message: 'hi', languageModelId: 'claude-x' },
+        data: { message: 'hi' },
       }),
     );
     expect(ws.sent).toEqual([]);
@@ -298,7 +298,6 @@ describe('useMaicPBLChannel', () => {
         data: {
           message: '@judge ok?',
           userRole: 'Designer',
-          languageModelId: 'claude-x',
         },
       }),
     );
@@ -308,7 +307,6 @@ describe('useMaicPBLChannel', () => {
       data: {
         message: '@judge ok?',
         userRole: 'Designer',
-        languageModelId: 'claude-x',
       },
     });
   });

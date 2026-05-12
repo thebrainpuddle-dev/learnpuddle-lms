@@ -54,6 +54,8 @@ _api_patterns = [
     # generate-{image,video}/. Provider adapters auto-register on import
     # (apps/maic/media/adapters/__init__.py).
     path('maic/v2/media/', include('apps.maic.media.urls', namespace='maic_media')),
+    # PDF parsing (Phase 11) - POST /api/maic/v2/pdf/parse/.
+    path('maic/v2/pdf/', include('apps.maic.pdf.urls', namespace='maic_pdf')),
     # Content versioning (TASK-048) — admin-only revisions/restore endpoints.
     path('admin/', include('apps.courses.versioning_urls')),
     # SCORM 1.2 export (TASK-052) — admin-only export endpoints.

@@ -365,6 +365,15 @@ async def test_minimax_per_tenant_kwargs_override_env(fake_aiohttp, minimax_env)
     assert req["json"]["model"] == "speech-2.5-turbo"
 
 
+def test_tenant_tts_base_url_rejects_loopback_literal():
+    """Tenant-controlled cloud TTS endpoints must not reach local services."""
+    with pytest.raises(SpeechSynthesisError, match="unsafe TTS base_url"):
+        tts_service._validate_tenant_tts_base_url(
+            "http://127.0.0.1:8080",
+            fallback="https://api.minimaxi.com",
+        )
+
+
 @pytest.mark.asyncio
 async def test_minimax_provider_arg_overrides_env(fake_aiohttp, monkeypatch):
     """provider= kwarg overrides MAIC_TTS_PROVIDER even when the env says edge."""

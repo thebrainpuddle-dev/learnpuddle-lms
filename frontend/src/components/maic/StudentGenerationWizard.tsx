@@ -407,6 +407,7 @@ export const StudentGenerationWizard: React.FC<StudentGenerationWizardProps> = (
           topic={topic}
           language={language}
           role="student"
+          agentCount={agentCount}
           initialAgents={agents.length > 0 ? agents : undefined}
           onBack={() => setWizardStep(1)}
           onComplete={(approvedAgents) => void handleAgentsComplete(approvedAgents)}

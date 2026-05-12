@@ -39,6 +39,7 @@ v1 routes remain mounted only while the flag is False.
 import io
 import json
 import logging
+import os
 import uuid
 
 import requests as http_requests
@@ -50,7 +51,6 @@ from apps.courses.maic_voices import (
     VOICE_BY_ID,
     infer_gender_from_name,
     voice_matches_role,
-    voices_for_gender,
 )
 from apps.courses.prompts.loader import load_prompt
 
@@ -627,6 +627,9 @@ def validate_agents(agents: list[dict], role_slots: list[dict]) -> None:
 
 def _build_llm_headers(config: TenantAIConfig) -> dict:
     """Build auth headers for the LLM provider."""
+    if config.llm_provider == "ollama":
+        return {"Content-Type": "application/json"}
+
     api_key = config.get_llm_api_key()
     return {
         "Authorization": f"Bearer {api_key}",
@@ -647,6 +650,13 @@ def _get_llm_url(config: TenantAIConfig) -> str:
     provider default on rejection (logged).
     """
     from utils.url_safety import safe_outbound_url_or_fallback
+    if config.llm_provider == "ollama":
+        # Ollama is deployment infrastructure, not a tenant-controlled
+        # outbound URL. Keep it on the operator env path so local/private
+        # addresses are possible without weakening the school-admin SSRF guard.
+        base_url = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+        return f"{base_url.rstrip('/')}/v1/chat/completions"
+
     provider_urls = {
         "openai": "https://api.openai.com/v1/chat/completions",
         "openrouter": "https://openrouter.ai/api/v1/chat/completions",
@@ -678,7 +688,7 @@ def _call_llm(config: TenantAIConfig, system_prompt: str, user_prompt: str,
     headers = _build_llm_headers(config)
 
     payload = {
-        "model": config.llm_model,
+        "model": _llm_model_name(config),
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -694,7 +704,12 @@ def _call_llm(config: TenantAIConfig, system_prompt: str, user_prompt: str,
     # signal we want to alert on.
     with time_llm_call(provider=provider, path=caller):
         try:
-            resp = http_requests.post(url, headers=headers, json=payload, timeout=120)
+            resp = http_requests.post(
+                url,
+                headers=headers,
+                json=payload,
+                timeout=_llm_timeout_seconds(provider),
+            )
             resp.raise_for_status()
             data = resp.json()
             choices = data.get("choices") or []
@@ -742,6 +757,25 @@ def _call_llm(config: TenantAIConfig, system_prompt: str, user_prompt: str,
                 ),
             )
     return None
+
+
+def _llm_timeout_seconds(provider: str) -> float:
+    """HTTP read timeout for legacy generation providers."""
+    provider_key = str(provider or "").lower()
+    default = 300.0 if provider_key == "ollama" else 120.0
+    env_key = "OLLAMA_TIMEOUT_SECONDS" if provider_key == "ollama" else "LLM_TIMEOUT_SECONDS"
+    try:
+        return float(os.environ.get(env_key, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _llm_model_name(config: TenantAIConfig) -> str:
+    """Provider-specific model slug for legacy teacher-portal generation."""
+    model = str(config.llm_model or "").strip()
+    if config.llm_provider == "ollama":
+        return model.removeprefix("ollama/").removeprefix("ollama:") or model
+    return model
 
 
 def _parse_json_from_llm(text: str) -> dict | list | None:
@@ -939,19 +973,20 @@ def _call_llm_with_json_retry(
 # ─── Agent Profile Generation ────────────────────────────────────────────────
 
 def _auto_fix_voice_gender_mismatches(agents: list[dict]) -> tuple[list[dict], list[str]]:
-    """Deterministically swap voiceIds to repair name↔voice gender mismatches.
+    """Deterministically swap voiceIds to repair invalid agent voices.
 
     LLMs are inconsistent about matching voice gender to Indian first-name
-    convention even with explicit instructions. Rather than fail the whole
-    generation when a mismatch slips through, try to fix it locally.
+    convention and role suitability even with explicit instructions. Rather
+    than fail the whole generation when a repairable voice issue slips
+    through, try to fix it locally.
 
     Uses a two-pass release-then-reassign strategy to handle the common
     "swap chain" case — e.g. agent-1 has Priya+male-voice and agent-2 has
     Arjun+female-voice. If we fix them one at a time, the first fix sees
     no free female voice (still held by agent-2) and bails out. So we
-    first release all mismatched agents' voices into a free pool, then
-    assign each mismatched agent a fresh gender-matched voice from that
-    pool. Correctly-paired agents keep their voices untouched.
+    first release all invalid voices into a free pool, then assign each
+    affected agent a fresh role-safe and, when known, gender-matched voice
+    from that pool. Correctly-paired agents keep their voices untouched.
 
     Returns a new list (leaves the input untouched) plus a list of
     human-readable fix notes for logging. Only returns a valid roster
@@ -961,35 +996,40 @@ def _auto_fix_voice_gender_mismatches(agents: list[dict]) -> tuple[list[dict], l
     fixed: list[dict] = [dict(a) for a in agents]
     notes: list[str] = []
 
-    # Pass 1: identify mismatched agents + release their voices.
-    mismatched_indices: list[int] = []
+    # Pass 1: identify invalid voices + release them.
+    invalid_indices: list[int] = []
     kept_voices: set[str] = set()
     for i, a in enumerate(fixed):
         voice_id = a.get("voiceId")
         voice = VOICE_BY_ID.get(voice_id) if voice_id else None
-        if not voice:
-            kept_voices.add(voice_id) if voice_id else None
-            continue
+        role = a.get("role")
         inferred = infer_gender_from_name(a.get("name", ""))
-        if inferred == "unknown" or inferred == voice["gender"]:
-            kept_voices.add(voice_id)
+        if (
+            not voice
+            or voice_id in kept_voices
+            or not voice_matches_role(voice_id, role)
+            or (inferred != "unknown" and inferred != voice["gender"])
+        ):
+            invalid_indices.append(i)
             continue
-        mismatched_indices.append(i)
+        kept_voices.add(voice_id)
 
-    # Pass 2: assign each mismatched agent a fresh matched voice.
-    for i in mismatched_indices:
+    # Pass 2: assign each invalid agent a fresh valid voice.
+    for i in invalid_indices:
         a = fixed[i]
         old_voice = a.get("voiceId")
         inferred = infer_gender_from_name(a.get("name", ""))
+        role = a.get("role")
         candidates = [
-            v for v in voices_for_gender(inferred)
+            v for v in AZURE_IN_VOICES
             if v["id"] not in kept_voices
-            and a.get("role") in v.get("suits", [])
+            and role in v.get("suits", [])
+            and (inferred == "unknown" or v["gender"] == inferred)
         ]
         if not candidates:
             notes.append(
-                f"could not auto-fix {a.get('name')!r}: no unused "
-                f"{inferred} voice available for role {a.get('role')!r}"
+                f"could not auto-fix {a.get('name')!r}: no unused valid "
+                f"voice available for role {role!r}"
             )
             # Intentionally do NOT add the old (wrong) voice back to the
             # kept pool — it might have just been taken by a prior fix
@@ -1001,14 +1041,14 @@ def _auto_fix_voice_gender_mismatches(agents: list[dict]) -> tuple[list[dict], l
 
         # Prefer voices whose suits list contains ONLY the matching role
         # (e.g. Prabhat -> professor), then fall back to any candidate.
-        exact = [v for v in candidates if v["suits"] == [a.get("role")]]
+        exact = [v for v in candidates if v["suits"] == [role]]
         picked = exact[0] if exact else candidates[0]
 
         a["voiceId"] = picked["id"]
         kept_voices.add(picked["id"])
         notes.append(
             f"auto-swapped {a.get('name')!r}: {old_voice} -> {picked['id']} "
-            f"(matched {inferred} voice)"
+            f"(matched {inferred} voice for role {role})"
         )
 
     return fixed, notes
@@ -1431,8 +1471,16 @@ def _audience_preamble(audience_role: str) -> str:
     return "AUDIENCE: students in the indicated grade band."
 
 
+def _class_guide_text(class_guide: str) -> str:
+    """Bound the teacher-authored class guide before prompt insertion."""
+    text = str(class_guide or "").strip()
+    if not text:
+        return ""
+    return text[:4000]
+
+
 def _context_block(grade_level: str, subject: str, syllabus_board: str,
-                   audience_role: str) -> str:
+                   audience_role: str, class_guide: str = "") -> str:
     """Compose the CONTEXT preamble injected at the top of every system
     prompt. Ordering matters: audience → grade band → subject → board → anchor
     example. Keep the label lines terse; LLMs pattern-match on them."""
@@ -1451,6 +1499,13 @@ def _context_block(grade_level: str, subject: str, syllabus_board: str,
     lines.append(f"Syllabus board: {board} — {_BOARD_GUIDANCE[board]}")
     if band_info["anchor"]:
         lines.append(band_info["anchor"])
+    guide = _class_guide_text(class_guide)
+    if guide:
+        lines.extend([
+            "=== TEACHER CLASS GUIDE ===",
+            guide,
+            "=== END CLASS GUIDE ===",
+        ])
     lines.append("=== END CONTEXT ===")
     return "\n".join(lines)
 
@@ -1511,12 +1566,13 @@ Rules:
 
 def build_outline_system_prompt(grade_level: str = "", subject: str = "",
                                 syllabus_board: str = "Generic",
-                                audience_role: str = "student") -> str:
+                                audience_role: str = "student",
+                                class_guide: str = "") -> str:
     """Compose the outline system prompt, with a context preamble tailored
     to the grade band, subject, board, and audience. Defaults mean callers
     that don't pass any context get near-identical behavior to the pre-
     refactor prompt."""
-    return f"{_context_block(grade_level, subject, syllabus_board, audience_role)}\n\n{_OUTLINE_BODY}"
+    return f"{_context_block(grade_level, subject, syllabus_board, audience_role, class_guide)}\n\n{_OUTLINE_BODY}"
 
 
 # Back-compat: some call sites / tests may still import this constant.
@@ -1530,7 +1586,8 @@ def generate_outline_sse(topic: str, language: str, agents: list[dict],
                          grade_level: str = "",
                          subject: str = "",
                          syllabus_board: str = "Generic",
-                         audience_role: str = "student"):
+                         audience_role: str = "student",
+                         class_guide: str = ""):
     """
     Generator that yields SSE-formatted strings for outline streaming.
     Used as the body of a StreamingHttpResponse.
@@ -1569,6 +1626,9 @@ def generate_outline_sse(topic: str, language: str, agents: list[dict],
         user_prompt += f"\nSyllabus board: {syllabus_board}"
     if audience_role:
         user_prompt += f"\nAudience: {audience_role}"
+    guide = _class_guide_text(class_guide)
+    if guide:
+        user_prompt += f"\n\nTeacher class guide:\n{guide}"
     user_prompt += (
         "\n\nAgent roster (use these ids when assigning agents to scenes):\n"
         f"{json.dumps(agent_roster_for_prompt, indent=2)}\n"
@@ -1585,6 +1645,7 @@ def generate_outline_sse(topic: str, language: str, agents: list[dict],
         subject=subject,
         syllabus_board=syllabus_board,
         audience_role=audience_role,
+        class_guide=class_guide,
     )
 
     # Call LLM. CG-P0-7: 4096 → 6144 so 9-12 scene outlines with the new
@@ -1812,11 +1873,12 @@ For quiz scenes, return:
 def build_scene_content_system_prompt(grade_level: str = "",
                                       subject: str = "",
                                       syllabus_board: str = "Generic",
-                                      audience_role: str = "student") -> str:
+                                      audience_role: str = "student",
+                                      class_guide: str = "") -> str:
     """Compose the scene-content system prompt with an audience/grade/board
     preamble. Defaults preserve pre-refactor behavior for callers that don't
     thread the new params through."""
-    return f"{_context_block(grade_level, subject, syllabus_board, audience_role)}\n\n{_SCENE_CONTENT_BODY}"
+    return f"{_context_block(grade_level, subject, syllabus_board, audience_role, class_guide)}\n\n{_SCENE_CONTENT_BODY}"
 
 
 # Back-compat constant.
@@ -1910,6 +1972,7 @@ def generate_scene_content(scene: dict, agents: list, language: str,
                            subject: str = "",
                            syllabus_board: str = "Generic",
                            audience_role: str = "student",
+                           class_guide: str = "",
                            classroom_id: str | None = None,
                            tenant_id: str | None = None,
                            scene_idx: int | None = None) -> dict | None:
@@ -2023,6 +2086,9 @@ Generate exactly {slide_count} slides following the layout guidelines (title sli
         ctx_lines.append(f"Audience: {audience_role}")
     if ctx_lines:
         user_prompt += "\nContext:\n" + "\n".join(f"  - {line}" for line in ctx_lines) + "\n"
+    guide = _class_guide_text(class_guide)
+    if guide:
+        user_prompt += "\nTeacher class guide:\n" + guide + "\n"
 
     # CG-P0-7 (2026-04-27): inject the outline-committed substance
     # (`teachingObjective` + `keyPoints`) so the slide-content LLM call
@@ -2050,6 +2116,7 @@ Generate exactly {slide_count} slides following the layout guidelines (title sli
         subject=subject,
         syllabus_board=syllabus_board,
         audience_role=audience_role,
+        class_guide=class_guide,
     )
     # Pick the validator for the shape the current branch actually needs:
     # quiz scenes must contain "questions"; lecture/other scenes must
@@ -2490,10 +2557,11 @@ CRITICAL RULES:
 
 def build_actions_system_prompt(grade_level: str = "", subject: str = "",
                                 syllabus_board: str = "Generic",
-                                audience_role: str = "student") -> str:
+                                audience_role: str = "student",
+                                class_guide: str = "") -> str:
     """Compose the actions/director system prompt with a context preamble.
     Defaults preserve the pre-refactor (generic-audience) behavior."""
-    return f"{_context_block(grade_level, subject, syllabus_board, audience_role)}\n\n{_ACTIONS_BODY}"
+    return f"{_context_block(grade_level, subject, syllabus_board, audience_role, class_guide)}\n\n{_ACTIONS_BODY}"
 
 
 # Back-compat constant.
@@ -2506,6 +2574,7 @@ def generate_scene_actions(scene: dict, agents: list, language: str,
                            subject: str = "",
                            syllabus_board: str = "Generic",
                            audience_role: str = "student",
+                           class_guide: str = "",
                            classroom_id: str | None = None) -> dict | None:
     """Generate rich playback actions for a multi-slide scene. Returns parsed dict.
 
@@ -2602,12 +2671,16 @@ IMPORTANT:
         ctx_lines.append(f"Audience: {audience_role}")
     if ctx_lines:
         user_prompt += "\nContext:\n" + "\n".join(f"  - {line}" for line in ctx_lines) + "\n"
+    guide = _class_guide_text(class_guide)
+    if guide:
+        user_prompt += "\nTeacher class guide:\n" + guide + "\n"
 
     actions_system_prompt = build_actions_system_prompt(
         grade_level=grade_level,
         subject=subject,
         syllabus_board=syllabus_board,
         audience_role=audience_role,
+        class_guide=class_guide,
     )
     parsed, _raw = _call_llm_with_json_retry(
         config, actions_system_prompt, user_prompt,
@@ -2627,6 +2700,7 @@ IMPORTANT:
         _stamp_action_durations(fallback.get("actions", []))
         return fallback
 
+    _normalize_scene_actions(parsed["actions"], assigned_agents)
     _stamp_action_durations(parsed["actions"])
     maic_scene_generation_total.labels(
         scene_type="scene_actions", outcome="ok"
@@ -2643,6 +2717,103 @@ IMPORTANT:
 # utterances ("Exactly.", "Right.") still register on screen.
 _SPEECH_MS_PER_CHAR = 55
 _SPEECH_MIN_MS = 800
+_KNOWN_ACTION_TYPES = {
+    "spotlight",
+    "laser",
+    "speech",
+    "play_video",
+    "wb_open",
+    "wb_close",
+    "wb_clear",
+    "wb_draw_text",
+    "wb_draw_shape",
+    "wb_draw_chart",
+    "wb_draw_latex",
+    "wb_draw_table",
+    "wb_draw_line",
+    "wb_draw_code",
+    "wb_edit_code",
+    "wb_delete",
+    "discussion",
+    "highlight",
+    "pause",
+    "transition",
+}
+_SPEECHLIKE_ACTION_TYPES = {
+    "answer",
+    "dialogue",
+    "explanation",
+    "intro",
+    "introduction",
+    "narration",
+    "question",
+    "recap",
+    "response",
+    "summary",
+    "teacher_speech",
+    "student_response",
+}
+_ACTION_TYPE_ALIASES = {
+    "slide_transition": "transition",
+    "transition_to_slide": "transition",
+    "whiteboard_open": "wb_open",
+    "whiteboard_close": "wb_close",
+    "draw_text": "wb_draw_text",
+    "draw_shape": "wb_draw_shape",
+    "draw_line": "wb_draw_line",
+    "draw_latex": "wb_draw_latex",
+    "draw_chart": "wb_draw_chart",
+}
+
+
+def _normalize_scene_actions(actions: list, agents: list[dict]) -> None:
+    """Normalize LLM action labels to the playback engine contract in place.
+
+    Local/smaller models sometimes return narrative segment labels such as
+    ``introduction`` or ``recap`` even after JSON recovery succeeds. Those
+    entries usually contain perfectly usable dialogue text; leaving them as
+    unknown action types makes the player skip teacher/student handoffs.
+    """
+    if not isinstance(actions, list):
+        return
+
+    valid_agent_ids = [str(a.get("id")) for a in agents if isinstance(a, dict) and a.get("id")]
+    fallback_agent_id = valid_agent_ids[0] if valid_agent_ids else "agent-1"
+    normalized: list[dict] = []
+
+    for action in actions:
+        if not isinstance(action, dict):
+            continue
+        raw_type = str(action.get("type") or "").strip().lower()
+        action_type = _ACTION_TYPE_ALIASES.get(raw_type, raw_type)
+
+        if action_type in _SPEECHLIKE_ACTION_TYPES or action_type not in _KNOWN_ACTION_TYPES:
+            text = _extract_action_text(action)
+            if not text:
+                continue
+            action["type"] = "speech"
+            action["text"] = text
+            agent_id = str(action.get("agentId") or action.get("agent_id") or "")
+            if agent_id not in valid_agent_ids:
+                action["agentId"] = fallback_agent_id
+            else:
+                action["agentId"] = agent_id
+        else:
+            action["type"] = action_type
+
+        if action["type"] == "wb_draw_shape" and action.get("shape") == "rect":
+            action["shape"] = "rectangle"
+        normalized.append(action)
+
+    actions[:] = normalized
+
+
+def _extract_action_text(action: dict) -> str:
+    for key in ("text", "content", "message", "line", "script", "utterance"):
+        value = action.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
 
 
 def _stamp_action_durations(actions: list) -> None:

@@ -1,5 +1,7 @@
 // lib/maicSSE.ts — SSE streaming client for OpenMAIC endpoints
 
+import { refreshAccessTokenForRequests } from '../config/api';
+import { getAccessToken } from '../utils/authSession';
 import type { MAICSSEEvent } from '../types/maic';
 
 interface SSEOptions {
@@ -30,35 +32,45 @@ export async function streamMAIC({
   const baseUrl = import.meta.env.VITE_API_BASE_URL || '';
   const fullUrl = `${baseUrl}${url}`;
 
-  // Build headers — include tenant subdomain for localhost dev
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    Authorization: `Bearer ${token}`,
+  const buildHeaders = (tokenOverride?: string): Record<string, string> => {
+    // Build headers — include tenant subdomain for localhost dev.
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${tokenOverride || getAccessToken() || token}`,
+    };
+
+    const hostname = window.location.hostname;
+    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname.endsWith('.localhost')) {
+      // Extract subdomain from URL (e.g., keystone.localhost) or fall back to storage
+      const urlSubdomain = hostname.endsWith('.localhost')
+        ? hostname.replace('.localhost', '')
+        : null;
+      const subdomain =
+        urlSubdomain ||
+        sessionStorage.getItem('tenant_subdomain') ||
+        localStorage.getItem('tenant_subdomain');
+      if (subdomain) {
+        headers['X-Tenant-Subdomain'] = subdomain;
+      }
+    }
+    return headers;
   };
 
-  const hostname = window.location.hostname;
-  if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname.endsWith('.localhost')) {
-    // Extract subdomain from URL (e.g., keystone.localhost) or fall back to storage
-    const urlSubdomain = hostname.endsWith('.localhost')
-      ? hostname.replace('.localhost', '')
-      : null;
-    const subdomain =
-      urlSubdomain ||
-      sessionStorage.getItem('tenant_subdomain') ||
-      localStorage.getItem('tenant_subdomain');
-    if (subdomain) {
-      headers['X-Tenant-Subdomain'] = subdomain;
-    }
-  }
+  const requestBody = JSON.stringify(body);
+  const fetchStream = (tokenOverride?: string) => fetch(fullUrl, {
+    method: 'POST',
+    headers: buildHeaders(tokenOverride),
+    body: requestBody,
+    signal,
+  });
 
   let response: globalThis.Response;
   try {
-    response = await fetch(fullUrl, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-      signal,
-    });
+    response = await fetchStream();
+    if (await shouldRefreshSseResponse(response)) {
+      const refreshedToken = await refreshAccessTokenForRequests();
+      response = await fetchStream(refreshedToken);
+    }
   } catch (err) {
     onError?.(err instanceof Error ? err : new Error('Network error'));
     return;
@@ -126,5 +138,31 @@ export async function streamMAIC({
   } finally {
     reader.releaseLock();
     onDone?.();
+  }
+}
+
+async function shouldRefreshSseResponse(response: Response): Promise<boolean> {
+  if (response.status === 401) return true;
+  if (response.status !== 403) return false;
+
+  try {
+    const data = await response.clone().json();
+    const detail = String(data?.error || data?.detail || '').toLowerCase();
+    const code = String(data?.code || '').toLowerCase();
+    const messages = Array.isArray(data?.messages)
+      ? data.messages.map((item: any) => String(item?.message || '')).join(' ').toLowerCase()
+      : '';
+    return (
+      code.includes('token_not_valid') ||
+      (detail.includes('token') && (detail.includes('expired') || detail.includes('invalid'))) ||
+      messages.includes('token')
+    );
+  } catch {
+    try {
+      const text = (await response.clone().text()).toLowerCase();
+      return text.includes('token') && (text.includes('expired') || text.includes('invalid'));
+    } catch {
+      return false;
+    }
   }
 }

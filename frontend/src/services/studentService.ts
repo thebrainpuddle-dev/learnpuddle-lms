@@ -96,6 +96,7 @@ export interface StudentCourseDetail {
       lock_reason: string;
       has_transcript?: boolean;
       transcript_vtt_url?: string;
+      maic_classroom_id?: string | null;
     }>;
   }>;
 }
