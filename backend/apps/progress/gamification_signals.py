@@ -55,13 +55,17 @@ def on_teacher_progress_save(sender, instance, created, **kwargs):
     # Check if entire course is now complete
     if instance.content_id:
         from apps.courses.models import Content
-        from .models import TeacherProgress as TP
+        from .models import QuizSubmission, TeacherProgress as TP
 
         course = instance.course
         total_content = Content.objects.filter(
             module__course=course, is_active=True,
         ).count()
-        if total_content > 0:
+        has_course_assessment_activity = QuizSubmission.all_objects.filter(
+            teacher=teacher,
+            quiz__assignment__course=course,
+        ).exists()
+        if total_content > 1 or has_course_assessment_activity:
             completed_content = TP.all_objects.filter(
                 teacher=teacher,
                 course=course,
@@ -229,5 +233,3 @@ def on_assignment_submission_mastery(sender, instance, created, **kwargs):
             "award_assignment_mastery failed for AssignmentSubmission %s",
             instance.id,
         )
-
-

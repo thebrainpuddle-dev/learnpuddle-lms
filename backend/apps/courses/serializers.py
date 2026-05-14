@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 #   • views.py: the nested Prefetch that loads group members for the N+1 fix
 #   • serializers.py: the DB-fallback COUNT query in get_assigned_teacher_count
 # Keep these in sync by referencing this single constant.
-TEACHER_ROLES = ("TEACHER", "HOD", "IB_COORDINATOR")
+TEACHER_ROLES = ("TEACHER",)
 ACTIVE_TEACHER_FILTERS = {"role__in": TEACHER_ROLES, "is_active": True}
 
 

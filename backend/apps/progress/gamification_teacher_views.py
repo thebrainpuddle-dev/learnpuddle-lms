@@ -415,13 +415,12 @@ def teacher_streak_freeze_weekend_mode(request):
     Body: ``{"enabled": true|false}``.
     """
     config = get_or_create_config(request.tenant)
-    if not config.weekend_mode_available:
+    enabled = bool(request.data.get('enabled', False))
+    if enabled and not config.weekend_mode_available:
         return error_response(
             "Weekend mode is disabled for this tenant.",
             status_code=400,
         )
-
-    enabled = bool(request.data.get('enabled', False))
 
     streak, _ = TeacherStreak.all_objects.get_or_create(
         teacher=request.user,

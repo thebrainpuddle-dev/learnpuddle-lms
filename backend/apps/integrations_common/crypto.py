@@ -97,15 +97,15 @@ def decrypt_secret(ciphertext: str) -> str:
 def mask_secret(plaintext: str, visible: int = 4) -> str:
     """
     Return a masked representation of *plaintext* that reveals only the last
-    *visible* characters.  All preceding characters are replaced with ``…``.
+    *visible* characters.  Preceding characters are represented with asterisks.
 
     Example::
 
         mask_secret("https://hooks.slack.com/services/T123/B456/abcdefgh", 4)
-        -> "…efgh"
+        -> "****efgh"
     """
     if not plaintext:
         return ""
     if len(plaintext) <= visible:
         return plaintext
-    return "…" + plaintext[-visible:]
+    return "****" + plaintext[-visible:]

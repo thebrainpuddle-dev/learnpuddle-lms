@@ -212,6 +212,14 @@ def verify_encrypted_totp(device: TOTPDevice, token: str) -> bool:
     if not token:
         return False
 
+    try:
+        device.encrypted_secret  # type: ignore[attr-defined]
+    except EncryptedTOTPSecret.DoesNotExist:
+        # Legacy TOTPDevice rows still keep their seed on the device. Delegate
+        # to django-otp's implementation so old installations and older tests
+        # retain the same verification semantics until regenerated.
+        return bool(device.verify_token(token))
+
     # django-otp throttling — keep it.
     verify_allowed, _ = device.verify_is_allowed()
     if not verify_allowed:

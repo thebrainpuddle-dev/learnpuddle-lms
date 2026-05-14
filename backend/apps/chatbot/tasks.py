@@ -13,6 +13,8 @@ import logging
 from celery import shared_task
 from django.utils import timezone
 
+from .models import ChatQuery
+
 logger = logging.getLogger(__name__)
 
 RETENTION_DAYS = 30
@@ -25,8 +27,6 @@ def purge_old_chat_queries() -> dict:
 
     Returns a dict with ``deleted_count`` and ``cutoff`` for observability.
     """
-    from .models import ChatQuery
-
     cutoff = timezone.now() - datetime.timedelta(days=RETENTION_DAYS)
     qs = ChatQuery.all_objects.filter(created_at__lt=cutoff)
     deleted_count, _ = qs.delete()

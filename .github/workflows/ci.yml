@@ -53,6 +53,8 @@ jobs:
       DB_HOST: localhost
       DB_PORT: "5432"
       REDIS_URL: redis://localhost:6379/0
+      MAIC_V2_ENABLED: "true"
+      MAIC_GENERATION_USE_V2: "true"
       # Phase 2 target: 60%. Raise to 75% once integration tests are added.
       COV_FAIL_UNDER: "60"
     steps:

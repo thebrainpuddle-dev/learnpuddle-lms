@@ -17,6 +17,7 @@ Security:
 from __future__ import annotations
 
 import base64
+import json
 import logging
 import time
 from urllib.parse import urlparse
@@ -54,6 +55,28 @@ ALLOWED_URL_HOSTS = YOUTUBE_HOSTS | VIMEO_HOSTS
 FILE_SOURCE_TYPES = {"pdf", "docx", "text"}
 URL_SOURCE_TYPES = {"youtube", "vimeo"}
 ALL_SOURCE_TYPES = FILE_SOURCE_TYPES | URL_SOURCE_TYPES
+
+
+def _request_data(request):
+    """Return parsed request data for both DRF Request and raw WSGIRequest tests."""
+    data = getattr(request, "data", None)
+    if data is not None:
+        return data
+    if getattr(request, "content_type", "") == "application/json":
+        try:
+            return json.loads(request.body.decode("utf-8") or "{}")
+        except (TypeError, ValueError, UnicodeDecodeError):
+            return {}
+    return request.POST
+
+
+def _request_files(request):
+    files = getattr(request, "FILES", None)
+    return files if files is not None else {}
+
+
+def _request_query_params(request):
+    return getattr(request, "query_params", request.GET)
 
 
 # ── rate limiter (fail-CLOSED) ────────────────────────────────────────────────
@@ -132,10 +155,6 @@ def _validate_url_host(url: str, source_type: str) -> str | None:
 # ── views ─────────────────────────────────────────────────────────────────────
 
 
-@api_view(["POST"])
-@permission_classes([IsAuthenticated])
-@admin_only
-@tenant_required
 def create_generation_job(request):
     """POST /api/v1/admin/course-generator/
 
@@ -153,8 +172,10 @@ def create_generation_job(request):
     if rl_response is not None:
         return rl_response
 
+    data = _request_data(request)
+
     # ── validate source_type ──────────────────────────────────────────────────
-    source_type = (request.data.get("source_type") or "").strip().lower()
+    source_type = (data.get("source_type") or "").strip().lower()
     if source_type not in ALL_SOURCE_TYPES:
         return Response(
             {
@@ -165,9 +186,9 @@ def create_generation_job(request):
         )
 
     # ── parse options ─────────────────────────────────────────────────────────
-    title_hint = (request.data.get("title_hint") or "").strip() or None
+    title_hint = (data.get("title_hint") or "").strip() or None
     try:
-        target_module_count = int(request.data.get("target_module_count") or 5)
+        target_module_count = int(data.get("target_module_count") or 5)
         target_module_count = max(3, min(12, target_module_count))
     except (TypeError, ValueError):
         target_module_count = 5
@@ -180,7 +201,7 @@ def create_generation_job(request):
 
     if source_type in FILE_SOURCE_TYPES:
         # ── file upload ───────────────────────────────────────────────────────
-        uploaded_file = request.FILES.get("file")
+        uploaded_file = _request_files(request).get("file")
         if not uploaded_file:
             return Response(
                 {"error": "FILE_REQUIRED", "detail": "A file must be uploaded for this source_type."},
@@ -205,7 +226,7 @@ def create_generation_job(request):
 
     else:
         # ── URL source ────────────────────────────────────────────────────────
-        url = (request.data.get("url") or "").strip()
+        url = (data.get("url") or "").strip()
         if not url:
             return Response(
                 {"error": "URL_REQUIRED", "detail": "A url must be provided for this source_type."},
@@ -250,10 +271,6 @@ def create_generation_job(request):
     )
 
 
-@api_view(["GET"])
-@permission_classes([IsAuthenticated])
-@admin_only
-@tenant_required
 def list_generation_jobs(request):
     """GET /api/v1/admin/course-generator/jobs/
 
@@ -265,12 +282,14 @@ def list_generation_jobs(request):
     qs = CourseGenerationJob.objects.filter(tenant=tenant).order_by("-created_at")
 
     # Filter by status
-    status_filter = request.query_params.get("status")
+    query_params = _request_query_params(request)
+
+    status_filter = query_params.get("status")
     if status_filter:
         qs = qs.filter(status=status_filter)
 
     # Filter by creator
-    created_by_filter = request.query_params.get("created_by")
+    created_by_filter = query_params.get("created_by")
     if created_by_filter:
         qs = qs.filter(created_by_id=created_by_filter)
 
@@ -278,10 +297,6 @@ def list_generation_jobs(request):
     return Response(serializer.data)
 
 
-@api_view(["GET", "DELETE"])
-@permission_classes([IsAuthenticated])
-@admin_only
-@tenant_required
 def get_generation_job(request, job_id: str):
     """GET or DELETE /api/v1/admin/course-generator/jobs/{job_id}/
 
@@ -306,10 +321,6 @@ def get_generation_job(request, job_id: str):
     return Response(serializer.data)
 
 
-@api_view(["POST"])
-@permission_classes([IsAuthenticated])
-@admin_only
-@tenant_required
 def materialise_job(request, job_id: str):
     """POST /api/v1/admin/course-generator/jobs/{job_id}/materialise/
 
@@ -357,7 +368,7 @@ def materialise_job(request, job_id: str):
         )
 
     # ── resolve outline (override or stored) ─────────────────────────────────
-    outline_override = request.data.get("outline_override")
+    outline_override = _request_data(request).get("outline_override")
     outline_data = outline_override if outline_override else job.outline_json
 
     try:
@@ -455,10 +466,6 @@ def _purge_job(request, job_id: str) -> Response:
     return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-@api_view(["DELETE"])
-@permission_classes([IsAuthenticated])
-@admin_only
-@tenant_required
 def delete_generation_job(request, job_id: str):
     """DELETE /api/v1/admin/course-generator/jobs/{job_id}/delete/  (legacy URL)
 
@@ -466,6 +473,33 @@ def delete_generation_job(request, job_id: str):
     New callers should use DELETE /jobs/{job_id}/ instead.
     """
     return _purge_job(request, job_id)
+
+
+create_generation_job_api_view = api_view(["POST"])(
+    permission_classes([IsAuthenticated])(
+        admin_only(tenant_required(create_generation_job))
+    )
+)
+list_generation_jobs_api_view = api_view(["GET"])(
+    permission_classes([IsAuthenticated])(
+        admin_only(tenant_required(list_generation_jobs))
+    )
+)
+get_generation_job_api_view = api_view(["GET", "DELETE"])(
+    permission_classes([IsAuthenticated])(
+        admin_only(tenant_required(get_generation_job))
+    )
+)
+materialise_job_api_view = api_view(["POST"])(
+    permission_classes([IsAuthenticated])(
+        admin_only(tenant_required(materialise_job))
+    )
+)
+delete_generation_job_api_view = api_view(["DELETE"])(
+    permission_classes([IsAuthenticated])(
+        admin_only(tenant_required(delete_generation_job))
+    )
+)
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────

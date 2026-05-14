@@ -28,7 +28,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Optional, Tuple
 
-from django.db import transaction
+from django.db import IntegrityError, connection, transaction
 from django.utils import timezone as dj_timezone
 
 from apps.progress.models import QuizSubmission
@@ -178,6 +178,13 @@ def start_quiz_attempt(quiz, teacher, tenant) -> Tuple[Optional[QuizSubmission],
     max_attempts = quiz.max_attempts  # 0 = unlimited
 
     with transaction.atomic():
+        if connection.vendor == "postgresql":
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext(%s), hashtext(%s))",
+                    [str(quiz.id), str(teacher.id)],
+                )
+
         # Lock all prior submissions for this (quiz, teacher) pair so parallel
         # callers serialise through this block. We materialise the queryset
         # via list(...) so the SELECT ... FOR UPDATE actually executes.
@@ -217,15 +224,30 @@ def start_quiz_attempt(quiz, teacher, tenant) -> Tuple[Optional[QuizSubmission],
             max((s.attempt_number for s in prior_locked), default=0) + 1
         )
 
-        submission = QuizSubmission.all_objects.create(
-            quiz=quiz,
-            teacher=teacher,
-            tenant=tenant,
-            attempt_number=next_attempt,
-            started_at=_utcnow(),
-            answers={},
-            # score remains NULL until submit.
-        )
+        try:
+            with transaction.atomic():
+                submission = QuizSubmission.all_objects.create(
+                    quiz=quiz,
+                    teacher=teacher,
+                    tenant=tenant,
+                    attempt_number=next_attempt,
+                    started_at=_utcnow(),
+                    answers={},
+                    # score remains NULL until submit.
+                )
+        except IntegrityError:
+            winner = (
+                QuizSubmission.all_objects.filter(
+                    quiz=quiz,
+                    teacher=teacher,
+                    score__isnull=True,
+                )
+                .order_by("-attempt_number")
+                .first()
+            )
+            if winner:
+                return winner, None
+            return None, "Another attempt was just started; please refresh."
         return submission, None
 
 

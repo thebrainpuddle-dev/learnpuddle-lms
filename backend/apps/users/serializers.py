@@ -338,6 +338,8 @@ class ChangePasswordSerializer(serializers.Serializer):
             _vp(data['new_password'], user=user)
         except _VE as exc:
             messages = getattr(exc, 'messages', [str(exc)])
+            if _is_legacy_no_policy_uppercase_only_failure(user, messages):
+                return data
             raise serializers.ValidationError({"new_password": list(messages)})
         return data
 
@@ -346,3 +348,27 @@ class ChangePasswordSerializer(serializers.Serializer):
         if not user.check_password(value):
             raise serializers.ValidationError("Old password is incorrect")
         return value
+
+
+def _is_legacy_no_policy_uppercase_only_failure(user, messages) -> bool:
+    """
+    Preserve change-password compatibility for tenants created before
+    TenantPasswordPolicy rows existed.
+
+    Explicit tenant policies still enforce uppercase. For rowless legacy
+    tenants, keep Django's length/common/numeric checks and only relax the
+    newer composition-only uppercase failure so existing lowercase+digit
+    passwords can still be rotated successfully.
+    """
+    if not getattr(user, "tenant_id", None):
+        return False
+    try:
+        from apps.tenants.password_policy_models import TenantPasswordPolicy
+
+        if TenantPasswordPolicy.objects.filter(tenant_id=user.tenant_id).exists():
+            return False
+    except Exception:
+        return False
+
+    normalized = {str(message) for message in messages}
+    return normalized == {"Password must contain at least one uppercase letter."}

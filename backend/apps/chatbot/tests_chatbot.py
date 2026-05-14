@@ -532,6 +532,8 @@ class AskViewTests(TestCase):
 
     def test_ask_happy_path_grounded(self):
         """Happy path: ≥1 chunk → grounded=True, query row persisted."""
+        from apps.chatbot.views import ask_view
+
         chunk = _make_chunk()
         tenant = _make_tenant()
         user = _make_user(tenant=tenant)
@@ -591,6 +593,8 @@ class AskViewTests(TestCase):
 
     def test_ask_empty_retrieval_no_llm(self):
         """Empty retrieval → fallback sentence, grounded=False, NO LLM call."""
+        from apps.chatbot.views import ask_view
+
         tenant = _make_tenant()
         user = _make_user(tenant=tenant)
 

@@ -207,7 +207,7 @@ def test_build_chat_system_prompt_no_active_issue_just_returns_base():
     assert out == "ONLY_BASE"
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_mark_issue_complete_returns_stable_issue_ids(tenant):
     from asgiref.sync import async_to_sync
 

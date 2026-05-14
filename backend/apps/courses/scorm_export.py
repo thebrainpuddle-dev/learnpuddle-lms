@@ -325,7 +325,6 @@ def _build_manifest(
             attrib={
                 "identifier": item_def["resource_id"],
                 "type": "webcontent",
-                "scormType": "sco",
                 "href": item_def["href"],
             },
         )

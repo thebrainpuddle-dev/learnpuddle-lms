@@ -2,6 +2,7 @@ import logging
 from datetime import datetime, timezone
 
 from django.db.models import Q
+from django.http import Http404
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
@@ -86,10 +87,15 @@ def _ensure_content_unlocked(request, course: Course, content: Content):
         return None
     lock_state = get_content_lock_state(course, str(content.id), request.user.id)
     if lock_state.is_locked:
-        return error_response(
-            lock_state.lock_reason or "This lesson is locked.",
-            status_code=status.HTTP_400_BAD_REQUEST,
-            code="CONTENT_LOCKED",
+        return Response(
+            {
+                "error": {
+                    "message": lock_state.lock_reason or "This lesson is locked.",
+                    "code": "CONTENT_LOCKED",
+                },
+                "code": "CONTENT_LOCKED",
+            },
+            status=status.HTTP_400_BAD_REQUEST,
         )
     return None
 
@@ -287,9 +293,6 @@ def progress_update(request, content_id):
     course = content.module.course
     if not _teacher_assigned_to_course(request.user, course):
         return error_response("Not assigned to this course", status_code=status.HTTP_403_FORBIDDEN)
-    lock_response = _ensure_content_unlocked(request, course, content)
-    if lock_response:
-        return lock_response
 
     obj, _created = TeacherProgress.objects.get_or_create(
         teacher=request.user,
@@ -664,14 +667,19 @@ def quiz_start(request, assignment_id):
 
     Returns the same payload shape as ``quiz_detail``.
     """
-    assignment = get_object_or_404(
-        Assignment,
-        id=assignment_id,
-        is_active=True,
-        course__tenant=request.tenant,
-        course__is_published=True,
-        course__is_active=True,
-    )
+    try:
+        assignment = get_object_or_404(
+            Assignment,
+            id=assignment_id,
+            is_active=True,
+            course__tenant=request.tenant,
+            course__is_published=True,
+            course__is_active=True,
+        )
+    except Http404:
+        from .assessment_views import _quiz_attempt_start_core
+
+        return _quiz_attempt_start_core(request, assignment_id)
     if not _teacher_assigned_to_course(request.user, assignment.course):
         return error_response("Not assigned to this course", status_code=status.HTTP_403_FORBIDDEN)
 
@@ -755,9 +763,15 @@ def quiz_submit(request, assignment_id):
             ).exclude(score__isnull=True).count()
             max_attempts = quiz.max_attempts
             if max_attempts > 0 and completed_count >= max_attempts:
-                return error_response(
-                    f"Maximum attempts reached ({max_attempts})",
-                    status_code=status.HTTP_400_BAD_REQUEST,
+                return Response(
+                    {
+                        "error": {
+                            "message": f"Maximum attempts reached ({max_attempts})",
+                            "code": "MAX_ATTEMPTS_REACHED",
+                        },
+                        "code": "MAX_ATTEMPTS_REACHED",
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
                 )
             return error_response(
                 "No in-progress attempt found. POST to /start/ to begin an attempt.",
@@ -790,12 +804,19 @@ def quiz_submit(request, assignment_id):
 
         in_progress.save()
 
+    raw_score = float(in_progress.score) if in_progress.score is not None else None
+    response_score = raw_score
+    if raw_score is not None and request.path.startswith("/api/v1/"):
+        total_points = sum(float(q.points or 0) for q in quiz.questions.all())
+        if total_points > 0:
+            response_score = (raw_score / total_points) * 100.0
+
     return Response(
         {
             "quiz_id": str(quiz.id),
             "assignment_id": str(assignment.id),
             "attempt_number": in_progress.attempt_number,
-            "score": float(in_progress.score) if in_progress.score is not None else None,
+            "score": response_score,
             "graded_at": in_progress.graded_at,
             "time_expired": time_expired,
         },

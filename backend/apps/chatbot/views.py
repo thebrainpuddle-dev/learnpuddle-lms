@@ -25,6 +25,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from apps.courses.models import Course
 from utils.audit import log_audit
 from utils.decorators import tenant_required
 
@@ -33,6 +34,9 @@ from .rag_service import RAGAnswer, answer_question
 from .serializers import AskRequestSerializer, AskResponseSerializer, ChatQueryHistorySerializer
 
 logger = logging.getLogger(__name__)
+
+COURSE_DOES_NOT_EXIST = Course.DoesNotExist
+CHAT_QUERY_DOES_NOT_EXIST = ChatQuery.DoesNotExist
 
 # ── Rate limiting constants ───────────────────────────────────────────────────
 RATE_LIMIT_WINDOW = 3600  # 1 hour in seconds
@@ -110,8 +114,6 @@ def _check_course_scope(request, course_id) -> Response | None:
     Returns None if allowed, Response(403) if denied, Response(404) if course
     not found in tenant.
     """
-    from apps.courses.models import Course
-
     tenant = request.tenant
     user = request.user
 
@@ -121,7 +123,7 @@ def _check_course_scope(request, course_id) -> Response | None:
 
     try:
         course = Course.all_objects.get(id=course_id, tenant=tenant)
-    except Course.DoesNotExist:
+    except COURSE_DOES_NOT_EXIST:
         return Response(
             {"error": "NOT_FOUND", "detail": "Course not found."},
             status=status.HTTP_404_NOT_FOUND,
@@ -147,9 +149,6 @@ def _check_course_scope(request, course_id) -> Response | None:
 # ── Views ─────────────────────────────────────────────────────────────────────
 
 
-@api_view(["POST"])
-@permission_classes([IsAuthenticated])
-@tenant_required
 def ask_view(request):
     """POST /api/v1/chatbot/ask/
 
@@ -304,9 +303,6 @@ def ask_view(request):
     return Response(response_data, status=status.HTTP_200_OK)
 
 
-@api_view(["GET"])
-@permission_classes([IsAuthenticated])
-@tenant_required
 def history_list_view(request):
     """GET /api/v1/chatbot/history/
 
@@ -359,9 +355,6 @@ def history_list_view(request):
     )
 
 
-@api_view(["DELETE"])
-@permission_classes([IsAuthenticated])
-@tenant_required
 def history_delete_view(request, query_id: str):
     """DELETE /api/v1/chatbot/history/{query_id}/
 
@@ -374,7 +367,7 @@ def history_delete_view(request, query_id: str):
 
     try:
         query = ChatQuery.all_objects.get(id=query_id, tenant=tenant)
-    except ChatQuery.DoesNotExist:
+    except CHAT_QUERY_DOES_NOT_EXIST:
         return Response(
             {"error": "NOT_FOUND", "detail": "Query not found."},
             status=status.HTTP_404_NOT_FOUND,
@@ -412,3 +405,14 @@ def history_delete_view(request, query_id: str):
     )
 
     return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+ask_api_view = api_view(["POST"])(
+    permission_classes([IsAuthenticated])(tenant_required(ask_view))
+)
+history_list_api_view = api_view(["GET"])(
+    permission_classes([IsAuthenticated])(tenant_required(history_list_view))
+)
+history_delete_api_view = api_view(["DELETE"])(
+    permission_classes([IsAuthenticated])(tenant_required(history_delete_view))
+)

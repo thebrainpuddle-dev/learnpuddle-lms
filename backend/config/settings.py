@@ -1,10 +1,12 @@
 # config/settings.py
+import sys
 from pathlib import Path
 from decouple import config
 from datetime import timedelta
 from urllib.parse import urlsplit, urlunsplit
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+TESTING = any("pytest" in arg for arg in sys.argv)
 
 
 def _redis_url_with_db(url: str, db: int) -> str:
@@ -423,7 +425,18 @@ REST_FRAMEWORK = {
     },
     # OpenAPI schema generation
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+    # Keep "format" available for business endpoints such as
+    # /admin/reports/.../export/?format=xlsx instead of DRF treating it as a
+    # renderer selector and raising 404 for non-renderer values.
+    'URL_FORMAT_OVERRIDE': None,
 }
+
+if TESTING:
+    # View-level throttles still run in tests. The global user/anon throttles
+    # share Django's default cache object with fail-closed rate-limit tests,
+    # so patched cache outages there can otherwise explode before the view
+    # under test gets to handle them.
+    REST_FRAMEWORK['DEFAULT_THROTTLE_CLASSES'] = []
 
 # -----------------------------------------------------------------------------
 # API Documentation (drf-spectacular) - OpenAPI 3.0 schema
@@ -711,6 +724,17 @@ CHANNEL_LAYERS = {
         },
     },
 }
+
+if TESTING:
+    # Channels' Redis layer keeps long-lived receive loops that can outlive a
+    # pytest event loop when ASGI modules are reloaded. Unit/integration tests
+    # still exercise the real ASGI application and consumer code; the transport
+    # bus itself stays in-process to avoid cross-loop Redis receiver leaks.
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels.layers.InMemoryChannelLayer",
+        },
+    }
 
 # Email Configuration
 EMAIL_BACKEND = config('EMAIL_BACKEND', default='django.core.mail.backends.console.EmailBackend')

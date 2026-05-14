@@ -116,6 +116,11 @@ def login_view(request):
     response_data = {
         'user': UserSerializer(user).data,
         'tokens': tokens,
+        # Backward-compatible token shape for older clients/tests. Newer
+        # frontend code reads response.tokens, but the top-level fields remain
+        # part of the API contract.
+        'access': tokens['access'],
+        'refresh': tokens['refresh'],
     }
     
     # Check if user must change password

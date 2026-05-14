@@ -17,6 +17,8 @@ import logging
 
 from django.db import transaction
 
+from apps.courses.models import Content, Course, Module
+
 from .outline_service import CourseBlueprint
 
 logger = logging.getLogger(__name__)
@@ -35,7 +37,7 @@ def materialise_course(
     tenant,
     created_by,
     title_hint: str | None = None,
-) -> "courses.Course":  # type: ignore[name-defined]  # noqa: F821
+) -> Course:
     """Create and return a draft Course from a CourseBlueprint.
 
     All database operations are wrapped in a single transaction; any failure
@@ -50,8 +52,6 @@ def materialise_course(
     Returns:
         The newly created (unpublished) Course instance.
     """
-    from apps.courses.models import Course, Module, Content
-
     # ── create Course ────────────────────────────────────────────────────────
     course = Course(
         tenant=tenant,

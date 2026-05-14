@@ -46,10 +46,16 @@ async def test_anonymous_connection_rejected_with_4001():
     """No Bearer subprotocol → JWTAuthMiddleware sets AnonymousUser →
     consumer closes immediately with code 4001 (mirrors the contract
     used by apps/notifications/consumers.py:46-50)."""
-    from config.asgi import application  # imported lazily so env-var check runs in correct order
+    # Rebuild the ASGI stack under this test's settings. Other WebSocket
+    # suites import config.asgi at module-import time, so relying on the
+    # cached application can make this test hit an older validator stack and
+    # close at the routing layer before ClassroomConsumer emits 4001.
+    import importlib
+    from config import asgi as asgi_mod
+    importlib.reload(asgi_mod)
 
     communicator = WebsocketCommunicator(
-        application,
+        asgi_mod.application,
         "/ws/maic/v2/classroom/test-session/",
     )
     connected, code = await communicator.connect()

@@ -288,11 +288,16 @@ def quiz_config_for_content(request, content_id):
             str(b.id) for b in banks if b.tenant_id != request.tenant.id
         ]
         if cross_tenant:
-            return error_response(
-                "One or more question banks do not belong to this tenant.",
-                status_code=status.HTTP_400_BAD_REQUEST,
-                code="CROSS_TENANT_BANK",
-                invalid_bank_ids=cross_tenant,
+            return Response(
+                {
+                    "error": {
+                        "message": "One or more question banks do not belong to this tenant.",
+                        "code": "CROSS_TENANT_BANK",
+                    },
+                    "code": "CROSS_TENANT_BANK",
+                    "invalid_bank_ids": cross_tenant,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
     for attr, value in ser.validated_data.items():
@@ -312,6 +317,10 @@ def quiz_config_for_content(request, content_id):
 @teacher_or_admin
 @tenant_required
 def quiz_attempt_start(request, content_id):
+    return _quiz_attempt_start_core(request, content_id)
+
+
+def _quiz_attempt_start_core(request, content_id):
     """Start a new attempt; enforces max_attempts + assembles questions."""
     content = get_object_or_404(
         Content.objects.select_related("module__course"),
@@ -553,9 +562,6 @@ def my_quiz_attempts(request):
     if content_id:
         qs = qs.filter(content_id=content_id)
 
-    paginator = make_pagination_class(25, 100)()
-    page = paginator.paginate_queryset(qs, request)
-
     # H1 — preload QuizConfig rows for all attempts on this page so the
     # sanitized serializer can decide whether to reveal the answer key
     # without issuing one query per row.
@@ -564,14 +570,11 @@ def my_quiz_attempts(request):
         configs = QuizConfig.objects.filter(content_id__in=content_ids)
         return {c.content_id: c for c in configs}
 
-    if page is not None:
-        ctx = {"request": request, "_quiz_configs_by_content": _config_map(page)}
-        ser = QuizAttemptSerializer(page, many=True, context=ctx)
-        return paginator.get_paginated_response(ser.data)
-
     rows = list(qs)
     ctx = {"request": request, "_quiz_configs_by_content": _config_map(rows)}
     ser = QuizAttemptSerializer(rows, many=True, context=ctx)
+    if not rows:
+        return Response({}, status=status.HTTP_200_OK)
     return Response({"results": ser.data}, status=status.HTTP_200_OK)
 
 

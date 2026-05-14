@@ -262,7 +262,7 @@ def search(
     # pgvector ``<=>`` ORDER BY (no other unsafe clauses); all user input
     # is bound as parameters.
     params: list = [str(tenant.id)]
-    clauses = ["tenant_id = %s"]
+    clauses = ["tenant_id = %s", "embedding IS NOT NULL"]
 
     if kinds:
         placeholders = ",".join(["%s"] * len(kinds))

@@ -198,7 +198,9 @@ def _sanitize_csv_cell(val):
 
 def _rows_to_csv_response(rows: list[dict], filename: str) -> HttpResponse:
     if not rows:
-        return HttpResponse("No data", content_type="text/csv")
+        resp = HttpResponse("No data", content_type="text/csv")
+        resp["Content-Disposition"] = f'attachment; filename="{filename}"'
+        return resp
     output = io.StringIO()
     writer = csv.DictWriter(output, fieldnames=rows[0].keys())
     writer.writeheader()

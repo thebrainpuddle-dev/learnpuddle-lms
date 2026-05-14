@@ -92,10 +92,21 @@ class ChatIntegrationSerializer(serializers.ModelSerializer):
 
 
 class ChatRoutingRuleSerializer(serializers.ModelSerializer):
+    role_filter = serializers.ChoiceField(
+        choices=ChatRoutingRule.ROLE_CHOICES,
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+        default=None,
+    )
+
     class Meta:
         model = ChatRoutingRule
         fields = ["id", "integration", "notification_type", "role_filter", "enabled"]
         read_only_fields = ["id"]
+
+    def validate_role_filter(self, value):
+        return value or None
 
 
 class ChatDeliverySerializer(serializers.ModelSerializer):

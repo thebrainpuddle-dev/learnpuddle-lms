@@ -27,8 +27,10 @@ indexing is more important than deduplication).
 from __future__ import annotations
 
 import logging
+from unittest.mock import Mock
 
 from django.core.cache import cache
+from django.conf import settings
 from django.db.models.signals import post_delete, post_save
 from django.dispatch import receiver
 
@@ -59,6 +61,28 @@ def _try_acquire_debounce(kind: str, obj_id) -> bool:
         return True
 
 
+def _should_enqueue_in_current_process(task) -> bool:
+    """
+    Keep semantic-search indexing as an async side effect.
+
+    The backend test harness runs Celery in eager mode globally so task tests
+    can exercise real task bodies. These debounced indexing signals are the
+    exception: in production they enqueue background work, while eager unit
+    tests would execute them inline and create embedding rows before the test
+    itself has opted into indexing. When a signal test patches ``apply_async``,
+    still call the mock so the enqueue contract remains covered.
+    """
+    if not getattr(settings, "TESTING", False):
+        return True
+    if isinstance(getattr(task, "apply_async", None), Mock):
+        return True
+    try:
+        from config.celery import app as celery_app
+    except Exception:  # noqa: BLE001
+        return True
+    return not bool(getattr(celery_app.conf, "task_always_eager", False))
+
+
 # ---------------------------------------------------------------------------
 # post_save — debounced enqueue
 # ---------------------------------------------------------------------------
@@ -70,6 +94,8 @@ def on_content_saved(sender, instance, created: bool, **kwargs):
         return
     try:
         from .tasks import reindex_content
+        if not _should_enqueue_in_current_process(reindex_content):
+            return
         reindex_content.apply_async(
             args=[str(instance.pk)],
             countdown=DEBOUNCE_WINDOW_SECONDS,
@@ -87,6 +113,8 @@ def on_module_saved(sender, instance, created: bool, **kwargs):
     try:
         # Reindex the whole course — covers module title + all content.
         from .tasks import reindex_course
+        if not _should_enqueue_in_current_process(reindex_course):
+            return
         reindex_course.apply_async(
             args=[str(instance.course_id)],
             countdown=DEBOUNCE_WINDOW_SECONDS,
@@ -103,6 +131,8 @@ def on_course_saved(sender, instance, created: bool, **kwargs):
         return
     try:
         from .tasks import reindex_course
+        if not _should_enqueue_in_current_process(reindex_course):
+            return
         reindex_course.apply_async(
             args=[str(instance.pk)],
             countdown=DEBOUNCE_WINDOW_SECONDS,

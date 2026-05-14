@@ -122,7 +122,7 @@ class GamificationConfig(models.Model):
         help_text="Hours after a missed day during which activity still counts for the streak.",
     )
     weekend_mode_available = models.BooleanField(
-        default=True,
+        default=False,
         help_text="Allow teachers to opt into weekend mode (Sat/Sun don't count).",
     )
     freeze_token_earn_every_n_days = models.PositiveIntegerField(
@@ -134,7 +134,7 @@ class GamificationConfig(models.Model):
         help_text="Token lifetime in days (0 = never expires).",
     )
     freeze_token_max_inventory = models.PositiveIntegerField(
-        default=5,
+        default=3,
         help_text="Cap on unspent freeze tokens per teacher.",
     )
     leaderboard_enabled = models.BooleanField(default=True)

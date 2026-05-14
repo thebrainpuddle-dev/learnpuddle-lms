@@ -27,13 +27,19 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument(
             "--id",
-            required=True,
             dest="notification_id",
+            help="UUID of the notification to unarchive.",
+        )
+        parser.add_argument(
+            "notification_id_positional",
+            nargs="?",
             help="UUID of the notification to unarchive.",
         )
 
     def handle(self, *args, **options):
-        raw_id = options["notification_id"]
+        raw_id = options.get("notification_id") or options.get("notification_id_positional")
+        if not raw_id:
+            raise CommandError("Notification ID is required. Pass --id <uuid> or <uuid>.")
 
         # Validate UUID format before hitting the DB.
         try:

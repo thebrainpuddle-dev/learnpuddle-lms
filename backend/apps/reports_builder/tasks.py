@@ -29,6 +29,9 @@ from django.conf import settings
 from django.core.mail import send_mail
 from django.utils import timezone
 
+from apps.reports_builder.models import ReportRun, ReportSchedule
+from apps.reports_builder.query_engine import rows_to_csv, rows_to_xlsx, run_report
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -57,13 +60,6 @@ def _artifact_path(run_id: str, fmt: str = "csv") -> pathlib.Path:
 @shared_task(name="reports_builder.build_csv_export", bind=True, max_retries=2)
 def build_csv_export(self, run_id: str) -> None:
     """Build a CSV artifact for *run_id* and update the ReportRun record."""
-    from apps.reports_builder.models import ReportRun
-    from apps.reports_builder.query_engine import (
-        ROW_CAP_EXCEEDED,
-        rows_to_csv,
-        run_report,
-    )
-
     try:
         run = ReportRun.all_objects.get(id=run_id)
     except ReportRun.DoesNotExist:
@@ -110,9 +106,8 @@ def build_csv_export(self, run_id: str) -> None:
         logger.exception("build_csv_export run=%s unexpected error", run_id)
         return
 
-    # Write CSV artifact to disk
     csv_bytes, sha256 = rows_to_csv(rows)
-    artifact_path = _artifact_path(run_id)
+    artifact_path = _artifact_path(run_id, "csv")
     try:
         artifact_path.write_bytes(csv_bytes)
     except OSError:
@@ -128,6 +123,7 @@ def build_csv_export(self, run_id: str) -> None:
     run.row_count = row_count
     run.artifact_path = str(artifact_path)
     run.artifact_sha256 = sha256
+    run.artifact_format = "csv"
     run.finished_at = timezone.now()
     run.save(
         update_fields=[
@@ -135,10 +131,92 @@ def build_csv_export(self, run_id: str) -> None:
             "row_count",
             "artifact_path",
             "artifact_sha256",
+            "artifact_format",
             "finished_at",
         ]
     )
     logger.info("build_csv_export run=%s success rows=%d", run_id, row_count)
+
+
+@shared_task(name="reports_builder.build_xlsx_export", bind=True, max_retries=2)
+def build_xlsx_export(self, run_id: str) -> None:
+    """Build an XLSX artifact for *run_id* and update the ReportRun record."""
+    try:
+        run = ReportRun.all_objects.get(id=run_id)
+    except ReportRun.DoesNotExist:
+        logger.error("build_xlsx_export: run %s not found", run_id)
+        return
+
+    run.status = "running"
+    run.save(update_fields=["status"])
+
+    snapshot = run.params_snapshot_json or {}
+    data_source = snapshot.get("data_source", "")
+    filters = snapshot.get("filters", [])
+    group_by_raw = snapshot.get("group_by", [])
+    aggregates = snapshot.get("aggregates", [])
+
+    group_by: list[str] = []
+    for item in group_by_raw:
+        if isinstance(item, str):
+            group_by.append(item)
+        elif isinstance(item, dict) and "field" in item:
+            group_by.append(item["field"])
+
+    try:
+        rows, row_count = run_report(
+            tenant=run.tenant,
+            data_source=data_source,
+            filters=filters,
+            group_by=group_by,
+            aggregates=aggregates,
+        )
+    except ValueError as exc:
+        run.status = "error"
+        run.error = str(exc)
+        run.finished_at = timezone.now()
+        run.save(update_fields=["status", "error", "finished_at"])
+        logger.warning("build_xlsx_export run=%s error: %s", run_id, exc)
+        return
+    except Exception:
+        tb = traceback.format_exc()
+        run.status = "error"
+        run.error = tb
+        run.finished_at = timezone.now()
+        run.save(update_fields=["status", "error", "finished_at"])
+        logger.exception("build_xlsx_export run=%s unexpected error", run_id)
+        return
+
+    xlsx_bytes, sha256 = rows_to_xlsx(rows)
+    artifact_path = _artifact_path(run_id, "xlsx")
+    try:
+        artifact_path.write_bytes(xlsx_bytes)
+    except OSError:
+        tb = traceback.format_exc()
+        run.status = "error"
+        run.error = tb
+        run.finished_at = timezone.now()
+        run.save(update_fields=["status", "error", "finished_at"])
+        logger.exception("build_xlsx_export run=%s failed to write artifact", run_id)
+        return
+
+    run.status = "success"
+    run.row_count = row_count
+    run.artifact_path = str(artifact_path)
+    run.artifact_sha256 = sha256
+    run.artifact_format = "xlsx"
+    run.finished_at = timezone.now()
+    run.save(
+        update_fields=[
+            "status",
+            "row_count",
+            "artifact_path",
+            "artifact_sha256",
+            "artifact_format",
+            "finished_at",
+        ]
+    )
+    logger.info("build_xlsx_export run=%s success rows=%d", run_id, row_count)
 
 
 # ---------------------------------------------------------------------------
@@ -200,8 +278,6 @@ def execute_scheduled_report(self, schedule_id: str) -> None:
     Errors are captured into ReportRun.error + ReportSchedule.last_run_status.
     NEVER attaches the CSV directly — always a signed-URL link.
     """
-    from apps.reports_builder.models import ReportRun, ReportSchedule
-    from apps.reports_builder.query_engine import rows_to_csv, run_report
     from apps.courses.helpers.signed_urls import make_signed_url
 
     try:

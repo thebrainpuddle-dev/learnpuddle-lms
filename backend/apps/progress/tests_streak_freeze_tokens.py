@@ -116,10 +116,10 @@ class StreakFreezeModelTest(TestCase):
     def test_gamification_config_freeze_defaults(self):
         config = get_or_create_config(self.tenant)
         self.assertEqual(config.grace_period_hours, 24)
-        self.assertTrue(config.weekend_mode_available)
+        self.assertFalse(config.weekend_mode_available)
         self.assertEqual(config.freeze_token_earn_every_n_days, 7)
         self.assertEqual(config.freeze_token_expires_days, 90)
-        self.assertEqual(config.freeze_token_max_inventory, 5)
+        self.assertEqual(config.freeze_token_max_inventory, 3)
 
 
 # ---------------------------------------------------------------------------
@@ -319,6 +319,9 @@ class StreakFreezeApiTest(TestCase):
         self.assertEqual(resp.status_code, 400)
 
     def test_weekend_mode_toggle_on(self):
+        self.config.weekend_mode_available = True
+        self.config.save(update_fields=["weekend_mode_available"])
+
         resp = self.client.post(
             self._url("weekend-mode/"),
             {"enabled": True}, format="json",

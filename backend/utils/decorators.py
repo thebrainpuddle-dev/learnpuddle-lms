@@ -2,7 +2,7 @@
 
 from functools import wraps
 from rest_framework.exceptions import PermissionDenied
-from .tenant_middleware import get_current_tenant
+from . import tenant_middleware
 
 
 def tenant_required(view_func):
@@ -13,12 +13,13 @@ def tenant_required(view_func):
     """
     @wraps(view_func)
     def wrapper(request, *args, **kwargs):
-        tenant = get_current_tenant()
+        tenant = tenant_middleware.get_current_tenant()
         if not tenant:
             raise PermissionDenied("Tenant context required")
-        # Also ensure request.tenant is available
-        if not hasattr(request, 'tenant') or request.tenant is None:
-            request.tenant = tenant
+        # Keep request.tenant aligned with the resolved context tenant. This
+        # matters for tests and async code paths where the request object may
+        # already carry stale tenant state from a previous wrapper.
+        request.tenant = tenant
         # Cross-tenant isolation (DRF-level check — catches force_authenticate)
         if (request.user.is_authenticated
                 and request.user.role != 'SUPER_ADMIN'
@@ -121,7 +122,10 @@ def check_feature(feature_name):
     def decorator(view_func):
         @wraps(view_func)
         def wrapper(request, *args, **kwargs):
-            tenant = getattr(request, 'tenant', None) or get_current_tenant()
+            tenant = (
+                getattr(request, 'tenant', None)
+                or tenant_middleware.get_current_tenant()
+            )
             if tenant:
                 key = feature_name
                 if key.startswith('features.'):
@@ -155,7 +159,10 @@ def check_tenant_limit(resource_name):
     def decorator(view_func):
         @wraps(view_func)
         def wrapper(request, *args, **kwargs):
-            tenant = getattr(request, 'tenant', None) or get_current_tenant()
+            tenant = (
+                getattr(request, 'tenant', None)
+                or tenant_middleware.get_current_tenant()
+            )
             if tenant:
                 from apps.tenants.services import check_limit
                 if not check_limit(tenant, resource_name):

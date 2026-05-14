@@ -214,7 +214,8 @@ def tenant_settings_view(request):
     serializer = TenantSettingsSerializer(
         tenant, data=request.data, partial=True, context={"request": request}
     )
-    serializer.is_valid(raise_exception=True)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     serializer.save()
     log_audit('SETTINGS_CHANGE', 'Tenant', target_id=str(tenant.id), target_repr=tenant.name, request=request)
     return Response(serializer.data, status=status.HTTP_200_OK)

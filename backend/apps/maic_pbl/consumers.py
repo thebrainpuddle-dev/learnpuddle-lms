@@ -53,9 +53,20 @@ logger = logging.getLogger(__name__)
 _MENTION_RE = re.compile(r"@(question|judge)\b", re.IGNORECASE)
 
 
+def _close_stale_db_connections() -> None:
+    """Reset inherited closed DB connections before sync ORM work in WS tests."""
+    from django.db import close_old_connections, connections
+
+    close_old_connections()
+    for conn in connections.all():
+        if getattr(conn, "connection", None) is not None and not conn.is_usable():
+            conn.close()
+
+
 @database_sync_to_async
 def _user_has_maic_v2_access(user) -> bool:
     """Run the shared MAIC v2 gate in a DB-safe sync context."""
+    _close_stale_db_connections()
     from apps.maic.permissions import user_has_maic_v2_access
 
     return user_has_maic_v2_access(user)
@@ -70,6 +81,7 @@ def _load_session(session_id: str, user) -> tuple[Any, int]:
       4003 — cross-tenant (session exists for a different tenant)
       4004 — session not found
     """
+    _close_stale_db_connections()
     from apps.maic_pbl.models import MaicPBLSession
 
     user_tenant_id = getattr(user, "tenant_id", None)
@@ -92,6 +104,7 @@ def _load_session(session_id: str, user) -> tuple[Any, int]:
 
 @database_sync_to_async
 def _resolve_llm_config_for_tenant(tenant_id) -> dict:
+    _close_stale_db_connections()
     from apps.maic.llm_config import resolve_tenant_llm_runtime_config
 
     return resolve_tenant_llm_runtime_config(tenant_id=tenant_id)
@@ -104,6 +117,7 @@ def _persist_chat_turn(session_id: str, message: dict[str, Any]) -> None:
     Re-reads the row to avoid clobbering concurrent writers (rare —
     PBL is single-owner per upstream model — but the read-modify-
     write is still cheap insurance)."""
+    _close_stale_db_connections()
     from apps.maic_pbl.models import MaicPBLSession
 
     sess = MaicPBLSession.objects.all_tenants().filter(id=session_id).first()
@@ -120,6 +134,7 @@ def _mark_issue_complete_and_advance(
     """Mark the current issue is_done + activate next; return
     (advanced, next_title, completed_issue_id, next_issue_id) so the
     consumer can include stable ids in the agent_end frame."""
+    _close_stale_db_connections()
     from apps.maic_pbl.mcp import AgentMCP, IssueboardMCP
     from apps.maic_pbl.models import MaicPBLSession
 

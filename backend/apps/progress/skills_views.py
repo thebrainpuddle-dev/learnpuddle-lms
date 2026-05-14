@@ -77,10 +77,10 @@ def skill_create(request):
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 @admin_only
-@tenant_required
 def skill_detail(request, skill_id):
     """Retrieve a single skill."""
-    skill = get_object_or_404(Skill, id=skill_id, tenant=request.tenant)
+    tenant = getattr(request, "tenant", None) or getattr(request.user, "tenant", None)
+    skill = get_object_or_404(Skill, id=skill_id, tenant=tenant)
     return Response(SkillSerializer(skill).data, status=status.HTTP_200_OK)
 
 

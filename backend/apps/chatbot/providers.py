@@ -11,6 +11,7 @@ Stub raises `StubNotAllowed` in production unless `CHATBOT_ALLOW_STUB=1`
 from __future__ import annotations
 
 import logging
+import requests
 import time
 
 from django.conf import settings
@@ -65,8 +66,6 @@ class OpenRouterChatProvider(ChatProvider):
             raise ChatProviderError("OPENROUTER_API_KEY is not configured")
 
     def complete(self, prompt: str) -> tuple[str, int, int]:
-        import requests  # local import
-
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -123,8 +122,6 @@ class OllamaChatProvider(ChatProvider):
         self.model = getattr(settings, "CHATBOT_OLLAMA_MODEL", "llama3")
 
     def complete(self, prompt: str) -> tuple[str, int, int]:
-        import requests
-
         body = {
             "model": self.model,
             "prompt": prompt,

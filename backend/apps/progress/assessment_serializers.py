@@ -161,6 +161,12 @@ class QuestionBankSerializer(serializers.ModelSerializer):
 # ---------------------------------------------------------------------------
 
 class QuizConfigSerializer(serializers.ModelSerializer):
+    source_question_banks = serializers.PrimaryKeyRelatedField(
+        queryset=QuestionBank.all_objects.all(),
+        many=True,
+        required=False,
+    )
+
     class Meta:
         model = QuizConfig
         fields = [

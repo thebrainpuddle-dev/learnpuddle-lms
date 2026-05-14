@@ -195,6 +195,17 @@ def award_quiz_mastery(submission) -> Optional[object]:
     weight = _to_decimal(config.mp_quiz_weight, '1')
     mp_amount = (score_percent * weight)
 
+    from .gamification_models import MasteryPointTransaction
+
+    existing = MasteryPointTransaction.all_objects.filter(
+        teacher=teacher,
+        reason='quiz_mastery',
+        reference_id=submission.id,
+        reference_type='quiz_submission',
+    ).first()
+    if existing:
+        return existing
+
     return award_mastery_points(
         teacher=teacher,
         reason='quiz_mastery',
@@ -243,6 +254,17 @@ def award_assignment_mastery(submission) -> Optional[object]:
     # MP scales off the raw rubric/assignment score so higher-weight
     # assignments yield more MP than percentage alone would.
     mp_amount = score * weight
+
+    from .gamification_models import MasteryPointTransaction
+
+    existing = MasteryPointTransaction.all_objects.filter(
+        teacher=teacher,
+        reason='assignment_mastery',
+        reference_id=submission.id,
+        reference_type='assignment_submission',
+    ).first()
+    if existing:
+        return existing
 
     return award_mastery_points(
         teacher=teacher,

@@ -82,6 +82,7 @@ class ChatRoutingRule(models.Model):
 
     NOTIFICATION_TYPE_CHOICES = [
         ("COURSE_ASSIGNED", "Course Assigned"),
+        ("COURSE_PUBLISHED", "Course Published"),
         ("ASSIGNMENT_DUE", "Assignment Due"),
         ("QUIZ_SUBMISSION", "Quiz Submission"),
         ("CERTIFICATION_EXPIRING", "Certification Expiring"),

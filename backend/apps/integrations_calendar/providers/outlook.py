@@ -15,6 +15,7 @@ Secrets required (from settings / env):
 from __future__ import annotations
 
 import logging
+import requests
 from typing import TYPE_CHECKING
 
 from django.conf import settings
@@ -184,8 +185,6 @@ def ensure_learnpuddle_calendar(connection: "CalendarConnection") -> str:
     Create the dedicated LearnPuddle calendar in Outlook if it doesn't exist yet.
     Returns the calendar ID.
     """
-    import requests
-
     headers = _auth_headers(connection)
     resp = requests.get(f"{GRAPH_BASE}/me/calendars", headers=headers, timeout=15)
     resp.raise_for_status()
@@ -219,8 +218,6 @@ def upsert_event(connection: "CalendarConnection", event_data: dict) -> str:
 
     Returns the provider event ID.
     """
-    import requests
-
     headers = {**_auth_headers(connection), "Content-Type": "application/json"}
     calendar_id = connection.target_calendar_id
 
@@ -274,8 +271,6 @@ def upsert_event(connection: "CalendarConnection", event_data: dict) -> str:
 
 def delete_event(connection: "CalendarConnection", provider_event_id: str) -> None:
     """Delete an Outlook Calendar event by its provider event ID."""
-    import requests
-
     try:
         resp = requests.delete(
             f"{GRAPH_BASE}/me/calendars/{connection.target_calendar_id}/events/{provider_event_id}",
@@ -324,8 +319,6 @@ def _auth_headers(connection: "CalendarConnection") -> dict:
 
 def _fetch_graph_user_id(access_token: str) -> str:
     """Retrieve the MS Graph user's 'id' field."""
-    import requests
-
     try:
         resp = requests.get(
             f"{GRAPH_BASE}/me?$select=id",

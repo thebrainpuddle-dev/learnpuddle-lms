@@ -22,6 +22,10 @@ import time
 from dataclasses import dataclass, field
 from typing import List, Optional
 
+from apps.semantic_search.retrieval import search as semantic_search
+
+from .providers import get_provider
+
 logger = logging.getLogger(__name__)
 
 # The exact fallback sentence used when context is empty or LLM is uncertain.
@@ -170,10 +174,6 @@ def answer_question(
     Raises:
         ChatProviderError: If all LLM providers fail.
     """
-    from apps.semantic_search.retrieval import search as semantic_search
-
-    from .providers import get_provider
-
     start_time = time.monotonic()
 
     # Injection check — log only, never block.

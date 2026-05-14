@@ -16,6 +16,15 @@ Usage example:
 """
 
 # ---------------------------------------------------------------------------
+# Backend CI and local pytest should exercise the MAIC v2/PBL route surface.
+# This must be set before Django imports settings/asgi modules.
+# ---------------------------------------------------------------------------
+import os
+
+os.environ.setdefault("MAIC_V2_ENABLED", "true")
+os.environ.setdefault("MAIC_GENERATION_USE_V2", "true")
+
+# ---------------------------------------------------------------------------
 # Host-env guard: fail fast with one clear error instead of 20+ cryptic ones.
 #
 # `utils/logging.py` imports `pythonjsonlogger` at module level (line 32).
@@ -284,7 +293,8 @@ def override_allowed_hosts(settings):
     ALLOWED_HOSTS to be explicitly set per-test.
     """
     settings.ALLOWED_HOSTS = ["*"]
-    settings.PLATFORM_DOMAIN = "lms.com"
+    if getattr(settings, "PLATFORM_DOMAIN", None) in (None, "", "localhost"):
+        settings.PLATFORM_DOMAIN = "lms.com"
 
 
 # ---------------------------------------------------------------------------

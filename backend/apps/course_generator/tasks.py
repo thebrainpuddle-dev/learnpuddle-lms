@@ -14,6 +14,14 @@ from django.utils import timezone
 
 from utils.audit import log_audit
 
+from apps.course_generator.materialiser import materialise_course
+from apps.course_generator.models import CourseGenerationJob
+from apps.course_generator.outline_service import (
+    OutlineProviderError,
+    generate_outline,
+    looks_like_injection,
+)
+
 logger = logging.getLogger(__name__)
 
 TEXT_CAP = 100_000  # Characters; must match extractor constants
@@ -32,10 +40,6 @@ def generate_course_from_source(self, job_id: str) -> None:
 
     Any exception transitions the job to failed.
     """
-    from apps.course_generator.models import CourseGenerationJob
-    from apps.course_generator.outline_service import generate_outline, looks_like_injection, OutlineProviderError
-    from apps.course_generator.materialiser import materialise_course
-
     try:
         job = CourseGenerationJob.all_objects.get(id=job_id)
     except CourseGenerationJob.DoesNotExist:
