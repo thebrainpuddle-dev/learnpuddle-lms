@@ -48,6 +48,21 @@ All of these were run locally on `/Volumes/CrucialX9/learnpuddle-lms` before com
 - Frontend production build:
   - `vite build` completed successfully.
 
+## Follow-up CI Fix
+
+GitHub Actions run `25879661771` on commit `d7305ef` reduced the backend failure to one SCIM sorting assertion:
+
+- `apps/users/tests_scim.py::TestSCIMListUsers::test_list_users_sortby_email_is_synonym_for_username`
+
+Root cause: PostgreSQL's locale-dependent text collation can order `admin-...@...` before `a@...`, while the SCIM contract/test expects deterministic byte-style `userName`/email ordering.
+
+Fix: `apps/users/scim_views.py` now uses explicit PostgreSQL `COLLATE "C"` ordering for SCIM user text sorts, with a non-PostgreSQL fallback to normal field ordering.
+
+Follow-up local validation:
+
+- Targeted SCIM sort tests: `7 passed`.
+- Full SCIM user/group/cross-tenant cluster: `173 passed`.
+
 ## Remaining AI Classroom Foundation Work For Claude
 
 This commit makes CI/build stable. It does not finish the OpenMAIC-level classroom experience. Claude should pull latest `main`, branch, and work in focused PRs.

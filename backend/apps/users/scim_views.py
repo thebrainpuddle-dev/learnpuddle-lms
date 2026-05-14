@@ -23,6 +23,8 @@ import json
 import logging
 import re
 
+from django.db import connection
+from django.db.models.functions import Collate
 from django.http import HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 
@@ -124,6 +126,14 @@ def _tenant_users(tenant):
     return User.objects.all_tenants().filter(tenant=tenant)
 
 
+def _scim_text_order(field_name: str, descending: bool = False):
+    """Return deterministic SCIM text ordering independent of DB locale."""
+    if connection.vendor == "postgresql":
+        expr = Collate(field_name, "C")
+        return expr.desc() if descending else expr.asc()
+    return f"-{field_name}" if descending else field_name
+
+
 # ---------------------------------------------------------------------------
 # Endpoint: GET/POST /scim/v2/Users
 # ---------------------------------------------------------------------------
@@ -177,11 +187,10 @@ def scim_users_view(request):
                     "invalidValue",
                 )
             sort_field = _USERS_SORT_ALLOWLIST[sort_by_param]
-            if sort_order_param == "descending":
-                sort_field = f"-{sort_field}"
         else:
             # Implicit default: ascending email (unchanged pre-PHASE3-6 behaviour)
             sort_field = "email"
+        sort_descending = sort_order_param == "descending"
 
         total = users.count()
 
@@ -193,7 +202,10 @@ def scim_users_view(request):
             start_index, count = 1, 100
 
         offset = start_index - 1
-        page_users = users.order_by(sort_field)[offset: offset + count]
+        page_users = users.order_by(
+            _scim_text_order(sort_field, sort_descending),
+            "id",
+        )[offset: offset + count]
 
         return _json_resp({
             "schemas": [_SCHEMA_LIST],
