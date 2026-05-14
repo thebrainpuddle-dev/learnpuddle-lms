@@ -40,6 +40,7 @@ ImageProviderId = Literal[
     "nano_banana",
     "seedream",
     "stability",
+    "pollinations",
     "disabled",
 ]
 

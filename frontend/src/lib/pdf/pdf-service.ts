@@ -6,12 +6,85 @@
 import api from '../../config/api';
 import type { ParsedPdfContent, PDFParserConfig } from './types';
 
-interface BackendPdfResponse {
+interface BackendPdfFigure {
+  figure_id: string;
+  caption: string;
+  image_url: string | null;
+  page: number;
+}
+
+interface BackendPdfPage {
+  page_number: number;
   text: string;
-  images: string[];
-  metadata: Record<string, unknown>;
-  tables?: Array<{ page: number; data: string[][]; caption?: string }>;
-  formulas?: Array<{ page: number; latex: string }>;
+}
+
+interface BackendPdfSection {
+  section_id: string;
+  title: string;
+  level: number;
+  text: string;
+  page_start: number;
+  page_end: number;
+}
+
+interface BackendPdfDocument {
+  document_id: string;
+  title: string;
+  total_pages: number;
+  sections: BackendPdfSection[];
+  figures: BackendPdfFigure[];
+  pages: BackendPdfPage[];
+  provider: string;
+  latency_ms: number;
+  cost_usd_estimate: number | null;
+}
+
+interface BackendPdfResponse {
+  document_id: string;
+  document: BackendPdfDocument;
+  state: string;
+  latency_ms: number;
+}
+
+function documentToText(document: BackendPdfDocument): string {
+  const sectionText = document.sections
+    .map((section) => [section.title, section.text].filter(Boolean).join('\n'))
+    .filter(Boolean)
+    .join('\n\n');
+
+  if (sectionText.trim()) return sectionText.trim();
+
+  return document.pages
+    .map((page) => page.text)
+    .filter(Boolean)
+    .join('\n\n')
+    .trim();
+}
+
+function mapBackendPdfResponse(response: BackendPdfResponse): ParsedPdfContent {
+  const document = response.document;
+  const images = document.figures
+    .map((figure) => figure.image_url)
+    .filter((url): url is string => Boolean(url));
+
+  return {
+    text: documentToText(document),
+    images,
+    metadata: {
+      fileName: document.title || response.document_id,
+      pageCount: document.total_pages,
+      parser: document.provider,
+      processingTime: response.latency_ms,
+      documentId: response.document_id,
+      state: response.state,
+      pdfImages: document.figures.map((figure) => ({
+        id: figure.figure_id,
+        src: figure.image_url || '',
+        pageNumber: figure.page,
+        description: figure.caption,
+      })),
+    },
+  };
 }
 
 /**
@@ -29,17 +102,11 @@ export async function parsePDF(
   }
 
   const response = await api.post<BackendPdfResponse>(
-    '/v1/teacher/maic/parse-pdf/',
+    '/maic/v2/pdf/parse/',
     formData,
   );
 
-  return {
-    text: response.data.text,
-    images: response.data.images || [],
-    tables: response.data.tables,
-    formulas: response.data.formulas,
-    metadata: response.data.metadata as ParsedPdfContent['metadata'],
-  };
+  return mapBackendPdfResponse(response.data);
 }
 
 /**
@@ -50,17 +117,11 @@ export async function parsePDFStudent(file: File): Promise<ParsedPdfContent> {
   formData.append('file', file);
 
   const response = await api.post<BackendPdfResponse>(
-    '/v1/student/maic/parse-pdf/',
+    '/maic/v2/pdf/parse/',
     formData,
   );
 
-  return {
-    text: response.data.text,
-    images: response.data.images || [],
-    tables: response.data.tables,
-    formulas: response.data.formulas,
-    metadata: response.data.metadata as ParsedPdfContent['metadata'],
-  };
+  return mapBackendPdfResponse(response.data);
 }
 
 /**

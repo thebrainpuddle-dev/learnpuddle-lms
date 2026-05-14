@@ -47,6 +47,9 @@ import pytest
 from rest_framework.test import APIClient
 
 from apps.courses.maic_models import MAICClassroom, TenantAIConfig
+from tests.courses.maic_legacy_generation_helpers import (
+    call_legacy_scene_content_view,
+)
 
 pytestmark = pytest.mark.django_db
 
@@ -157,7 +160,7 @@ def _make_classroom(tenant, creator, *, images_pending=False, n_scenes=1):
 
 
 def test_teacher_scene_content_does_not_inline_fetch_images(
-    teacher_client, maic_enabled_tenant, teacher_user, ai_config
+    maic_enabled_tenant, teacher_user, ai_config
 ):
     """Calling the teacher scene-content endpoint while the LLM produces a
     valid multi-slide payload must not call ``fetch_scene_image`` even
@@ -197,25 +200,26 @@ def test_teacher_scene_content_does_not_inline_fetch_images(
     ), patch(
         "apps.courses.maic_tasks.fill_classroom_images.apply_async",
     ):
-        resp = teacher_client.post(
-            "/api/v1/teacher/maic/generate/scene-content/",
-            {
+        resp = call_legacy_scene_content_view(
+            audience="teacher",
+            user=teacher_user,
+            tenant=maic_enabled_tenant,
+            payload={
                 "scene": {"id": "scene-1", "title": "Intro", "type": "lecture",
                           "slideCount": 3, "agentIds": []},
                 "agents": [{"id": "a1", "name": "Prof", "role": "professor"}],
                 "language": "en",
                 "classroomId": classroom_id,
             },
-            format="json",
         )
 
-    assert resp.status_code == 200, resp.content
+    assert resp.status_code == 200, getattr(resp, "data", None)
     assert mock_fetch.call_count == 0, (
         f"fetch_scene_image must not be called inline during the wizard "
         f"request (got {mock_fetch.call_count} calls)"
     )
 
-    data = resp.json()
+    data = resp.data
     # Image src is left empty for the Celery task to fill later.
     img_el = next(
         el for slide in data["slides"]
@@ -232,7 +236,7 @@ def test_teacher_scene_content_does_not_inline_fetch_images(
 
 
 def test_student_scene_content_does_not_inline_fetch_images(
-    student_client, maic_enabled_tenant, teacher_user, ai_config
+    student_user, maic_enabled_tenant, teacher_user, ai_config
 ):
     """Same contract as the teacher endpoint, asserted independently because
     student views go through ``student_or_admin`` and their own classroom
@@ -268,19 +272,20 @@ def test_student_scene_content_does_not_inline_fetch_images(
     ), patch(
         "apps.courses.maic_tasks.fill_classroom_images.apply_async",
     ):
-        resp = student_client.post(
-            "/api/v1/student/maic/generate/scene-content/",
-            {
+        resp = call_legacy_scene_content_view(
+            audience="student",
+            user=student_user,
+            tenant=maic_enabled_tenant,
+            payload={
                 "scene": {"id": "scene-1", "title": "Intro", "type": "lecture",
                           "slideCount": 3, "agentIds": []},
                 "agents": [{"id": "a1", "name": "Prof", "role": "professor"}],
                 "language": "en",
                 "classroomId": classroom_id,
             },
-            format="json",
         )
 
-    assert resp.status_code == 200, resp.content
+    assert resp.status_code == 200, getattr(resp, "data", None)
     assert mock_fetch.call_count == 0, (
         "fetch_scene_image must not run inline on the student endpoint"
     )
@@ -371,6 +376,36 @@ def test_service_fill_image_urls_disabled_provider_stamps_meta():
     assert el.get("meta", {}).get("imageProviderDisabled") is True
 
 
+def test_service_fill_image_urls_strips_placeholder_hosts():
+    """LLM responses must not bypass the tenant image pipeline with generic
+    placeholder CDN URLs or random external fallbacks."""
+    from apps.courses import maic_generation_service as svc
+
+    parsed = {
+        "slides": [
+            {
+                "id": "slide-1",
+                "elements": [
+                    {"type": "image", "id": "img-placehold", "src": "https://placehold.co/800x450"},
+                    {"type": "image", "id": "img-unsplash", "src": "https://source.unsplash.com/800x450/?math"},
+                    {"type": "image", "id": "img-example", "src": "https://example.com/image.jpg"},
+                    {"type": "image", "id": "img-example-subdomain", "src": "https://images.example.com/photosynthesis.jpg"},
+                    {"type": "image", "id": "img-media", "src": "/media/tenant/1/videos/asset.jpg"},
+                ],
+            }
+        ]
+    }
+
+    svc._fill_image_urls(parsed, scene_id="scene-1", image_provider="pollinations")
+
+    elements = parsed["slides"][0]["elements"]
+    assert elements[0]["src"] == ""
+    assert elements[1]["src"] == ""
+    assert elements[2]["src"] == ""
+    assert elements[3]["src"] == ""
+    assert elements[4]["src"] == "/media/tenant/1/videos/asset.jpg"
+
+
 # ---------------------------------------------------------------------------
 # 4. View-layer duplicate _fill_image_urls is gone.
 # ---------------------------------------------------------------------------
@@ -399,8 +434,7 @@ def test_views_fill_image_urls_is_removed():
 
 
 def test_defer_image_fill_does_not_leak_across_tenants(
-    teacher_client, maic_enabled_tenant, maic_enabled_tenant_b,
-    teacher_user, ai_config
+    maic_enabled_tenant, maic_enabled_tenant_b, teacher_user, ai_config
 ):
     """``_defer_image_fill`` must not flip ``images_pending`` or enqueue a
     Celery task when the body-supplied ``classroomId`` belongs to a
@@ -448,9 +482,11 @@ def test_defer_image_fill_does_not_leak_across_tenants(
     ), patch(
         "apps.courses.maic_tasks.fill_classroom_images.apply_async",
     ) as mock_enqueue:
-        resp = teacher_client.post(
-            "/api/v1/teacher/maic/generate/scene-content/",
-            {
+        resp = call_legacy_scene_content_view(
+            audience="teacher",
+            user=teacher_user,
+            tenant=maic_enabled_tenant,
+            payload={
                 "scene": {"id": "scene-1", "title": "Intro", "type": "lecture",
                           "slideCount": 3, "agentIds": []},
                 "agents": [{"id": "a1", "name": "Prof", "role": "professor"}],
@@ -458,10 +494,9 @@ def test_defer_image_fill_does_not_leak_across_tenants(
                 # Hostile body: tenant B's classroom UUID.
                 "classroomId": str(victim.id),
             },
-            format="json",
         )
 
-    assert resp.status_code == 200, resp.content
+    assert resp.status_code == 200, getattr(resp, "data", None)
     # No inline fetch.
     assert mock_fetch.call_count == 0
     # No cross-tenant enqueue.

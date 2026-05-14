@@ -221,6 +221,9 @@ export const SchoolDetailPage: React.FC = () => {
               {usage && (
                 <>
                   <UsageBar label="Teachers" used={usage.teachers.used} limit={usage.teachers.limit} />
+                  {usage.students && (
+                    <UsageBar label="Students" used={usage.students.used} limit={usage.students.limit} />
+                  )}
                   <UsageBar label="Courses" used={usage.courses.used} limit={usage.courses.limit} />
                   <UsageBar label="Storage" used={usage.storage_mb.used} limit={usage.storage_mb.limit} unit="MB" />
                 </>
@@ -333,6 +336,10 @@ export const SchoolDetailPage: React.FC = () => {
               <input id="tenant-max-teachers" name="max_teachers" type="number" inputMode="numeric" defaultValue={tenant.max_teachers} onBlur={(e) => updateMut.mutate({ max_teachers: Number(e.target.value) })} className="w-full px-3 py-2 text-[13px] border border-slate-200/80 rounded-xl focus:ring-2 focus:ring-indigo-500/20" />
             </div>
             <div>
+              <label htmlFor="tenant-max-students" className="block text-[11px] font-medium text-slate-400 mb-1">Max Students</label>
+              <input id="tenant-max-students" name="max_students" type="number" inputMode="numeric" defaultValue={tenant.max_students} onBlur={(e) => updateMut.mutate({ max_students: Number(e.target.value) })} className="w-full px-3 py-2 text-[13px] border border-slate-200/80 rounded-xl focus:ring-2 focus:ring-indigo-500/20" />
+            </div>
+            <div>
               <label htmlFor="tenant-max-courses" className="block text-[11px] font-medium text-slate-400 mb-1">Max Courses</label>
               <input id="tenant-max-courses" name="max_courses" type="number" inputMode="numeric" defaultValue={tenant.max_courses} onBlur={(e) => updateMut.mutate({ max_courses: Number(e.target.value) })} className="w-full px-3 py-2 text-[13px] border border-slate-200/80 rounded-xl focus:ring-2 focus:ring-indigo-500/20" />
             </div>
@@ -363,6 +370,9 @@ export const SchoolDetailPage: React.FC = () => {
             <div className="space-y-3 pt-4 border-t border-slate-200/80">
               <h3 className="text-[13px] font-semibold text-slate-900">Current Usage</h3>
               <UsageBar label="Teachers" used={usage.teachers.used} limit={usage.teachers.limit} />
+              {usage.students && (
+                <UsageBar label="Students" used={usage.students.used} limit={usage.students.limit} />
+              )}
               <UsageBar label="Courses" used={usage.courses.used} limit={usage.courses.limit} />
               <UsageBar label="Storage" used={usage.storage_mb.used} limit={usage.storage_mb.limit} unit="MB" />
             </div>

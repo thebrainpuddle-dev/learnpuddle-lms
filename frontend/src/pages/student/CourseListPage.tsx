@@ -4,7 +4,7 @@
 
 import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Search,
   BookOpen,
@@ -32,9 +32,15 @@ const STATUS_LABELS: Record<StatusFilter, string> = {
 export const CourseListPage: React.FC = () => {
   usePageTitle('My Courses');
   const navigate = useNavigate();
-  const [search, setSearch] = useState('');
+  const [searchParams] = useSearchParams();
+  const urlSearch = searchParams.get('search') ?? '';
+  const [search, setSearch] = useState(urlSearch);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('ALL');
   const [viewMode, setViewMode] = useState<ViewMode>('grid');
+
+  React.useEffect(() => {
+    setSearch(urlSearch);
+  }, [urlSearch]);
 
   const { data: courses = [], isLoading } = useQuery({
     queryKey: ['studentCourses'],
@@ -166,6 +172,7 @@ export const CourseListPage: React.FC = () => {
           {filtered.map((course) => {
             const progress = Number(course.progress_percentage || 0);
             const status = getStatus(progress);
+            const thumbnailSrc = course.thumbnail_url || course.thumbnail;
             return (
               <button
                 key={course.id}
@@ -173,9 +180,9 @@ export const CourseListPage: React.FC = () => {
                 className="text-left bg-white rounded-2xl border border-gray-100 overflow-hidden hover:border-indigo-200 hover:shadow-md transition-all group shadow-sm"
               >
                 <div className="h-32 bg-gray-50 relative overflow-hidden">
-                  {course.thumbnail ? (
+                  {thumbnailSrc ? (
                     <img
-                      src={course.thumbnail}
+                      src={thumbnailSrc}
                       alt=""
                       className="h-full w-full object-cover"
                     />
@@ -260,6 +267,7 @@ export const CourseListPage: React.FC = () => {
             {filtered.map((course) => {
               const progress = Number(course.progress_percentage || 0);
               const status = getStatus(progress);
+              const thumbnailSrc = course.thumbnail_url || course.thumbnail;
               const StatusIcon =
                 status === 'COMPLETED'
                   ? CheckCircle2
@@ -281,9 +289,9 @@ export const CourseListPage: React.FC = () => {
                 >
                   <div className="col-span-5 flex items-center gap-3 min-w-0">
                     <div className="h-9 w-9 rounded-lg bg-gray-50 border border-gray-100 flex items-center justify-center flex-shrink-0 overflow-hidden">
-                      {course.thumbnail ? (
+                      {thumbnailSrc ? (
                         <img
-                          src={course.thumbnail}
+                          src={thumbnailSrc}
                           alt=""
                           className="h-9 w-9 object-cover"
                         />

@@ -737,7 +737,7 @@ def student_search(request):
     matched_assignments = Assignment.objects.filter(
         course__in=courses_qs,
         is_active=True,
-    ).filter(Q(title__icontains=q) | Q(description__icontains=q))[:10]
+    ).select_related("course").filter(Q(title__icontains=q) | Q(description__icontains=q))[:10]
 
     return Response({
         "courses": [
@@ -745,7 +745,13 @@ def student_search(request):
             for c in matched_courses
         ],
         "assignments": [
-            {"id": str(a.id), "title": a.title, "course_id": str(a.course_id), "type": "assignment"}
+            {
+                "id": str(a.id),
+                "title": a.title,
+                "course_id": str(a.course_id),
+                "course_title": a.course.title,
+                "type": "assignment",
+            }
             for a in matched_assignments
         ],
     })

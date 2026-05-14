@@ -85,7 +85,7 @@ describe('TourContext', () => {
 
   const renderTour = (initialPath = '/admin/dashboard', showSecondTarget = false) =>
     render(
-      <MemoryRouter initialEntries={[initialPath]}>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={[initialPath]}>
         <TourProvider>
           <Routes>
             <Route path="*" element={<DashboardPage showSecondTarget={showSecondTarget} />} />

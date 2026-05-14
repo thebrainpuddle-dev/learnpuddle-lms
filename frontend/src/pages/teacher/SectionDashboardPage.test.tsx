@@ -59,7 +59,9 @@ vi.mock('../../config/api', () => ({
 // ── Typed mock helper ─────────────────────────────────────────────────────────
 
 import { academicsService } from '../../services/academicsService';
+import api from '../../config/api';
 const mockGetSectionDashboard = academicsService.getSectionDashboard as ReturnType<typeof vi.fn>;
+const mockApiGet = api.get as ReturnType<typeof vi.fn>;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -73,7 +75,7 @@ function renderPage(sectionId = 'sec-1', search = '') {
   const path = `/teacher/sections/${sectionId}/dashboard${search}`;
   return render(
     <QueryClientProvider client={makeClient()}>
-      <MemoryRouter initialEntries={[path]}>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={[path]}>
         <Routes>
           <Route
             path="/teacher/sections/:sectionId/dashboard"
@@ -193,7 +195,8 @@ function makeAnalyticsResponse() {
 
 describe('SectionDashboardPage', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
+    mockApiGet.mockReturnValue(new Promise(() => {}));
     // Default: students tab resolves, others never resolve
     mockGetSectionDashboard.mockImplementation(
       (_sectionId: string, tab: string) => {

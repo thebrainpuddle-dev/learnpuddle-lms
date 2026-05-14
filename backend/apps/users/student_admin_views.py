@@ -441,6 +441,7 @@ def _serialize_invitation(inv):
         "email": inv.email,
         "first_name": inv.first_name,
         "last_name": inv.last_name,
+        "invitation_role": inv.invitation_role,
         "status": inv.status,
         "created_at": inv.created_at.isoformat() if inv.created_at else None,
         "expires_at": inv.expires_at.isoformat() if inv.expires_at else None,
@@ -462,7 +463,10 @@ def student_invitations_view(request):
     tenant = request.tenant
 
     if request.method == "GET":
-        qs = TeacherInvitation.objects.filter(tenant=tenant).order_by("-created_at")
+        qs = TeacherInvitation.objects.filter(
+            tenant=tenant,
+            invitation_role="STUDENT",
+        ).order_by("-created_at")
         status_filter = request.GET.get("status")
         if status_filter:
             qs = qs.filter(status=status_filter)
@@ -480,7 +484,11 @@ def student_invitations_view(request):
     if User.objects.filter(email__iexact=email).exists():
         return Response({"error": "A user with this email already exists."}, status=status.HTTP_400_BAD_REQUEST)
 
-    existing = TeacherInvitation.objects.filter(tenant=tenant, email__iexact=email, status="pending").first()
+    existing = TeacherInvitation.objects.filter(
+        tenant=tenant,
+        email__iexact=email,
+        status="pending",
+    ).first()
     if existing and not existing.is_expired:
         return Response({"error": "A pending invitation already exists for this email."}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -489,9 +497,13 @@ def student_invitations_view(request):
         email=email,
         first_name=first_name,
         last_name=last_name,
+        invitation_role="STUDENT",
         invited_by=request.user,
         expires_at=timezone.now() + timezone.timedelta(days=7),
     )
+
+    from apps.notifications.tasks import send_teacher_invitation_email
+    send_teacher_invitation_email.delay(str(invitation.id))
 
     log_audit("CREATE", "StudentInvitation", target_id=str(invitation.id), target_repr=email, request=request)
     return Response(_serialize_invitation(invitation), status=status.HTTP_201_CREATED)
@@ -536,20 +548,27 @@ def student_bulk_invite_view(request):
             results.append({"row": i, "email": email, "status": "error", "message": "User already exists"})
             continue
 
-        existing = TeacherInvitation.objects.filter(tenant=tenant, email__iexact=email, status="pending").first()
+        existing = TeacherInvitation.objects.filter(
+            tenant=tenant,
+            email__iexact=email,
+            status="pending",
+        ).first()
         if existing and not existing.is_expired:
             results.append({"row": i, "email": email, "status": "error", "message": "Pending invitation exists"})
             continue
 
         try:
-            TeacherInvitation.objects.create(
+            invitation = TeacherInvitation.objects.create(
                 tenant=tenant,
                 email=email,
                 first_name=first_name,
                 last_name=last_name,
+                invitation_role="STUDENT",
                 invited_by=request.user,
                 expires_at=timezone.now() + timezone.timedelta(days=7),
             )
+            from apps.notifications.tasks import send_teacher_invitation_email
+            send_teacher_invitation_email.delay(str(invitation.id))
             created_count += 1
             results.append({"row": i, "email": email, "status": "success"})
         except Exception:

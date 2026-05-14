@@ -23,6 +23,7 @@ import {
   VolumeX,
   SkipForward,
   PictureInPicture2,
+  List,
 } from 'lucide-react';
 import { useMAICStageStore } from '../../stores/maicStageStore';
 import { useMAICSettingsStore } from '../../stores/maicSettingsStore';
@@ -47,6 +48,7 @@ interface StageToolbarProps {
   pipSupported?: boolean;
   pipOpen?: boolean;
   onTogglePiP?: () => void;
+  onToggleSceneSidebar?: () => void;
 }
 
 const PLAYBACK_SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
@@ -68,6 +70,7 @@ export const StageToolbar = React.memo<StageToolbarProps>(function StageToolbar(
   pipSupported = false,
   pipOpen = false,
   onTogglePiP,
+  onToggleSceneSidebar,
 }) {
   const isFullscreen = useMAICStageStore((s) => s.isFullscreen);
   const setFullscreen = useMAICStageStore((s) => s.setFullscreen);
@@ -116,6 +119,22 @@ export const StageToolbar = React.memo<StageToolbarProps>(function StageToolbar(
 
       {/* Divider */}
       <div className="w-px h-5 bg-gray-200 dark:bg-gray-700 mx-1" aria-hidden="true" />
+
+      {onToggleSceneSidebar && (
+        <button
+          type="button"
+          onClick={onToggleSceneSidebar}
+          className={cn(
+            'inline-flex items-center justify-center min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 p-1.5 rounded-md transition-colors',
+            'focus:outline-none focus:ring-2 focus:ring-primary-500',
+            'text-gray-400 hover:text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:text-gray-200 dark:hover:bg-gray-800',
+          )}
+          title="Scene list"
+          aria-label="Open scene list"
+        >
+          <List className="h-4 w-4" />
+        </button>
+      )}
 
       {/* Settings dropdown */}
       <div className="relative">

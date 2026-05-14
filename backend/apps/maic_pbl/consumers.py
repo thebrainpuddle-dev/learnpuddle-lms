@@ -30,6 +30,7 @@ Close codes:
   4003 — cross-tenant (session belongs to another tenant)
   4004 — session not found
   4040 — user has no tenant_id
+  4403 — MAIC v2 disabled globally or for this tenant
 """
 from __future__ import annotations
 
@@ -50,6 +51,14 @@ logger = logging.getLogger(__name__)
 
 
 _MENTION_RE = re.compile(r"@(question|judge)\b", re.IGNORECASE)
+
+
+@database_sync_to_async
+def _user_has_maic_v2_access(user) -> bool:
+    """Run the shared MAIC v2 gate in a DB-safe sync context."""
+    from apps.maic.permissions import user_has_maic_v2_access
+
+    return user_has_maic_v2_access(user)
 
 
 @database_sync_to_async
@@ -82,6 +91,13 @@ def _load_session(session_id: str, user) -> tuple[Any, int]:
 
 
 @database_sync_to_async
+def _resolve_llm_config_for_tenant(tenant_id) -> dict:
+    from apps.maic.llm_config import resolve_tenant_llm_runtime_config
+
+    return resolve_tenant_llm_runtime_config(tenant_id=tenant_id)
+
+
+@database_sync_to_async
 def _persist_chat_turn(session_id: str, message: dict[str, Any]) -> None:
     """Append one chat message to MaicPBLSession.chat_messages.
 
@@ -98,29 +114,41 @@ def _persist_chat_turn(session_id: str, message: dict[str, Any]) -> None:
 
 
 @database_sync_to_async
-def _mark_issue_complete_and_advance(session_id: str) -> tuple[bool, str | None]:
+def _mark_issue_complete_and_advance(
+    session_id: str,
+) -> tuple[bool, str | None, str | None, str | None]:
     """Mark the current issue is_done + activate next; return
-    (advanced, next_title) so the consumer can include the info in
-    the agent_end frame."""
+    (advanced, next_title, completed_issue_id, next_issue_id) so the
+    consumer can include stable ids in the agent_end frame."""
     from apps.maic_pbl.mcp import AgentMCP, IssueboardMCP
     from apps.maic_pbl.models import MaicPBLSession
 
     sess = MaicPBLSession.objects.all_tenants().filter(id=session_id).first()
     if sess is None:
-        return False, None
+        return False, None, None, None
     config = sess.project_config or {}
     if "issueboard" not in config:
-        return False, None
+        return False, None, None, None
 
     agent_mcp = AgentMCP(config)
     board = IssueboardMCP(config, agent_mcp)
+    issues = config.get("issueboard", {}).get("issues") or []
+    active_before = next((i for i in issues if i.get("is_active")), None)
+    completed_issue_id = (
+        active_before.get("id") if isinstance(active_before, dict) else None
+    )
     board.complete_current_issue()
     advance = board.activate_next_issue()
 
     next_title: str | None = None
+    next_issue_id: str | None = None
     if advance.success:
         next_title = (advance.model_dump().get("message") or "").removeprefix(
             "Activated issue: "
+        )
+        active_after = next((i for i in issues if i.get("is_active")), None)
+        next_issue_id = (
+            active_after.get("id") if isinstance(active_after, dict) else None
         )
 
     sess.project_config = config
@@ -131,7 +159,7 @@ def _mark_issue_complete_and_advance(session_id: str) -> tuple[bool, str | None]
         )
     else:
         sess.save(update_fields=["project_config", "updated_at"])
-    return advance.success, next_title
+    return advance.success, next_title, completed_issue_id, next_issue_id
 
 
 def _resolve_target_agent(
@@ -239,6 +267,15 @@ class PBLChatConsumer(AsyncJsonWebsocketConsumer):
             await self.close(code=4040)
             return
 
+        if not await _user_has_maic_v2_access(self.user):
+            logger.warning(
+                "PBL WS: user %s tenant=%s failed v2 access gate",
+                self.user.id,
+                self.tenant_id,
+            )
+            await self.close(code=4403)
+            return
+
         sess, code = await _load_session(self.session_id, self.user)
         if code != 0:
             await self.close(code=code)
@@ -290,10 +327,9 @@ class PBLChatConsumer(AsyncJsonWebsocketConsumer):
                 })
                 return
             user_role = data.get("userRole") or ""
-            language_model_id = data.get("languageModelId", "stub")
             await self._cancel_in_flight()
             self._chat_task = asyncio.create_task(
-                self._run_chat_turn(message, user_role, language_model_id),
+                self._run_chat_turn(message, user_role),
             )
             return
 
@@ -307,9 +343,7 @@ class PBLChatConsumer(AsyncJsonWebsocketConsumer):
             "data": {"message": f"unknown action: {action!r}"},
         })
 
-    async def _run_chat_turn(
-        self, message: str, user_role: str, language_model_id: str,
-    ) -> None:
+    async def _run_chat_turn(self, message: str, user_role: str) -> None:
         """Run one chat turn: pick agent, stream LLM, persist."""
         # Re-load the session so any persisted issueboard mutations
         # from prior turns (issue completed, next activated) are
@@ -331,18 +365,13 @@ class PBLChatConsumer(AsyncJsonWebsocketConsumer):
             })
             return
 
-        if language_model_id == "stub":
-            await self._safe_send_json({
-                "type": "error",
-                "data": {"message": "languageModelId 'stub' is for tests; pick a real provider"},
-            })
-            return
-
         try:
             from apps.maic.exceptions import MaicConfigError
             from apps.maic.orchestration.ai_adapter import resolve_chat_model
             try:
-                model = resolve_chat_model(language_model_id)
+                llm_config = await _resolve_llm_config_for_tenant(sess.tenant_id)
+                language_model_id = str(llm_config["language_model_id"])
+                model = resolve_chat_model(language_model_id, llm_config=llm_config)
             except MaicConfigError as exc:
                 await self._safe_send_json({
                     "type": "error",
@@ -406,11 +435,16 @@ class PBLChatConsumer(AsyncJsonWebsocketConsumer):
 
             complete = False
             advanced_to: str | None = None
+            completed_issue_id: str | None = None
+            advanced_to_issue_id: str | None = None
             if agent_type == "judge" and "COMPLETE" in full_text.upper():
                 complete = True
-                _advanced, advanced_to = await _mark_issue_complete_and_advance(
-                    self.session_id,
-                )
+                (
+                    _advanced,
+                    advanced_to,
+                    completed_issue_id,
+                    advanced_to_issue_id,
+                ) = await _mark_issue_complete_and_advance(self.session_id)
 
             await self._safe_send_json({
                 "type": "agent_end",
@@ -418,6 +452,8 @@ class PBLChatConsumer(AsyncJsonWebsocketConsumer):
                     "agentName": agent["name"],
                     "complete": complete,
                     "advancedTo": advanced_to,
+                    "completedIssueId": completed_issue_id,
+                    "advancedToIssueId": advanced_to_issue_id,
                 },
             })
         except asyncio.CancelledError:

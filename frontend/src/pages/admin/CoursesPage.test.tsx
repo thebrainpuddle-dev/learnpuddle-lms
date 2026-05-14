@@ -157,7 +157,7 @@ function renderPage(initialPath = '/admin/courses') {
   return render(
     <QueryClientProvider client={qc}>
       <ToastProvider>
-        <MemoryRouter initialEntries={[initialPath]}>
+        <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={[initialPath]}>
           <CoursesPage />
         </MemoryRouter>
       </ToastProvider>
@@ -178,8 +178,19 @@ beforeEach(() => {
   mockedApi.get.mockResolvedValue({ data: makePaginatedResponse() });
   mockedApi.delete.mockResolvedValue({ data: {} });
   mockedApi.patch.mockResolvedValue({ data: { ...COURSE_DRAFT, is_published: true } });
-  mockedApi.post.mockResolvedValue({
-    data: { ...COURSE_DRAFT, id: 'c-3', title: 'Copy of Introduction to Teaching' },
+  mockedApi.post.mockImplementation((url: string) => {
+    if (url === '/courses/c-1/publish/') {
+      return Promise.resolve({ data: { is_published: true } });
+    }
+    if (url === '/courses/c-2/publish/') {
+      return Promise.resolve({ data: { is_published: false } });
+    }
+    if (url === '/courses/bulk-action/') {
+      return Promise.resolve({ data: { message: '1 course published', affected_count: 1, requested_count: 1 } });
+    }
+    return Promise.resolve({
+      data: { ...COURSE_DRAFT, id: 'c-3', title: 'Copy of Introduction to Teaching' },
+    });
   });
 });
 
@@ -472,7 +483,7 @@ describe('CoursesPage', () => {
       expect(screen.getByTitle('Unpublish')).toBeInTheDocument();
     });
 
-    it('clicking Publish fires api.patch with is_published: true', async () => {
+    it('clicking Publish calls the guarded publish endpoint', async () => {
       const user = userEvent.setup();
       renderPage();
       await waitFor(() =>
@@ -482,8 +493,8 @@ describe('CoursesPage', () => {
       await user.click(screen.getByTitle('Publish'));
 
       await waitFor(() =>
-        expect(mockedApi.patch).toHaveBeenCalledWith('/courses/c-1/', {
-          is_published: true,
+        expect(mockedApi.post).toHaveBeenCalledWith('/courses/c-1/publish/', {
+          action: 'publish',
         }),
       );
     });

@@ -54,7 +54,7 @@ const mockSetSession = vi.fn();
 
 function renderPage() {
   return render(
-    <MemoryRouter initialEntries={['/parent']}>
+    <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={['/parent']}>
       <ParentLoginPage />
     </MemoryRouter>,
   );

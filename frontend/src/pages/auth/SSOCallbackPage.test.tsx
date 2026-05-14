@@ -49,7 +49,7 @@ const mockedApi = api as unknown as {
 
 const renderPage = () =>
   render(
-    <MemoryRouter initialEntries={['/auth/sso/callback']}>
+    <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={['/auth/sso/callback']}>
       <SSOCallbackPage />
     </MemoryRouter>
   );

@@ -125,7 +125,7 @@ const makeQueryClient = () =>
 const renderPage = (initialPath = '/super-admin/schools') =>
   render(
     <QueryClientProvider client={makeQueryClient()}>
-      <MemoryRouter initialEntries={[initialPath]}>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={[initialPath]}>
         <ToastProvider>
           <SchoolsPage />
         </ToastProvider>

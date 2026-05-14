@@ -488,6 +488,39 @@ def _classify_fetch_error(exc: BaseException) -> str:
     return name or "fetch_error"
 
 
+def _is_safe_existing_image_src(src: str) -> bool:
+    """True when an already-present image URL can be treated as filled."""
+    if not src:
+        return False
+    if src.startswith("https://") or src.startswith("http://"):
+        return True
+    # Tenant media is served as site-relative paths in local/prod.
+    return src.startswith("/") and not src.startswith("//")
+
+
+def _mark_existing_image_done(
+    classroom: MAICClassroom,
+    element_key: str | None,
+    src: str,
+    *,
+    parent_slide: dict | None = None,
+    scene_idx: int | None = None,
+    slide_idx: int | None = None,
+) -> None:
+    """Convert an already-filled element's task entry from pending to done."""
+    if not element_key:
+        return
+    _persist_image_task(classroom, element_key, "done", src=src)
+    _maybe_persist_slot_image_task(
+        classroom,
+        parent_slide,
+        scene_idx,
+        slide_idx,
+        "done",
+        src=src,
+    )
+
+
 # ── SPRINT-2-BATCH-9-F2: orchestrator concurrency lock ────────────────────
 # Guards against double-enqueue of ``pre_generate_classroom_tts`` for the
 # same classroom (e.g. publish-button double-click, retry-on-timeout from
@@ -871,20 +904,26 @@ def fill_classroom_images(
                         continue
                     total_images += 1
                     existing_src = (element.get("src") or "").strip()
-                    if existing_src and (
-                        existing_src.startswith("https://") or existing_src.startswith("http://")
-                    ):
-                        provider_outcomes["already_filled"] = (
-                            provider_outcomes.get("already_filled", 0) + 1
-                        )
-                        continue
-                    keyword = element.get("content", "educational illustration")
                     # WAVE-F2-F6: walker tag is the INTERNAL routing key (NOT
                     # serialized in the on-the-wire element_key — see
                     # ``make_image_element_key`` docstring).  ``WalkerTag``
                     # is a ``StrEnum`` so the bare-string lookup tuples used
                     # historically still hash-match.
                     el_key = _key_lookup.get((WalkerTag.SLIDES, scene_idx, slide_idx, el_idx))
+                    if _is_safe_existing_image_src(existing_src):
+                        provider_outcomes["already_filled"] = (
+                            provider_outcomes.get("already_filled", 0) + 1
+                        )
+                        _mark_existing_image_done(
+                            classroom,
+                            el_key,
+                            existing_src,
+                            parent_slide=slide,
+                            scene_idx=scene_idx,
+                            slide_idx=slide_idx,
+                        )
+                        continue
+                    keyword = element.get("content", "educational illustration")
                     if el_key:
                         _persist_image_task(classroom, el_key, "generating")
                         # Path A: emit slot key when this slide is the
@@ -961,15 +1000,14 @@ def fill_classroom_images(
                         continue
                     total_images += 1
                     existing_src = (element.get("src") or "").strip()
-                    if existing_src and (
-                        existing_src.startswith("https://") or existing_src.startswith("http://")
-                    ):
+                    el_key = _key_lookup.get((WalkerTag.CONTENT_ELEMENTS, scene_idx, -1, el_idx))
+                    if _is_safe_existing_image_src(existing_src):
                         provider_outcomes["already_filled"] = (
                             provider_outcomes.get("already_filled", 0) + 1
                         )
+                        _mark_existing_image_done(classroom, el_key, existing_src)
                         continue
                     keyword = element.get("content", "educational illustration")
-                    el_key = _key_lookup.get((WalkerTag.CONTENT_ELEMENTS, scene_idx, -1, el_idx))
                     if el_key:
                         _persist_image_task(classroom, el_key, "generating")
                     try:
@@ -1027,18 +1065,23 @@ def fill_classroom_images(
                             continue
                         total_images += 1
                         existing_src = (element.get("src") or "").strip()
-                        if existing_src and (
-                            existing_src.startswith("https://")
-                            or existing_src.startswith("http://")
-                        ):
-                            provider_outcomes["already_filled"] = (
-                                provider_outcomes.get("already_filled", 0) + 1
-                            )
-                            continue
-                        keyword = element.get("content", "educational illustration")
                         el_key = _key_lookup.get(
                             (WalkerTag.CONTENT_SLIDES, scene_idx, slide_idx, el_idx)
                         )
+                        if _is_safe_existing_image_src(existing_src):
+                            provider_outcomes["already_filled"] = (
+                                provider_outcomes.get("already_filled", 0) + 1
+                            )
+                            _mark_existing_image_done(
+                                classroom,
+                                el_key,
+                                existing_src,
+                                parent_slide=slide,
+                                scene_idx=scene_idx,
+                                slide_idx=slide_idx,
+                            )
+                            continue
+                        keyword = element.get("content", "educational illustration")
                         if el_key:
                             _persist_image_task(classroom, el_key, "generating")
                             _maybe_persist_slot_image_task(
@@ -1121,16 +1164,6 @@ def fill_classroom_images(
                         continue
                     total_images += 1
                     existing_src = (element.get("src") or "").strip()
-                    if existing_src and (
-                        existing_src.startswith("https://")
-                        or existing_src.startswith("http://")
-                        or existing_src.startswith("/media/")
-                    ):
-                        provider_outcomes["already_filled"] = (
-                            provider_outcomes.get("already_filled", 0) + 1
-                        )
-                        continue
-                    keyword = element.get("content", "educational illustration")
                     el_key = _key_lookup.get((WalkerTag.META_SLIDES, -1, slide_idx, el_idx))
                     # Resolve the scene_idx the FE will use when rendering
                     # this slide so the slot-key matches the FE's
@@ -1139,6 +1172,20 @@ def fill_classroom_images(
                         slide_idx,
                         snapshot_scene_slide_bounds,
                     )
+                    if _is_safe_existing_image_src(existing_src):
+                        provider_outcomes["already_filled"] = (
+                            provider_outcomes.get("already_filled", 0) + 1
+                        )
+                        _mark_existing_image_done(
+                            classroom,
+                            el_key,
+                            existing_src,
+                            parent_slide=slide,
+                            scene_idx=resolved_scene_idx,
+                            slide_idx=slide_idx,
+                        )
+                        continue
+                    keyword = element.get("content", "educational illustration")
                     if el_key:
                         _persist_image_task(classroom, el_key, "generating")
                         _maybe_persist_slot_image_task(

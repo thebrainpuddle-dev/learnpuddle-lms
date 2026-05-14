@@ -10,6 +10,7 @@ app = Celery("lms")
 app.config_from_object("django.conf:settings", namespace="CELERY")
 app.autodiscover_tasks()
 app.autodiscover_tasks(["apps.courses"], related_name="ai_studio_tasks")
+app.autodiscover_tasks(["apps.maic.generation"], related_name="tasks")
 
 
 # ── PERF-P0-5: dedicated `tts` queue for per-scene TTS fan-out ─────────────
@@ -33,6 +34,10 @@ app.conf.task_routes = {
     # → images_pending stayed True forever → slides rendered with empty src.
     # Pin to "default" so the existing worker pool actually executes it.
     "apps.courses.maic_tasks.fill_classroom_images": {"queue": "default"},
+    # The v2/PBL classroom generation chain is triggered from the teacher
+    # wizard. Production workers listen to "default"; without this route the
+    # chain falls back to Celery's implicit "celery" queue and can sit idle.
+    "apps.maic.generation.tasks.*": {"queue": "default"},
     # Same root cause: semantic_search.* tasks were unrouted and piled up
     # 210-deep on the unread "celery" queue. Pin to default.
     "semantic_search.*": {"queue": "default"},

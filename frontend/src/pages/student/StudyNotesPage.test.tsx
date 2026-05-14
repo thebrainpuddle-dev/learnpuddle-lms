@@ -21,37 +21,8 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
+import { describe, expect, it, vi } from 'vitest';
 import { StudyNotesPage } from './StudyNotesPage';
-
-// ─── Stub heavy transitive deps that hang in happy-dom ────────────────────────
-// These are imported by StudySummaryPanel. Even though StudySummaryPanel itself
-// is mocked with a factory, Vitest v4 may still resolve its module graph.
-// Mocking them here is defensive and prevents the worker from stalling.
-
-vi.mock('../../components/student/FlashcardReview', () => ({
-  FlashcardReview: () => null,
-}));
-
-vi.mock('../../components/student/MindMapTab', () => ({
-  MindMapTab: () => null,
-}));
-
-// @xyflow/react uses ResizeObserver + requestAnimationFrame at module load,
-// which blocks the happy-dom worker. Mock it here in addition to setupTests.ts
-// to ensure the mock is registered before this test file's module graph is resolved.
-vi.mock('@xyflow/react', () => ({
-  ReactFlow: () => null,
-  MiniMap: () => null,
-  Controls: () => null,
-  Background: () => null,
-  Panel: () => null,
-  Handle: () => null,
-  useNodesState: () => [[], () => {}],
-  useEdgesState: () => [[], () => {}],
-  Position: { Top: 'top', Bottom: 'bottom', Left: 'left', Right: 'right' },
-  MarkerType: { ArrowClosed: 'arrowclosed' },
-  BackgroundVariant: { Dots: 'dots', Lines: 'lines', Cross: 'cross' },
-}));
 
 // Mock api to prevent the circular authStore→gamificationService→api chain
 // from hanging during module graph resolution.
@@ -251,50 +222,43 @@ const MOCK_SUMMARIES = [
 const makeQueryClient = () =>
   new QueryClient({
     defaultOptions: {
-      queries: { retry: false, staleTime: Infinity, refetchOnWindowFocus: false },
+      queries: { retry: false, gcTime: 0, staleTime: Infinity, refetchOnWindowFocus: false },
       mutations: { retry: false },
     },
   });
 
-const renderPage = () =>
-  render(
+function resetStudentServiceMocks() {
+  mockedStudentService.getStudentCourses.mockReset();
+  mockedStudentService.getStudySummaries.mockReset();
+  mockedStudentService.getStudentCourseDetail.mockReset();
+}
+
+function setupDefaultMocks() {
+  resetStudentServiceMocks();
+  mockedStudentService.getStudentCourses.mockResolvedValue(MOCK_COURSES);
+  mockedStudentService.getStudySummaries.mockResolvedValue(MOCK_SUMMARIES);
+  mockedStudentService.getStudentCourseDetail.mockImplementation((id: string) =>
+    Promise.resolve(makeCourseDetail(id, id === 'c-1' ? 'Math Foundations' : 'Science Lab')),
+  );
+}
+
+const renderPage = ({ withDefaultMocks = true }: { withDefaultMocks?: boolean } = {}) => {
+  if (withDefaultMocks) {
+    setupDefaultMocks();
+  }
+
+  return render(
     <QueryClientProvider client={makeQueryClient()}>
-      <MemoryRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <StudyNotesPage />
       </MemoryRouter>
     </QueryClientProvider>,
   );
+};
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
-// QUARANTINED 2026-05-04 — module-graph resolution hangs under vitest v4 +
-// happy-dom because the page → StudySummaryPanel → MindMapTab transitive
-// import chain pulls in @xyflow/react/dist/style.css and @dagrejs/dagre.
-// Despite the vi.mock factories above (which cover the JS exports), the
-// CSS side-effect import is processed by vite's transform pipeline and
-// stalls the worker — Tests never run, "Errors 1 error" with no test
-// output. Reproduces in isolation under both pool=forks and pool=threads.
-//
-// Proper fix needs one of:
-//   (a) vite.config: css.preprocessorOptions or `css: false` for test
-//   (b) replace the MindMapTab import in StudySummaryPanel with a lazy
-//       import so the CSS side-effect is gated on actual usage
-//   (c) module-level CSS shim: vi.mock('@xyflow/react/dist/style.css', ...)
-//       — needs verification under vitest v4's CSS handling
-//
-// For now: skip the suite to keep the tree green. The page itself is
-// production code that's been smoke-tested manually; the test coverage
-// gap is explicit and ticketed.
-describe.skip('StudyNotesPage', () => {
-  beforeEach(() => {
-    vi.resetAllMocks();
-    mockedStudentService.getStudentCourses.mockResolvedValue(MOCK_COURSES);
-    mockedStudentService.getStudySummaries.mockResolvedValue(MOCK_SUMMARIES);
-    mockedStudentService.getStudentCourseDetail.mockImplementation((id: string) =>
-      Promise.resolve(makeCourseDetail(id, id === 'c-1' ? 'Math Foundations' : 'Science Lab')),
-    );
-  });
-
+describe('StudyNotesPage', () => {
   // ── 1. Page heading ─────────────────────────────────────────────────────────
 
   it('renders "AI Study Summaries" h1 heading', async () => {
@@ -316,8 +280,10 @@ describe.skip('StudyNotesPage', () => {
   // ── 3. Loading state ────────────────────────────────────────────────────────
 
   it('renders a loading spinner while courses are being fetched', () => {
+    resetStudentServiceMocks();
     mockedStudentService.getStudentCourses.mockReturnValue(new Promise(() => {}));
-    renderPage();
+    mockedStudentService.getStudySummaries.mockResolvedValue(MOCK_SUMMARIES);
+    renderPage({ withDefaultMocks: false });
     // The loading state renders a role="status" or aria-label="Loading" element
     const loadingEl =
       screen.queryByRole('status') ||
@@ -346,8 +312,10 @@ describe.skip('StudyNotesPage', () => {
   // ── 6. Empty state — no courses ─────────────────────────────────────────────
 
   it('shows "No courses available" when API returns an empty course list', async () => {
+    resetStudentServiceMocks();
     mockedStudentService.getStudentCourses.mockResolvedValue([]);
-    renderPage();
+    mockedStudentService.getStudySummaries.mockResolvedValue([]);
+    renderPage({ withDefaultMocks: false });
     expect(await screen.findByText(/no courses available/i)).toBeInTheDocument();
   });
 

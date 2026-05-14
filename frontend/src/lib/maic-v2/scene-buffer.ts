@@ -46,6 +46,7 @@ export interface AgentSnapshot {
 export interface BufferedAudio {
   audioId: string;
   audioB64: string;
+  audioUrl?: string;
   format: string;
   /** messageId of the agent_start this audio belongs to. */
   messageId: string;
@@ -86,12 +87,24 @@ export interface SceneBuffer {
   currentAgent: AgentSnapshot | null;
 
   /**
+   * Agent metadata keyed by messageId. Transcript uses this to keep
+   * prior agents visually distinct after currentAgent advances.
+   */
+  agentsByMessageId: Record<string, AgentSnapshot>;
+
+  /**
    * Concatenated text deltas, keyed by messageId.  In Phase 1 there's
    * exactly one messageId per agent turn so this is effectively a
    * single string per turn; the dict shape is forward-compat for
    * Phase 3 multi-agent where each agent has its own messageId.
    */
   textByMessageId: Record<string, string>;
+
+  /**
+   * Arrival order of messageIds. This is the stable display/playback
+   * order for multi-agent turns, independent of object key ordering.
+   */
+  messageOrder: string[];
 
   /**
    * Action events received, in original arrival order.  Used by the
@@ -132,7 +145,9 @@ export interface SceneBuffer {
 export const EMPTY_SCENE_BUFFER: SceneBuffer = {
   status: 'idle',
   currentAgent: null,
+  agentsByMessageId: {},
   textByMessageId: {},
+  messageOrder: [],
   actions: [],
   audioByMessageId: {},
   cueingUser: false,
@@ -142,6 +157,11 @@ export const EMPTY_SCENE_BUFFER: SceneBuffer = {
 
 
 // ── Reducer ──────────────────────────────────────────────────────
+
+function appendMessageOrder(order: string[], messageId: string): string[] {
+  if (!messageId || order.includes(messageId)) return order;
+  return [...order, messageId];
+}
 
 
 /**
@@ -170,12 +190,17 @@ export function applyEvent(buffer: SceneBuffer, event: MaicEvent): SceneBuffer {
         ...buffer,
         status: 'streaming',
         currentAgent: snap,
+        agentsByMessageId: {
+          ...buffer.agentsByMessageId,
+          [snap.messageId]: snap,
+        },
         // Initialize an empty text bucket for this messageId so callers
         // can do textByMessageId[messageId] without an undefined check.
         textByMessageId: {
           ...buffer.textByMessageId,
           [snap.messageId]: buffer.textByMessageId[snap.messageId] ?? '',
         },
+        messageOrder: appendMessageOrder(buffer.messageOrder, snap.messageId),
         thinkingStage: null,
       };
     }
@@ -189,6 +214,7 @@ export function applyEvent(buffer: SceneBuffer, event: MaicEvent): SceneBuffer {
           ...buffer.textByMessageId,
           [messageId]: prior + content,
         },
+        messageOrder: appendMessageOrder(buffer.messageOrder, messageId),
       };
     }
 
@@ -216,16 +242,26 @@ export function applyEvent(buffer: SceneBuffer, event: MaicEvent): SceneBuffer {
       const data = event.data as Record<string, unknown>;
       const audioId = String(data.audioId ?? '');
       const audioB64 = String(data.audioB64 ?? data.base64 ?? '');
+      const audioUrl = String(data.audioUrl ?? data.url ?? '');
       const format = String(data.format ?? 'mp3');
-      const messageId = String((data.messageId ?? '') || '');
-      const agentId = String((data.agentId ?? '') || '');
+      const messageId = String((data.messageId ?? '') || buffer.currentAgent?.messageId || '');
+      const agentId = String((data.agentId ?? '') || buffer.currentAgent?.agentId || '');
       if (!audioId) return buffer;  // malformed, ignore
+      if (!messageId) return buffer; // cannot safely attach audio to a transcript turn
       return {
         ...buffer,
         audioByMessageId: {
           ...buffer.audioByMessageId,
-          [messageId]: { audioId, audioB64, format, messageId, agentId },
+          [messageId]: {
+            audioId,
+            audioB64,
+            format,
+            messageId,
+            agentId,
+            ...(audioUrl ? { audioUrl } : {}),
+          },
         },
+        messageOrder: appendMessageOrder(buffer.messageOrder, messageId),
       };
     }
 

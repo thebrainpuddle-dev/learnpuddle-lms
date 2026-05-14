@@ -126,3 +126,34 @@ def test_fill_classroom_images_walks_content_meta_slides(
         assert el["src"].startswith("https://"), (
             f"unexpected src shape: {el['src']!r}"
         )
+
+
+@pytest.mark.django_db
+def test_fill_classroom_images_marks_existing_meta_images_done(
+    maic_enabled_tenant_prod, teacher_user,
+):
+    """Already-materialized media URLs must not stay pending in the FE task map."""
+    from apps.courses.maic_tasks import fill_classroom_images
+
+    classroom = _production_shape_classroom(
+        maic_enabled_tenant_prod, teacher_user, n_slides=2,
+    )
+    meta = dict(classroom.content_meta or {})
+    slides = list(meta["slides"])
+    slides[0]["elements"][0]["src"] = "/media/tenant/test/leaf-cycle.jpg"
+    slides[1]["elements"][0]["src"] = "/media/tenant/test/water-cycle.jpg"
+    classroom.content_meta = {**meta, "slides": slides}
+    classroom.save(update_fields=["content_meta", "updated_at"])
+
+    with patch("apps.courses.image_service.fetch_scene_image") as fetch_scene_image:
+        fill_classroom_images(str(classroom.id))
+
+    fetch_scene_image.assert_not_called()
+
+    classroom.refresh_from_db()
+    assert classroom.images_pending is False
+    tasks = classroom.content_image_tasks or {}
+    assert tasks["0:0:0:img-0"]["status"] == "done"
+    assert tasks["0:0:0:img-0"]["src"] == "/media/tenant/test/leaf-cycle.jpg"
+    assert tasks["1:1:0:img-1"]["status"] == "done"
+    assert tasks["1:1:0:img-1"]["src"] == "/media/tenant/test/water-cycle.jpg"

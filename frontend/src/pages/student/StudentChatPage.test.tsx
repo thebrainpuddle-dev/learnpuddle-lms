@@ -136,7 +136,7 @@ const makeQueryClient = () =>
 const renderPage = (chatbotId = CHATBOT_ID) =>
   render(
     <QueryClientProvider client={makeQueryClient()}>
-      <MemoryRouter initialEntries={[`/student/chatbots/${chatbotId}`]}>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={[`/student/chatbots/${chatbotId}`]}>
         <Routes>
           <Route path="/student/chatbots/:id" element={<StudentChatPage />} />
         </Routes>

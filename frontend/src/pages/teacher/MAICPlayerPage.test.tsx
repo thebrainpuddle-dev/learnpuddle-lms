@@ -206,7 +206,7 @@ function mountPage(opts: MountOptions = {}): TestHarness {
 
   const { unmount } = render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={[`/teacher/ai-classroom/${TEST_ID}`]}>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={[`/teacher/ai-classroom/${TEST_ID}`]}>
         <Routes>
           <Route
             path="/teacher/ai-classroom/:id"
@@ -230,7 +230,7 @@ async function flushEffects() {
 // ─── Setup / Teardown ─────────────────────────────────────────────────────────
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  vi.resetAllMocks();
   mockGetStoredClassroom.mockResolvedValue(null);
   mockSaveClassroom.mockResolvedValue(undefined);
   mockComputeRefetchInterval.mockReturnValue(false);
@@ -298,7 +298,7 @@ describe('MAICPlayerPage — Error / Not Found state', () => {
 
     const { unmount } = render(
       <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={[`/teacher/ai-classroom/${TEST_ID}`]}>
+        <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={[`/teacher/ai-classroom/${TEST_ID}`]}>
           <Routes>
             <Route path="/teacher/ai-classroom/:id" element={<MAICPlayerPage />} />
           </Routes>
@@ -321,7 +321,7 @@ describe('MAICPlayerPage — Error / Not Found state', () => {
 
     render(
       <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={[`/teacher/ai-classroom/${TEST_ID}`]}>
+        <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={[`/teacher/ai-classroom/${TEST_ID}`]}>
           <Routes>
             <Route path="/teacher/ai-classroom/:id" element={<MAICPlayerPage />} />
           </Routes>
@@ -412,6 +412,35 @@ describe('MAICPlayerPage — ARCHIVED status', () => {
   });
 });
 
+describe('MAICPlayerPage — DRAFT status', () => {
+  test('renders a non-spinning draft state when no content exists', async () => {
+    const { unmount } = mountPage({
+      queryData: makeClassroom('DRAFT', {
+        content: { slides: [], scenes: [], sceneSlideBounds: [] },
+      }),
+    });
+    await flushEffects();
+
+    expect(screen.getByText('Classroom Draft')).toBeInTheDocument();
+    expect(screen.getByText('Create New Classroom')).toBeInTheDocument();
+    expect(screen.queryByText('Preparing classroom')).not.toBeInTheDocument();
+    unmount();
+  });
+
+  test('draft create button navigates to /teacher/ai-classroom/new', async () => {
+    const { unmount } = mountPage({
+      queryData: makeClassroom('DRAFT', {
+        content: { slides: [], scenes: [], sceneSlideBounds: [] },
+      }),
+    });
+    await flushEffects();
+
+    fireEvent.click(screen.getByText('Create New Classroom'));
+    expect(mockNavigate).toHaveBeenCalledWith('/teacher/ai-classroom/new');
+    unmount();
+  });
+});
+
 describe('MAICPlayerPage — GENERATING state (no content)', () => {
   test('renders "Generating your classroom" heading', async () => {
     const { unmount } = mountPage({
@@ -497,6 +526,46 @@ describe('MAICPlayerPage — GENERATING state (no content)', () => {
     expect(
       screen.getByText(/Safe to leave this tab/),
     ).toBeInTheDocument();
+    unmount();
+  });
+
+  test('hydrates content when the same classroom transitions from GENERATING to READY', async () => {
+    const { queryClient, unmount } = mountPage({
+      queryData: makeClassroom('GENERATING', {
+        content: { slides: [], scenes: [], sceneSlideBounds: [] },
+        progress: {},
+      }),
+    });
+    await flushEffects();
+
+    expect(screen.getByText('Generating your classroom')).toBeInTheDocument();
+
+    const readyClassroom = makeClassroom('READY', {
+      updated_at: new Date(Date.now() + 1000).toISOString(),
+      content: {
+        slides: [{ id: 'ready-slide-1', title: 'Ready Slide', elements: [] }],
+        scenes: [{ id: 'ready-scene-1', title: 'Ready Scene', actions: [] }],
+        sceneSlideBounds: [{ sceneIdx: 0, startSlide: 0, endSlide: 0 }],
+      },
+      config: {
+        agents: [{ id: 'agent-1', name: 'Asha', role: 'student' }],
+      },
+    });
+
+    await act(async () => {
+      queryClient.setQueryData(QUERY_KEY, readyClassroom);
+    });
+    await flushEffects();
+
+    await waitFor(() => {
+      expect(mockSetSlides).toHaveBeenCalledWith([
+        { id: 'ready-slide-1', title: 'Ready Slide', elements: [] },
+      ]);
+      expect(screen.getByTestId('mock-stage')).toBeInTheDocument();
+    });
+    expect(
+      screen.queryByText('Classroom content unavailable'),
+    ).not.toBeInTheDocument();
     unmount();
   });
 });

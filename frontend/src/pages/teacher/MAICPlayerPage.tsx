@@ -301,6 +301,82 @@ export const MAICPlayerPage: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [classroom?.id, id]);
 
+  // If this page was opened while the classroom was still GENERATING with no
+  // partial content, the id-only hydration effect above has already run by the
+  // time polling later flips the same row to READY. Hydrate once more from the
+  // READY API payload so teachers do not land on a false "content unavailable"
+  // state after waiting for generation to finish.
+  useEffect(() => {
+    if (!classroom || !id || hasContent || classroom.status !== 'READY') return;
+
+    const meta = classroom as unknown as Record<string, unknown>;
+    const apiContent = meta.content as {
+      slides?: unknown[];
+      scenes?: unknown[];
+      sceneSlideBounds?: unknown[];
+    } | undefined;
+    const apiHasSlides =
+      Array.isArray(apiContent?.slides) &&
+      (apiContent!.slides as unknown[]).length > 0;
+    if (!apiHasSlides || !apiContent) return;
+    const readyContent = apiContent;
+
+    let cancelled = false;
+
+    async function hydrateReadyPayload() {
+      setClassroomId(id!);
+      const stored = await getStoredClassroom(id!);
+      if (cancelled) return;
+
+      const apiConfig = meta.config as { agents?: unknown[] } | undefined;
+      setSlides(readyContent.slides as Parameters<typeof setSlides>[0]);
+      if (readyContent.scenes?.length) {
+        setScenes(readyContent.scenes as Parameters<typeof setScenes>[0]);
+      }
+      if (readyContent.sceneSlideBounds?.length) {
+        setSceneSlideBounds(readyContent.sceneSlideBounds as Parameters<typeof setSceneSlideBounds>[0]);
+      }
+      if (apiConfig?.agents?.length) {
+        setAgents(apiConfig.agents as Parameters<typeof setAgents>[0]);
+      }
+      if (stored?.chatHistory?.length) {
+        setChatMessages(stored.chatHistory);
+      }
+
+      setHasContent(true);
+      setStoreReady(true);
+
+      saveClassroom({
+        id: id!,
+        title: String(meta.title || ''),
+        slides: (readyContent.slides || []) as Parameters<typeof setSlides>[0],
+        scenes: (readyContent.scenes || []) as Parameters<typeof setScenes>[0],
+        outlines: [],
+        agents: (apiConfig?.agents || []) as Parameters<typeof setAgents>[0],
+        chatHistory: stored?.chatHistory || [],
+        config: stored?.config || {},
+        sceneSlideBounds: (readyContent.sceneSlideBounds || []) as Parameters<typeof setSceneSlideBounds>[0],
+        syncedAt: Date.now(),
+      }).catch(() => {});
+    }
+
+    hydrateReadyPayload();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    classroom,
+    hasContent,
+    id,
+    setAgents,
+    setChatMessages,
+    setClassroomId,
+    setSceneSlideBounds,
+    setScenes,
+    setSlides,
+  ]);
+
   // ─── Loading ─────────────────────────────────────────────────────────────────
 
   if (isLoading) {
@@ -369,8 +445,8 @@ export const MAICPlayerPage: React.FC = () => {
       return (
         // MOB-P0-4 — `100dvh` (dynamic viewport height) avoids the iOS URL-bar
         // jump that `100vh` hits when Safari hides its bottom chrome on scroll.
-        <div className="flex flex-col h-[calc(100dvh-80px)]">
-          <div className="flex items-center gap-3 px-3 py-2 border-b border-gray-200 bg-white flex-shrink-0">
+        <div className="flex flex-col h-[100dvh]">
+          <div className="hidden md:flex items-center gap-3 px-3 py-2 border-b border-gray-200 bg-white flex-shrink-0">
             <button
               onClick={() => navigate('/teacher/ai-classroom')}
               className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
@@ -391,6 +467,32 @@ export const MAICPlayerPage: React.FC = () => {
             <Stage role="teacher" imagesPending={
               !!((classroom as unknown as Record<string, unknown>).images_pending)
             } />
+          </div>
+        </div>
+      );
+    }
+
+    if (classroom.status === 'DRAFT') {
+      return (
+        <div className="space-y-4 p-6">
+          <button
+            onClick={() => navigate('/teacher/ai-classroom')}
+            className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900"
+          >
+            <ArrowLeftIcon />
+            Back to Library
+          </button>
+          <div className="bg-gray-50 border border-gray-200 rounded-lg p-6 text-center">
+            <h3 className="text-lg font-medium text-gray-800 mb-2">Classroom Draft</h3>
+            <p className="text-sm text-gray-500">
+              This classroom has not generated scenes or slides yet.
+            </p>
+            <button
+              onClick={() => navigate('/teacher/ai-classroom/new')}
+              className="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 transition-colors"
+            >
+              Create New Classroom
+            </button>
           </div>
         </div>
       );
@@ -603,13 +705,39 @@ export const MAICPlayerPage: React.FC = () => {
     );
   }
 
+  if (storeReady && !hasContent) {
+    return (
+      <div className="space-y-4 p-6">
+        <button
+          onClick={() => navigate('/teacher/ai-classroom')}
+          className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900"
+        >
+          <ArrowLeftIcon />
+          Back to Library
+        </button>
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-6 text-center">
+          <h3 className="text-lg font-medium text-amber-900 mb-2">Classroom content unavailable</h3>
+          <p className="text-sm text-amber-700">
+            This classroom has no saved scenes or slides. Regenerate it before using it in class.
+          </p>
+          <button
+            onClick={() => navigate('/teacher/ai-classroom/new')}
+            className="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 transition-colors"
+          >
+            Create New Classroom
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   // ─── READY — full Stage ──────────────────────────────────────────────────────
 
   return (
     // MOB-P0-4 — `100dvh` (dynamic viewport height) avoids the iOS URL-bar
     // jump that `100vh` hits when Safari hides its bottom chrome on scroll.
-    <div className="flex flex-col h-[calc(100dvh-80px)]">
-      <div className="flex items-center gap-3 px-3 py-2 border-b border-gray-200 bg-white flex-shrink-0">
+    <div className="flex flex-col h-[100dvh]">
+      <div className="hidden md:flex items-center gap-3 px-3 py-2 border-b border-gray-200 bg-white flex-shrink-0">
         <button
           onClick={() => navigate('/teacher/ai-classroom')}
           className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"

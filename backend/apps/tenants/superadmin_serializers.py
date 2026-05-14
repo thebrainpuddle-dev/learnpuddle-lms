@@ -10,6 +10,8 @@ from apps.users.models import User
 from apps.courses.models import Course
 from utils.s3_utils import sign_file_field
 
+TEACHER_ROLES = ("TEACHER", "HOD", "IB_COORDINATOR")
+
 
 class TenantListSerializer(serializers.ModelSerializer):
     # These fields are populated via annotate() on the queryset — no per-row queries.
@@ -24,7 +26,7 @@ class TenantListSerializer(serializers.ModelSerializer):
             "id", "name", "slug", "subdomain", "email",
             "is_active", "is_trial", "trial_end_date",
             "plan", "plan_started_at", "plan_expires_at",
-            "max_teachers", "max_courses", "max_storage_mb",
+            "max_teachers", "max_students", "max_courses", "max_storage_mb",
             "primary_color", "logo",
             "teacher_count", "admin_count", "course_count",
             "created_at", "updated_at",
@@ -47,7 +49,7 @@ class TenantListSerializer(serializers.ModelSerializer):
         """Annotate a Tenant queryset with teacher/admin/course counts in 1 query."""
         return qs.annotate(
             teacher_count=Count(
-                "users", filter=Q(users__role="TEACHER", users__is_active=True), distinct=True
+                "users", filter=Q(users__role__in=TEACHER_ROLES, users__is_active=True), distinct=True
             ),
             admin_count=Count(
                 "users", filter=Q(users__role="SCHOOL_ADMIN", users__is_active=True), distinct=True
@@ -68,6 +70,8 @@ class TenantDetailSerializer(TenantListSerializer):
             "feature_video_upload", "feature_auto_quiz", "feature_transcripts",
             "feature_reminders", "feature_custom_branding", "feature_reports_export",
             "feature_groups", "feature_certificates", "feature_teacher_authoring",
+            "feature_ai_studio", "feature_sso", "feature_saml", "feature_2fa",
+            "feature_students", "feature_maic", "feature_maic_v2",
             "internal_notes",
             "published_course_count", "admin_email", "admin_name",
         ]
@@ -146,10 +150,12 @@ class TenantUpdateSerializer(serializers.ModelSerializer):
             "name", "email", "phone", "address",
             "is_active", "is_trial", "trial_end_date",
             "plan", "plan_started_at", "plan_expires_at",
-            "max_teachers", "max_courses", "max_storage_mb", "max_video_duration_minutes",
+            "max_teachers", "max_students", "max_courses", "max_storage_mb", "max_video_duration_minutes",
             "feature_video_upload", "feature_auto_quiz", "feature_transcripts",
             "feature_reminders", "feature_custom_branding", "feature_reports_export",
             "feature_groups", "feature_certificates", "feature_teacher_authoring",
+            "feature_ai_studio", "feature_sso", "feature_saml", "feature_2fa",
+            "feature_students", "feature_maic", "feature_maic_v2",
             "internal_notes",
             "primary_color", "secondary_color", "font_family",
         ]

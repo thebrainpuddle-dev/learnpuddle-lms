@@ -4,9 +4,9 @@ Source: THU-MAIC/OpenMAIC lib/pbl/pbl-system-prompt.ts (30 lines)
         Lifted under ADR-001a.
 
 Thin adapter over `apps.maic.generation.prompt_loader.load_generation_prompt`
-that fills in the 5 placeholders in `pbl-design/system.md`:
+that fills in the placeholders in `pbl-design/system.md`:
 projectTopic, projectDescription, targetSkills, issueCount,
-languageDirective.
+languageDirective, teacherContext.
 
 Returns just the system string — the design loop's user prompt is a
 fixed kickoff message ("Design a PBL project. Start in project_info
@@ -37,6 +37,7 @@ class PBLSystemPromptConfig:
     target_skills: list[str] = field(default_factory=list)
     issue_count: int = 3
     language_directive: str = ""
+    teacher_context: str = ""
 
 
 def build_pbl_system_prompt(config: PBLSystemPromptConfig) -> str:
@@ -54,6 +55,8 @@ def build_pbl_system_prompt(config: PBLSystemPromptConfig) -> str:
             "targetSkills": ", ".join(config.target_skills),
             "issueCount": config.issue_count,
             "languageDirective": config.language_directive,
+            "teacherContext": config.teacher_context,
+            "hasTeacherContext": bool(config.teacher_context.strip()),
         },
     )
     return built.system

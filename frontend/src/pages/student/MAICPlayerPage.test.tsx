@@ -215,7 +215,7 @@ const makeQueryClient = () =>
 function renderPage(queryClient = makeQueryClient()) {
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={['/student/ai-classroom/cls-test']}>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={['/student/ai-classroom/cls-test']}>
         <Routes>
           <Route
             path="/student/ai-classroom/:id"
@@ -257,8 +257,8 @@ async function renderPageWithStoreReady(
 
 describe('StudentMAICPlayerPage', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-    // Restore key mock defaults after clearAllMocks resets call history.
+    vi.resetAllMocks();
+    // Restore key mock defaults after resetAllMocks clears implementations.
     mockGetStoredClassroom.mockResolvedValue(null);
     mockSaveClassroom.mockResolvedValue(undefined);
     mockIsClassroomPlayable.mockReturnValue(true);

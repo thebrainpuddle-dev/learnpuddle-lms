@@ -84,6 +84,8 @@ beforeEach(() => {
     speakingAgentId: null,
     speechText: null,
     spotlightElementId: null,
+    laserElementId: null,
+    laserColor: null,
     scenes: [],
     currentSceneIndex: 0,
   });
@@ -91,6 +93,23 @@ beforeEach(() => {
     audioVolume: 1,
     playbackSpeed: 1,
   } as any);
+});
+
+describe('MAICActionEngine visual effects', () => {
+  test('laser action targets a concrete element id and color', async () => {
+    const engine = new MAICActionEngine({ ttsEndpoint: '/tts', token: 't' });
+
+    await engine.execute({
+      type: 'laser',
+      elementId: 'slide-slot-title',
+      color: '#2563EB',
+      duration: 1000,
+    } as any);
+
+    expect(useMAICStageStore.getState().laserElementId).toBe('slide-slot-title');
+    expect(useMAICStageStore.getState().laserColor).toBe('#2563EB');
+    engine.dispose();
+  });
 });
 
 afterEach(() => {

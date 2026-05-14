@@ -89,7 +89,7 @@ export async function generateTTS(
     });
 
     const arrayBuffer: ArrayBuffer = response.data;
-    const contentType = response.headers['content-type'] || '';
+    const contentType = String(response.headers['content-type'] ?? '').toLowerCase();
 
     // Determine format from response content-type
     let format = 'mp3';

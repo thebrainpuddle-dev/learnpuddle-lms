@@ -41,6 +41,7 @@ describe('useSceneBuffer', () => {
     expect(result.current.currentAgent).toBeNull();
     expect(result.current.actions).toEqual([]);
     expect(result.current.textByMessageId).toEqual({});
+    expect(result.current.messageOrder).toEqual([]);
   });
 
   test('matches reduceEvents byte-for-byte for a Phase-1 turn', () => {
@@ -80,5 +81,6 @@ describe('useSceneBuffer', () => {
     expect(result.current.status).toBe('streaming');
     expect(result.current.currentAgent?.messageId).toBe('m1');
     expect(result.current.textByMessageId['m1']).toBe('Hi.');
+    expect(result.current.messageOrder).toEqual(['m1']);
   });
 });

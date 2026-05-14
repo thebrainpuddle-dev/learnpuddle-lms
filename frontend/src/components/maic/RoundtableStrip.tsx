@@ -18,9 +18,8 @@
 //
 // Design anchors (own implementation; patterns inspired by what feels
 // polished in similar multi-agent UIs):
-//   - Strip sits at bottom-center of the 16:9 viewport, above the
-//     ProactiveCardManager overlay so suggestion cards can still fly
-//     over without occluding the agent roster.
+//   - Strip sits in the reserved chrome row below the 16:9 lesson viewport
+//     so it never occludes slide content.
 //   - Active speaker: ring pulse keyed to agent.color, avatar size 'lg'.
 //   - Inactive: size 'sm', opacity 0.55, no ring emphasis.
 //   - Small name label under each avatar — truncated at 10 chars.
@@ -72,7 +71,7 @@ export const RoundtableStrip = React.memo<RoundtableStripProps>(function Roundta
   return (
     <div
       className={cn(
-        'absolute inset-x-0 bottom-2 z-10 flex justify-center px-4',
+        'absolute inset-x-0 top-1 z-10 flex justify-center px-4',
         'pointer-events-none select-none',
       )}
       aria-label="Classroom agent roster"
@@ -86,13 +85,14 @@ export const RoundtableStrip = React.memo<RoundtableStripProps>(function Roundta
           exit={{ opacity: 0, y: 8 }}
           transition={{ duration: 0.28, ease: [0.21, 1, 0.36, 1] }}
           className={cn(
-            'flex items-end gap-3 px-4 py-2',
+            'flex items-end gap-3 px-4 py-1',
             'rounded-2xl border border-white/10 bg-black/55 backdrop-blur-md',
             'shadow-lg shadow-black/20',
           )}
         >
           {agents.map((agent) => {
             const isActive = agent.id === speakingAgentId;
+            const isSpeaking = isPlaying && isActive;
             // CG-P1-2 (2026-04-27): hide name labels when ANY agent is
             // speaking. The PresentationSpeechOverlay (bottom-left) already
             // shows the active speaker's full name + role + speech — having
@@ -100,7 +100,7 @@ export const RoundtableStrip = React.memo<RoundtableStripProps>(function Roundta
             // duplicate "Dr. Meera De… / Dr. Meera Desai" pair in the
             // user's screenshot. Avatars alone keep the cast visible
             // without competing for the speaker label.
-            const showLabel = !speakingAgentId;
+            const showLabel = !isSpeaking;
             return (
               <motion.div
                 key={agent.id}
@@ -112,13 +112,13 @@ export const RoundtableStrip = React.memo<RoundtableStripProps>(function Roundta
                 }}
                 transition={{ type: 'spring', stiffness: 280, damping: 26, mass: 0.7 }}
                 className="flex flex-col items-center gap-1 min-w-[48px]"
-                data-active={isActive ? 'true' : 'false'}
+                data-active={isSpeaking ? 'true' : 'false'}
                 data-testid="roundtable-agent-tile"
                 data-agent-id={agent.id}
               >
                 <AgentAvatar
                   agent={agent}
-                  isSpeaking={isActive}
+                  isSpeaking={isSpeaking}
                   size={isActive ? 'md' : 'sm'}
                 />
                 {showLabel && (

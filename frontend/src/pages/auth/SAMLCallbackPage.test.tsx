@@ -41,7 +41,7 @@ const mockedApi = api as unknown as {
 
 const renderAt = (url: string) =>
   render(
-    <MemoryRouter initialEntries={[url]}>
+    <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={[url]}>
       <Routes>
         <Route path="/auth/saml-callback" element={<SAMLCallbackPage />} />
         <Route path="/" element={<div>Home</div>} />

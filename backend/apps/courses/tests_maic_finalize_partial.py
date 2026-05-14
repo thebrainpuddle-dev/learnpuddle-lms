@@ -14,7 +14,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from apps.courses.maic_views import finalize_partial_classroom
+from apps.courses.maic_views import finalize_partial_classroom, _maic_response_status
 
 
 def _make_classroom(
@@ -22,13 +22,16 @@ def _make_classroom(
     status: str = "GENERATING",
     content_scenes=None,
     content_agents=None,
+    content_meta=None,
 ):
     """Minimal MAICClassroom-like mock — we only need attribute access +
     a `save` method that records what was written."""
     classroom = MagicMock()
     classroom.status = status
+    classroom.content = {}
     classroom.content_scenes = content_scenes if content_scenes is not None else []
     classroom.content_agents = content_agents if content_agents is not None else []
+    classroom.content_meta = content_meta if content_meta is not None else {}
     classroom.scenes_ready = 0
     classroom.scene_count = 0
     classroom.error_message = ""
@@ -65,6 +68,43 @@ def test_finalize_rejects_when_no_scenes_saved():
     assert result["ok"] is False
     assert "no scenes" in result["error"].lower()
     assert classroom.status == "GENERATING"  # unchanged
+    classroom.save.assert_not_called()
+
+
+def test_finalize_rejects_prompt_placeholder_content():
+    """A syntactically valid scene is not READY if it copied prompt examples."""
+    classroom = _make_classroom(
+        content_scenes=[
+            {
+                "id": "s0",
+                "title": "Quadratics",
+                "content": {
+                    "type": "slide",
+                    "elements": [
+                        {"type": "text", "content": "Main Title Text"},
+                    ],
+                },
+                "actions": [{"type": "speech"}],
+            }
+        ],
+        content_meta={
+            "slides": [
+                {
+                    "id": "slide-1",
+                    "elements": [
+                        {"type": "text", "content": "A compelling subtitle or tagline"},
+                    ],
+                }
+            ],
+        },
+    )
+
+    result = finalize_partial_classroom(classroom)
+
+    assert result["ok"] is False
+    assert "placeholder" in result["error"].lower()
+    assert "Main Title Text" in result["placeholders"]
+    assert classroom.status == "GENERATING"
     classroom.save.assert_not_called()
 
 
@@ -113,3 +153,25 @@ def test_finalize_clears_stale_error_message_on_revive():
     finalize_partial_classroom(classroom)
 
     assert classroom.error_message == ""
+
+
+def test_ready_response_status_rejects_legacy_placeholder_content():
+    """Already-saved bad rows must not keep rendering as playable READY."""
+    classroom = _make_classroom(
+        status="READY",
+        content_scenes=[
+            {
+                "id": "s0",
+                "content": {
+                    "elements": [{"type": "text", "content": "Main Title Text"}],
+                },
+            }
+        ],
+        content_meta={"slides": [{"elements": [{"content": "Main Title Text"}]}]},
+    )
+    classroom.error_message = ""
+
+    response_status, response_error = _maic_response_status(classroom)
+
+    assert response_status == "FAILED"
+    assert "placeholder" in response_error.lower()

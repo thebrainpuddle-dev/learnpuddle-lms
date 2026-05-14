@@ -19,6 +19,7 @@ import logging
 from datetime import datetime, timedelta, timezone as dt_timezone
 from typing import TYPE_CHECKING
 
+from django.db.models import Q
 from django.utils import timezone
 
 if TYPE_CHECKING:
@@ -162,7 +163,7 @@ def _collect_lms_events(connection: "CalendarConnection") -> list[dict]:
     try:
         from apps.progress.models import Assignment
 
-        qs = Assignment.objects.all_objects.filter(
+        qs = Assignment.all_objects.filter(
             course__in=_user_course_ids(user),
             due_date__isnull=False,
             is_active=True,
@@ -182,30 +183,6 @@ def _collect_lms_events(connection: "CalendarConnection") -> list[dict]:
             ))
     except Exception:
         logger.exception("sync_engine: error collecting assignment events for user=%s", user.pk)
-
-    # --- Enrollment deadlines ---
-    try:
-        from apps.courses.models import Enrollment
-
-        qs = Enrollment.objects.filter(
-            user=user,
-            enrollment_end_date__isnull=False,
-        ).select_related("course")
-
-        for e in qs:
-            dt = _to_utc_dt(e.enrollment_end_date)
-            events.append(_make_event(
-                source_type="deadline",
-                source_id=str(e.id),
-                summary=f"[LearnPuddle] {e.course.title} — Enrollment Ends",
-                description=f"Course enrollment ends on {e.enrollment_end_date}.",
-                start_dt=dt,
-                end_dt=dt + timedelta(hours=1),
-                subdomain=subdomain,
-                platform_domain=platform_domain,
-            ))
-    except Exception:
-        logger.exception("sync_engine: error collecting enrollment events for user=%s", user.pk)
 
     return events
 
@@ -322,11 +299,28 @@ def _hash_title(title: str) -> str:
 
 
 def _user_course_ids(user):
-    try:
-        from apps.courses.models import Enrollment
-        return Enrollment.objects.filter(user=user).values_list("course_id", flat=True)
-    except Exception:
+    tenant = getattr(user, "tenant", None)
+    if tenant is None:
         return []
+
+    from apps.courses.models import Course
+
+    qs = Course.objects.all_tenants().filter(
+        tenant=tenant,
+        is_active=True,
+        is_published=True,
+    )
+    if getattr(user, "role", None) == "STUDENT":
+        qs = qs.filter(
+            Q(assigned_to_all_students=True) | Q(assigned_students=user)
+        )
+    else:
+        qs = qs.filter(
+            Q(assigned_to_all=True)
+            | Q(assigned_teachers=user)
+            | Q(assigned_groups__in=user.teacher_groups.all())
+        )
+    return qs.distinct().values_list("id", flat=True)
 
 
 def _platform_domain() -> str:

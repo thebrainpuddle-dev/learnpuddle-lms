@@ -137,7 +137,7 @@ export function useTTSPreview() {
         }
 
         // Determine audio type from response headers
-        const contentType = res.headers['content-type'] || 'audio/mp3';
+        const contentType = String(res.headers['content-type'] ?? 'audio/mp3');
         const blob = new Blob([arrayBuffer], { type: contentType });
 
         if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);

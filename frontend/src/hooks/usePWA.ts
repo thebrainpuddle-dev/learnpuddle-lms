@@ -10,6 +10,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import api from '../config/api';
 
 interface PWAState {
   isOnline: boolean;
@@ -224,7 +225,6 @@ export function usePWA(): UsePWAReturn {
       }
 
       // Get VAPID public key from server
-      const { default: api } = await import('../config/api');
       const response = await api.get('/notifications/push/vapid-key/');
       const { publicKey } = response.data;
 
@@ -258,7 +258,6 @@ export function usePWA(): UsePWAReturn {
         await subscription.unsubscribe();
 
         // Notify server
-        const { default: api } = await import('../config/api');
         await api.post('/notifications/push/unsubscribe/', { endpoint: subscription.endpoint });
       }
       return true;

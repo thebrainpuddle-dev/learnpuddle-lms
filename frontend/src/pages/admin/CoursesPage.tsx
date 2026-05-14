@@ -78,15 +78,20 @@ const duplicateCourse = async (id: string): Promise<Course> => {
 };
 
 const togglePublish = async (course: Course): Promise<Course> => {
-  const response = await api.patch(`/courses/${course.id}/`, {
-    is_published: !course.is_published,
+  const response = await api.post(`/courses/${course.id}/publish/`, {
+    action: course.is_published ? 'unpublish' : 'publish',
   });
-  return response.data;
+  return { ...course, is_published: response.data.is_published };
 };
 
 const bulkActionCourses = async (action: 'publish' | 'unpublish' | 'delete', courseIds: string[]) => {
   const response = await api.post('/courses/bulk-action/', { action, course_ids: courseIds });
-  return response.data as { message: string; affected_count: number; requested_count: number };
+  return response.data as {
+    message: string;
+    affected_count: number;
+    requested_count: number;
+    skipped?: Array<{ id: string; title: string; error: string }>;
+  };
 };
 
 /* ── Thumbnail helper ─────────────────────────────────────────────── */
@@ -254,8 +259,8 @@ export const CoursesPage: React.FC = () => {
         updatedCourse.is_published ? 'Teachers can now access this course.' : 'Course is now in draft mode.'
       );
     },
-    onError: () => {
-      toast.error('Failed to update course', 'Please try again.');
+    onError: (err: any) => {
+      toast.error('Failed to update course', err?.response?.data?.error || 'Please try again.');
     },
   });
 
@@ -265,7 +270,11 @@ export const CoursesPage: React.FC = () => {
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ['adminCourses'] });
       queryClient.invalidateQueries({ queryKey: ['adminDashboardStats'] });
-      toast.success('Bulk action complete', result.message);
+      const skipped = result.skipped?.length ?? 0;
+      toast.success(
+        'Bulk action complete',
+        skipped ? `${result.message}. ${skipped} course(s) were skipped because they are not publish-ready.` : result.message
+      );
       setSelectedIds(new Set());
     },
     onError: () => {

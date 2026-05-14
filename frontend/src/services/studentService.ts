@@ -33,6 +33,7 @@ export interface StudentCourseListItem {
   slug: string;
   description: string;
   thumbnail: string | null;
+  thumbnail_url?: string | null;
   is_mandatory: boolean;
   deadline: string | null;
   estimated_hours: string;
@@ -51,6 +52,7 @@ export interface StudentCourseDetail {
   slug: string;
   description: string;
   thumbnail: string | null;
+  thumbnail_url?: string | null;
   is_mandatory: boolean;
   deadline: string | null;
   estimated_hours: string;
@@ -96,8 +98,23 @@ export interface StudentCourseDetail {
       lock_reason: string;
       has_transcript?: boolean;
       transcript_vtt_url?: string;
+      maic_classroom_id?: string | null;
+      ai_chatbot_id?: string | null;
     }>;
   }>;
+}
+
+export interface StudentSearchResult {
+  id: string;
+  title: string;
+  type: 'course' | 'assignment';
+  course_id?: string;
+  course_title?: string;
+}
+
+export interface StudentSearchResponse {
+  courses: StudentSearchResult[];
+  assignments: StudentSearchResult[];
 }
 
 // ─── Assignments ──────────────────────────────────────────────────────────────
@@ -130,6 +147,45 @@ export interface StudentAssignmentSubmission {
   feedback: string;
   submitted_at: string;
   updated_at: string;
+}
+
+export interface StudentQuizDetailResponse {
+  assignment_id: string;
+  quiz_id: string;
+  schema_version: number;
+  max_attempts: number;
+  time_limit_minutes: number | null;
+  attempts_used: number;
+  attempts_remaining: number | null;
+  best_score: number | null;
+  current_attempt: null | {
+    attempt_number: number;
+    started_at: string;
+  };
+  attempts_exhausted: boolean;
+  attempt_history: Array<{
+    id?: string;
+    attempt_number: number;
+    answers: Record<string, any>;
+    score: number | null;
+    graded_at: string | null;
+    submitted_at: string;
+  }>;
+  questions: Array<{
+    id: string;
+    order: number;
+    question_type: 'MCQ' | 'SHORT_ANSWER' | 'TRUE_FALSE';
+    selection_mode: 'SINGLE' | 'MULTIPLE';
+    prompt: string;
+    options: string[];
+    points: number;
+  }>;
+  submission: null | {
+    answers: Record<string, any>;
+    score: number | null;
+    graded_at: string | null;
+    submitted_at: string;
+  };
 }
 
 // ─── Gamification ─────────────────────────────────────────────────────────────
@@ -209,26 +265,12 @@ export const studentService = {
   // Quizzes
   async getQuizDetail(assignmentId: string) {
     const res = await api.get(`/v1/student/quizzes/${assignmentId}/`);
-    return res.data as {
-      assignment_id: string;
-      quiz_id: string;
-      schema_version: number;
-      questions: Array<{
-        id: string;
-        order: number;
-        question_type: 'MCQ' | 'SHORT_ANSWER' | 'TRUE_FALSE';
-        selection_mode: 'SINGLE' | 'MULTIPLE';
-        prompt: string;
-        options: string[];
-        points: number;
-      }>;
-      submission: null | {
-        answers: Record<string, any>;
-        score: number | null;
-        graded_at: string | null;
-        submitted_at: string;
-      };
-    };
+    return res.data as StudentQuizDetailResponse;
+  },
+
+  async startQuiz(assignmentId: string) {
+    const res = await api.post(`/v1/student/quizzes/${assignmentId}/start/`);
+    return res.data as StudentQuizDetailResponse;
   },
 
   async submitQuiz(assignmentId: string, answers: Record<string, any>) {
@@ -248,7 +290,7 @@ export const studentService = {
   },
 
   // Search
-  async searchStudentContent(query: string) {
+  async searchStudentContent(query: string): Promise<StudentSearchResponse> {
     const res = await api.get('/v1/student/search/', { params: { q: query } });
     return res.data;
   },
@@ -266,8 +308,14 @@ export const studentService = {
   },
 
   // Study Summaries
-  async getStudySummaries(courseId?: string): Promise<StudySummaryListItem[]> {
-    const res = await api.get('/v1/student/study-summaries/', { params: courseId ? { course_id: courseId } : undefined });
+  async getStudySummaries(courseId?: string, contentId?: string): Promise<StudySummaryListItem[]> {
+    const params = {
+      ...(courseId ? { course_id: courseId } : {}),
+      ...(contentId ? { content_id: contentId } : {}),
+    };
+    const res = await api.get('/v1/student/study-summaries/', {
+      params: Object.keys(params).length ? params : undefined,
+    });
     return res.data;
   },
 
@@ -278,8 +326,8 @@ export const studentService = {
 
   async getStudySummaryForContent(contentId: string): Promise<StudySummaryDetail | null> {
     try {
-      const summaries = await api.get('/v1/student/study-summaries/', { params: { content_id: contentId } });
-      const match = (summaries.data as StudySummaryListItem[]).find((s) => s.content_id === contentId && s.status === 'READY');
+      const summaries = await studentService.getStudySummaries(undefined, contentId);
+      const match = summaries.find((s) => s.content_id === contentId && s.status === 'READY');
       if (match) {
         const detail = await api.get(`/v1/student/study-summaries/${match.id}/`);
         return detail.data;

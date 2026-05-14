@@ -34,6 +34,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.maic.exceptions import MaicConfigError
+from apps.maic.llm_config import resolve_tenant_llm_runtime_config
 from apps.maic.permissions import MaicV2TenantPermission
 from apps.maic_pbl.design_graph import (
     GeneratePBLConfig,
@@ -69,9 +70,9 @@ class PBLProjectCreateView(APIView):
         language: str (optional, default "en") — the IETF tag
             stamped on MaicPBLSession; passed to the design loop as
             languageDirective via the prompt template.
-        languageModelId: str (optional, default "stub") — same id
-            scheme as apps/maic/views_generation; "stub" for tests,
-            real provider ids for production.
+        languageModelId: str (optional) — normally omitted. Production
+            resolves from the school's TenantAIConfig; request overrides
+            must be explicitly enabled by deploy configuration.
 
     Response 201 (Created):
         {
@@ -99,9 +100,7 @@ class PBLProjectCreateView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        body: dict[str, Any] = (
-            request.data if isinstance(request.data, dict) else {}
-        )
+        body: dict[str, Any] = request.data if isinstance(request.data, dict) else {}
 
         topic = body.get("topic")
         if not isinstance(topic, str) or not topic.strip():
@@ -140,26 +139,31 @@ class PBLProjectCreateView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        language_model_id = body.get("languageModelId", "stub")
-        if not isinstance(language_model_id, str):
+        teacher_context = body.get("teacherContext", body.get("teacher_context", "")) or ""
+        if not isinstance(teacher_context, str):
             return Response(
-                {"error": "languageModelId must be a string"},
+                {"error": "teacherContext must be a string"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        teacher_context = teacher_context.strip()[:4000]
 
-        # Resolve the LLM. "stub" is a sentinel that the design loop's
-        # tests use; not a real LangChain model — bind_tools won't work.
-        # Rejecting it here keeps the API contract honest in production.
-        if language_model_id == "stub":
+        try:
+            llm_config = resolve_tenant_llm_runtime_config(
+                tenant=getattr(user, "tenant", None),
+                tenant_id=tenant_id,
+                requested=body.get("languageModelId"),
+            )
+            language_model_id = str(llm_config["language_model_id"])
+        except MaicConfigError as exc:
             return Response(
-                {"error": "languageModelId 'stub' is for tests only; pick a real provider id"},
+                {"error": str(exc)},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         try:
             from apps.maic.orchestration.ai_adapter import resolve_chat_model
 
-            model = resolve_chat_model(language_model_id)
+            model = resolve_chat_model(language_model_id, llm_config=llm_config)
         except MaicConfigError as exc:
             return Response(
                 {"error": f"languageModelId invalid: {exc}"},
@@ -182,6 +186,7 @@ class PBLProjectCreateView(APIView):
                 target_skills=list(target_skills),
                 issue_count=issue_count,
                 language_directive=_build_language_directive(language),
+                teacher_context=teacher_context,
             )
             result = asyncio.run(generate_pbl_project(cfg, model))
         except Exception as exc:  # noqa: BLE001 — boundary
@@ -263,9 +268,7 @@ class PBLProjectRetrieveView(APIView):
             )
 
         sess = (
-            MaicPBLSession.objects.all_tenants()
-            .filter(id=session_id, tenant_id=tenant_id)
-            .first()
+            MaicPBLSession.objects.all_tenants().filter(id=session_id, tenant_id=tenant_id).first()
         )
         if sess is None:
             raise NotFound("PBL session not found")

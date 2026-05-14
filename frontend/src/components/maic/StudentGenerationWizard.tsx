@@ -20,6 +20,7 @@ import { useStudentMAICGeneration, type StudentGenerationStep } from '../../hook
 import type { GenerationPhase } from '../../hooks/useMAICGeneration';
 import { maicStudentApi } from '../../services/openmaicService';
 import type { MAICAgent, MAICGenerationConfig, MAICOutlineScene } from '../../types/maic';
+import { featureFlags } from '../../config/featureFlags';
 import { AgentGenerationStep } from './AgentGenerationStep';
 import { OutlineEditor } from './OutlineEditor';
 import { PDFUploader } from './PDFUploader';
@@ -110,11 +111,13 @@ export const StudentGenerationWizard: React.FC<StudentGenerationWizardProps> = (
     validateAndStartOutline,
     updateOutline,
     startContentGeneration,
+    startV2Generation,
     cancel,
     reset: resetGeneration,
   } = useStudentMAICGeneration();
 
   const effectiveStep = stepFromGeneration(genStep, wizardStep);
+  const useV2Generation = featureFlags.maicV2Enabled && featureFlags.maicGenerationUseV2;
 
   // Step 1 → Step 2 (agents). Outline generation runs once the roster is
   // approved so the backend can condition scenes on the chosen personas.
@@ -142,6 +145,19 @@ export const StudentGenerationWizard: React.FC<StudentGenerationWizardProps> = (
         enableWebSearch: true,
       };
 
+      if (useV2Generation) {
+        setWizardStep(4);
+        const result = await startV2Generation(config, approvedAgents);
+        if (result.rejected) {
+          setWizardStep(1);
+          return;
+        }
+        if (result.classroomId) {
+          setClassroomId(result.classroomId);
+        }
+        return;
+      }
+
       setWizardStep(3);
       const result = await validateAndStartOutline(config, approvedAgents);
       // If validation rejected the topic, snap the wizard back to Step 1 so
@@ -151,7 +167,7 @@ export const StudentGenerationWizard: React.FC<StudentGenerationWizardProps> = (
         setWizardStep(1);
       }
     },
-    [topic, pdfText, language, sceneCount, validateAndStartOutline],
+    [topic, pdfText, language, sceneCount, useV2Generation, startV2Generation, validateAndStartOutline],
   );
 
   const handleStartGeneration = useCallback(async () => {
@@ -407,6 +423,7 @@ export const StudentGenerationWizard: React.FC<StudentGenerationWizardProps> = (
           topic={topic}
           language={language}
           role="student"
+          agentCount={agentCount}
           initialAgents={agents.length > 0 ? agents : undefined}
           onBack={() => setWizardStep(1)}
           onComplete={(approvedAgents) => void handleAgentsComplete(approvedAgents)}

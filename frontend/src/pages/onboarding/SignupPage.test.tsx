@@ -71,7 +71,7 @@ function renderPage(queryClient?: QueryClient) {
   const client = queryClient ?? makeQueryClient();
   return render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={['/signup']}>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={['/signup']}>
         <SignupPage />
       </MemoryRouter>
     </QueryClientProvider>,

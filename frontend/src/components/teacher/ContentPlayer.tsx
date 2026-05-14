@@ -10,6 +10,7 @@ import {
   HandThumbUpIcon,
 } from '@heroicons/react/24/outline';
 import { teacherService } from '../../services/teacherService';
+import { studentService } from '../../services/studentService';
 import { getAccessToken } from '../../utils/authSession';
 
 interface ContentPlayerProps {
@@ -24,6 +25,8 @@ interface ContentPlayerProps {
     duration?: number;
     has_transcript?: boolean;
     transcript_vtt_url?: string;
+    maic_classroom_id?: string | null;
+    ai_chatbot_id?: string | null;
   };
   initialProgress?: number;
   isCompleted?: boolean;
@@ -107,7 +110,8 @@ export const ContentPlayer: React.FC<ContentPlayerProps> = ({
 
     setTranscriptLoading(true);
     setTranscriptError(null);
-    teacherService
+    const transcriptService = window.location.pathname.startsWith('/student') ? studentService : teacherService;
+    transcriptService
       .getVideoTranscript(content.id)
       .then((data) => {
         setTranscript({ full_text: data.full_text, segments: data.segments || [] });
@@ -249,6 +253,7 @@ export const ContentPlayer: React.FC<ContentPlayerProps> = ({
 
   if (content.content_type === 'AI_CLASSROOM') {
     const rolePrefix = window.location.pathname.startsWith('/student') ? '/student' : '/teacher';
+    const classroomId = content.maic_classroom_id || content.id;
     return (
       <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
         <div className="p-4 sm:p-6 lg:p-8">
@@ -281,7 +286,7 @@ export const ContentPlayer: React.FC<ContentPlayerProps> = ({
 
           <div className="flex flex-wrap items-center gap-3">
             <a
-              href={`${rolePrefix}/ai-classroom/${content.id}`}
+              href={`${rolePrefix}/ai-classroom/${classroomId}`}
               className="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-violet-700"
             >
               Launch AI Classroom
@@ -311,6 +316,7 @@ export const ContentPlayer: React.FC<ContentPlayerProps> = ({
 
   if (content.content_type === 'CHATBOT') {
     const rolePrefix = window.location.pathname.startsWith('/student') ? '/student' : '/teacher';
+    const chatbotId = content.ai_chatbot_id || content.id;
     return (
       <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
         <div className="p-4 sm:p-6 lg:p-8">
@@ -343,7 +349,7 @@ export const ContentPlayer: React.FC<ContentPlayerProps> = ({
 
           <div className="flex flex-wrap items-center gap-3">
             <a
-              href={`${rolePrefix}/chatbots/${content.id}`}
+              href={`${rolePrefix}/chatbots/${chatbotId}`}
               className="inline-flex items-center gap-2 rounded-lg bg-teal-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-teal-700"
             >
               Open Tutor

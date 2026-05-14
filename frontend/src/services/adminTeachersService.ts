@@ -7,6 +7,7 @@ export interface TeacherInvitation {
   email: string;
   first_name: string;
   last_name: string;
+  invitation_role?: 'TEACHER' | 'STUDENT';
   status: 'pending' | 'accepted' | 'expired';
   created_at: string;
   expires_at: string;
@@ -75,7 +76,14 @@ export const adminTeachersService = {
 
   async validateInvitation(token: string) {
     const res = await api.get(`/users/auth/invitation/${token}/`);
-    return res.data as { email: string; first_name: string; last_name: string; school_name: string; expires_at: string };
+    return res.data as {
+      email: string;
+      first_name: string;
+      last_name: string;
+      invitation_role: 'TEACHER' | 'STUDENT';
+      school_name: string;
+      expires_at: string;
+    };
   },
 
   async acceptInvitation(token: string, password: string) {

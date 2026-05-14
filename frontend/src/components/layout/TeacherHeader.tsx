@@ -4,7 +4,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   Menu,
   Search,
@@ -15,7 +15,7 @@ import {
   Megaphone,
 } from 'lucide-react';
 import { cn } from '../../design-system/theme/cn';
-import { notificationService, Notification } from '../../services/notificationService';
+import { useNotifications, type Notification } from '../../hooks/useNotifications';
 import { formatDistanceToNow } from 'date-fns';
 
 interface TeacherHeaderProps {
@@ -44,34 +44,9 @@ export const TeacherHeader: React.FC<TeacherHeaderProps> = ({ onMenuClick }) => 
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [searchFocused, setSearchFocused] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
-
-  const { data: unreadCount = 0 } = useQuery({
-    queryKey: ['notificationUnreadCount'],
-    queryFn: () => notificationService.getUnreadCount(),
-    refetchInterval: 30000,
-  });
-
-  const { data: notifications = [], isLoading } = useQuery({
-    queryKey: ['notifications'],
-    queryFn: () => notificationService.getNotifications({ limit: 10 }),
-    enabled: dropdownOpen,
-  });
-
-  const markAsReadMutation = useMutation({
-    mutationFn: notificationService.markAsRead,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['notifications'] });
-      queryClient.invalidateQueries({ queryKey: ['notificationUnreadCount'] });
-    },
-  });
-
-  const markAllAsReadMutation = useMutation({
-    mutationFn: notificationService.markAllAsRead,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['notifications'] });
-      queryClient.invalidateQueries({ queryKey: ['notificationUnreadCount'] });
-    },
-  });
+  const syncedNotificationIdsRef = useRef<Set<string>>(new Set());
+  const { notifications, unreadCount, markAsRead, markAllAsRead } = useNotifications({ limit: 10 });
+  const isLoading = false;
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -83,8 +58,33 @@ export const TeacherHeader: React.FC<TeacherHeaderProps> = ({ onMenuClick }) => 
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  useEffect(() => {
+    const knownIds = syncedNotificationIdsRef.current;
+    const freshNotifications = notifications.filter((notification) => !knownIds.has(notification.id));
+    notifications.forEach((notification) => knownIds.add(notification.id));
+
+    if (freshNotifications.length === 0) return;
+
+    if (freshNotifications.some((notification) => notification.notification_type === 'COURSE_ASSIGNED')) {
+      queryClient.invalidateQueries({ queryKey: ['teacherCourses'] });
+      queryClient.invalidateQueries({ queryKey: ['teacherDashboard'] });
+    }
+    if (freshNotifications.some((notification) => notification.notification_type === 'ASSIGNMENT_DUE')) {
+      queryClient.invalidateQueries({ queryKey: ['teacherAssignments'] });
+      queryClient.invalidateQueries({ queryKey: ['teacherAssignmentsAll'] });
+      queryClient.invalidateQueries({ queryKey: ['teacherDashboard'] });
+    }
+    if (freshNotifications.some((notification) => (
+      notification.notification_type === 'REMINDER' ||
+      notification.notification_type === 'ANNOUNCEMENT'
+    ))) {
+      queryClient.invalidateQueries({ queryKey: ['teacherRemindersPage'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboardAnnouncements'] });
+    }
+  }, [notifications, queryClient]);
+
   const handleNotificationClick = (notification: Notification) => {
-    if (!notification.is_read) markAsReadMutation.mutate(notification.id);
+    if (!notification.is_read) markAsRead([notification.id]);
     if (notification.course) {
       navigate(`/teacher/courses/${notification.course}`);
     } else if (notification.assignment) {
@@ -157,7 +157,7 @@ export const TeacherHeader: React.FC<TeacherHeaderProps> = ({ onMenuClick }) => 
                 <h3 className="text-[13px] font-semibold text-tp-text">Notifications</h3>
                 {unreadCount > 0 && (
                   <button
-                    onClick={() => markAllAsReadMutation.mutate()}
+                    onClick={() => markAllAsRead()}
                     className="text-[11px] text-tp-accent hover:text-tp-accent-dark font-medium flex items-center gap-1 transition-colors"
                   >
                     <Check className="h-3 w-3" />

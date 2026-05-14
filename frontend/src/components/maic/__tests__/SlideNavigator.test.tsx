@@ -1,15 +1,14 @@
-// SlideNavigator.test.tsx — counter null-state UX (BUNDLE-2026-04-29-FX-3)
+// SlideNavigator.test.tsx — scene navigation for mixed classrooms
 //
 // SlideNavigator renders the bottom scene strip with a "Scene N of M" counter.
-// When the active scene isn't a slide-bearing scene (e.g. quiz / pbl /
-// interactive), `activeNavPosition` is null and showing a stale counter
-// like "Scene – of N" is confusing — the navigator should hide entirely.
+// Mixed v2 classrooms include slide, quiz, interactive, and PBL scenes.
+// The navigator must keep every scene reachable even when only some scenes
+// own slide screens.
 //
 // Cases covered:
 //   1. Renders normally when activeSceneIdx matches a navScenes entry.
-//   2. Returns null when navScenes is empty (no slide-bearing scenes).
-//   3. Returns null when activeSceneIdx doesn't match any navScenes entry
-//      (user is on a non-slide scene like quiz/pbl/interactive).
+//   2. Returns null only when there are no scenes.
+//   3. Renders non-slide scenes without a stale "Scene –" counter.
 
 import { describe, expect, test, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
@@ -27,7 +26,7 @@ function makeScene(overrides: Partial<MAICScene> = {}): MAICScene {
   } as MAICScene;
 }
 
-describe('SlideNavigator — null-state UX', () => {
+describe('SlideNavigator — mixed scene UX', () => {
   beforeEach(() => {
     // Reset store between cases so leaked state from one test can't mask
     // the rendering decisions in the next.
@@ -64,11 +63,9 @@ describe('SlideNavigator — null-state UX', () => {
     expect(screen.getByText(/Scene 1 of 2/)).toBeInTheDocument();
   });
 
-  test('returns null when navScenes is empty (no slide-bearing scenes)', () => {
-    // No bounds at all — every scene is non-slide-bearing or generation
-    // hasn't produced slides yet.
+  test('returns null when there are no scenes', () => {
     useMAICStageStore.setState({
-      scenes: [makeScene({ id: 's1', title: 'Quiz', type: 'quiz' })],
+      scenes: [],
       sceneSlideBounds: [],
       currentSceneIndex: 0,
       currentSlideIndex: 0,
@@ -78,9 +75,7 @@ describe('SlideNavigator — null-state UX', () => {
     expect(container.firstChild).toBeNull();
   });
 
-  test('returns null when active scene is not in navScenes (quiz / pbl / interactive)', () => {
-    // Three scenes — slide-bearing ones at index 0 and 2; index 1 is a
-    // non-slide scene (e.g. quiz). The user is currently on the quiz scene.
+  test('renders non-slide active scenes as first-class navigation targets', () => {
     const scenes: MAICScene[] = [
       makeScene({ id: 's1', title: 'Intro', type: 'lecture' }),
       makeScene({ id: 's2', title: 'Quiz', type: 'quiz' }),
@@ -98,6 +93,9 @@ describe('SlideNavigator — null-state UX', () => {
     });
 
     const { container } = render(<SlideNavigator />);
-    expect(container.firstChild).toBeNull();
+    expect(container.firstChild).not.toBeNull();
+    expect(screen.getByRole('navigation', { name: /scene navigation/i })).toBeInTheDocument();
+    expect(screen.getByText(/Scene 2 of 3/)).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /2\s*Quiz/i })).toHaveAttribute('aria-selected', 'true');
   });
 });

@@ -250,6 +250,7 @@ export const DashboardPage: React.FC = () => {
                   const progress = Math.min(100, Number(course.progress_percentage || 0));
                   const isCompleted = progress >= 100;
                   const isInProgress = progress > 0 && progress < 100;
+                  const thumbnailSrc = course.thumbnail_url || course.thumbnail;
                   return (
                     <button
                       key={course.id}
@@ -258,9 +259,9 @@ export const DashboardPage: React.FC = () => {
                     >
                       {/* Thumbnail */}
                       <div className="h-10 w-10 rounded-lg bg-gray-50 border border-gray-100 flex items-center justify-center flex-shrink-0 overflow-hidden">
-                        {course.thumbnail ? (
+                        {thumbnailSrc ? (
                           <img
-                            src={course.thumbnail}
+                            src={thumbnailSrc}
                             alt=""
                             className="h-10 w-10 object-cover"
                           />

@@ -40,7 +40,7 @@ vi.mock('../../hooks/usePageTitle', () => ({ usePageTitle: vi.fn() }));
 
 function renderPage() {
   return render(
-    <MemoryRouter>
+    <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <MAICCreatePage />
     </MemoryRouter>,
   );
@@ -50,7 +50,7 @@ function renderPage() {
 
 describe('MAICCreatePage', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
   });
 
   it('renders "New AI Classroom" heading', () => {

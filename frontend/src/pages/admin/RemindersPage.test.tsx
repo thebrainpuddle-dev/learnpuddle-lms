@@ -135,7 +135,7 @@ function renderPage() {
   const user = userEvent.setup();
   const utils = render(
     <QueryClientProvider client={qc}>
-      <MemoryRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <ToastProvider>
           <RemindersPage />
         </ToastProvider>

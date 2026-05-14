@@ -1,15 +1,21 @@
 import { expect, Page } from '@playwright/test';
 
-type RoleKey = 'teacher' | 'admin' | 'superAdmin';
+type RoleKey = 'teacher' | 'admin' | 'student' | 'superAdmin';
+
+const localDefault = (value: string) => (process.env.CI ? '' : value);
 
 export const credentials = {
   teacher: {
-    email: (process.env.E2E_TEACHER_EMAIL || '').trim(),
-    password: (process.env.E2E_TEACHER_PASSWORD || '').trim(),
+    email: (process.env.E2E_TEACHER_EMAIL || localDefault('teacher@demo.learnpuddle.com')).trim(),
+    password: (process.env.E2E_TEACHER_PASSWORD || localDefault('Teacher@123')).trim(),
   },
   admin: {
-    email: (process.env.E2E_ADMIN_EMAIL || '').trim(),
-    password: (process.env.E2E_ADMIN_PASSWORD || '').trim(),
+    email: (process.env.E2E_ADMIN_EMAIL || localDefault('admin@demo.learnpuddle.com')).trim(),
+    password: (process.env.E2E_ADMIN_PASSWORD || localDefault('Admin@123')).trim(),
+  },
+  student: {
+    email: (process.env.E2E_STUDENT_EMAIL || localDefault('student@demo.learnpuddle.com')).trim(),
+    password: (process.env.E2E_STUDENT_PASSWORD || localDefault('Student@123')).trim(),
   },
   superAdmin: {
     email: (process.env.E2E_SUPERADMIN_EMAIL || '').trim(),
@@ -52,11 +58,23 @@ export async function clearBrowserAuthState(page: Page) {
   });
 }
 
+export function tenantIdentifierInput(page: Page) {
+  return page.locator('#identifier, input[name="identifier"], input[name="email"], input[type="email"]').first();
+}
+
+export function tenantPasswordInput(page: Page) {
+  return page.locator('#password, input[name="password"], input[type="password"]').first();
+}
+
+export async function fillTenantLogin(page: Page, email: string, password: string) {
+  await tenantIdentifierInput(page).fill(email);
+  await tenantPasswordInput(page).fill(password);
+}
+
 export async function loginAsAdmin(page: Page) {
   ensureCredentialsConfigured('admin');
   await page.goto('/login', { waitUntil: 'domcontentloaded' });
-  await page.getByLabel(/email/i).fill(credentials.admin.email);
-  await page.getByLabel(/password/i).fill(credentials.admin.password);
+  await fillTenantLogin(page, credentials.admin.email, credentials.admin.password);
   await page.getByRole('button', { name: /sign in/i }).click();
   await expect(page).toHaveURL(/.*\/admin\/dashboard/, { timeout: 15000 });
   await dismissTourIfPresent(page);
@@ -65,10 +83,18 @@ export async function loginAsAdmin(page: Page) {
 export async function loginAsTeacher(page: Page) {
   ensureCredentialsConfigured('teacher');
   await page.goto('/login', { waitUntil: 'domcontentloaded' });
-  await page.getByLabel(/email/i).fill(credentials.teacher.email);
-  await page.getByLabel(/password/i).fill(credentials.teacher.password);
+  await fillTenantLogin(page, credentials.teacher.email, credentials.teacher.password);
   await page.getByRole('button', { name: /sign in/i }).click();
   await expect(page).toHaveURL(/.*\/teacher\/dashboard/, { timeout: 15000 });
+  await dismissTourIfPresent(page);
+}
+
+export async function loginAsStudent(page: Page) {
+  ensureCredentialsConfigured('student');
+  await page.goto('/login', { waitUntil: 'domcontentloaded' });
+  await fillTenantLogin(page, credentials.student.email, credentials.student.password);
+  await page.getByRole('button', { name: /sign in/i }).click();
+  await expect(page).toHaveURL(/.*\/student\/dashboard/, { timeout: 15000 });
   await dismissTourIfPresent(page);
 }
 

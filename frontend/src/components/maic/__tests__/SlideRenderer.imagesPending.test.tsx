@@ -3,9 +3,9 @@
 // SPRINT-2-BATCH-3-F2 — Tests for the `imagesPending` indicator on
 // SlideRenderer.
 //
-// Verifies two states for an image element whose `src` is empty:
+// Verifies empty-src image states:
 //   1. imagesPending=true  → "fetching image…" skeleton (NOT Unsplash fallback)
-//   2. imagesPending=false → Unsplash fallback URL (existing behaviour)
+//   2. imagesPending=false → honest unavailable placeholder, not a random image
 
 import React from 'react';
 import { describe, test, expect, vi, beforeEach } from 'vitest';
@@ -82,7 +82,7 @@ describe('SlideRenderer — imagesPending indicator (SPRINT-2-BATCH-3-F2)', () =
   );
 
   test(
-    'renders an <img> with Unsplash fallback src when src is empty AND imagesPending is false',
+    'renders an unavailable placeholder when src is empty AND imagesPending is false',
     () => {
       render(
         <SlideRenderer
@@ -95,12 +95,12 @@ describe('SlideRenderer — imagesPending indicator (SPRINT-2-BATCH-3-F2)', () =
       const skeleton = document.querySelector('[data-testid="image-fetching-skeleton"]');
       expect(skeleton).toBeNull();
 
-      // An <img> element should be rendered with an Unsplash URL.
-      const imgs = document.querySelectorAll('img');
-      expect(imgs.length).toBeGreaterThan(0);
-      const src = imgs[0].getAttribute('src') ?? '';
-      expect(src).toContain('unsplash.com');
-      expect(src).toContain('photosynthesis');
+      expect(
+        document.querySelector('[data-testid="image-empty-placeholder"]'),
+      ).not.toBeNull();
+      expect(screen.getByText('Image unavailable')).toBeDefined();
+      expect(screen.getByText('photosynthesis')).toBeDefined();
+      expect(document.querySelector('img')).toBeNull();
     },
   );
 
@@ -127,9 +127,10 @@ describe('SlideRenderer — imagesPending indicator (SPRINT-2-BATCH-3-F2)', () =
   );
 
   test(
-    'falls through to Unsplash when imagesPending is undefined',
+    'renders unavailable placeholder when imagesPending is undefined',
     () => {
-      // When imagesPending is not provided (undefined), empty src → Unsplash.
+      // When imagesPending is not provided (undefined), empty src still does
+      // not bypass the image pipeline with a random remote image.
       render(
         <SlideRenderer
           slide={makeImageSlide('')}
@@ -138,13 +139,11 @@ describe('SlideRenderer — imagesPending indicator (SPRINT-2-BATCH-3-F2)', () =
       );
 
       const skeleton = document.querySelector('[data-testid="image-fetching-skeleton"]');
-      // No skeleton — imagesPending is undefined/falsy, so Unsplash fallback applies.
       expect(skeleton).toBeNull();
-
-      const imgs = document.querySelectorAll('img');
-      expect(imgs.length).toBeGreaterThan(0);
-      const src = imgs[0].getAttribute('src') ?? '';
-      expect(src).toContain('unsplash.com');
+      expect(
+        document.querySelector('[data-testid="image-empty-placeholder"]'),
+      ).not.toBeNull();
+      expect(document.querySelector('img')).toBeNull();
     },
   );
 });

@@ -532,7 +532,7 @@ describe('maicDb quota — AUDIT-5 estimate caching', () => {
 
   test('two saveClassroom calls separated by > TTL re-estimate', async () => {
     // Only fake Date so that fake-indexeddb's internal Promise/microtask
-    // machinery is not disturbed. `vi.useFakeTimers()` without options would
+    // machinery is not disturbed. `vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })` without options would
     // also fake setTimeout/setInterval, stalling IDB operations inside the test.
     vi.useFakeTimers({ toFake: ['Date'] });
     try {

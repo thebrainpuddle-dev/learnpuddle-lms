@@ -157,7 +157,7 @@ describe('buildSceneFromBuffer — action assembly', () => {
 
 
 describe('buildSceneFromBuffer — speech action synthesis', () => {
-  test('skips audio entries with empty audioB64 (no silent reading-time gap)', () => {
+  test('skips audio entries with empty audioB64 and no audioUrl', () => {
     // Manually craft a buffer with a bookkeeping-only audio entry.
     const buffer: SceneBuffer = {
       ...EMPTY_SCENE_BUFFER,
@@ -181,6 +181,28 @@ describe('buildSceneFromBuffer — speech action synthesis', () => {
     };
     const scene = buildSceneFromBuffer(buffer, SESSION_ID);
     expect(scene.actions).toEqual([]);
+  });
+
+  test('uses URL-backed speech audio when no inline base64 exists', () => {
+    const buffer: SceneBuffer = {
+      ...EMPTY_SCENE_BUFFER,
+      textByMessageId: { m1: 'This audio came from storage.' },
+      messageOrder: ['m1'],
+      audioByMessageId: {
+        m1: {
+          audioId: 'aud-url',
+          audioB64: '',
+          audioUrl: 'https://cdn.example.test/audio.mp3',
+          format: 'mp3',
+          messageId: 'm1',
+          agentId: 'default-1',
+        },
+      },
+    };
+    const scene = buildSceneFromBuffer(buffer, SESSION_ID);
+    const speech = scene.actions![0] as SpeechAction;
+    expect(speech.audioUrl).toBe('https://cdn.example.test/audio.mp3');
+    expect(speech.text).toBe('This audio came from storage.');
   });
 
   test('uses empty string text when text bucket missing for the messageId', () => {
@@ -226,6 +248,23 @@ describe('buildSceneFromBuffer — speech action synthesis', () => {
     ) as Record<string, SpeechAction>;
     expect(byId['speech-m1'].text).toBe('Hi from teacher.');
     expect(byId['speech-m2'].text).toBe('Hi from helper.');
+  });
+
+  test('orders speech actions by messageOrder instead of audio object insertion', () => {
+    const buffer: SceneBuffer = {
+      ...EMPTY_SCENE_BUFFER,
+      messageOrder: ['m1', 'm2'],
+      textByMessageId: { m1: 'First speaker.', m2: 'Second speaker.' },
+      audioByMessageId: {
+        m2: { audioId: 'aud-2', audioB64: 'BBB', format: 'mp3', messageId: 'm2', agentId: 'helper' },
+        m1: { audioId: 'aud-1', audioB64: 'AAA', format: 'mp3', messageId: 'm1', agentId: 'teacher' },
+      },
+    };
+    const scene = buildSceneFromBuffer(buffer, SESSION_ID);
+    expect(scene.actions!.map((action) => action.id)).toEqual([
+      'speech-m1',
+      'speech-m2',
+    ]);
   });
 });
 

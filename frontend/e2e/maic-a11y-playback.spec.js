@@ -78,7 +78,7 @@ test.describe('MAIC A11y Playback — TEST-P0-8', () => {
     test.skip(!process.env.E2E_LIVE, 'Set E2E_LIVE=1 to run e2e tests');
 
     await page.goto(`${BASE_URL}/teacher/ai-classroom/${classroomId}`);
-    await page.waitForSelector('button[aria-label*="Start class"]', { timeout: 20_000 });
+    await page.waitForSelector('button[aria-label^="Start playback"][aria-label*="scene"]', { timeout: 20_000 });
 
     const live = page.locator('[role="status"][aria-live="polite"]').first();
     await expect(live).toBeAttached();
@@ -96,8 +96,8 @@ test.describe('MAIC A11y Playback — TEST-P0-8', () => {
     test.skip(!process.env.E2E_LIVE, 'Set E2E_LIVE=1 to run e2e tests');
 
     await page.goto(`${BASE_URL}/teacher/ai-classroom/${classroomId}`);
-    await page.waitForSelector('button[aria-label*="Start class"]', { timeout: 20_000 });
-    await page.locator('button[aria-label*="Start class"]').click();
+    await page.waitForSelector('button[aria-label^="Start playback"][aria-label*="scene"]', { timeout: 20_000 });
+    await page.locator('button[aria-label^="Start playback"][aria-label*="scene"]').click();
 
     const live = page.locator('[role="status"][aria-live="polite"]').first();
     // SPRINT-2-BATCH-9-F7: poll for Scene-1 announcement instead of fixed sleep.
@@ -134,8 +134,8 @@ test.describe('MAIC A11y Playback — TEST-P0-8', () => {
     test.skip(!process.env.E2E_LIVE, 'Set E2E_LIVE=1 to run e2e tests');
 
     await page.goto(`${BASE_URL}/teacher/ai-classroom/${classroomId}`);
-    await page.waitForSelector('button[aria-label*="Start class"]', { timeout: 20_000 });
-    await page.locator('button[aria-label*="Start class"]').click();
+    await page.waitForSelector('button[aria-label^="Start playback"][aria-label*="scene"]', { timeout: 20_000 });
+    await page.locator('button[aria-label^="Start playback"][aria-label*="scene"]').click();
 
     const live = page.locator('[role="status"][aria-live="polite"]').first();
     // SPRINT-2-BATCH-9-F7: poll for Scene-1 announcement.
@@ -175,8 +175,8 @@ test.describe('MAIC A11y Playback — TEST-P0-8', () => {
     test.skip(!process.env.E2E_LIVE, 'Set E2E_LIVE=1 to run e2e tests');
 
     await page.goto(`${BASE_URL}/teacher/ai-classroom/${classroomId}`);
-    await page.waitForSelector('button[aria-label*="Start class"]', { timeout: 20_000 });
-    await page.locator('button[aria-label*="Start class"]').click();
+    await page.waitForSelector('button[aria-label^="Start playback"][aria-label*="scene"]', { timeout: 20_000 });
+    await page.locator('button[aria-label^="Start playback"][aria-label*="scene"]').click();
 
     const nav = page.locator('[role="navigation"][aria-label="Scene navigation"]');
     await expect(nav).toBeVisible();
@@ -202,8 +202,8 @@ test.describe('MAIC A11y Playback — TEST-P0-8', () => {
     test.skip(!process.env.E2E_LIVE, 'Set E2E_LIVE=1 to run e2e tests');
 
     await page.goto(`${BASE_URL}/teacher/ai-classroom/${classroomId}`);
-    await page.waitForSelector('button[aria-label*="Start class"]', { timeout: 20_000 });
-    await page.locator('button[aria-label*="Start class"]').click();
+    await page.waitForSelector('button[aria-label^="Start playback"][aria-label*="scene"]', { timeout: 20_000 });
+    await page.locator('button[aria-label^="Start playback"][aria-label*="scene"]').click();
 
     const live = page.locator('[role="status"][aria-live="polite"]').first();
     // SPRINT-2-BATCH-9-F7: poll for Scene-1 announcement before snapshotting.

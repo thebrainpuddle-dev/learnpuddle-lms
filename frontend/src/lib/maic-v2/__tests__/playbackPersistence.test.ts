@@ -164,8 +164,8 @@ describe('playbackPersistence', () => {
 
   describe('quota / error resilience', () => {
     it('save swallows storage exceptions and never throws', () => {
-      const original = window.localStorage.setItem.bind(window.localStorage);
-      window.localStorage.setItem = () => {
+      const originalStringify = JSON.stringify;
+      JSON.stringify = () => {
         throw new DOMException('quota exceeded', 'QuotaExceededError');
       };
       const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -174,21 +174,32 @@ describe('playbackPersistence', () => {
         expect(() => p.save(SAMPLE)).not.toThrow();
         expect(consoleWarnSpy).toHaveBeenCalled();
       } finally {
-        window.localStorage.setItem = original;
+        JSON.stringify = originalStringify;
         consoleWarnSpy.mockRestore();
       }
     });
 
     it('clear swallows storage exceptions and never throws', () => {
-      const original = window.localStorage.removeItem.bind(window.localStorage);
-      window.localStorage.removeItem = () => {
-        throw new Error('boom');
-      };
+      const originalStorage = window.localStorage;
+      const throwingStorage = Object.create(originalStorage) as Storage;
+      Object.defineProperty(throwingStorage, 'removeItem', {
+        configurable: true,
+        value: () => {
+          throw new Error('boom');
+        },
+      });
+      Object.defineProperty(window, 'localStorage', {
+        configurable: true,
+        value: throwingStorage,
+      });
       try {
         const p = createPlaybackPersistence('session-A');
         expect(() => p.clear()).not.toThrow();
       } finally {
-        window.localStorage.removeItem = original;
+        Object.defineProperty(window, 'localStorage', {
+          configurable: true,
+          value: originalStorage,
+        });
       }
     });
   });

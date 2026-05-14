@@ -206,6 +206,16 @@ def build_complete_scene(
             "content": {
                 "type": "pbl",
                 "projectConfig": content["projectConfig"],
+                **(
+                    {"pblSessionId": content["pblSessionId"]}
+                    if content.get("pblSessionId")
+                    else {}
+                ),
+                **(
+                    {"pblWsPath": content["pblWsPath"]}
+                    if content.get("pblWsPath")
+                    else {}
+                ),
             },
         }
 
@@ -302,6 +312,7 @@ async def resolve_scene_media(
     # provider adapters at import time. Lazy here so test-only fake
     # adapters can be registered BEFORE this function imports the
     # orchestrator module (mirrors apps/maic/tts/service.py pattern).
+    from apps.maic.media import adapters  # noqa: F401
     from apps.maic.media.orchestrator import generate_image, generate_video
     from apps.maic.media.types import (
         ImageGenerationRequest,

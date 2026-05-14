@@ -47,17 +47,67 @@ export default defineConfig(({ mode }) => {
     build: {
       outDir: 'build',
       sourcemap: true,
+      chunkSizeWarningLimit: 1200,
       rollupOptions: {
         output: {
-          manualChunks: {
-            'vendor-react': ['react', 'react-dom', 'react-router-dom'],
-            'vendor-ui': ['@headlessui/react', 'lucide-react', 'clsx', 'tailwind-merge'],
-            'vendor-charts': ['recharts'],
-            'vendor-query': ['@tanstack/react-query'],
-            'vendor-state': ['zustand', 'dexie'],
-            'vendor-utils': ['date-fns', 'axios', 'dompurify'],
-            'vendor-sentry': ['@sentry/react'],
-            'vendor-pdf': ['pdfjs-dist'],
+          manualChunks(id) {
+            const moduleId = id.replace(/\\/g, '/');
+            if (!moduleId.includes('node_modules')) return undefined;
+
+            if (
+              moduleId.includes('/node_modules/react/') ||
+              moduleId.includes('/node_modules/react-dom/') ||
+              moduleId.includes('/node_modules/react-router') ||
+              moduleId.includes('/node_modules/@remix-run/router/') ||
+              moduleId.includes('/node_modules/@headlessui/react/') ||
+              moduleId.includes('/node_modules/recharts/') ||
+              moduleId.includes('/node_modules/lucide-react/') ||
+              moduleId.includes('/node_modules/clsx/') ||
+              moduleId.includes('/node_modules/tailwind-merge/')
+            ) {
+              return 'vendor-ui-react';
+            }
+            if (moduleId.includes('/node_modules/@tanstack/react-query/')) {
+              return 'vendor-query';
+            }
+            if (moduleId.includes('/node_modules/zustand/') || moduleId.includes('/node_modules/dexie/')) {
+              return 'vendor-state';
+            }
+            if (
+              moduleId.includes('/node_modules/date-fns/') ||
+              moduleId.includes('/node_modules/axios/') ||
+              moduleId.includes('/node_modules/dompurify/')
+            ) {
+              return 'vendor-utils';
+            }
+            if (moduleId.includes('/node_modules/@sentry/react/')) {
+              return 'vendor-sentry';
+            }
+            if (moduleId.includes('/node_modules/pdfjs-dist/')) {
+              return 'vendor-pdf';
+            }
+            if (moduleId.includes('/node_modules/hls.js/')) {
+              return 'vendor-media';
+            }
+            if (
+              moduleId.includes('/node_modules/katex/') ||
+              moduleId.includes('/node_modules/lowlight/') ||
+              moduleId.includes('/node_modules/highlight.js/')
+            ) {
+              return 'vendor-rendering';
+            }
+            if (moduleId.includes('/node_modules/pptxgenjs/') || moduleId.includes('/node_modules/jszip/')) {
+              return 'vendor-office';
+            }
+            if (
+              moduleId.includes('/node_modules/zod/') ||
+              moduleId.includes('/node_modules/react-hook-form/') ||
+              moduleId.includes('/node_modules/i18next/') ||
+              moduleId.includes('/node_modules/i18next-browser-languagedetector/')
+            ) {
+              return 'vendor-forms-i18n';
+            }
+            return undefined;
           },
         },
       },

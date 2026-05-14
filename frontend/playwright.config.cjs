@@ -74,7 +74,7 @@ module.exports = defineConfig({
     },
     {
       name: 'mobile-iphone',
-      use: Object.assign({}, devices['iPhone 13']),
+      use: Object.assign({}, devices['iPhone 13'], { browserName: 'chromium' }),
       // Mobile project runs ONLY the mobile-named spec files.
       testMatch: /maic-mobile-.*\.spec\.js/,
     },

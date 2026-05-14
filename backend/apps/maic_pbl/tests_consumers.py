@@ -15,6 +15,17 @@ from channels.testing import WebsocketCommunicator
 from django.test import override_settings
 
 
+@pytest.fixture(autouse=True)
+def _allow_maic_v2_ws_access(monkeypatch):
+    async def _allow(_user):
+        return True
+
+    monkeypatch.setattr(
+        "apps.maic_pbl.consumers._user_has_maic_v2_access",
+        _allow,
+    )
+
+
 # ── Pure unit tests (no DB, no env-var prerequisite) ───────────────────
 
 
@@ -196,6 +207,78 @@ def test_build_chat_system_prompt_no_active_issue_just_returns_base():
     assert out == "ONLY_BASE"
 
 
+@pytest.mark.django_db
+def test_mark_issue_complete_returns_stable_issue_ids(tenant):
+    from asgiref.sync import async_to_sync
+
+    from apps.maic_pbl.consumers import _mark_issue_complete_and_advance
+    from apps.maic_pbl.models import MaicPBLSession
+
+    tenant.feature_maic = True
+    tenant.feature_maic_v2 = True
+    tenant.save(update_fields=["feature_maic", "feature_maic_v2"])
+
+    session = MaicPBLSession.objects.create(
+        tenant=tenant,
+        status=MaicPBLSession.STATUS_ACTIVE,
+        project_config={
+            "projectInfo": {"title": "PBL", "description": "Demo"},
+            "agents": [],
+            "issueboard": {
+                "agent_ids": [],
+                "current_issue_id": "i-1",
+                "issues": [
+                    {
+                        "id": "i-1",
+                        "title": "Collect evidence",
+                        "description": "Gather data.",
+                        "person_in_charge": "Designer",
+                        "participants": [],
+                        "notes": "",
+                        "parent_issue": None,
+                        "index": 0,
+                        "is_done": False,
+                        "is_active": True,
+                        "generated_questions": "",
+                        "question_agent_name": "Q1",
+                        "judge_agent_name": "J1",
+                    },
+                    {
+                        "id": "i-2",
+                        "title": "Present recommendation",
+                        "description": "Defend the choice.",
+                        "person_in_charge": "Designer",
+                        "participants": [],
+                        "notes": "",
+                        "parent_issue": None,
+                        "index": 1,
+                        "is_done": False,
+                        "is_active": False,
+                        "generated_questions": "",
+                        "question_agent_name": "Q2",
+                        "judge_agent_name": "J2",
+                    },
+                ],
+            },
+            "chat": {"messages": []},
+        },
+    )
+
+    advanced, next_title, completed_id, next_id = async_to_sync(
+        _mark_issue_complete_and_advance
+    )(str(session.id))
+
+    assert advanced is True
+    assert next_title == "Present recommendation"
+    assert completed_id == "i-1"
+    assert next_id == "i-2"
+    session.refresh_from_db()
+    issues = session.project_config["issueboard"]["issues"]
+    assert issues[0]["is_done"] is True
+    assert issues[0]["is_active"] is False
+    assert issues[1]["is_active"] is True
+
+
 # ── HTTP-boundary tests (require ASGI app + middleware monkeypatch) ────
 
 
@@ -238,6 +321,42 @@ async def test_no_tenant_user_rejected_with_4040(monkeypatch):
     connected, code = await communicator.connect()
     assert connected is False
     assert code == 4040
+
+
+@pytest.mark.asyncio
+@override_settings(ALLOWED_HOSTS=["*"])
+async def test_tenant_v2_gate_rejected_with_4403(monkeypatch):
+    """PBL chat socket denies before session lookup when the shared MAIC
+    v2 access gate is off."""
+    from types import SimpleNamespace
+
+    async def _fake_call(self, scope, receive, send):
+        scope["user"] = SimpleNamespace(
+            is_anonymous=False, id=42, tenant_id=222,
+        )
+        scope["accepted_subprotocol"] = None
+        return await self.inner(scope, receive, send)
+
+    from apps.notifications.middleware import JWTAuthMiddleware
+    monkeypatch.setattr(JWTAuthMiddleware, "__call__", _fake_call)
+
+    async def _deny(_user):
+        return False
+
+    monkeypatch.setattr(
+        "apps.maic_pbl.consumers._user_has_maic_v2_access",
+        _deny,
+    )
+
+    from config import asgi as asgi_mod
+    importlib.reload(asgi_mod)
+
+    communicator = WebsocketCommunicator(
+        asgi_mod.application, "/ws/maic/pbl/v2-gate-off/",
+    )
+    connected, code = await communicator.connect()
+    assert connected is False
+    assert code == 4403
 
 
 @pytest.mark.asyncio

@@ -114,6 +114,7 @@ export const AcceptInvitationPage: React.FC = () => {
             <div className="bg-indigo-50 rounded-lg p-4">
               <p className="text-sm text-indigo-700">
                 You've been invited to join <strong>{invitation.school_name}</strong>
+                {' '}as a {invitation.invitation_role === 'STUDENT' ? 'student' : 'teacher'}.
               </p>
               <p className="text-sm text-indigo-600 mt-1">Email: {invitation.email}</p>
             </div>

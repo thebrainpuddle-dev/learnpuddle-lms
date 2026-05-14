@@ -128,7 +128,7 @@ function renderPage(id = 'def-1') {
   const path = `/admin/reports/builder/${id}`;
   return render(
     <QueryClientProvider client={makeClient()}>
-      <MemoryRouter initialEntries={[path]}>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={[path]}>
         <Routes>
           <Route
             path="/admin/reports/builder/:id"
@@ -180,7 +180,7 @@ function makeSchedule(overrides: Record<string, unknown> = {}) {
 
 describe('ReportBuilderDetailPage', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     // Default: all queries resolve with valid data
     mockGetDefinition.mockResolvedValue(makeDefinition());
     mockListRuns.mockResolvedValue([]);

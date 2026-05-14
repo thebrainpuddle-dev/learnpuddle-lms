@@ -129,7 +129,7 @@ const bot2 = makeBot({
 
 function renderPage() {
   return render(
-    <MemoryRouter>
+    <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <ChatbotListPage />
     </MemoryRouter>,
   );
@@ -139,7 +139,7 @@ function renderPage() {
 
 describe('ChatbotListPage', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     // Reset Zustand store to initial state before each test
     useChatbotStore.setState({ chatbots: [], isLoading: false, error: null });
     mockDelete.mockResolvedValue({});

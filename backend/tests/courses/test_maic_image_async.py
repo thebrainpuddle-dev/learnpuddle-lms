@@ -22,6 +22,9 @@ import pytest
 from rest_framework.test import APIClient
 
 from apps.courses.maic_models import MAICClassroom, TenantAIConfig
+from tests.courses.maic_legacy_generation_helpers import (
+    call_legacy_scene_content_view,
+)
 
 pytestmark = pytest.mark.django_db
 
@@ -110,7 +113,7 @@ def _classroom_with_slides(tenant, creator, *, images_pending=False, n_scenes=1)
 # ---------------------------------------------------------------------------
 
 def test_scene_content_defers_image_fill(
-    teacher_client, maic_enabled_tenant, teacher_user, ai_config
+    maic_enabled_tenant, teacher_user, ai_config
 ):
     """Scene-content endpoint must not call fetch_scene_image inline (CG-P0-3).
 
@@ -143,19 +146,20 @@ def test_scene_content_defers_image_fill(
         "apps.courses.maic_views._proxy_json",
         return_value=MagicMock(status_code=502),
     ):
-        resp = teacher_client.post(
-            "/api/v1/teacher/maic/generate/scene-content/",
-            {
+        resp = call_legacy_scene_content_view(
+            audience="teacher",
+            user=teacher_user,
+            tenant=maic_enabled_tenant,
+            payload={
                 "scene": {"id": "scene-1", "title": "Intro"},
                 "agents": [],
                 "language": "en",
                 "classroomId": classroom_id,
             },
-            format="json",
         )
 
-    assert resp.status_code == 200, resp.content
-    data = resp.json()
+    assert resp.status_code == 200, getattr(resp, "data", None)
+    data = resp.data
     # Image src should be "" (placeholder) — not fetched inline.
     el = data["slides"][0]["elements"][0]
     assert el["type"] == "image"
@@ -661,7 +665,7 @@ def test_fill_classroom_images_doubled_enqueue_second_call_is_noop(
 # ---------------------------------------------------------------------------
 
 def test_scene_content_apply_async_failure_still_returns_200(
-    teacher_client, maic_enabled_tenant, teacher_user, ai_config
+    maic_enabled_tenant, teacher_user, ai_config
 ):
     """When fill_classroom_images.apply_async raises (e.g. broker unreachable),
     the scene-content endpoint must still return 200 — the wizard must not be
@@ -702,20 +706,22 @@ def test_scene_content_apply_async_failure_still_returns_200(
         "apps.courses.maic_views._proxy_json",
         return_value=MagicMock(status_code=502),
     ):
-        resp = teacher_client.post(
-            "/api/v1/teacher/maic/generate/scene-content/",
-            {
+        resp = call_legacy_scene_content_view(
+            audience="teacher",
+            user=teacher_user,
+            tenant=maic_enabled_tenant,
+            payload={
                 "scene": {"id": "scene-1", "title": "Intro"},
                 "agents": [],
                 "language": "en",
                 "classroomId": classroom_id,
             },
-            format="json",
         )
 
     # Endpoint must still return 200 despite the broker being down
     assert resp.status_code == 200, (
-        f"Expected 200 even when broker is down; got {resp.status_code}: {resp.content}"
+        "Expected 200 even when broker is down; "
+        f"got {resp.status_code}: {getattr(resp, 'data', None)}"
     )
 
     # images_pending was written (the .update() call happens BEFORE apply_async)

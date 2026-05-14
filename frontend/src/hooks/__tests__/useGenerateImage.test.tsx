@@ -37,7 +37,7 @@ describe('useGenerateImage', () => {
     expect(result.current.data).toBeUndefined();
   });
 
-  test('POSTs to /api/maic/v2/media/generate-image/ with the request body', async () => {
+  test('POSTs to /maic/v2/media/generate-image/ with the request body', async () => {
     const post = vi.spyOn(api, 'post').mockResolvedValueOnce({
       data: {
         media_id: 'm-1',
@@ -62,7 +62,7 @@ describe('useGenerateImage', () => {
     });
 
     expect(post).toHaveBeenCalledWith(
-      '/api/maic/v2/media/generate-image/',
+      '/maic/v2/media/generate-image/',
       expect.objectContaining({ prompt: 'a fractions diagram', scene_id: 's-1' }),
     );
     // mutateAsync's resolved value is the direct truth source

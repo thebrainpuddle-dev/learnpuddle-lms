@@ -14,8 +14,8 @@
  *      elsewhere — keep all flag parsing centralized here)
  */
 
-const parseFlag = (raw: string | undefined): boolean => {
-  if (raw === undefined) return false;
+const parseFlag = (raw: string | undefined, defaultValue = false): boolean => {
+  if (raw === undefined) return defaultValue;
   const v = String(raw).toLowerCase().trim();
   return v === 'true' || v === '1' || v === 'yes' || v === 'on';
 };
@@ -28,6 +28,13 @@ export const featureFlags = {
    * a 404-equivalent at the asgi router.
    */
   maicV2Enabled: parseFlag(import.meta.env.VITE_MAIC_V2_ENABLED),
+  /**
+   * Teacher AI Classroom generation v2 handoff. Backend mirror:
+   * settings.MAIC_GENERATION_USE_V2 (default False). When true, the
+   * teacher creation wizard submits to /api/maic/v2/generate/ instead
+   * of the legacy v1 outline/content/action endpoints.
+   */
+  maicGenerationUseV2: parseFlag(import.meta.env.VITE_MAIC_GENERATION_USE_V2, true),
 } as const;
 
 export type FeatureFlags = typeof featureFlags;

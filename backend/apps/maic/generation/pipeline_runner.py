@@ -174,6 +174,7 @@ async def run_generation_pipeline(
         requirements = session.get("requirements") or {}
         agents = requirements.get("agents") or []
         user_profile = requirements.get("userProfile") or ""
+        teacher_context = requirements.get("teacherContext") or ""
 
         scenes = await generate_full_scenes(
             outlines,
@@ -181,6 +182,7 @@ async def run_generation_pipeline(
             language_directive=language_directive,
             agents=agents,
             user_profile=user_profile,
+            teacher_context=teacher_context,
             callbacks=callbacks,
         )
         session["scenes"] = scenes
@@ -213,5 +215,4 @@ async def run_generation_pipeline(
 def _generate_session_id() -> str:
     """12-char URL-safe id; equivalent to upstream's `nanoid()`."""
     return secrets.token_urlsafe(9).replace("-", "").replace("_", "")[:12]
-
 

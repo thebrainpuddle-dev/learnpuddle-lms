@@ -134,7 +134,7 @@ function renderPage() {
   const queryClient = makeQueryClient();
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <SecuritySettings />
       </MemoryRouter>
     </QueryClientProvider>,

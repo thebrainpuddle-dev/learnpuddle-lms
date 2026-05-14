@@ -116,7 +116,7 @@ const makeQueryClient = () =>
 const renderPage = () =>
   render(
     <QueryClientProvider client={makeQueryClient()}>
-      <MemoryRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <StudentDiscussionPage />
       </MemoryRouter>
     </QueryClientProvider>,

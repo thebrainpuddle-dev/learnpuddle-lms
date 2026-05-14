@@ -4,7 +4,7 @@
 // and provides tabbed navigation for Summary / Flashcards / Key Terms / Quiz Prep / Mind Map.
 // Supports both student and teacher modes.
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { lazy, Suspense, useState, useEffect, useCallback, useRef } from 'react';
 import {
   Sparkles, BookOpen, Layers, List, HelpCircle, Loader2, AlertCircle,
   RefreshCw, X, ChevronRight, GitBranch, Share2, Users,
@@ -14,10 +14,10 @@ import { studentService } from '../../services/studentService';
 import { getAccessToken } from '../../utils/authSession';
 import api from '../../config/api';
 import { FlashcardReview } from './FlashcardReview';
-import { MindMapTab } from './MindMapTab';
 import type { StudySummaryData, Flashcard, QuizQuestion } from '../../types/studySummary';
 
 const API_BASE_URL = api.defaults.baseURL ?? '';
+const MindMapTab = lazy(() => import('./MindMapTab').then((module) => ({ default: module.MindMapTab })));
 
 type Tab = 'summary' | 'flashcards' | 'key_terms' | 'quiz_prep' | 'mind_map';
 
@@ -104,7 +104,7 @@ export function StudySummaryPanel({
           if (cached?.summary_data) {
             setSummaryData(cached.summary_data);
             setSummaryId(cached.id);
-            setIsSharedByTeacher(!!cached.shared_by);
+            setIsSharedByTeacher(Boolean(cached.is_shared || cached.shared_by));
           }
         }
       } catch {
@@ -197,6 +197,8 @@ export function StudySummaryPanel({
         if (json.cached && json.summary_data) {
           setSummaryData(json.summary_data);
           if (json.id) setSummaryId(json.id);
+          if (mode === 'teacher') setIsShared(!!json.is_shared);
+          if (mode === 'student') setIsSharedByTeacher(Boolean(json.is_shared || json.shared_by));
           setIsGenerating(false);
           setStatusMessage('');
           return;
@@ -283,9 +285,11 @@ export function StudySummaryPanel({
     if (!summaryId || mode !== 'teacher') return;
     setIsTogglingShare(true);
     try {
-      await api.patch(`${apiPrefix}/study-summaries/${summaryId}/`, {
-        is_shared: !isShared,
-      });
+      const res = await api.patch(`${apiPrefix}/study-summaries/${summaryId}/share/`);
+      if (typeof res.data?.is_shared === 'boolean') {
+        setIsShared(res.data.is_shared);
+        return;
+      }
       setIsShared((prev) => !prev);
     } catch {
       // silently fail
@@ -446,7 +450,9 @@ export function StudySummaryPanel({
               <QuizPrepTab questions={summaryData.quiz_prep} accentColor={accentColor} />
             )}
             {activeTab === 'mind_map' && summaryData.mind_map && (
-              <MindMapTab data={summaryData.mind_map} />
+              <Suspense fallback={<MindMapLoading />}>
+                <MindMapTab data={summaryData.mind_map} />
+              </Suspense>
             )}
             {activeTab === 'mind_map' && !summaryData.mind_map && (
               <div className="flex flex-col items-center justify-center py-12 text-center">
@@ -498,6 +504,15 @@ export function StudySummaryPanel({
           onClose={() => setShowFlashcardReview(false)}
         />
       )}
+    </div>
+  );
+}
+
+function MindMapLoading() {
+  return (
+    <div className="flex items-center justify-center py-12 text-sm text-gray-400">
+      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+      Loading mind map...
     </div>
   );
 }

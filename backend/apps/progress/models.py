@@ -423,3 +423,6 @@ from .rubric_models import (  # noqa: E402,F401
 from .challenge_models import (  # noqa: E402,F401
     Challenge, ChallengeParticipation,
 )
+from .league_models import (  # noqa: E402,F401
+    League, LeagueMembership, LeagueRankSnapshot,
+)

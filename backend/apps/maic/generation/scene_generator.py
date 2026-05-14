@@ -9,8 +9,9 @@ grows incrementally:
   MAIC-422.1:              slide-actions branch
   MAIC-422.2:              quiz-content branch
   MAIC-422.3:              quiz-actions branch
-  MAIC-422.4:              pbl-content + pbl-actions (STUBs per
-                           MAIC-432 research; real port Phase 5+)
+  MAIC-422.4:              pbl-content + pbl-actions (real PBL design
+                           loop for live models; deterministic stub for
+                           stub/dev model ids)
   MAIC-422.5:              interactive umbrella content (5 widget
                            types via switch on widgetType)
   MAIC-422.6:              unified scene-actions dispatcher
@@ -37,8 +38,8 @@ Used by:
 """
 from __future__ import annotations
 
+import hashlib
 import logging
-import random
 import secrets
 from typing import Any, TypedDict
 
@@ -91,23 +92,48 @@ _CANVAS_WIDTH = 1000
 _CANVAS_HEIGHT = 562.5  # 1000 × 0.5625 viewport ratio
 
 
+def _combine_teacher_prompt_context(
+    agent_context: str,
+    lesson_context: str,
+) -> str:
+    """Merge visible teacher persona with private planning constraints."""
+    chunks = []
+    if agent_context.strip():
+        chunks.append(agent_context.strip())
+    if lesson_context.strip():
+        chunks.append(
+            "## Lesson Planning Context\n"
+            "Use this to choose examples, misconceptions, checks, pacing, "
+            "and agent handovers. Do not quote or reveal these planning "
+            "notes verbatim unless the note is explicitly student-facing.\n"
+            f"{lesson_context.strip()}"
+        )
+    return "\n\n".join(chunks)
+
+
 # ── Options TypedDicts ────────────────────────────────────────────
 
 
 class SceneContentOptions(TypedDict, total=False):
     """Optional knobs for `generate_scene_content`.
 
-    Mirrors upstream `SceneContentOptions`. Phase 4 reads only
-    `agents` + `languageDirective`; the rest are accepted but unused
+    Mirrors upstream `SceneContentOptions`. Phase 4 reads
+    `agents` + `languageDirective` + LearnPuddle's teacherContext
+    bridge; the rest are accepted but unused
     pending Phase 5+ image / vision support.
     """
 
     agents: list[AgentInfo]
     languageDirective: str
+    teacherContext: str
     # Phase 5+:
     assignedImages: list[dict]
     imageMapping: dict
     visionEnabled: bool
+    imageGenerationEnabled: bool
+    image_generation_enabled: bool
+    videoGenerationEnabled: bool
+    video_generation_enabled: bool
     generatedMediaMapping: dict
     languageModel: str
     thinkingConfig: dict
@@ -122,6 +148,7 @@ class SceneActionsOptions(TypedDict, total=False):
     ctx: SceneGenerationContext
     agents: list[AgentInfo]
     userProfile: str
+    teacherContext: str
     languageDirective: str
 
 
@@ -141,7 +168,7 @@ async def generate_scene_content(
       - GeneratedSlideContent: {elements, background, remark}
       - GeneratedQuizContent: {questions}        (MAIC-422.2)
       - GeneratedInteractiveContent: {html, ...}  (MAIC-422.5)
-      - GeneratedPBLContent: {projectConfig}     (MAIC-422.4 STUB)
+      - GeneratedPBLContent: {projectConfig}     (MAIC-422.4)
 
     Returns None when:
       - The scene type doesn't match any branch (defensive).
@@ -162,7 +189,14 @@ async def generate_scene_content(
             outline,
             language_model_id=language_model_id,
             agents=options.get("agents"),
+            teacher_context=options.get("teacherContext", ""),
             language_directive=options.get("languageDirective", ""),
+            image_generation_enabled=bool(
+                options.get("imageGenerationEnabled") or options.get("image_generation_enabled")
+            ),
+            video_generation_enabled=bool(
+                options.get("videoGenerationEnabled") or options.get("video_generation_enabled")
+            ),
         )
 
     # ── Quiz branch (MAIC-422.2) ──
@@ -197,15 +231,46 @@ async def generate_scene_content(
             language_directive=options.get("languageDirective", ""),
         )
 
-    # ── PBL branch — MAIC-422.4 STUB ──
+    # ── PBL branch (MAIC-422.4) ──
     if scene_type == "pbl":
-        return _generate_pbl_content_stub(outline)
+        return await _generate_pbl_content(
+            outline,
+            language_model_id=language_model_id,
+            language_directive=options.get("languageDirective", ""),
+            teacher_context=options.get("teacherContext", ""),
+        )
 
     _logger.warning(
         "generate_scene_content: unknown scene type %r — returning None",
         scene_type,
     )
     return None
+
+
+def _format_media_generation_options(outline: SceneOutline) -> str:
+    media_generations = outline.get("mediaGenerations") or []
+    lines: list[str] = []
+    for item in media_generations:
+        if not isinstance(item, dict):
+            continue
+        media_type = item.get("type")
+        element_id = item.get("elementId")
+        prompt = item.get("prompt")
+        if media_type not in {"image", "video"}:
+            continue
+        if not isinstance(element_id, str) or not element_id.strip():
+            continue
+        if not isinstance(prompt, str) or not prompt.strip():
+            continue
+        details = [f"placeholder `{element_id.strip()}`", prompt.strip()]
+        aspect_ratio = item.get("aspectRatio")
+        if isinstance(aspect_ratio, str) and aspect_ratio.strip():
+            details.append(f"aspect ratio {aspect_ratio.strip()}")
+        duration = item.get("duration_seconds") or item.get("durationSeconds")
+        if media_type == "video" and duration:
+            details.append(f"duration {duration}s")
+        lines.append(f"- {media_type}: " + " - ".join(details))
+    return "\n".join(lines) if lines else "None"
 
 
 # ── Slide content (MAIC-422.0) ────────────────────────────────────
@@ -216,7 +281,10 @@ async def _generate_slide_content(
     *,
     language_model_id: str,
     agents: list[AgentInfo] | None = None,
+    teacher_context: str = "",
     language_directive: str = "",
+    image_generation_enabled: bool = False,
+    video_generation_enabled: bool = False,
 ) -> dict[str, Any] | None:
     """Generate slide content.
 
@@ -248,20 +316,32 @@ async def _generate_slide_content(
         # self-consistent.
     )
 
-    # Image / video element gating flags — all False in Phase 4.
-    image_element_enabled = False
-    generated_image_enabled = False
-    generated_video_enabled = False
-    media_element_enabled = False
+    media_generations_text = _format_media_generation_options(outline)
+    has_generated_images = any(
+        isinstance(item, dict) and item.get("type") == "image"
+        for item in (outline.get("mediaGenerations") or [])
+    )
+    has_generated_videos = any(
+        isinstance(item, dict) and item.get("type") == "video"
+        for item in (outline.get("mediaGenerations") or [])
+    )
 
-    teacher_context = format_teacher_persona_for_prompt(agents)
+    # Source image support is still deferred, but generated media can flow
+    # through the Phase 9 orchestrator when the teacher enabled it.
+    image_element_enabled = False
+    generated_image_enabled = image_generation_enabled and has_generated_images
+    generated_video_enabled = video_generation_enabled and has_generated_videos
+    media_element_enabled = generated_image_enabled or generated_video_enabled
+
+    teacher_context = _combine_teacher_prompt_context(
+        format_teacher_persona_for_prompt(agents),
+        teacher_context,
+    )
 
     # Format outline keypoints for the prompt (mirrors upstream
     # line 683: `(outline.keyPoints || []).map((p, i) => …)`).
     key_points = outline.get("keyPoints") or []
-    key_points_text = "\n".join(
-        f"{i + 1}. {p}" for i, p in enumerate(key_points)
-    )
+    key_points_text = "\n".join(f"{i + 1}. {p}" for i, p in enumerate(key_points))
 
     try:
         prompts = load_generation_prompt(
@@ -282,15 +362,14 @@ async def _generate_slide_content(
                 "generatedImageEnabled": generated_image_enabled,
                 "generatedVideoEnabled": generated_video_enabled,
                 "mediaElementEnabled": media_element_enabled,
+                "generatedMedia": media_generations_text,
             },
         )
     except MaicConfigError as exc:
         _logger.error("Slide-content prompt missing: %s", exc)
         return None
 
-    _logger.debug(
-        "Generating slide content for: %s", outline.get("title", "?")
-    )
+    _logger.debug("Generating slide content for: %s", outline.get("title", "?"))
 
     try:
         response = await generate_text(
@@ -331,7 +410,11 @@ async def _generate_slide_content(
     # Element-fixing (defaults, dimensions) lands when needed for
     # parity. For Phase 4, pass elements through verbatim — the
     # frontend playback engine handles missing-default fallback.
-    processed_elements = elements
+    processed_elements = _apply_generated_image_contract(
+        elements,
+        outline,
+        image_generation_enabled=image_generation_enabled,
+    )
 
     # Process background (mirrors upstream lines 757-767).
     background: dict[str, Any] | None = None
@@ -354,6 +437,83 @@ async def _generate_slide_content(
         "background": background,
         "remark": generated_data.get("remark") or outline.get("description", ""),
     }
+
+
+def _apply_generated_image_contract(
+    elements: list[dict[str, Any]],
+    outline: SceneOutline,
+    *,
+    image_generation_enabled: bool,
+) -> list[dict[str, Any]]:
+    """Ensure enabled generated media has a resolvable slide element.
+
+    The prompt asks the model to reference `gen_img_*` placeholders, but
+    local models frequently emit empty image boxes instead. The media
+    resolver can only call a provider when an element `src` matches an
+    outline `mediaGenerations[].elementId`, so repair the element list into
+    that contract deterministically.
+    """
+    if not image_generation_enabled:
+        return elements
+
+    image_generations = [
+        item for item in (outline.get("mediaGenerations") or [])
+        if isinstance(item, dict)
+        and item.get("type") == "image"
+        and isinstance(item.get("elementId"), str)
+        and str(item.get("elementId")).strip()
+    ]
+    if not image_generations:
+        return elements
+
+    first_media = image_generations[0]
+    placeholder = str(first_media["elementId"]).strip()
+    prompt = str(first_media.get("prompt") or outline.get("title") or "Lesson visual").strip()
+    assigned = False
+    repaired: list[dict[str, Any]] = []
+
+    for raw in elements:
+        if not isinstance(raw, dict):
+            continue
+        if raw.get("type") != "image":
+            repaired.append(raw)
+            continue
+
+        src = str(raw.get("src") or "").strip()
+        content = str(raw.get("content") or "").strip()
+        if src.startswith("gen_img_"):
+            assigned = True
+            repaired.append(raw)
+            continue
+
+        if not assigned:
+            image = {**raw}
+            image["src"] = placeholder
+            image["content"] = content or prompt
+            image.setdefault("fixedRatio", True)
+            assigned = True
+            repaired.append(image)
+            continue
+
+        # Drop duplicate empty image boxes. They create giant placeholders
+        # that obscure slide text without adding any media value.
+        if src or content:
+            repaired.append(raw)
+
+    if not assigned:
+        repaired.append({
+            "id": f"image_{_nanoid_8()}",
+            "type": "image",
+            "left": 560,
+            "top": 150,
+            "width": 380,
+            "height": 220,
+            "src": placeholder,
+            "content": prompt,
+            "fixedRatio": True,
+        })
+
+    return repaired
 
 
 # ── Quiz content (MAIC-422.2) ─────────────────────────────────────
@@ -396,9 +556,7 @@ async def _generate_quiz_content(
     quiz_config = outline.get("quizConfig") or _DEFAULT_QUIZ_CONFIG
 
     key_points = outline.get("keyPoints") or []
-    key_points_text = "\n".join(
-        f"{i + 1}. {p}" for i, p in enumerate(key_points)
-    )
+    key_points_text = "\n".join(f"{i + 1}. {p}" for i, p in enumerate(key_points))
     question_types = quiz_config.get("questionTypes") or ["single"]
 
     try:
@@ -418,9 +576,7 @@ async def _generate_quiz_content(
         _logger.error("Quiz-content prompt missing: %s", exc)
         return None
 
-    _logger.debug(
-        "Generating quiz content for: %s", outline.get("title", "?")
-    )
+    _logger.debug("Generating quiz content for: %s", outline.get("title", "?"))
 
     try:
         response = await generate_text(
@@ -461,12 +617,8 @@ async def _generate_quiz_content(
         normalized = {
             **q,
             "id": q.get("id") or f"q_{_nanoid_8()}",
-            "options": (
-                None if is_text else _normalize_quiz_options(q.get("options"))
-            ),
-            "answer": (
-                None if is_text else _normalize_quiz_answer(q)
-            ),
+            "options": (None if is_text else _normalize_quiz_options(q.get("options"))),
+            "answer": (None if is_text else _normalize_quiz_answer(q)),
             "hasAnswer": not is_text,
         }
         questions.append(normalized)
@@ -539,52 +691,390 @@ def _normalize_quiz_answer(
     return [str(raw)]
 
 
-# ── PBL content STUB (MAIC-422.4) ─────────────────────────────────
+# ── PBL content (MAIC-422.4) ──────────────────────────────────────
 
 
-def _generate_pbl_content_stub(outline: SceneOutline) -> dict[str, Any]:
-    """STUB — programmatic PBL content (no LLM call).
+async def _generate_pbl_content(
+    outline: SceneOutline,
+    *,
+    language_model_id: str,
+    language_directive: str = "",
+    teacher_context: str = "",
+) -> dict[str, Any] | None:
+    """Generate a PBLProjectConfig through the real PBL design loop.
 
-    The real PBL content generator is upstream's
-    `lib/pbl/generate-pbl.ts` (414 LoC + 4 MCP modules: project-info,
-    agent, issueboard, chat). It runs an agentic tool-calling loop
-    that incrementally constructs a `PBLProjectConfig`. Per MAIC-432
-    research, that work is **deferred to Phase 5+**.
-
-    Phase 4 produces a minimal-but-well-formed `projectConfig` so
-    the playback engine can render a placeholder PBL scene without
-    a runtime crash. The output uses outline.title /
-    outline.description / outline.pblConfig (when present) to seed
-    `projectInfo`. Agents + issueboard + chat ship as empty lists —
-    the frontend treats this as "PBL not configured yet".
-
-    Returns a `{"projectConfig": ...}` dict matching the
-    GeneratedPBLContent shape upstream's pbl-actions branch + scene-
-    builder both expect.
+    `stub` and malformed outlines keep the old deterministic fallback so
+    unit/dev smoke paths remain credential-free. Production model ids run
+    the tool-calling design graph ported from OpenMAIC and fail loudly
+    enough for the scene to be dropped if the model cannot produce a
+    schema-valid PBL config.
     """
+    if language_model_id in {"stub", "stub-director"}:
+        return _generate_pbl_content_stub(
+            outline,
+            language_directive=language_directive,
+        )
+
+    pbl_config = outline.get("pblConfig") or {}
+    if not isinstance(pbl_config, dict):
+        _logger.error(
+            'PBL outline "%s" has non-object pblConfig; dropping scene',
+            outline.get("title", "?"),
+        )
+        return None
+
+    project_topic = str(pbl_config.get("projectTopic") or outline.get("title") or "").strip()
+    if not project_topic:
+        _logger.error("PBL outline missing project topic; dropping scene")
+        return None
+
+    target_skills = pbl_config.get("targetSkills") or []
+    if not isinstance(target_skills, list):
+        target_skills = []
+    target_skills = [str(s).strip() for s in target_skills if str(s).strip()]
+
+    issue_count_raw = pbl_config.get("issueCount", 3)
+    try:
+        issue_count = int(issue_count_raw)
+    except (TypeError, ValueError):
+        issue_count = 3
+    issue_count = max(1, min(issue_count, 10))
+
+    try:
+        from apps.maic.orchestration.ai_adapter import resolve_chat_model
+        from apps.maic_pbl.design_graph import GeneratePBLConfig, generate_pbl_project
+    except Exception as exc:  # noqa: BLE001 — import/runtime boundary
+        _logger.exception("PBL design imports failed: %s", exc)
+        return None
+
+    try:
+        model = resolve_chat_model(language_model_id)
+    except MaicConfigError as exc:
+        if _is_outline_fallback_allowed_for_pbl(language_model_id):
+            _logger.warning(
+                "PBL design cannot resolve tool-calling model %r for %r; "
+                "using outline-derived PBL config fallback: %s",
+                language_model_id,
+                project_topic,
+                exc,
+            )
+            return _generate_pbl_content_stub(
+                outline,
+                language_directive=language_directive,
+            )
+        _logger.error(
+            "PBL design cannot resolve model %r for %r: %s",
+            language_model_id,
+            project_topic,
+            exc,
+        )
+        return None
+
+    project_description = _build_pbl_project_description(outline, pbl_config)
+    try:
+        result = await generate_pbl_project(
+            GeneratePBLConfig(
+                project_topic=project_topic,
+                project_description=project_description,
+                target_skills=target_skills,
+                issue_count=issue_count,
+                language_directive=language_directive,
+                teacher_context=teacher_context,
+            ),
+            model,
+        )
+    except Exception as exc:  # noqa: BLE001 — model/tool loop boundary
+        _logger.exception(
+            "PBL design loop crashed for outline=%r: %s",
+            outline.get("title", "?"),
+            exc,
+        )
+        return None
+
+    if result.error or not result.schema_valid:
+        _logger.error(
+            "PBL design returned unusable config for %r: error=%r schema_valid=%s",
+            outline.get("title", "?"),
+            result.error,
+            result.schema_valid,
+        )
+        return None
+
+    return {"projectConfig": result.project_config}
+
+
+def _is_outline_fallback_allowed_for_pbl(language_model_id: str) -> bool:
+    """Return True when a local model cannot support the PBL tool loop.
+
+    Ollama is handled by the text-streaming adapter in this codebase, but
+    the PBL design graph needs a LangChain chat model with `bind_tools`.
+    Keep cloud model failures loud; use this only for local teacher-dev
+    runs that would otherwise drop the PBL scene entirely.
+    """
+    return language_model_id.startswith("ollama/")
+
+
+def _build_pbl_project_description(
+    outline: SceneOutline,
+    pbl_config: dict[str, Any],
+) -> str:
+    """Compose the design-loop description from classroom context.
+
+    OpenMAIC feeds the PBL generator with the project description. In a
+    teacher-created SaaS classroom we also have scene intent and key
+    points from the class guide/outline. Folding those in is what makes
+    the generated issueboard feel in-context rather than attached later.
+    """
+    parts: list[str] = []
+    for value in (
+        pbl_config.get("projectDescription"),
+        outline.get("description"),
+    ):
+        if isinstance(value, str) and value.strip() and value.strip() not in parts:
+            parts.append(value.strip())
+
+    key_points = outline.get("keyPoints") or []
+    if isinstance(key_points, list):
+        clean_points = [str(p).strip() for p in key_points if str(p).strip()]
+        if clean_points:
+            parts.append("Lesson focus points: " + "; ".join(clean_points[:6]))
+
+    return "\n\n".join(parts)
+
+
+def _generate_pbl_content_stub(
+    outline: SceneOutline,
+    *,
+    language_directive: str = "",
+) -> dict[str, Any]:
+    """Deterministic, schema-valid PBL config from outline context."""
     pbl_config = outline.get("pblConfig") or {}
     project_topic = pbl_config.get("projectTopic") or outline.get("title", "")
-    project_description = (
-        pbl_config.get("projectDescription")
-        or outline.get("description", "")
+    project_description = pbl_config.get("projectDescription") or outline.get("description", "")
+
+    project_config = _build_outline_driven_pbl_config(
+        outline,
+        project_topic=str(project_topic or "Project Challenge"),
+        project_description=str(project_description or ""),
+        language_directive=language_directive,
+    )
+    return {"projectConfig": project_config}
+
+
+def _build_outline_driven_pbl_config(
+    outline: SceneOutline,
+    *,
+    project_topic: str,
+    project_description: str,
+    language_directive: str,
+) -> dict[str, Any]:
+    """Build a usable PBL workspace when tool-calling is unavailable."""
+    from apps.maic_pbl.mcp import AgentMCP, IssueboardMCP
+    from apps.maic_pbl.types import PBLProjectConfig
+
+    pbl_config = outline.get("pblConfig") or {}
+    if not isinstance(pbl_config, dict):
+        pbl_config = {}
+
+    key_points = _coerce_string_list(outline.get("keyPoints"))
+    target_skills = _coerce_string_list(pbl_config.get("targetSkills"))
+    focus_points = target_skills or key_points
+
+    issue_count = _coerce_int(pbl_config.get("issueCount"), default=3)
+    issue_count = max(1, min(issue_count, 6))
+
+    config: dict[str, Any] = {
+        "projectInfo": {
+            "title": project_topic.strip() or "Project Challenge",
+            "description": (
+                project_description.strip()
+                or _build_pbl_project_description(outline, pbl_config)
+                or "Work as a team to investigate the challenge, build a "
+                "reasoned solution, and defend it with evidence."
+            ),
+        },
+        "agents": [],
+        "issueboard": {"agent_ids": [], "issues": [], "current_issue_id": None},
+        "chat": {"messages": []},
+        "selectedRole": None,
+    }
+
+    agent_mcp = AgentMCP(config)
+    issueboard_mcp = IssueboardMCP(config, agent_mcp, language_directive)
+
+    role_blueprints = _pbl_role_blueprints(focus_points)
+    role_names: list[str] = []
+    for role in role_blueprints:
+        result = agent_mcp.create_agent(
+            name=role["name"],
+            actor_role=role["actor_role"],
+            role_division="development",
+            default_mode="chat",
+            system_prompt=role["system_prompt"],
+        )
+        if result.success:
+            role_names.append(role["name"])
+
+    config["issueboard"]["agent_ids"] = role_names
+
+    issue_blueprints = _pbl_issue_blueprints(
+        project_topic=config["projectInfo"]["title"],
+        project_description=config["projectInfo"]["description"],
+        focus_points=focus_points,
+        issue_count=issue_count,
+    )
+    for index, issue in enumerate(issue_blueprints):
+        lead = role_names[index % len(role_names)] if role_names else "Research Lead"
+        issueboard_mcp.create_issue(
+            title=issue["title"],
+            description=issue["description"],
+            person_in_charge=lead,
+            participants=role_names,
+            notes=issue["notes"],
+            index=index,
+        )
+
+    issueboard_mcp.activate_next_issue()
+    _seed_pbl_welcome_message(config)
+
+    # Validate before handing the blob to materialization. model_dump keeps
+    # Pydantic defaults explicit and protects against drift in the fallback.
+    return PBLProjectConfig.model_validate(config).model_dump()
+
+
+def _pbl_role_blueprints(focus_points: list[str]) -> list[dict[str, str]]:
+    focus_text = "; ".join(focus_points[:4]) if focus_points else "the project brief"
+    return [
+        {
+            "name": "Research Lead",
+            "actor_role": "Research and Evidence Lead",
+            "system_prompt": (
+                "Help the team gather trustworthy evidence, name assumptions, "
+                f"and connect research back to {focus_text}."
+            ),
+        },
+        {
+            "name": "Design Lead",
+            "actor_role": "Prototype and Solution Lead",
+            "system_prompt": (
+                "Help the team turn evidence into a practical design, compare "
+                "trade-offs, and keep the solution testable."
+            ),
+        },
+        {
+            "name": "Evidence Analyst",
+            "actor_role": "Data and Reflection Lead",
+            "system_prompt": (
+                "Help the team check observations, summarize evidence, and "
+                "prepare a clear explanation for peer critique."
+            ),
+        },
+    ]
+
+
+def _pbl_issue_blueprints(
+    *,
+    project_topic: str,
+    project_description: str,
+    focus_points: list[str],
+    issue_count: int,
+) -> list[dict[str, str]]:
+    if not focus_points:
+        focus_points = [
+            "understand the challenge",
+            "develop a prototype",
+            "test with evidence",
+        ]
+
+    base_sequence = [
+        (
+            "Frame the Challenge",
+            "Clarify the project goal, success criteria, constraints, and "
+            "what evidence the team will need.",
+        ),
+        (
+            "Investigate the Evidence",
+            "Collect and compare information that can guide the team toward "
+            "a defensible solution.",
+        ),
+        (
+            "Design and Test a Solution",
+            "Build a proposed solution, test it against the evidence, and "
+            "record what changes are needed.",
+        ),
+        (
+            "Defend and Improve",
+            "Present the solution, respond to peer critique, and identify "
+            "the strongest next improvement.",
+        ),
+    ]
+
+    issues: list[dict[str, str]] = []
+    for index in range(issue_count):
+        title, default_description = base_sequence[index % len(base_sequence)]
+        focus = focus_points[index % len(focus_points)]
+        issues.append(
+            {
+                "title": f"{title}: {focus[:72]}",
+                "description": (
+                    f"{default_description} Project context: {project_topic}. "
+                    f"Focus this milestone on {focus}."
+                ),
+                "notes": (
+                    f"Project brief: {project_description[:240]}. "
+                    "Ask students for observable evidence before accepting claims."
+                ),
+            }
+        )
+    return issues
+
+
+def _seed_pbl_welcome_message(config: dict[str, Any]) -> None:
+    issueboard = config.get("issueboard") or {}
+    current_issue_id = issueboard.get("current_issue_id")
+    issues = issueboard.get("issues") or []
+    current_issue = next(
+        (i for i in issues if i.get("id") == current_issue_id),
+        None,
+    )
+    if not current_issue:
+        return
+
+    questions = (
+        f"Start with {current_issue.get('title')}. What do we already know, "
+        "what evidence is missing, and what would make the solution convincing?"
+    )
+    current_issue["generated_questions"] = questions
+    config.setdefault("chat", {}).setdefault("messages", []).append(
+        {
+            "id": f"msg_{current_issue['id']}_welcome",
+            "agent_name": current_issue["question_agent_name"],
+            "message": questions,
+            "timestamp": 1.0,
+            "read_by": [],
+        }
     )
 
-    return {
-        "projectConfig": {
-            "projectInfo": {
-                "title": project_topic,
-                "description": project_description,
-            },
-            "agents": [],
-            "issueboard": {
-                "agent_ids": [],
-                "issues": [],
-                "current_issue_id": None,
-            },
-            "chat": {"messages": []},
-            "selectedRole": None,
-        }
-    }
+
+def _coerce_string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    clean: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        text = str(item).strip()
+        key = text.casefold()
+        if text and key not in seen:
+            clean.append(text)
+            seen.add(key)
+    return clean
+
+
+def _coerce_int(value: Any, *, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 # ── Interactive / widget content (MAIC-422.5) ────────────────────
@@ -647,16 +1137,12 @@ async def _generate_widget_content(
         _logger.warning("Unknown widget type: %s", widget_type)
         return None
 
-    variables = _build_widget_variables(
-        widget_type, outline, widget_outline, language_directive
-    )
+    variables = _build_widget_variables(widget_type, outline, widget_outline, language_directive)
 
     try:
         prompts = load_generation_prompt(template_id, variables)
     except MaicConfigError as exc:
-        _logger.error(
-            "Widget-content prompt %s missing: %s", template_id, exc
-        )
+        _logger.error("Widget-content prompt %s missing: %s", template_id, exc)
         return None
 
     _logger.debug(
@@ -665,47 +1151,108 @@ async def _generate_widget_content(
         outline.get("title", "?"),
     )
 
-    try:
-        response = await generate_text(
-            messages=[
-                SystemMessage(content=prompts.system),
-                HumanMessage(content=prompts.user),
-            ],
-            language_model_id=language_model_id,
+    html: str | None = None
+    widget_config: dict[str, Any] | None = None
+    invalid_widget_config: dict[str, Any] | None = None
+    validation_reason: str | None = None
+    for attempt in range(2):
+        retry_note = (
+            "\n\nPrevious widget-config schema validation failed: "
+            f"{validation_reason}. Regenerate the complete HTML document and "
+            "make the embedded widget-config JSON match the documented schema "
+            "exactly; remove extra fields instead of inventing alternatives."
+            if validation_reason
+            else ""
         )
-    except Exception as exc:  # noqa: BLE001
-        _logger.error(
-            "Widget-content (%s) LLM call failed for %s: %s",
-            widget_type,
-            outline.get("title", "?"),
-            exc,
-        )
-        return None
-
-    html = _extract_html(response)
-    if not html:
-        _logger.error(
-            "Failed to extract HTML from %s response for: %s",
-            widget_type,
-            outline.get("title", "?"),
-        )
-        return None
-
-    widget_config = _extract_widget_config(html)
-
-    # MAIC-602: quality-gate the embedded widget-config JSON against
-    # the Pydantic types ported from upstream `lib/types/widgets.ts`.
-    # Failure logs a warning but does NOT replace `widget_config` —
-    # the widget still renders with the raw dict. The gate exists to
-    # catch schema regressions in generation, not to transform the
-    # wire payload.
-    if widget_config is not None:
-        ok, reason = _validate_widget_config(widget_type, widget_config)
-        if not ok:
-            _logger.warning(
-                "Widget config validation failed for %s/%s: %s",
-                widget_type, outline.get("title", "?"), reason,
+        try:
+            response = await generate_text(
+                messages=[
+                    SystemMessage(content=prompts.system),
+                    HumanMessage(content=f"{prompts.user}{retry_note}"),
+                ],
+                language_model_id=language_model_id,
             )
+        except Exception as exc:  # noqa: BLE001
+            _logger.error(
+                "Widget-content (%s) LLM call failed for %s: %s",
+                widget_type,
+                outline.get("title", "?"),
+                exc,
+            )
+            return None
+
+        html = _extract_html(response)
+        if not html:
+            _logger.error(
+                "Failed to extract HTML from %s response for: %s",
+                widget_type,
+                outline.get("title", "?"),
+            )
+            return None
+
+        widget_config = _normalize_widget_config(
+            widget_type,
+            _extract_widget_config(html),
+        )
+        if widget_config is None:
+            break
+
+        ok, reason = _validate_widget_config(widget_type, widget_config)
+        if ok:
+            break
+
+        validation_reason = reason or "unknown validation error"
+        invalid_widget_config = widget_config
+        repaired = _repair_widget_config(
+            widget_type,
+            invalid_widget_config,
+            outline,
+            widget_outline,
+        )
+        repaired_ok, repaired_reason = _validate_widget_config(widget_type, repaired)
+        if repaired_ok:
+            _logger.warning(
+                "Widget-content (%s) repaired widget-config for %s after "
+                "schema validation failed on attempt %d: %s",
+                widget_type,
+                outline.get("title", "?"),
+                attempt + 1,
+                validation_reason,
+            )
+            widget_config = repaired
+            break
+        _logger.warning(
+            "Widget config validation failed for %s/%s on attempt %d: %s",
+            widget_type,
+            outline.get("title", "?"),
+            attempt + 1,
+            repaired_reason or validation_reason,
+        )
+        widget_config = None
+    else:
+        repaired = _repair_widget_config(
+            widget_type,
+            invalid_widget_config,
+            outline,
+            widget_outline,
+        )
+        ok, reason = _validate_widget_config(widget_type, repaired)
+        if not ok:
+            _logger.error(
+                "Widget-content (%s) failed strict widget-config validation "
+                "for %s after retry and repair: %s",
+                widget_type,
+                outline.get("title", "?"),
+                reason,
+            )
+            return None
+        _logger.warning(
+            "Widget-content (%s) used repaired widget-config for %s after "
+            "LLM schema retries failed.",
+            widget_type,
+            outline.get("title", "?"),
+        )
+        widget_config = repaired
 
     # MAIC-422.7: optional second LLM call to produce Ultra Mode
     # teacher actions. None on missing template OR LLM failure OR
@@ -823,53 +1370,65 @@ def _convert_teacher_actions_to_actions(
         content = ta.get("content") or ""
 
         if ta_type == "speech":
-            out.append({
+            out.append(
+                {
+                    "id": action_id,
+                    "type": "speech",
+                    "title": base_title,
+                    "text": content,
+                }
+            )
+            continue
+
+        if ta_type in ("highlight", "annotation", "reveal"):
+            out.append(
+                {
+                    "id": action_id,
+                    "type": f"widget_{ta_type}",
+                    "title": base_title,
+                    "target": ta.get("target") or "",
+                }
+            )
+            if content:
+                out.append(
+                    {
+                        "id": f"{action_id}_speech",
+                        "type": "speech",
+                        "title": base_title,
+                        "text": content,
+                    }
+                )
+            continue
+
+        if ta_type == "setState":
+            out.append(
+                {
+                    "id": action_id,
+                    "type": "widget_setState",
+                    "title": base_title,
+                    "state": ta.get("state") or {},
+                }
+            )
+            if content:
+                out.append(
+                    {
+                        "id": f"{action_id}_speech",
+                        "type": "speech",
+                        "title": base_title,
+                        "text": content,
+                    }
+                )
+            continue
+
+        # Unknown type — fall back to speech.
+        out.append(
+            {
                 "id": action_id,
                 "type": "speech",
                 "title": base_title,
                 "text": content,
-            })
-            continue
-
-        if ta_type in ("highlight", "annotation", "reveal"):
-            out.append({
-                "id": action_id,
-                "type": f"widget_{ta_type}",
-                "title": base_title,
-                "target": ta.get("target") or "",
-            })
-            if content:
-                out.append({
-                    "id": f"{action_id}_speech",
-                    "type": "speech",
-                    "title": base_title,
-                    "text": content,
-                })
-            continue
-
-        if ta_type == "setState":
-            out.append({
-                "id": action_id,
-                "type": "widget_setState",
-                "title": base_title,
-                "state": ta.get("state") or {},
-            })
-            if content:
-                out.append({
-                    "id": f"{action_id}_speech",
-                    "type": "speech",
-                    "title": base_title,
-                    "text": content,
-                })
-            continue
-
-        # Unknown type — fall back to speech.
-        out.append({
-            "id": action_id,
-            "type": "speech",
-            "title": base_title,
-            "text": content,
-        })
+            }
+        )
 
     return out
 
@@ -891,13 +1450,10 @@ def _build_widget_variables(
 
     if widget_type == "simulation":
         return {
-            "conceptName": widget_outline.get("concept")
-            or outline.get("title", ""),
+            "conceptName": widget_outline.get("concept") or outline.get("title", ""),
             "conceptOverview": outline.get("description", ""),
             "keyPoints": key_points_text,
-            "variables": ", ".join(
-                widget_outline.get("keyVariables") or []
-            ),
+            "variables": ", ".join(widget_outline.get("keyVariables") or []),
             "designIdea": "",
             "languageDirective": language_directive,
         }
@@ -936,8 +1492,7 @@ def _build_widget_variables(
         interactions = widget_outline.get("interactions") or []
         return {
             "title": outline.get("title", ""),
-            "visualizationType": widget_outline.get("visualizationType")
-            or "custom",
+            "visualizationType": widget_outline.get("visualizationType") or "custom",
             "description": outline.get("description", ""),
             "keyPoints": key_points_text,
             "objects": ", ".join(objects) if objects else "",
@@ -975,9 +1530,7 @@ def _extract_html(response: str) -> str | None:
             return response[start : html_end + len("</html>")]
 
     # Strategy 2: code block extraction.
-    match = _re.search(
-        r"```(?:html)?\s*([\s\S]*?)```", response, flags=_re.MULTILINE
-    )
+    match = _re.search(r"```(?:html)?\s*([\s\S]*?)```", response, flags=_re.MULTILINE)
     if match:
         content = match.group(1).strip()
         if "<html" in content or "<!DOCTYPE" in content:
@@ -1003,8 +1556,7 @@ def _extract_widget_config(html: str) -> dict[str, Any] | None:
     import re as _re
 
     match = _re.search(
-        r'<script type="application/json" id="widget-config">'
-        r"([\s\S]*?)</script>",
+        r'<script type="application/json" id="widget-config">' r"([\s\S]*?)</script>",
         html,
     )
     if not match:
@@ -1014,6 +1566,429 @@ def _extract_widget_config(html: str) -> dict[str, Any] | None:
         return json.loads(match.group(1))
     except (ValueError, TypeError):
         return None
+
+
+def _normalize_widget_config(
+    widget_type: str,
+    widget_config: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Repair safe widget-config drift using authoritative outline metadata."""
+    if not isinstance(widget_config, dict):
+        return widget_config
+    if widget_config.get("type"):
+        return widget_config
+    return {"type": widget_type, **widget_config}
+
+
+def _repair_widget_config(
+    widget_type: str,
+    widget_config: dict[str, Any] | None,
+    outline: SceneOutline,
+    widget_outline: dict[str, Any],
+) -> dict[str, Any]:
+    """Build a valid widget config from trusted outline metadata.
+
+    This is the final production safety net after LLM schema retries:
+    keep the generated HTML, but never expose malformed widgetConfig
+    through the API. The repair intentionally uses only the current
+    outline and safely shaped values from the model response.
+    """
+    raw = widget_config if isinstance(widget_config, dict) else {}
+    title = str(
+        raw.get("concept")
+        or widget_outline.get("concept")
+        or outline.get("title")
+        or "Interactive concept"
+    )
+    description = str(
+        raw.get("description") or outline.get("description") or "Explore the concept interactively."
+    )
+
+    if widget_type == "simulation":
+        variables = _repair_simulation_variables(
+            raw.get("variables"),
+            widget_outline.get("keyVariables"),
+        )
+        repaired: dict[str, Any] = {
+            "type": "simulation",
+            "concept": title,
+            "description": description,
+            "variables": variables,
+        }
+        presets = _repair_simulation_presets(raw.get("presets"), variables)
+        if presets:
+            repaired["presets"] = presets
+        return repaired
+
+    if widget_type == "diagram":
+        return _repair_diagram_config(raw, title, description, widget_outline)
+
+    if widget_type == "code":
+        language = raw.get("language") or widget_outline.get("language") or "python"
+        if language not in {"python", "javascript", "typescript", "java", "cpp"}:
+            language = "python"
+        return {
+            "type": "code",
+            "language": language,
+            "description": description,
+            "starterCode": str(raw.get("starterCode") or "# Try your solution here\n"),
+            "testCases": _repair_code_test_cases(raw.get("testCases")),
+            "hints": _coerce_string_list(raw.get("hints"))
+            or ["Start with the example from the lesson."],
+            "solution": str(raw.get("solution") or "# One possible solution goes here\n"),
+        }
+
+    if widget_type == "game":
+        game_type = raw.get("gameType") or widget_outline.get("gameType") or "quiz"
+        if game_type not in {"quiz", "puzzle", "strategy", "card"}:
+            game_type = "quiz"
+        return {
+            "type": "game",
+            "gameType": game_type,
+            "description": description,
+            "questions": _repair_game_questions(raw.get("questions"), title),
+            "scoring": _repair_game_scoring(raw.get("scoring")),
+        }
+
+    if widget_type == "visualization3d":
+        viz_type = (
+            raw.get("visualizationType") or widget_outline.get("visualizationType") or "custom"
+        )
+        if viz_type not in {
+            "molecular",
+            "solar",
+            "anatomy",
+            "geometry",
+            "physics",
+            "custom",
+        }:
+            viz_type = "custom"
+        return {
+            "type": "visualization3d",
+            "visualizationType": viz_type,
+            "description": description,
+            "objects": _repair_3d_objects(raw.get("objects"), title),
+            "interactions": _repair_3d_interactions(raw.get("interactions")),
+        }
+
+    return {"type": widget_type}
+
+
+def _repair_simulation_variables(
+    raw_variables: Any,
+    outline_variables: Any,
+) -> list[dict[str, Any]]:
+    variables: list[dict[str, Any]] = []
+    if isinstance(raw_variables, list):
+        for index, item in enumerate(raw_variables[:6]):
+            if isinstance(item, dict):
+                name = str(item.get("name") or f"variable_{index + 1}")
+                label = str(item.get("label") or name.replace("_", " ").title())
+                minimum = _coerce_number(item.get("min"), default=0.0)
+                maximum = _coerce_number(item.get("max"), default=10.0)
+                if maximum <= minimum:
+                    maximum = minimum + 10.0
+                default = _coerce_number(
+                    item.get("default"),
+                    default=minimum + ((maximum - minimum) / 2),
+                )
+                default = min(max(default, minimum), maximum)
+                variable = {
+                    "name": name,
+                    "label": label,
+                    "min": minimum,
+                    "max": maximum,
+                    "default": default,
+                }
+                unit = item.get("unit")
+                if isinstance(unit, str) and unit.strip():
+                    variable["unit"] = unit.strip()
+                step = item.get("step")
+                if step is not None:
+                    variable["step"] = _coerce_number(step, default=1.0)
+                variables.append(variable)
+            elif isinstance(item, str) and item.strip():
+                variables.append(_default_simulation_variable(item, index))
+
+    if not variables:
+        names = _coerce_string_list(outline_variables)
+        variables = [
+            _default_simulation_variable(name, index) for index, name in enumerate(names[:4])
+        ]
+    return variables or [_default_simulation_variable("value", 0)]
+
+
+def _default_simulation_variable(name: str, index: int) -> dict[str, Any]:
+    safe_name = str(name).strip() or f"variable_{index + 1}"
+    return {
+        "name": safe_name.lower().replace(" ", "_"),
+        "label": safe_name.replace("_", " ").title(),
+        "min": 0.0 if index == 0 else 1.0,
+        "max": 10.0 if index == 0 else 12.0,
+        "default": 1.0,
+        "step": 1.0,
+    }
+
+
+def _repair_simulation_presets(
+    raw_presets: Any,
+    variables: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not isinstance(raw_presets, list):
+        return []
+    valid_names = {str(var["name"]) for var in variables}
+    presets: list[dict[str, Any]] = []
+    for item in raw_presets[:4]:
+        if not isinstance(item, dict):
+            continue
+        values = item.get("variables")
+        if not isinstance(values, dict):
+            continue
+        clean_values = {
+            str(key): _coerce_number(value, default=0.0)
+            for key, value in values.items()
+            if str(key) in valid_names
+        }
+        if clean_values:
+            presets.append(
+                {
+                    "name": str(item.get("name") or f"Preset {len(presets) + 1}"),
+                    "variables": clean_values,
+                }
+            )
+    return presets
+
+
+def _repair_diagram_config(
+    raw: dict[str, Any],
+    title: str,
+    description: str,
+    widget_outline: dict[str, Any],
+) -> dict[str, Any]:
+    diagram_type = raw.get("diagramType") or widget_outline.get("diagramType") or "flowchart"
+    if diagram_type not in {"flowchart", "mindmap", "hierarchy", "system"}:
+        diagram_type = "flowchart"
+    nodes = _repair_diagram_nodes(raw.get("nodes"), title)
+    return {
+        "type": "diagram",
+        "diagramType": diagram_type,
+        "description": description,
+        "nodes": nodes,
+        "edges": _repair_diagram_edges(raw.get("edges"), nodes),
+    }
+
+
+def _repair_diagram_nodes(raw_nodes: Any, title: str) -> list[dict[str, Any]]:
+    nodes: list[dict[str, Any]] = []
+    if isinstance(raw_nodes, list):
+        for index, item in enumerate(raw_nodes[:8]):
+            if not isinstance(item, dict):
+                continue
+            node_id = str(item.get("id") or f"node_{index + 1}")
+            label = str(item.get("label") or item.get("title") or node_id)
+            node: dict[str, Any] = {"id": node_id, "label": label}
+            position = item.get("position")
+            if isinstance(position, dict):
+                node["position"] = {
+                    "x": _coerce_number(position.get("x"), default=index * 160.0),
+                    "y": _coerce_number(position.get("y"), default=80.0),
+                }
+            details = item.get("details")
+            if isinstance(details, str) and details.strip():
+                node["details"] = details.strip()
+            node_type = item.get("type")
+            if node_type in {"default", "decision", "start", "end"}:
+                node["type"] = node_type
+            nodes.append(node)
+    return nodes or [
+        {"id": "start", "label": title, "type": "start"},
+        {"id": "explore", "label": "Explore and explain", "type": "default"},
+    ]
+
+
+def _repair_diagram_edges(
+    raw_edges: Any,
+    nodes: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    node_ids = {str(node["id"]) for node in nodes}
+    edges: list[dict[str, Any]] = []
+    if isinstance(raw_edges, list):
+        for index, item in enumerate(raw_edges[:10]):
+            if not isinstance(item, dict):
+                continue
+            from_id = str(item.get("from") or item.get("from_") or "")
+            to_id = str(item.get("to") or "")
+            if from_id not in node_ids or to_id not in node_ids:
+                continue
+            edge = {
+                "id": str(item.get("id") or f"edge_{index + 1}"),
+                "from": from_id,
+                "to": to_id,
+            }
+            label = item.get("label")
+            if isinstance(label, str) and label.strip():
+                edge["label"] = label.strip()
+            edges.append(edge)
+    if not edges and len(nodes) >= 2:
+        edges.append({"id": "edge_1", "from": nodes[0]["id"], "to": nodes[1]["id"]})
+    return edges
+
+
+def _repair_code_test_cases(raw_cases: Any) -> list[dict[str, Any]]:
+    cases: list[dict[str, Any]] = []
+    if isinstance(raw_cases, list):
+        for index, item in enumerate(raw_cases[:5]):
+            if not isinstance(item, dict):
+                continue
+            cases.append(
+                {
+                    "id": str(item.get("id") or f"case_{index + 1}"),
+                    "input": str(item.get("input") or ""),
+                    "expected": str(item.get("expected") or ""),
+                    "description": str(item.get("description") or "Check the result."),
+                }
+            )
+    return cases or [
+        {
+            "id": "case_1",
+            "input": "",
+            "expected": "",
+            "description": "Run the starter example.",
+        }
+    ]
+
+
+def _repair_game_questions(raw_questions: Any, title: str) -> list[dict[str, Any]]:
+    questions: list[dict[str, Any]] = []
+    if isinstance(raw_questions, list):
+        for index, item in enumerate(raw_questions[:6]):
+            if not isinstance(item, dict):
+                continue
+            options = _coerce_string_list(item.get("options"))
+            if len(options) < 2:
+                continue
+            correct = item.get("correct")
+            if not isinstance(correct, int) and not (
+                isinstance(correct, list) and all(isinstance(i, int) for i in correct)
+            ):
+                correct = 0
+            questions.append(
+                {
+                    "id": str(item.get("id") or f"question_{index + 1}"),
+                    "question": str(item.get("question") or f"Review {title}."),
+                    "type": item.get("type")
+                    if item.get("type") in {"single", "multiple"}
+                    else "single",
+                    "options": options,
+                    "correct": correct,
+                    "explanation": str(item.get("explanation") or "Check the lesson evidence."),
+                    "points": _coerce_int(item.get("points"), default=10),
+                }
+            )
+    return questions or [
+        {
+            "id": "question_1",
+            "question": f"Which choice best matches {title}?",
+            "type": "single",
+            "options": ["The lesson's core idea", "An unrelated detail"],
+            "correct": 0,
+            "explanation": "The correct choice follows the scene's main concept.",
+            "points": 10,
+        }
+    ]
+
+
+def _repair_game_scoring(raw_scoring: Any) -> dict[str, Any]:
+    scoring = raw_scoring if isinstance(raw_scoring, dict) else {}
+    return {
+        "correctPoints": _coerce_number(scoring.get("correctPoints"), default=10.0),
+        "speedBonus": _coerce_number(scoring.get("speedBonus"), default=0.0),
+    }
+
+
+def _repair_3d_objects(raw_objects: Any, title: str) -> list[dict[str, Any]]:
+    objects: list[dict[str, Any]] = []
+    allowed_types = {"sphere", "box", "cylinder", "cone", "torus", "plane", "custom"}
+    if isinstance(raw_objects, list):
+        for index, item in enumerate(raw_objects[:8]):
+            if not isinstance(item, dict):
+                continue
+            object_type = item.get("type") if item.get("type") in allowed_types else "box"
+            clean: dict[str, Any] = {
+                "id": str(item.get("id") or f"object_{index + 1}"),
+                "type": object_type,
+                "name": str(item.get("name") or item.get("id") or title),
+            }
+            position = _repair_vec3(item.get("position"))
+            if position:
+                clean["position"] = position
+            material = item.get("material")
+            if isinstance(material, dict):
+                mat_type = (
+                    material.get("type")
+                    if material.get("type")
+                    in {
+                        "basic",
+                        "lambert",
+                        "phong",
+                        "standard",
+                        "emissive",
+                    }
+                    else "standard"
+                )
+                clean["material"] = {
+                    "type": mat_type,
+                    "color": str(material.get("color") or "#4f46e5"),
+                }
+            objects.append(clean)
+    return objects or [
+        {
+            "id": "concept_model",
+            "type": "box",
+            "name": title,
+            "position": {"x": 0.0, "y": 0.0, "z": 0.0},
+            "material": {"type": "standard", "color": "#4f46e5"},
+        }
+    ]
+
+
+def _repair_3d_interactions(raw_interactions: Any) -> list[dict[str, Any]]:
+    allowed = {"orbit", "zoom", "pan", "slider", "button", "toggle"}
+    interactions: list[dict[str, Any]] = []
+    if isinstance(raw_interactions, list):
+        for item in raw_interactions[:6]:
+            if not isinstance(item, dict):
+                continue
+            kind = item.get("type")
+            if kind not in allowed:
+                continue
+            clean: dict[str, Any] = {"type": kind}
+            for key in ("target", "label", "param"):
+                value = item.get(key)
+                if isinstance(value, str) and value.strip():
+                    clean[key] = value.strip()
+            for key in ("min", "max", "default", "step"):
+                if item.get(key) is not None:
+                    clean[key] = _coerce_number(item.get(key), default=0.0)
+            interactions.append(clean)
+    return interactions or [{"type": "orbit", "label": "Rotate view"}]
+
+
+def _repair_vec3(raw: Any) -> dict[str, float] | None:
+    if not isinstance(raw, dict):
+        return None
+    return {
+        "x": _coerce_number(raw.get("x"), default=0.0),
+        "y": _coerce_number(raw.get("y"), default=0.0),
+        "z": _coerce_number(raw.get("z"), default=0.0),
+    }
+
+
+def _coerce_number(value: Any, *, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 # ── Scene actions dispatcher (MAIC-422.1) ─────────────────────────
@@ -1079,11 +2054,7 @@ async def generate_scene_actions(
     # carried teacher actions, convert them directly to Action[] and
     # SKIP the standard interactive-actions LLM call. Mirrors upstream
     # lines 1167-1174.
-    if (
-        outline.get("type") == "interactive"
-        and "html" in content
-        and content.get("teacherActions")
-    ):
+    if outline.get("type") == "interactive" and "html" in content and content.get("teacherActions"):
         teacher_actions = content["teacherActions"]
         _logger.info(
             "[Ultra Mode] Converting %d teacherActions to Actions for: %s",
@@ -1110,6 +2081,7 @@ async def generate_scene_actions(
             language_model_id=language_model_id,
             ctx=options.get("ctx"),
             agents=agents,
+            teacher_context=options.get("teacherContext", ""),
             language_directive=options.get("languageDirective", ""),
         )
 
@@ -1143,9 +2115,7 @@ async def _generate_slide_actions(
     course_context = build_course_context(ctx)
 
     key_points = outline.get("keyPoints") or []
-    key_points_text = "\n".join(
-        f"{i + 1}. {p}" for i, p in enumerate(key_points)
-    )
+    key_points_text = "\n".join(f"{i + 1}. {p}" for i, p in enumerate(key_points))
 
     try:
         prompts = load_generation_prompt(
@@ -1162,9 +2132,7 @@ async def _generate_slide_actions(
             },
         )
     except MaicConfigError:
-        _logger.warning(
-            "Slide-actions prompt missing — using default fallback."
-        )
+        _logger.warning("Slide-actions prompt missing — using default fallback.")
         return _generate_default_slide_actions(outline, elements)
 
     try:
@@ -1183,9 +2151,7 @@ async def _generate_slide_actions(
         )
         return _generate_default_slide_actions(outline, elements)
 
-    actions = parse_actions_from_structured_output(
-        response, scene_type="slide"
-    )
+    actions = parse_actions_from_structured_output(response, scene_type="slide")
 
     if actions:
         return _process_actions(actions, elements, agents)
@@ -1225,9 +2191,7 @@ async def _generate_quiz_actions(
     course_context = build_course_context(ctx)
 
     key_points = outline.get("keyPoints") or []
-    key_points_text = "\n".join(
-        f"{i + 1}. {p}" for i, p in enumerate(key_points)
-    )
+    key_points_text = "\n".join(f"{i + 1}. {p}" for i, p in enumerate(key_points))
 
     try:
         prompts = load_generation_prompt(
@@ -1243,9 +2207,7 @@ async def _generate_quiz_actions(
             },
         )
     except MaicConfigError:
-        _logger.warning(
-            "Quiz-actions prompt missing — using default fallback."
-        )
+        _logger.warning("Quiz-actions prompt missing — using default fallback.")
         return _generate_default_quiz_actions(outline)
 
     try:
@@ -1264,9 +2226,7 @@ async def _generate_quiz_actions(
         )
         return _generate_default_quiz_actions(outline)
 
-    actions = parse_actions_from_structured_output(
-        response, scene_type="quiz"
-    )
+    actions = parse_actions_from_structured_output(response, scene_type="quiz")
 
     if actions:
         return _process_actions(actions, [], agents)
@@ -1289,9 +2249,7 @@ def _format_questions_for_prompt(
         options = q.get("options")
         if isinstance(options, list) and options:
             opts_rendered = ", ".join(
-                f"{o.get('value', '?')}. {o.get('label', '')}"
-                if isinstance(o, dict)
-                else str(o)
+                f"{o.get('value', '?')}. {o.get('label', '')}" if isinstance(o, dict) else str(o)
                 for o in options
             )
             options_text = f"Options: {opts_rendered}"
@@ -1323,13 +2281,92 @@ def _generate_default_quiz_actions(
 # ── PBL actions (MAIC-422.4) ──────────────────────────────────────
 
 
+def _short_prompt_value(value: Any, *, max_chars: int = 220) -> str:
+    text = str(value or "").strip()
+    if len(text) <= max_chars:
+        return text
+    return f"{text[: max_chars - 3].rstrip()}..."
+
+
+def _format_pbl_project_for_prompt(project_config: Any) -> str:
+    """Summarize the generated PBL workspace for the handoff speech prompt."""
+    if not isinstance(project_config, dict):
+        return "No generated PBL workspace details are available."
+
+    lines: list[str] = ["## Generated PBL Workspace"]
+    project_info = project_config.get("projectInfo") or {}
+    if isinstance(project_info, dict):
+        title = _short_prompt_value(project_info.get("title"))
+        description = _short_prompt_value(project_info.get("description"))
+        if title:
+            lines.append(f"- Project title: {title}")
+        if description:
+            lines.append(f"- Project description: {description}")
+
+    agents = project_config.get("agents") or []
+    if isinstance(agents, list) and agents:
+        lines.append("- Roles:")
+        for agent in agents[:6]:
+            if not isinstance(agent, dict):
+                continue
+            name = _short_prompt_value(agent.get("name") or agent.get("id"))
+            role = _short_prompt_value(
+                agent.get("actor_role")
+                or agent.get("actorRole")
+                or agent.get("role_division")
+                or agent.get("roleDivision")
+            )
+            system_prompt = _short_prompt_value(agent.get("system_prompt"))
+            role_bits = [bit for bit in (role, system_prompt) if bit]
+            detail = f" - {'; '.join(role_bits)}" if role_bits else ""
+            if name:
+                lines.append(f"  - {name}{detail}")
+
+    issueboard = project_config.get("issueboard") or {}
+    if isinstance(issueboard, dict):
+        current_issue_id = _short_prompt_value(issueboard.get("current_issue_id"))
+        if current_issue_id:
+            lines.append(f"- Current issue: {current_issue_id}")
+        issues = issueboard.get("issues") or []
+        if isinstance(issues, list) and issues:
+            lines.append("- Issues:")
+            for issue in issues[:6]:
+                if not isinstance(issue, dict):
+                    continue
+                title = _short_prompt_value(issue.get("title") or issue.get("id"))
+                description = _short_prompt_value(issue.get("description"))
+                owner = _short_prompt_value(issue.get("person_in_charge"))
+                parts = [part for part in (description, f"owner: {owner}" if owner else "") if part]
+                if title:
+                    suffix = f" - {'; '.join(parts)}" if parts else ""
+                    lines.append(f"  - {title}{suffix}")
+
+    chat = project_config.get("chat") or {}
+    messages = chat.get("messages") if isinstance(chat, dict) else None
+    if isinstance(messages, list) and messages:
+        lines.append("- Generated kickoff/questions:")
+        for message in messages[:3]:
+            if not isinstance(message, dict):
+                continue
+            agent_name = _short_prompt_value(message.get("agent_name"))
+            content = _short_prompt_value(message.get("content"))
+            if content:
+                prefix = f"{agent_name}: " if agent_name else ""
+                lines.append(f"  - {prefix}{content}")
+
+    if len(lines) == 1:
+        lines.append("No generated PBL workspace details are available.")
+    return "\n".join(lines)
+
+
 async def _generate_pbl_actions(
     outline: SceneOutline,
-    content: dict[str, Any],  # noqa: ARG001  # kept for shape parity
+    content: dict[str, Any],
     *,
     language_model_id: str,
     ctx: SceneGenerationContext | None,
     agents: list[AgentInfo] | None,
+    teacher_context: str,
     language_directive: str,
 ) -> list[dict[str, Any]]:
     """PBL-actions LLM call.
@@ -1344,24 +2381,19 @@ async def _generate_pbl_actions(
     template is missing OR the LLM returns zero actions OR the LLM
     call fails.
 
-    Note: `content` is unused in this branch — upstream also doesn't
-    feed projectConfig into the actions prompt. The pbl-actions
-    template uses pblConfig + outline metadata only.
+    LearnPuddle also feeds the generated projectConfig and private
+    teacher context into this prompt so the handoff names the actual
+    roles, first issue, deliverable, and class-guide constraints.
     """
     pbl_config = outline.get("pblConfig") or {}
     project_topic = pbl_config.get("projectTopic") or outline.get("title", "")
-    project_description = (
-        pbl_config.get("projectDescription")
-        or outline.get("description", "")
-    )
+    project_description = pbl_config.get("projectDescription") or outline.get("description", "")
 
     agents_text = format_agents_for_prompt(agents)
     course_context = build_course_context(ctx)
 
     key_points = outline.get("keyPoints") or []
-    key_points_text = "\n".join(
-        f"{i + 1}. {p}" for i, p in enumerate(key_points)
-    )
+    key_points_text = "\n".join(f"{i + 1}. {p}" for i, p in enumerate(key_points))
 
     try:
         prompts = load_generation_prompt(
@@ -1372,15 +2404,16 @@ async def _generate_pbl_actions(
                 "description": outline.get("description", ""),
                 "projectTopic": project_topic,
                 "projectDescription": project_description,
+                "projectWorkspace": _format_pbl_project_for_prompt(content.get("projectConfig")),
+                "teacherContext": teacher_context,
+                "hasTeacherContext": bool(teacher_context.strip()),
                 "courseContext": course_context,
                 "agents": agents_text,
                 "languageDirective": language_directive,
             },
         )
     except MaicConfigError:
-        _logger.warning(
-            "PBL-actions prompt missing — using default fallback."
-        )
+        _logger.warning("PBL-actions prompt missing — using default fallback.")
         return _generate_default_pbl_actions(outline)
 
     try:
@@ -1399,9 +2432,7 @@ async def _generate_pbl_actions(
         )
         return _generate_default_pbl_actions(outline)
 
-    actions = parse_actions_from_structured_output(
-        response, scene_type="pbl"
-    )
+    actions = parse_actions_from_structured_output(response, scene_type="pbl")
 
     if actions:
         return _process_actions(actions, [], agents)
@@ -1421,10 +2452,7 @@ def _generate_default_pbl_actions(
             "id": f"action_{_nanoid_8()}",
             "type": "speech",
             "title": "PBL 项目介绍",  # "PBL project introduction"
-            "text": (
-                "现在让我们开始一个项目式学习活动。"
-                "请选择你的角色，查看任务看板，开始协作完成项目。"
-            ),
+            "text": ("现在让我们开始一个项目式学习活动。" "请选择你的角色，查看任务看板，开始协作完成项目。"),
             # ^ "Now let's start a project-based learning activity.
             # Please select your role, check the task board, and
             # begin collaborating to complete the project."
@@ -1469,19 +2497,13 @@ async def _generate_interactive_actions(
         or legacy_config.get("conceptName")
         or outline.get("title", "")
     )
-    design_idea = (
-        widget_outline.get("designIdea")
-        or legacy_config.get("designIdea")
-        or ""
-    )
+    design_idea = widget_outline.get("designIdea") or legacy_config.get("designIdea") or ""
 
     agents_text = format_agents_for_prompt(agents)
     course_context = build_course_context(ctx)
 
     key_points = outline.get("keyPoints") or []
-    key_points_text = "\n".join(
-        f"{i + 1}. {p}" for i, p in enumerate(key_points)
-    )
+    key_points_text = "\n".join(f"{i + 1}. {p}" for i, p in enumerate(key_points))
 
     try:
         prompts = load_generation_prompt(
@@ -1498,9 +2520,7 @@ async def _generate_interactive_actions(
             },
         )
     except MaicConfigError:
-        _logger.warning(
-            "Interactive-actions prompt missing — using default fallback."
-        )
+        _logger.warning("Interactive-actions prompt missing — using default fallback.")
         return _generate_default_interactive_actions(outline)
 
     try:
@@ -1519,9 +2539,7 @@ async def _generate_interactive_actions(
         )
         return _generate_default_interactive_actions(outline)
 
-    actions = parse_actions_from_structured_output(
-        response, scene_type="interactive"
-    )
+    actions = parse_actions_from_structured_output(response, scene_type="interactive")
 
     if actions:
         return _process_actions(actions, [], agents)
@@ -1542,10 +2560,7 @@ def _generate_default_interactive_actions(
             "id": f"action_{_nanoid_8()}",
             "type": "speech",
             "title": "交互引导",  # "interactive introduction"
-            "text": (
-                "现在让我们通过交互式可视化来探索这个概念。"
-                "请尝试操作页面中的元素，观察变化。"
-            ),
+            "text": ("现在让我们通过交互式可视化来探索这个概念。" "请尝试操作页面中的元素，观察变化。"),
             # ^ "Now let's explore this concept through an interactive
             # visualization. Try operating the elements on the page
             # and observe how things change."
@@ -1604,36 +2619,61 @@ def _process_actions(
          missing or invalid, fall back to the first element's id
          (warning logged).
       2. discussion.agentId must reference a real agent (when agents
-         are provided). If missing or invalid, pick a random student
-         (or non-teacher) from the roster.
+         are provided). If missing or invalid, pick a deterministic
+         student (or non-teacher) from the roster.
     """
     element_ids = {el.get("id") for el in elements if el.get("id")}
     agent_ids = {a.get("id") for a in (agents or []) if a.get("id")}
     student_agents = [a for a in (agents or []) if a.get("role") == "student"]
-    non_teacher_agents = [
-        a for a in (agents or []) if a.get("role") != "teacher"
-    ]
+    non_teacher_agents = [a for a in (agents or []) if a.get("role") != "teacher"]
 
     processed: list[dict[str, Any]] = []
+    speech_index = 0
     for action in actions:
         # Ensure each action has an ID.
         proc = dict(action)
         if not proc.get("id"):
             proc["id"] = f"action_{_nanoid_8()}"
 
-        # Validate spotlight.elementId.
-        if proc.get("type") == "spotlight":
+        # Validate slide element targets.
+        if proc.get("type") in {"spotlight", "laser", "play_video"}:
             current = proc.get("elementId")
             if not current or current not in element_ids:
                 if elements:
-                    fallback = elements[0].get("id")
+                    typed_elements = [
+                        el for el in elements
+                        if proc.get("type") != "play_video" or el.get("type") == "video"
+                    ]
+                    fallback_source = typed_elements or elements
+                    fallback = fallback_source[0].get("id")
                     if fallback:
                         proc["elementId"] = fallback
                         _logger.warning(
-                            "Invalid elementId %r, falling back to first element: %s",
+                            "Invalid %s elementId %r, falling back to: %s",
+                            proc.get("type"),
                             current,
                             fallback,
                         )
+
+        # Validate speech.agentId. Text objects in the upstream action
+        # schema may omit a speaker, but LearnPuddle needs explicit
+        # speaker IDs for TTS voice, handoff UI, and transcript sync.
+        if proc.get("type") == "speech" and agents:
+            current = proc.get("agentId")
+            if current and current in agent_ids:
+                pass
+            else:
+                pool = agents or []
+                if pool:
+                    picked = pool[speech_index % len(pool)]
+                    proc["agentId"] = picked.get("id")
+                    _logger.warning(
+                        "Speech agentId %r invalid, assigned: %s (%s)",
+                        current or "(none)",
+                        picked.get("id"),
+                        picked.get("name"),
+                    )
+            speech_index += 1
 
         # Validate discussion.agentId.
         if proc.get("type") == "discussion" and agents:
@@ -1643,7 +2683,7 @@ def _process_actions(
             else:
                 pool = student_agents or non_teacher_agents
                 if pool:
-                    picked = random.choice(pool)
+                    picked = _stable_agent_pick(pool, proc)
                     _logger.warning(
                         "Discussion agentId %r invalid, assigned: %s (%s)",
                         current or "(none)",
@@ -1654,6 +2694,20 @@ def _process_actions(
 
         processed.append(proc)
     return processed
+
+
+def _stable_agent_pick(
+    agents: list[AgentInfo],
+    action: dict[str, Any],
+) -> AgentInfo:
+    """Pick a deterministic repair target for invalid discussion agent ids."""
+    if len(agents) == 1:
+        return agents[0]
+    seed = "|".join(
+        str(action.get(key) or "") for key in ("id", "topic", "prompt", "title", "text")
+    )
+    digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()
+    return agents[int(digest[:8], 16) % len(agents)]
 
 
 def _generate_default_slide_actions(
@@ -1675,26 +2729,28 @@ def _generate_default_slide_actions(
     if text_elements:
         first_id = text_elements[0].get("id")
         if first_id:
-            actions.append({
-                "id": f"action_{_nanoid_8()}",
-                "type": "spotlight",
-                "title": "聚焦重点",  # "focus on key points"
-                "elementId": first_id,
-            })
+            actions.append(
+                {
+                    "id": f"action_{_nanoid_8()}",
+                    "type": "spotlight",
+                    "title": "聚焦重点",  # "focus on key points"
+                    "elementId": first_id,
+                }
+            )
 
     key_points = outline.get("keyPoints") or []
     if key_points:
         speech_text = "。".join(key_points) + "。"
     else:
-        speech_text = (
-            outline.get("description") or outline.get("title") or ""
-        )
-    actions.append({
-        "id": f"action_{_nanoid_8()}",
-        "type": "speech",
-        "title": "场景讲解",  # "scene narration"
-        "text": speech_text,
-    })
+        speech_text = outline.get("description") or outline.get("title") or ""
+    actions.append(
+        {
+            "id": f"action_{_nanoid_8()}",
+            "type": "speech",
+            "title": "场景讲解",  # "scene narration"
+            "text": speech_text,
+        }
+    )
 
     return actions
 
@@ -1717,6 +2773,7 @@ async def generate_full_scenes(
     language_directive: str = "",
     agents: list[AgentInfo] | None = None,
     user_profile: str = "",
+    teacher_context: str = "",
     stage_id: str | None = None,
     callbacks: GenerationCallbacks | None = None,
 ) -> list[dict[str, Any]]:
@@ -1742,6 +2799,7 @@ async def generate_full_scenes(
         language_directive: shared across all scenes (set by Stage 1).
         agents: forwarded to scene-actions for discussion validation.
         user_profile: optional per-student profile string.
+        teacher_context: private teacher planning context from Step 2.
         callbacks: onProgress fires after each scene completes (best-
                    effort — concurrent updates are non-atomic but the
                    final count converges to the total).
@@ -1770,12 +2828,14 @@ async def generate_full_scenes(
     completed = {"n": 0}
 
     if on_progress:
-        on_progress({
-            "stage": 3,
-            "completed": 0,
-            "total": total,
-            "message": f"Generating {total} scenes in parallel...",
-        })
+        on_progress(
+            {
+                "stage": 3,
+                "completed": 0,
+                "total": total,
+                "message": f"Generating {total} scenes in parallel...",
+            }
+        )
 
     all_titles = [o.get("title", "") for o in outlines]
     # Per-scene `previousSpeeches` is best-effort because scenes run
@@ -1801,30 +2861,27 @@ async def generate_full_scenes(
                 user_profile=user_profile,
                 ctx=ctx,
                 stage_id=stage_id,
+                teacher_context=teacher_context,
             )
         except Exception as exc:  # noqa: BLE001
-            _logger.error(
-                "Failed to generate scene %r: %s", outline.get("title", "?"), exc
-            )
+            _logger.error("Failed to generate scene %r: %s", outline.get("title", "?"), exc)
             if on_error:
-                on_error(
-                    f"Failed to generate scene {outline.get('title', '?')}: {exc}"
-                )
+                on_error(f"Failed to generate scene {outline.get('title', '?')}: {exc}")
             scene = None
 
         completed["n"] += 1
         if on_progress:
-            on_progress({
-                "stage": 3,
-                "completed": completed["n"],
-                "total": total,
-                "message": f"Completed {completed['n']}/{total} scenes",
-            })
+            on_progress(
+                {
+                    "stage": 3,
+                    "completed": completed["n"],
+                    "total": total,
+                    "message": f"Completed {completed['n']}/{total} scenes",
+                }
+            )
         return index, scene
 
-    results = await asyncio.gather(
-        *[_run_one(i, o) for i, o in enumerate(outlines)]
-    )
+    results = await asyncio.gather(*[_run_one(i, o) for i, o in enumerate(outlines)])
 
     # Sort by original index; drop failures.
     results.sort(key=lambda r: r[0])
@@ -1840,7 +2897,10 @@ async def _generate_single_scene(
     user_profile: str,
     ctx: SceneGenerationContext | None,
     stage_id: str,
+    teacher_context: str = "",
     tenant_config: Any | None = None,
+    image_generation_enabled: bool = False,
+    video_generation_enabled: bool = False,
 ) -> dict[str, Any] | None:
     """Two-step single-scene generator.
 
@@ -1863,7 +2923,10 @@ async def _generate_single_scene(
         language_model_id=language_model_id,
         options={
             "agents": agents or [],
+            "teacherContext": teacher_context,
             "languageDirective": language_directive,
+            "imageGenerationEnabled": image_generation_enabled,
+            "videoGenerationEnabled": video_generation_enabled,
         },
     )
     if not content:
@@ -1879,12 +2942,11 @@ async def _generate_single_scene(
             "ctx": ctx,
             "agents": agents or [],
             "userProfile": user_profile,
+            "teacherContext": teacher_context,
             "languageDirective": language_directive,
         },
     )
-    _logger.info(
-        "Generated %d actions for: %s", len(actions), outline.get("title", "?")
-    )
+    _logger.info("Generated %d actions for: %s", len(actions), outline.get("title", "?"))
 
     scene = build_complete_scene(outline, content, actions, stage_id)
     # Phase 9 MAIC-915: dispatch media orchestrator to resolve any

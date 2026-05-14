@@ -35,7 +35,7 @@ describe('real TanStack Query + staleTime fix', () => {
     });
     const { container } = render(
       <QueryClientProvider client={client}>
-        <MemoryRouter>
+        <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
           <TeacherStudyNotesPage />
         </MemoryRouter>
       </QueryClientProvider>

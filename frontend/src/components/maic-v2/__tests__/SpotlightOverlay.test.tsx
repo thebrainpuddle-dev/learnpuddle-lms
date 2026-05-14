@@ -144,7 +144,7 @@ describe('SpotlightOverlay', () => {
   });
 
   test('auto-clears via onClear callback at AUTO_CLEAR_MS=5000', () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const onClear = vi.fn();
     render(
       <MockSurface>
@@ -166,7 +166,7 @@ describe('SpotlightOverlay', () => {
   });
 
   test('does not call onClear if unmounted before timer fires', () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const onClear = vi.fn();
     const { unmount } = render(
       <MockSurface>

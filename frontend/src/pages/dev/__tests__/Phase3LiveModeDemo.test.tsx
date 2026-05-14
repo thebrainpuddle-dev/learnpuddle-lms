@@ -32,7 +32,7 @@ describe('Phase3LiveModeDemo', () => {
   });
 
   test('clicking Start advances engine into playing then triggers ProactiveCard after 3s', () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
       render(<Phase3LiveModeDemo />);
       fireEvent.click(screen.getByTestId('phase3-live-mode-start'));
@@ -51,7 +51,7 @@ describe('Phase3LiveModeDemo', () => {
   });
 
   test('Join → live mode → LiveInput visible', () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
       const { container } = render(<Phase3LiveModeDemo />);
       fireEvent.click(screen.getByTestId('phase3-live-mode-start'));
@@ -68,7 +68,7 @@ describe('Phase3LiveModeDemo', () => {
   });
 
   test('Send records data-last-sent-action with user_message JSON shape', () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
       const { container } = render(<Phase3LiveModeDemo />);
       fireEvent.click(screen.getByTestId('phase3-live-mode-start'));
@@ -95,7 +95,7 @@ describe('Phase3LiveModeDemo', () => {
   });
 
   test('End Discussion records resume frame and exits live mode', () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
       const { container } = render(<Phase3LiveModeDemo />);
       fireEvent.click(screen.getByTestId('phase3-live-mode-start'));

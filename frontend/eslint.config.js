@@ -17,9 +17,18 @@
 // Prerequisites: `npm install` must have been run so that
 // @typescript-eslint/parser (declared in devDependencies) is present.
 
+import tsPlugin from '@typescript-eslint/eslint-plugin';
 import tsParser from '@typescript-eslint/parser';
+import jsxA11y from 'eslint-plugin-jsx-a11y';
+import reactHooks from 'eslint-plugin-react-hooks';
 
 export default [
+  {
+    linterOptions: {
+      reportUnusedDisableDirectives: 'off',
+    },
+  },
+
   // Layer 1 — TypeScript parser for TS/TSX source files
   {
     files: ['src/**/*.{ts,tsx}'],
@@ -40,6 +49,11 @@ export default [
   // Layer 2 — Project-wide rules (TS, TSX, JS, JSX)
   {
     files: ['src/**/*.{ts,tsx,js,jsx}'],
+    plugins: {
+      '@typescript-eslint': tsPlugin,
+      'jsx-a11y': jsxA11y,
+      'react-hooks': reactHooks,
+    },
     rules: {
       'no-restricted-syntax': [
         'error',

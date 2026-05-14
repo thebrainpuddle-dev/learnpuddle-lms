@@ -169,7 +169,7 @@ describe('DashboardPage essentials layout', () => {
 
     return render(
       <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={['/teacher/dashboard']}>
+        <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={['/teacher/dashboard']}>
           <Routes>
             <Route path="/teacher/dashboard" element={<DashboardPage />} />
           </Routes>

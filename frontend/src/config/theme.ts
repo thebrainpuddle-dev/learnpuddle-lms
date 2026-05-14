@@ -160,15 +160,30 @@ export function getSubdomain(): string {
   return 'demo';
 }
 
+function getThemeApiBaseUrl(): string {
+  return (
+    process.env.REACT_APP_API_URL ||
+    (process.env.NODE_ENV === 'production'
+      ? '/api'
+      : `http://${window.location.hostname}:8000/api`)
+  );
+}
+
 /**
  * Load theme from API based on subdomain
  */
 export async function loadTenantTheme(): Promise<TenantTheme> {
   try {
-    const { api } = await import('./api');
-    const response = await api.get('/tenants/theme/');
+    const response = await fetch(`${getThemeApiBaseUrl()}/tenants/theme/`, {
+      headers: {
+        'X-Tenant-Subdomain': getSubdomain(),
+      },
+    });
+    if (!response.ok) {
+      throw new Error(`Theme request failed with status ${response.status}`);
+    }
 
-    const data = response.data as {
+    const data = await response.json() as {
       name: string;
       subdomain: string;
       logo_url?: string | null;

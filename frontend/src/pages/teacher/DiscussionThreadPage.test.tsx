@@ -93,7 +93,7 @@ function makeClient() {
 function renderPage(threadId = 'thread-1') {
   return render(
     <QueryClientProvider client={makeClient()}>
-      <MemoryRouter initialEntries={[`/teacher/discussions/${threadId}`]}>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={[`/teacher/discussions/${threadId}`]}>
         <Routes>
           <Route
             path="/teacher/discussions/:threadId"
@@ -163,7 +163,7 @@ function makeThread(overrides: Record<string, unknown> = {}) {
 
 describe('DiscussionThreadPage', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     mockApiGet.mockResolvedValue({ data: makeThread() });
     mockApiPost.mockResolvedValue({ data: {} });
     mockApiPatch.mockResolvedValue({ data: {} });

@@ -20,20 +20,20 @@ def _reload_maic_urls():
     """Force a reload so the module-level _USE_V2_GENERATION binding
     re-reads from settings (settings overrides take effect)."""
     from apps.courses import maic_urls
+
     reload(maic_urls)
     return maic_urls
 
 
-def test_v1_generation_routes_not_mounted_by_default(settings):
-    """Default: MAIC_GENERATION_USE_V2 is True; v1 generate/* routes
-    are absent from teacher_urlpatterns."""
+def test_v1_generation_routes_not_mounted_when_v2_flag_enabled(settings):
+    """MAIC_GENERATION_USE_V2=True hides v1 generate/* routes for migrated clients."""
     settings.MAIC_GENERATION_USE_V2 = True
     maic_urls = _reload_maic_urls()
 
     teacher_paths = [str(p.pattern) for p in maic_urls.teacher_urlpatterns]
-    assert not any("generate/outlines" in p for p in teacher_paths), (
-        "v1 generate/outlines should not be mounted when v2 is enabled"
-    )
+    assert not any(
+        "generate/outlines" in p for p in teacher_paths
+    ), "v1 generate/outlines should not be mounted when v2 is enabled"
     assert not any("generate/scene-content" in p for p in teacher_paths)
     assert not any("generate/scene-actions" in p for p in teacher_paths)
     assert not any("generate/classroom" in p for p in teacher_paths)
@@ -87,10 +87,10 @@ def test_student_v1_generation_routes_gated(settings):
     assert not any("generate/scene-actions" in p for p in student_paths)
 
 
-def test_default_v2_setting_is_true():
-    """The setting default flips v2 ON. Phase 4 close ships with v2
-    canonical; rollback requires explicit env override."""
+def test_default_v2_setting_makes_teacher_wizard_v2_first():
+    """Default hides v1 generation now that the teacher wizard is migrated."""
     from django.conf import settings
+
     assert settings.MAIC_GENERATION_USE_V2 is True
 
 
@@ -101,7 +101,7 @@ def test_v1_service_module_carries_deprecation_marker():
     generation/ instead."""
     from apps.courses import maic_generation_service
 
-    docstring = (maic_generation_service.__doc__ or "")
+    docstring = maic_generation_service.__doc__ or ""
     assert "DEPRECATED" in docstring
     assert "Phase 4, MAIC-431" in docstring
     assert "Phase 8 final delete" in docstring

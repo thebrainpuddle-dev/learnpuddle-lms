@@ -128,7 +128,7 @@ describe('CourseViewPage locking behavior', () => {
     return render(
       <QueryClientProvider client={queryClient}>
         <ToastProvider>
-          <MemoryRouter initialEntries={['/teacher/courses/course-1']}>
+          <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={['/teacher/courses/course-1']}>
             <Routes>
               <Route path="/teacher/courses/:courseId" element={<CourseViewPage />} />
             </Routes>

@@ -136,7 +136,7 @@ function renderPage(search = '') {
   const path = `/admin/certifications${search}`;
   return render(
     <QueryClientProvider client={makeClient()}>
-      <MemoryRouter initialEntries={[path]}>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={[path]}>
         <Routes>
           <Route path="/admin/certifications" element={<CertificationsPage />} />
         </Routes>
@@ -165,7 +165,7 @@ function makeCertType(overrides: Record<string, unknown> = {}) {
 
 describe('CertificationsPage', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     // Default: empty data for all sub-tabs
     mockTypesList.mockResolvedValue([]);
     mockCertsList.mockResolvedValue([]);

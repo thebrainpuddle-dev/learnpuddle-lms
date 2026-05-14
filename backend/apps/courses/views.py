@@ -16,6 +16,7 @@ from .models import Course, Module, Content, TeacherGroup
 from apps.users.models import User as _User
 from .serializers import (
     ACTIVE_TEACHER_FILTERS,
+    TEACHER_ROLES,
     CourseListSerializer, CourseDetailSerializer,
     ModuleSerializer, CreateModuleSerializer,
     ContentSerializer, CreateContentSerializer
@@ -73,6 +74,39 @@ def _validate_teacher_target_sections(request, data):
             {'error': 'You can only target sections assigned to you via teaching assignments.'},
             status=status.HTTP_403_FORBIDDEN,
         )
+    return None
+
+
+def _as_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _course_publish_error(course):
+    """Return a user-facing reason when a course cannot be published."""
+    module_count = course.modules.filter(is_active=True).count()
+    if module_count == 0:
+        return "Cannot publish a course with no modules. Add at least one module first."
+
+    content_count = Content.objects.filter(
+        module__course=course,
+        module__is_active=True,
+        is_active=True,
+    ).count()
+    if content_count == 0:
+        return "Cannot publish a course with no content. Add at least one content item first."
+
+    from .video_models import VideoAsset
+    processing = VideoAsset.objects.filter(
+        content__module__course=course,
+        status='PROCESSING',
+    ).count()
+    if processing > 0:
+        return f"{processing} video(s) still processing. Wait for completion before publishing."
+
     return None
 
 
@@ -190,7 +224,7 @@ def course_list_create(request):
         # for courses with assigned_to_all=True, avoiding N+1 per-course queries).
         tenant_teacher_count = _User.objects.filter(
             tenant=request.tenant,
-            role='TEACHER',
+            role__in=TEACHER_ROLES,
             is_active=True,
         ).count()
 
@@ -284,6 +318,15 @@ def course_detail(request, course_id):
             context={'request': request}
         )
         serializer.is_valid(raise_exception=True)
+        publish_requested = (
+            'is_published' in data
+            and _as_bool(data.get('is_published'))
+            and not course.is_published
+        )
+        if publish_requested:
+            publish_error = _course_publish_error(course)
+            if publish_error:
+                return Response({'error': publish_error}, status=status.HTTP_400_BAD_REQUEST)
         serializer.save()
         
         return Response(serializer.data)
@@ -312,37 +355,9 @@ def course_publish(request, course_id):
     action = request.data.get('action')  # 'publish' or 'unpublish'
     
     if action == 'publish':
-        # Block publishing if course has no modules
-        module_count = course.modules.filter(is_active=True).count()
-        if module_count == 0:
-            return Response(
-                {'error': 'Cannot publish a course with no modules. Add at least one module first.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        
-        # Block publishing if course has no content
-        content_count = Content.objects.filter(
-            module__course=course,
-            module__is_active=True,
-            is_active=True
-        ).count()
-        if content_count == 0:
-            return Response(
-                {'error': 'Cannot publish a course with no content. Add at least one content item first.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        
-        # Block publishing if any video is still processing
-        from .video_models import VideoAsset
-        processing = VideoAsset.objects.filter(
-            content__module__course=course,
-            status='PROCESSING',
-        ).count()
-        if processing > 0:
-            return Response(
-                {'error': f'{processing} video(s) still processing. Wait for completion before publishing.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        publish_error = _course_publish_error(course)
+        if publish_error:
+            return Response({'error': publish_error}, status=status.HTTP_400_BAD_REQUEST)
         course.is_published = True
         message = 'Course published successfully'
     elif action == 'unpublish':
@@ -621,7 +636,19 @@ def courses_bulk_action(request):
     affected_count = 0
     
     if action == 'publish':
-        affected_count = courses.filter(is_published=False).update(is_published=True)
+        skipped = []
+        for course in courses.filter(is_published=False):
+            publish_error = _course_publish_error(course)
+            if publish_error:
+                skipped.append({
+                    'id': str(course.id),
+                    'title': course.title,
+                    'error': publish_error,
+                })
+                continue
+            course.is_published = True
+            course.save(update_fields=['is_published', 'updated_at'])
+            affected_count += 1
         action_display = 'published'
     elif action == 'unpublish':
         affected_count = courses.filter(is_published=True).update(is_published=False)
@@ -644,11 +671,14 @@ def courses_bulk_action(request):
         request=request
     )
     
-    return Response({
+    response_payload = {
         'message': f'Successfully {action_display} {affected_count} course(s)',
         'affected_count': affected_count,
         'requested_count': len(course_ids),
-    }, status=status.HTTP_200_OK)
+    }
+    if action == 'publish':
+        response_payload['skipped'] = skipped
+    return Response(response_payload, status=status.HTTP_200_OK)
 
 
 @api_view(['GET'])

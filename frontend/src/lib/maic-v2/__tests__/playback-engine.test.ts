@@ -235,7 +235,7 @@ describe('PlaybackEngine speech action dispatch', () => {
   });
 
   test('falls back to reading timer when no audioUrl', async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const events: string[] = [];
     const { engine, player } = makeEngine(
       [{ id: 's', actions: [speechAction('a1', 'Two short words')] }],
@@ -453,7 +453,7 @@ describe('PlaybackEngine browser-TTS fallback', () => {
   });
 
   test('short no-audio text uses reading-timer even when BrowserTTS available', async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const stub = new StubBrowserTts();
     const events: string[] = [];
     const { engine, player } = makeEngine(
@@ -476,7 +476,7 @@ describe('PlaybackEngine browser-TTS fallback', () => {
   });
 
   test('long text falls back to reading-timer when BrowserTTS unavailable', async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const longText = Array.from({ length: 80 }, () => 'word').join(' ');
     const stub = new StubBrowserTts();
     stub.available = false;
@@ -557,7 +557,7 @@ describe('PlaybackEngine browser-TTS fallback', () => {
     // No 5th arg → engine constructs a real createBrowserTTSPlayer().
     // In jsdom/happy-dom, isAvailable()=false so any speech routes
     // to the reading-timer path. This locks the constructor signature.
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const events: string[] = [];
     const { engine, player } = makeEngine(
       [{ id: 's', actions: [speechAction('a1', 'short')] }],
@@ -697,7 +697,7 @@ describe('PlaybackEngine confirmDiscussion / handleEndDiscussion round-trip', ()
         onModeChange: (m) => events.push(`mode:${m}`),
       },
     );
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     engine.start();
     // Drain first speech so the loop reaches the discussion action.
     player.fireEnded();
@@ -722,7 +722,7 @@ describe('PlaybackEngine confirmDiscussion / handleEndDiscussion round-trip', ()
 
   test('confirmDiscussion → handleEndDiscussion restores the cursor', () => {
     const { engine, player } = makeEngine(makeDiscussionScene());
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     engine.start();
     player.fireEnded();
     vi.advanceTimersByTime(3000);
@@ -761,7 +761,7 @@ describe('PlaybackEngine confirmDiscussion / handleEndDiscussion round-trip', ()
         onModeChange: (m) => events.push(`mode:${m}`),
       },
     );
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     engine.start();
     player.fireEnded();
     vi.advanceTimersByTime(3000);
@@ -801,7 +801,7 @@ describe('PlaybackEngine sendUserMessage', () => {
       ] }],
       { onLiveUserMessage: (text) => messages.push(text) },
     );
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     engine.start();
     // Drain first speech and the 3s discussion delay so we can confirm.
     // Easier path: drive engine directly into live via handleUserInterrupt

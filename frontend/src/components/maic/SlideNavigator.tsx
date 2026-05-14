@@ -46,23 +46,18 @@ export const SlideNavigator = React.memo(function SlideNavigator({
   const isPlaying = useMAICStageStore((s) => s.isPlaying);
   const setPlaying = useMAICStageStore((s) => s.setPlaying);
 
-  // Scenes that actually contribute playable slides. Quiz/empty scenes
-  // are hidden from the strip — they'd be unclickable chips otherwise.
-  // A scene's bounds entry means the generation pipeline produced slides
-  // for it (see useMAICGeneration.ts).
   const navScenes = useMemo(() => {
-    return sceneSlideBounds.map((bounds) => {
-      const scene = scenes[bounds.sceneIdx];
-      if (!scene) return null;
-      const slideCount = bounds.endSlide - bounds.startSlide + 1;
+    return scenes.map((scene, sceneIndex) => {
+      const bounds = sceneSlideBounds.find((b) => b.sceneIdx === sceneIndex);
+      const slideCount = bounds ? bounds.endSlide - bounds.startSlide + 1 : 0;
       return {
-        sceneIndex: bounds.sceneIdx,
+        sceneIndex,
         title: scene.title,
         slideCount,
-        startSlide: bounds.startSlide,
-        endSlide: bounds.endSlide,
+        startSlide: bounds?.startSlide ?? -1,
+        endSlide: bounds?.endSlide ?? -1,
       };
-    }).filter(Boolean) as Array<{
+    }) as Array<{
       sceneIndex: number;
       title: string;
       slideCount: number;
@@ -71,13 +66,7 @@ export const SlideNavigator = React.memo(function SlideNavigator({
     }>;
   }, [scenes, sceneSlideBounds]);
 
-  // Which scene does the current slide belong to?
-  const activeSceneIdx = useMemo(() => {
-    const match = sceneSlideBounds.find(
-      (b) => currentSlideIndex >= b.startSlide && currentSlideIndex <= b.endSlide,
-    );
-    return match ? match.sceneIdx : currentSceneIndex;
-  }, [sceneSlideBounds, currentSlideIndex, currentSceneIndex]);
+  const activeSceneIdx = currentSceneIndex;
 
   // Current scene position labels (e.g., "slide 2 of 4 within the active scene")
   const activeScene = useMemo(() => {
@@ -88,10 +77,6 @@ export const SlideNavigator = React.memo(function SlideNavigator({
     ? Math.max(0, currentSlideIndex - activeScene.startSlide) + 1
     : 0;
 
-  // Position of the active scene within navScenes (slide-bearing scenes
-  // only). Without this, the counter reads the raw `sceneIndex` from the
-  // unfiltered `scenes` array and mixes it with `navScenes.length` — e.g.
-  // "Scene 10 of 8" when quiz/pbl/interactive scenes are in the middle.
   const activeNavPosition = useMemo(() => {
     const idx = navScenes.findIndex((s) => s.sceneIndex === activeSceneIdx);
     return idx >= 0 ? idx + 1 : null;
@@ -117,11 +102,10 @@ export const SlideNavigator = React.memo(function SlideNavigator({
   }, [activeSceneIdx, goToScene, onSeekToScene]);
 
   const handleNext = useCallback(() => {
-    const last = navScenes[navScenes.length - 1]?.sceneIndex ?? -1;
-    if (activeSceneIdx >= last) return;
+    if (activeSceneIdx >= scenes.length - 1) return;
     if (onSeekToScene) onSeekToScene(activeSceneIdx + 1);
     else nextScene();
-  }, [activeSceneIdx, navScenes, nextScene, onSeekToScene]);
+  }, [activeSceneIdx, nextScene, onSeekToScene, scenes.length]);
 
   // Scroll active chip into view when scene changes.
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
@@ -141,12 +125,15 @@ export const SlideNavigator = React.memo(function SlideNavigator({
     (e: React.KeyboardEvent) => {
       if (e.key === 'ArrowLeft') {
         e.preventDefault();
+        e.stopPropagation();
         handlePrev();
       } else if (e.key === 'ArrowRight') {
         e.preventDefault();
+        e.stopPropagation();
         handleNext();
       } else if (e.key === ' ') {
         e.preventDefault();
+        e.stopPropagation();
         if (onPlayPause) onPlayPause();
         else setPlaying(!isPlaying);
       }
@@ -154,17 +141,10 @@ export const SlideNavigator = React.memo(function SlideNavigator({
     [handlePrev, handleNext, isPlaying, setPlaying, onPlayPause],
   );
 
-  // Hide the navigator entirely when:
-  //   1. No slide-bearing scenes exist at all (nothing to chip), OR
-  //   2. The active scene isn't slide-bearing (quiz / pbl / interactive) —
-  //      `activeNavPosition` is null and the counter would otherwise read
-  //      "Scene – of N", a confusing stale placeholder. See FX-3 in the
-  //      2026-04-29 bundle review.
   if (navScenes.length === 0) return null;
-  if (activeNavPosition === null) return null;
 
-  const isFirstScene = activeSceneIdx <= (navScenes[0]?.sceneIndex ?? 0);
-  const isLastScene = activeSceneIdx >= (navScenes[navScenes.length - 1]?.sceneIndex ?? 0);
+  const isFirstScene = activeSceneIdx <= 0;
+  const isLastScene = activeSceneIdx >= scenes.length - 1;
 
   return (
     <div
@@ -196,7 +176,7 @@ export const SlideNavigator = React.memo(function SlideNavigator({
         data-testid="play-button"
         className={cn(
           'shrink-0 flex items-center justify-center rounded-full transition-all',
-          'h-10 w-10 shadow-sm',
+          'h-11 w-11 md:h-10 md:w-10 shadow-sm',
           isPlaying
             ? 'bg-primary-600 text-white hover:bg-primary-700'
             : 'bg-gray-900 text-white hover:bg-gray-700',

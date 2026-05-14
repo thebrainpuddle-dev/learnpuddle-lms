@@ -46,8 +46,7 @@ interface StageProps {
   /**
    * CG-P0-3: forwarded from the classroom detail response.  When true the
    * Celery image-fill task is still running; image elements with empty src
-   * show a "fetching image…" skeleton instead of an immediate Unsplash
-   * fallback photo.
+   * show a "fetching image…" skeleton.
    */
   imagesPending?: boolean;
 }
@@ -95,6 +94,17 @@ export const Stage: React.FC<StageProps> = ({ role, imagesPending }) => {
   const [pendingSceneSwitch, setPendingSceneSwitch] = useState<number | null>(null);
 
   const roundtableStripEnabled = useSprintFlag(SPRINT1_FLAGS.roundtableStrip);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+    const media = window.matchMedia('(max-width: 767px)');
+    const closeDrawerOnMobile = () => {
+      if (media.matches) setShowChatPanel(false);
+    };
+    closeDrawerOnMobile();
+    media.addEventListener('change', closeDrawerOnMobile);
+    return () => media.removeEventListener('change', closeDrawerOnMobile);
+  }, [setShowChatPanel]);
 
   // Sprint 4 · B.7 — presentation-mode auto-hide controls. When the
   // user enters fullscreen the toolbar + bottom navigator fade out
@@ -229,7 +239,6 @@ export const Stage: React.FC<StageProps> = ({ role, imagesPending }) => {
     enterDiscussionFromUI,
     handleUserInterrupt,
     resumeAfterInterrupt,
-    startClass,
     playFromCurrent,
     seekToScene,
     seekToSlidePaused,
@@ -250,6 +259,11 @@ export const Stage: React.FC<StageProps> = ({ role, imagesPending }) => {
   const currentSlide = useMemo(
     () => slides[currentSlideIndex] || null,
     [slides, currentSlideIndex],
+  );
+  const currentSceneHasLinearPlayback = Boolean(
+    currentScene &&
+      !['quiz', 'pbl', 'interactive'].includes(currentScene.type) &&
+      (currentScene.actions?.length ?? 0) > 0,
   );
 
   // Load scene actions when scene changes. Key on the stable scene id (not
@@ -320,7 +334,7 @@ export const Stage: React.FC<StageProps> = ({ role, imagesPending }) => {
   // Audio URL — only used when the engine is NOT managing audio via speech
   // actions. When the engine has actions, it handles TTS audio internally
   // and the AudioPlayer must stay silent to avoid dual-audio overlap.
-  const engineManagesAudio = hasScenes && (currentScene?.actions?.length ?? 0) > 0;
+  const engineManagesAudio = hasScenes && currentSceneHasLinearPlayback;
   const audioUrl = engineManagesAudio
     ? undefined
     : currentScene?.content.type === 'slide'
@@ -696,6 +710,7 @@ export const Stage: React.FC<StageProps> = ({ role, imagesPending }) => {
           pipSupported={pipButtonVisible}
           pipOpen={pip.isOpen}
           onTogglePiP={togglePiP}
+          onToggleSceneSidebar={() => setShowSceneSidebar((v) => !v)}
         />
       </div>
 
@@ -712,13 +727,16 @@ export const Stage: React.FC<StageProps> = ({ role, imagesPending }) => {
 
         {/* Viewport wrapper (flex-col to stack video + subtitles) */}
         <div className="flex-1 flex flex-col min-w-0">
-        <div
-          className="flex-1 relative flex items-center justify-center bg-gray-900 p-2 sm:p-3 min-w-0"
-          onTouchStart={handleTouchStart}
-          onTouchEnd={handleTouchEnd}
-        >
-          {/* 16:9 aspect ratio container — fill viewport as much as possible */}
-          <div className="relative w-full max-w-[95vw] max-h-[calc(100%-0.5rem)] aspect-video bg-white rounded-lg shadow-lg overflow-hidden">
+          <div
+            className="flex-1 relative flex flex-col items-center justify-center gap-2 bg-gray-900 p-2 sm:p-3 min-w-0"
+            onTouchStart={handleTouchStart}
+            onTouchEnd={handleTouchEnd}
+          >
+            {/* 16:9 aspect ratio container — fill available slide row only.
+                The speaker/agent chrome has its own row below this, so it does
+                not cover lesson text or image content on shorter viewports. */}
+            <div className="relative flex-1 min-h-0 w-full flex items-center justify-center">
+              <div className="relative w-full max-w-full max-h-full aspect-video bg-white rounded-lg shadow-lg overflow-hidden">
             {/* Scene-based rendering (preferred) */}
             {hasScenes && currentScene ? (
               <div className="absolute inset-0">
@@ -759,6 +777,7 @@ export const Stage: React.FC<StageProps> = ({ role, imagesPending }) => {
             {/* Laser pointer effect (driven by store) */}
             <LaserPointer
               active={!!laserElementId}
+              targetElementId={laserElementId}
               color={laserColor || '#ef4444'}
             />
 
@@ -794,12 +813,15 @@ export const Stage: React.FC<StageProps> = ({ role, imagesPending }) => {
                 while idle. On hover we lock to full opacity + lift the
                 scale a touch so the CTA feels clickable. Matches
                 OpenMAIC's `canvas-area.tsx:194-220` idle feel. */}
-            {hasScenes && playbackState === 'idle' && !isClassPlaying && (
+            {hasScenes &&
+              currentSceneHasLinearPlayback &&
+              playbackState === 'idle' &&
+              !isClassPlaying && (
               <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/25 backdrop-blur-sm">
                 <button
-                  onClick={startClass}
+                  onClick={playFromCurrent}
                   className="group flex flex-col items-center gap-3 px-8 py-6 rounded-2xl bg-white/95 shadow-xl hover:shadow-2xl transition-shadow"
-                  aria-label={`Start class — ${scenes.length} scenes, ${agents.length} agents`}
+                  aria-label={`Start playback — scene ${currentSceneIndex + 1} of ${scenes.length}, ${agents.length} agents`}
                 >
                   <span
                     className="flex items-center justify-center h-16 w-16 rounded-full bg-indigo-600 shadow-lg transition-colors group-hover:bg-indigo-700"
@@ -812,9 +834,11 @@ export const Stage: React.FC<StageProps> = ({ role, imagesPending }) => {
                       <path d="M8 5v14l11-7z" />
                     </svg>
                   </span>
-                  <span className="text-lg font-semibold text-gray-900">Start Class</span>
+                  <span className="text-lg font-semibold text-gray-900">
+                    {currentSceneIndex > 0 ? 'Start This Scene' : 'Start Class'}
+                  </span>
                   <span className="text-xs text-gray-500">
-                    {scenes.length} scenes &middot; {agents.length} agents
+                    {scenes.length} activit{scenes.length === 1 ? 'y' : 'ies'} &middot; {agents.length} agents
                   </span>
                 </button>
                 {/* Scoped keyframes so we don't pollute the global CSS.
@@ -845,18 +869,6 @@ export const Stage: React.FC<StageProps> = ({ role, imagesPending }) => {
               />
             )}
 
-            {/* Persistent roundtable strip — all agents visible during
-                playback, active speaker emphasized. Sprint 1 · Step 1.
-                Gated behind SPRINT1_FLAGS.roundtableStrip (default on). */}
-            {roundtableStripEnabled && (
-              <RoundtableStrip
-                agents={agents}
-                speakingAgentId={speakingAgentId}
-                isPlaying={isClassPlaying}
-                hidden={!!discussionMode}
-              />
-            )}
-
             {/* Engine-driven discussion gate — shows the 3 s breath +
                 Join/Skip countdown when the playback engine hits a
                 scripted discussion action. See DiscussionGateCard for
@@ -879,14 +891,28 @@ export const Stage: React.FC<StageProps> = ({ role, imagesPending }) => {
                 onBeforeDiscussion={enterDiscussionFromProactiveCard}
               />
             </div>
-          </div>
+              </div>
+            </div>
 
-          {/* Speaking agent overlay (bottom-left) */}
-          <PresentationSpeechOverlay
-            agent={speakingAgent}
-            speechText={speechText}
-            active={!!speakingAgent}
-          />
+          <div className="relative h-20 w-full shrink-0">
+            {/* Persistent roundtable strip — lives in the reserved stage chrome
+                below the slide, so it never covers lesson text or images. */}
+            {roundtableStripEnabled && (
+              <RoundtableStrip
+                agents={agents}
+                speakingAgentId={speakingAgentId}
+                isPlaying={isClassPlaying}
+                hidden={!!discussionMode}
+              />
+            )}
+
+            {/* Speaking agent overlay (bottom-left) */}
+            <PresentationSpeechOverlay
+              agent={speakingAgent}
+              speechText={speechText}
+              active={!!speakingAgent}
+            />
+          </div>
 
           {/* Export menu (teacher only) */}
           {role === 'teacher' && classroomId && (
@@ -894,7 +920,7 @@ export const Stage: React.FC<StageProps> = ({ role, imagesPending }) => {
               <ExportMenu classroomId={classroomId} />
             </div>
           )}
-        </div>
+          </div>
         </div>
 
         {/* Right sidebar (desktop): Chat + Lecture Notes tabs live inside ChatPanel */}

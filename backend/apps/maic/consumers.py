@@ -19,6 +19,7 @@ Close codes:
   4003 — authenticated but session_id belongs to a different tenant
          (cross-tenant access attempt)
   4004 — authenticated user has no tenant_id (system error / corrupt user)
+  4403 — MAIC v2 disabled globally or for this tenant
 
 Tenant binding (MAIC-101):
   On connect we look up MaicSessionV2 by session_id. If the row exists
@@ -56,6 +57,30 @@ from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from django.contrib.auth.models import AnonymousUser
 
 logger = logging.getLogger(__name__)
+
+_DEFAULT_MAX_TURNS = 1
+_MAX_MAX_TURNS = 12
+
+
+def _coerce_max_turns(raw: Any) -> int:
+    """Parse client maxTurns with a hard cost-control ceiling."""
+    if raw is None:
+        return _DEFAULT_MAX_TURNS
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("maxTurns must be an integer") from exc
+    if value < 1:
+        raise ValueError("maxTurns must be at least 1")
+    return min(value, _MAX_MAX_TURNS)
+
+
+@database_sync_to_async
+def _user_has_maic_v2_access(user) -> bool:
+    """Run the shared MAIC v2 gate in a DB-safe sync context."""
+    from apps.maic.permissions import user_has_maic_v2_access
+
+    return user_has_maic_v2_access(user)
 
 
 @database_sync_to_async
@@ -160,6 +185,13 @@ def _resolve_tts_config_for_tenant(tenant_id) -> dict | None:
         return None
 
 
+@database_sync_to_async
+def _resolve_llm_config_for_tenant(tenant_id) -> dict:
+    from apps.maic.llm_config import resolve_tenant_llm_runtime_config
+
+    return resolve_tenant_llm_runtime_config(tenant_id=tenant_id)
+
+
 class ClassroomConsumer(AsyncJsonWebsocketConsumer):
     """WebSocket consumer for an AI Classroom session.
 
@@ -190,6 +222,15 @@ class ClassroomConsumer(AsyncJsonWebsocketConsumer):
                 "MAIC v2 WS: user %s has no tenant_id; rejecting", self.user.id,
             )
             await self.close(code=4004)
+            return
+
+        if not await _user_has_maic_v2_access(self.user):
+            logger.warning(
+                "MAIC v2 WS: user %s tenant=%s failed v2 access gate",
+                self.user.id,
+                self.tenant_id,
+            )
+            await self.close(code=4403)
             return
 
         # MAIC-101: resolve / create the MaicSessionV2 row + cross-tenant gate
@@ -332,14 +373,44 @@ class ClassroomConsumer(AsyncJsonWebsocketConsumer):
             await self._cancel_in_flight()
 
             data = content.get("data") or {}
-            # MAIC-502: pre-resolve per-tenant TTS config once per session
+            # Pre-resolve per-tenant model + TTS config once per session
             # start so the async orchestration loop doesn't do sync DB
-            # calls. Falls back to None when no TenantAIConfig row exists.
+            # calls. Missing/disabled LLM config is a hard product error:
+            # a production classroom must not silently fall back to stub.
+            try:
+                llm_config = await _resolve_llm_config_for_tenant(
+                    self.tenant_id
+                )
+                language_model_id = str(llm_config["language_model_id"])
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "MAIC v2 WS: failed resolving LLM config for tenant=%s: %s",
+                    self.tenant_id,
+                    exc,
+                )
+                await self._safe_send_json({
+                    "type": "error",
+                    "data": {"message": str(exc)},
+                })
+                return
+
+            # MAIC-502: TTS remains soft-fallback so audio still plays
+            # when only voice config is missing.
             tts_config = await _resolve_tts_config_for_tenant(self.tenant_id)
+            try:
+                max_turns = _coerce_max_turns(data.get("maxTurns"))
+            except ValueError as exc:
+                await self._safe_send_json({
+                    "type": "error",
+                    "data": {"message": str(exc)},
+                })
+                return
             initial_state = build_initial_state(
                 messages=data.get("messages"),
                 available_agent_ids=data.get("agentIds"),
-                max_turns=int(data.get("maxTurns", 1)),
+                max_turns=max_turns,
+                language_model_id=language_model_id,
+                llm_config=llm_config,
                 tts_config=tts_config,
             )
             self._state = initial_state

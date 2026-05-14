@@ -76,7 +76,7 @@ describe('AdminSidebar mobile drawer', () => {
     const onClose = vi.fn();
 
     render(
-      <MemoryRouter initialEntries={['/admin/dashboard']}>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={['/admin/dashboard']}>
         <AdminSidebar open onClose={onClose} />
       </MemoryRouter>
     );

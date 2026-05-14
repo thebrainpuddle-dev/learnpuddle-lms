@@ -142,6 +142,10 @@ export class MAICPlaybackEngine {
     }
   }
 
+  hasPlayableActions(): boolean {
+    return this.actions.length > 0;
+  }
+
   // ─── Playback Controls ─────────────────────────────────────────────
 
   /**
@@ -150,7 +154,10 @@ export class MAICPlaybackEngine {
    */
   play(): void {
     if (this.disposed) return;
-    if (this.actions.length === 0) return;
+    if (this.actions.length === 0) {
+      this.setMode('idle');
+      return;
+    }
 
     // If resuming from pause, delegate to resume()
     if (this.mode === 'paused') {
@@ -600,6 +607,20 @@ export class MAICPlaybackEngine {
       // Playback pauses while discussion is active. After discussion ends,
       // call resumeAfterDiscussion() to continue from the checkpoint.
       case 'discussion': {
+        const disc = action as import('../types/maic-actions').DiscussionAction;
+        if ((disc as { triggerMode?: string }).triggerMode !== 'auto') {
+          try {
+            this.actionEngine.execute(action);
+          } catch (err) {
+            console.error(`Discussion action ${idx} failed:`, err);
+          }
+          queueMicrotask(() => {
+            if (mySession !== this.sessionId) return;
+            if (this.mode === 'playing') void this.processNext();
+          });
+          break;
+        }
+
         if (this.consumedDiscussions.has(idx)) {
           // Already triggered this discussion — skip
           queueMicrotask(() => {
@@ -624,7 +645,6 @@ export class MAICPlaybackEngine {
 
         // Soft-pause: set mode to paused but notify via discussion callback
         this.setMode('paused');
-        const disc = action as import('../types/maic-actions').DiscussionAction;
         this.onDiscussionPending?.(disc.topic, disc.agentIds, disc.sessionType);
         break;
       }

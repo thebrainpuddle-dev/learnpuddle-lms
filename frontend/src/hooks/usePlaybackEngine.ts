@@ -38,6 +38,8 @@ export function usePlaybackEngine(role: MAICRole = 'teacher') {
   const actionEngineRef = useRef<MAICActionEngine | null>(null);
   const autoAdvanceRef = useRef(false);
   const classStoppedRef = useRef(false);
+  const sceneAdvanceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const startDelayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Engine-driven slide change flag: set by the action engine's
   // onEngineDrivenTransition callback (and by `seekToSlide` below) so
   // Stage.tsx's auto-pause effect can distinguish "engine is seeking"
@@ -46,6 +48,7 @@ export function usePlaybackEngine(role: MAICRole = 'teacher') {
   const engineDrivenSlideChangeRef = useRef(false);
 
   const accessToken = useAuthStore((s) => s.accessToken);
+  const hasAccessToken = Boolean(accessToken);
   const setEngineMode = useMAICStageStore((s) => s.setEngineMode);
   const autoPlay = useMAICSettingsStore((s) => s.autoPlay);
   // Offline-audio-durability re-wire (2026-04-26): thread the classroom id
@@ -54,14 +57,26 @@ export function usePlaybackEngine(role: MAICRole = 'teacher') {
   // the engine is rebuilt when navigating between classrooms.
   const classroomId = useMAICStageStore((s) => s.classroomId);
 
+  const clearQueuedPlaybackTimers = useCallback(() => {
+    if (sceneAdvanceTimerRef.current) {
+      clearTimeout(sceneAdvanceTimerRef.current);
+      sceneAdvanceTimerRef.current = null;
+    }
+    if (startDelayTimerRef.current) {
+      clearTimeout(startDelayTimerRef.current);
+      startDelayTimerRef.current = null;
+    }
+  }, []);
+
   // Initialize engines when token is available
   useEffect(() => {
-    if (!accessToken) return;
+    const token = useAuthStore.getState().accessToken;
+    if (!hasAccessToken || !token) return;
 
     const ttsEndpoint = maicTtsUrl(role);
     const actionEngine = new MAICActionEngine({
       ttsEndpoint,
-      token: accessToken,
+      token,
       classroomId: classroomId ?? undefined,
       onSpeechStart: (agentId: string, text: string) => {
         const s = useMAICStageStore.getState();
@@ -138,9 +153,15 @@ export function usePlaybackEngine(role: MAICRole = 'teacher') {
             // Brief pause between scenes, then advance.
             // The scene change triggers loadScene via Stage useEffect,
             // which auto-plays because autoAdvanceRef is true.
-            setTimeout(() => {
-              if (classStoppedRef.current) return;
-              store.goToScene(currentSceneIndex + 1);
+            if (sceneAdvanceTimerRef.current) {
+              clearTimeout(sceneAdvanceTimerRef.current);
+            }
+            sceneAdvanceTimerRef.current = setTimeout(() => {
+              sceneAdvanceTimerRef.current = null;
+              if (classStoppedRef.current || !autoAdvanceRef.current) return;
+              const latest = useMAICStageStore.getState();
+              if (latest.currentSceneIndex !== currentSceneIndex) return;
+              latest.goToScene(currentSceneIndex + 1);
             }, SCENE_TRANSITION_DELAY_MS);
           } else {
             // All scenes complete
@@ -174,6 +195,7 @@ export function usePlaybackEngine(role: MAICRole = 'teacher') {
     }
 
     return () => {
+      clearQueuedPlaybackTimers();
       playbackEngine.dispose();
       actionEngine.dispose();
       engineRef.current = null;
@@ -185,25 +207,42 @@ export function usePlaybackEngine(role: MAICRole = 'teacher') {
         delete (window as any).__maicEngine;
       }
     };
-  }, [accessToken, setEngineMode, role, classroomId]);
+  }, [hasAccessToken, setEngineMode, role, classroomId, clearQueuedPlaybackTimers]);
 
   // ─── Controls ───────────────────────────────────────────────────────
 
   const play = useCallback(() => {
+    clearQueuedPlaybackTimers();
+    if (!engineRef.current?.hasPlayableActions()) {
+      setIsClassPlaying(false);
+      useMAICStageStore.getState().setPlaying(false);
+      setPlaybackState('idle');
+      return;
+    }
+    useMAICStageStore.getState().setPlaying(true);
     engineRef.current?.play();
-  }, []);
+  }, [clearQueuedPlaybackTimers]);
 
   const pause = useCallback(() => {
+    clearQueuedPlaybackTimers();
+    useMAICStageStore.getState().setPlaying(false);
     engineRef.current?.pause();
-  }, []);
+  }, [clearQueuedPlaybackTimers]);
 
   const resume = useCallback(() => {
+    clearQueuedPlaybackTimers();
+    useMAICStageStore.getState().setPlaying(true);
     engineRef.current?.resume();
-  }, []);
+  }, [clearQueuedPlaybackTimers]);
 
   const stop = useCallback(() => {
+    clearQueuedPlaybackTimers();
+    autoAdvanceRef.current = false;
+    classStoppedRef.current = true;
+    setIsClassPlaying(false);
+    useMAICStageStore.getState().setPlaying(false);
     engineRef.current?.stop();
-  }, []);
+  }, [clearQueuedPlaybackTimers]);
 
   const seekTo = useCallback((index: number) => {
     engineRef.current?.seekTo(index);
@@ -250,10 +289,16 @@ export function usePlaybackEngine(role: MAICRole = 'teacher') {
    * plays from action 0 of the freshly loaded scene, deterministically.
    */
   const seekToScene = useCallback((sceneIndex: number) => {
+    const shouldContinuePlayback = autoAdvanceRef.current && !classStoppedRef.current;
+    clearQueuedPlaybackTimers();
+    autoAdvanceRef.current = shouldContinuePlayback;
+    classStoppedRef.current = !shouldContinuePlayback;
+    setIsClassPlaying(shouldContinuePlayback);
+    useMAICStageStore.getState().setPlaying(shouldContinuePlayback);
     engineDrivenSlideChangeRef.current = true;
     engineRef.current?.stop();
     useMAICStageStore.getState().goToScene(sceneIndex);
-  }, []);
+  }, [clearQueuedPlaybackTimers]);
 
   const resumeAfterDiscussion = useCallback(() => {
     engineRef.current?.resumeAfterDiscussion();
@@ -280,7 +325,7 @@ export function usePlaybackEngine(role: MAICRole = 'teacher') {
     // That makes the previous 150 ms setTimeout unnecessary — the token
     // guarantees a clean start with no stale callbacks leaking through.
     engineRef.current?.loadScene(scene);
-    setActionCount(scene.actions?.length ?? 0);
+    setActionCount(engineRef.current?.getActionCount() ?? scene.actions?.length ?? 0);
     setCurrentActionIndex(0);
     setPlaybackState('idle');
     // SPRINT-2-BATCH-9-F10 — any new scene load (manual nav, scene-chip
@@ -299,6 +344,7 @@ export function usePlaybackEngine(role: MAICRole = 'teacher') {
     const store = useMAICStageStore.getState();
     if (store.scenes.length === 0) return;
 
+    clearQueuedPlaybackTimers();
     classStoppedRef.current = false;
     autoAdvanceRef.current = true;
     setIsClassPlaying(true);
@@ -316,13 +362,24 @@ export function usePlaybackEngine(role: MAICRole = 'teacher') {
 
     // Go to scene 0 and start
     store.goToScene(0);
-    setTimeout(() => {
+    startDelayTimerRef.current = setTimeout(() => {
+      startDelayTimerRef.current = null;
+      if (classStoppedRef.current || !autoAdvanceRef.current) return;
       engineRef.current?.play();
     }, 300);
-  }, []);
+  }, [clearQueuedPlaybackTimers]);
 
   /** Start playing from the current scene and auto-advance through remaining */
   const playFromCurrent = useCallback(() => {
+    clearQueuedPlaybackTimers();
+    if (!engineRef.current?.hasPlayableActions()) {
+      autoAdvanceRef.current = false;
+      classStoppedRef.current = true;
+      setIsClassPlaying(false);
+      useMAICStageStore.getState().setPlaying(false);
+      setPlaybackState('idle');
+      return;
+    }
     classStoppedRef.current = false;
     autoAdvanceRef.current = true;
     setIsClassPlaying(true);
@@ -334,7 +391,7 @@ export function usePlaybackEngine(role: MAICRole = 'teacher') {
     // classrooms don't revert to blocked state after a long idle.
     actionEngineRef.current?.unlockAudio();
     engineRef.current?.play();
-  }, []);
+  }, [clearQueuedPlaybackTimers]);
 
   // CG-P1-7: `stopClass` was exported but no UI caller. `pause()` covers
   // user-initiated stops; auto-advance ends naturally via onSceneComplete

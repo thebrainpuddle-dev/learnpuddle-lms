@@ -53,18 +53,30 @@ export function buildSceneFromBuffer(
   const sceneId = buffer.currentAgent?.messageId ?? sessionId;
 
   const speechActions: SpeechAction[] = [];
-  for (const messageId of Object.keys(buffer.audioByMessageId)) {
+  const audioMessageIds = [
+    ...buffer.messageOrder,
+    ...Object.keys(buffer.audioByMessageId).filter(
+      (messageId) => !buffer.messageOrder.includes(messageId),
+    ),
+  ];
+
+  for (const messageId of audioMessageIds) {
     const audio = buffer.audioByMessageId[messageId];
+    if (!audio) continue;
     // Skip bookkeeping entries that have no actual audio bytes — the
     // engine would otherwise schedule a reading-time timer for empty
-    // text, producing a 2 s silent gap.
-    if (!audio.audioB64) continue;
+    // text, producing a 2 s silent gap. URL-backed TTS frames are a
+    // real audio source and should play.
+    const audioUrl = audio.audioUrl ?? (
+      audio.audioB64 ? dataUrlForBase64Mp3(audio.audioB64) : undefined
+    );
+    if (!audioUrl) continue;
     speechActions.push({
       id: `speech-${messageId}`,
       type: 'speech',
       text: buffer.textByMessageId[messageId] ?? '',
       audioId: audio.audioId,
-      audioUrl: dataUrlForBase64Mp3(audio.audioB64),
+      audioUrl,
     });
   }
 

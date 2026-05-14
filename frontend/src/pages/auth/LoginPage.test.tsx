@@ -93,7 +93,7 @@ describe('LoginPage', () => {
 
   const renderLoginPage = () => {
     return render(
-      <MemoryRouter initialEntries={['/login']}>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={['/login']}>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/admin/dashboard" element={<AdminDashboard />} />

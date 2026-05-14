@@ -2,8 +2,20 @@
 from pathlib import Path
 from decouple import config
 from datetime import timedelta
+from urllib.parse import urlsplit, urlunsplit
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+
+def _redis_url_with_db(url: str, db: int) -> str:
+    """Return a Redis URL using the same endpoint but a different DB index."""
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return f"redis://localhost:6379/{db}"
+    if parts.scheme not in {"redis", "rediss"} or not parts.netloc:
+        return f"redis://localhost:6379/{db}"
+    return urlunsplit((parts.scheme, parts.netloc, f"/{db}", parts.query, parts.fragment))
 
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = config('SECRET_KEY')
@@ -163,6 +175,7 @@ WSGI_APPLICATION = 'config.wsgi.application'
 
 # Database
 # Using psycopg3 (modern PostgreSQL adapter)
+_DB_CONN_MAX_AGE_DEFAULT = 0 if DEBUG else 600
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
@@ -171,7 +184,11 @@ DATABASES = {
         'PASSWORD': config('DB_PASSWORD'),
         'HOST': config('DB_HOST'),
         'PORT': config('DB_PORT'),
-        'CONN_MAX_AGE': config('DB_CONN_MAX_AGE', default=600, cast=int),  # Reuse connections for 10 min
+        # Local/CI runs do not have PgBouncer, and concurrent teacher tabs can
+        # exhaust Postgres if every request thread parks an idle connection.
+        # Production can keep reuse enabled via DB_CONN_MAX_AGE behind pooling.
+        'CONN_MAX_AGE': config('DB_CONN_MAX_AGE', default=_DB_CONN_MAX_AGE_DEFAULT, cast=int),
+        'CONN_HEALTH_CHECKS': config('DB_CONN_HEALTH_CHECKS', default=True, cast=bool),
     }
 }
 
@@ -631,12 +648,24 @@ else:
 # -----------------------------------------------------------------------------
 # Cache (Redis) - used for rate limiting, account lockout, and general caching
 # -----------------------------------------------------------------------------
+REDIS_URL = config("REDIS_URL", default="redis://localhost:6379/1")
+REDIS_CACHE_DB = config("REDIS_CACHE_DB", default=1, cast=int)
+REDIS_CHANNEL_DB = config("REDIS_CHANNEL_DB", default=2, cast=int)
+REDIS_CACHE_URL = config(
+    "REDIS_CACHE_URL",
+    default=_redis_url_with_db(REDIS_URL, REDIS_CACHE_DB),
+)
+CHANNEL_REDIS_URL = config(
+    "CHANNEL_REDIS_URL",
+    default=_redis_url_with_db(REDIS_URL, REDIS_CHANNEL_DB),
+)
+
 CACHES = {
     "default": {
         "BACKEND": "django.core.cache.backends.redis.RedisCache",
-        "LOCATION": config("REDIS_URL", default="redis://localhost:6379/1"),
+        "LOCATION": REDIS_CACHE_URL,
         "OPTIONS": {
-            "db": config("REDIS_CACHE_DB", default=1, cast=int),
+            "db": REDIS_CACHE_DB,
         },
         "KEY_PREFIX": "lms",
         "TIMEOUT": 300,  # 5 minutes default
@@ -646,7 +675,7 @@ CACHES = {
 # -----------------------------------------------------------------------------
 # Celery (async job queue) - used for video processing pipeline
 # -----------------------------------------------------------------------------
-CELERY_BROKER_URL = config("CELERY_BROKER_URL", default="redis://localhost:6379/0")
+CELERY_BROKER_URL = config("CELERY_BROKER_URL", default=REDIS_URL)
 CELERY_RESULT_BACKEND = config("CELERY_RESULT_BACKEND", default=CELERY_BROKER_URL)
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
@@ -676,7 +705,7 @@ CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
         "CONFIG": {
-            "hosts": [config("REDIS_URL", default="redis://localhost:6379/2")],
+            "hosts": [CHANNEL_REDIS_URL],
             "capacity": 1500,
             "expiry": 10,
         },
@@ -910,13 +939,17 @@ CHATBOT_OLLAMA_MODEL = config('CHATBOT_OLLAMA_MODEL', default='llama3')
 # See docs/AI_CLASSROOM_BLUEPRINT.md and the project brain at
 # obsidian-vault/agent-hq/projects/learnpuddle-lms/maic-rebuild/.
 MAIC_V2_ENABLED = config('MAIC_V2_ENABLED', default=False, cast=bool)
+# MAIC v2 must use a tenant's configured provider in production. The stub
+# stream is kept for explicit local/test probes only and is off by default.
+MAIC_V2_ALLOW_STUB = config('MAIC_V2_ALLOW_STUB', default=False, cast=bool)
+MAIC_V2_ALLOW_REQUEST_MODEL_OVERRIDE = config(
+    'MAIC_V2_ALLOW_REQUEST_MODEL_OVERRIDE',
+    default=False,
+    cast=bool,
+)
 
-# Phase 4 (MAIC-431) — generation pipeline v1→v2 gate. When True,
-# the legacy v1 generation routes in apps/courses/maic_urls.py are
-# NOT mounted; clients hit POST /api/maic/v2/generate/ instead.
-# When False (rollback path), the v1 path resumes serving without
-# a code change.
-#
-# Default True — Phase 4 closes with the v2 path as canonical.
-# Phase 8 deletes both this gate and apps/courses/maic_generation_service.py.
+# Phase 4+ (MAIC-431) — generation pipeline v1→v2 gate. The teacher portal
+# wizard now submits to `/api/maic/v2/generate/` by default. Keep the flag as
+# the emergency rollback switch: set MAIC_GENERATION_USE_V2=false to remount
+# the legacy per-step v1 generation endpoints during an incident.
 MAIC_GENERATION_USE_V2 = config('MAIC_GENERATION_USE_V2', default=True, cast=bool)

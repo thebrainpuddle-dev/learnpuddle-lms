@@ -64,7 +64,7 @@ function makeClient() {
 function renderPage() {
   return render(
     <QueryClientProvider client={makeClient()}>
-      <MemoryRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <QuizPage />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -122,7 +122,7 @@ const mockQuizData = {
 
 describe('QuizPage', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     mockSubmitQuiz.mockResolvedValue({ quiz_id: 'quiz-1', assignment_id: 'asgn-1', score: null, graded_at: null });
   });
 

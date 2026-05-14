@@ -150,7 +150,7 @@ const ALL_PLANS: Plan[] = [STARTER_PLAN, CURRENT_PLAN.plan, ENTERPRISE_PLAN];
 
 function renderPage() {
   return render(
-    <MemoryRouter>
+    <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <BillingPage />
     </MemoryRouter>
   );

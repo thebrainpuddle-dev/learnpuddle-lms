@@ -124,7 +124,7 @@ describe('SchoolDetailPage tab URL stability', () => {
 
     return render(
       <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={[path]}>
+        <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={[path]}>
           <Routes>
             <Route
               path="/super-admin/schools/:tenantId"

@@ -21,7 +21,7 @@ export interface MAICSlideElement {
   /** Optional bag for element-level backend signals. Image elements
    *  carry `imageProviderDisabled: true` when the tenant has opted
    *  out of AI image generation — the renderer uses this to show an
-   *  honest placeholder instead of falling back to random stock photos. */
+   *  honest placeholder. */
   meta?: {
     imageProviderDisabled?: boolean;
     [k: string]: unknown;
@@ -59,7 +59,7 @@ export interface SlideSlots {
   body?: { text?: string; bullets?: string[] };
   /** Image slot — `src` may be empty while the Celery image-fill task is
    *  still running (CG-P0-3); renderer shows the fetching skeleton in that
-   *  case and falls back to placeholder/Unsplash policy when not pending. */
+   *  case and an unavailable placeholder when not pending. */
   image?: { src?: string; alt?: string; meta?: Record<string, unknown> };
   /** Bottom-row footer caption. */
   footer?: { text: string };
@@ -77,6 +77,14 @@ export interface MAICSlide {
   audioUrl?: string;
   duration?: number;
   transition?: MAICSlideTransition;
+  /** Optional generation-space metadata. V2/OpenMAIC scenes commonly
+   *  generate coordinates on a 1000 x 562.5 canvas, while legacy scenes
+   *  use 800 x 450. The renderer uses these fields to scale without
+   *  clipping content. */
+  canvasWidth?: number;
+  canvasHeight?: number;
+  viewportSize?: number;
+  viewportRatio?: number;
   /** F4 (P0): optional layout discriminator. When set to a known template
    *  id AND `slots` is populated, the renderer uses the slot-aware path
    *  instead of `elements[]`. Absent on legacy slides. */
@@ -305,6 +313,9 @@ export interface MAICGenerationConfig {
   /** When true, the backend enriches the outline generation with web-search
    *  context (OpenMAIC-style grounding). Default ON in the wizard. */
   enableWebSearch?: boolean;
+  /** Curated web-search context from the teacher wizard. V2 sends this as
+   *  researchContext so the backend keeps it separate from uploaded PDFs. */
+  webSearchContext?: string;
   courseId?: string;
   /**
    * FULL-1 — Grade / subject / syllabus board metadata feeding the
@@ -317,6 +328,13 @@ export interface MAICGenerationConfig {
   gradeLevel?: string;
   subject?: string;
   syllabusBoard?: string;
+  /**
+   * Teacher-authored preparation guide from Step 2 of the wizard. This is
+   * threaded through outline, scene-content, and action prompts so the class
+   * plan, misconceptions, checks, PBL/activity moments, and agent handovers
+   * stay consistent across the whole generated classroom.
+   */
+  classGuide?: string;
 }
 
 // ─── View Mode ────────────────────────────────────────────────────────────

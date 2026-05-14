@@ -155,7 +155,7 @@ function renderPage(search = '') {
   const url = search ? `/?${search}` : '/';
   return render(
     <QueryClientProvider client={makeClient()}>
-      <MemoryRouter initialEntries={[url]}>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={[url]}>
         <StudentsPage />
       </MemoryRouter>
     </QueryClientProvider>

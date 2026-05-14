@@ -127,10 +127,21 @@ def format_agents_for_prompt(agents: list[AgentInfo] | None = None) -> str:
         return ""
 
     lines: list[str] = ["Classroom Agents:"]
+    student_ids: list[str] = []
     for a in agents:
         persona_part = f" — {a['persona']}" if a.get("persona") else ""
+        if a.get("role") == "student" and a.get("id"):
+            student_ids.append(str(a["id"]))
         lines.append(
             f'- id: "{a["id"]}", name: "{a["name"]}", role: {a["role"]}{persona_part}'
+        )
+    if student_ids:
+        lines.append(
+            "Valid discussion agentId values: "
+            + ", ".join(f'"{agent_id}"' for agent_id in student_ids)
+        )
+        lines.append(
+            "For discussion actions, use one of those IDs exactly or omit agentId."
         )
     return "\n".join(lines)
 

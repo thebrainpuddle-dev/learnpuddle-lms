@@ -209,12 +209,16 @@ def _generate_invitation_token():
 
 
 class TeacherInvitation(models.Model):
-    """Token-based invitation for teachers to self-register and set their own password."""
+    """Token-based invitation for tenant users to set their own password."""
 
     STATUS_CHOICES = [
         ('pending', 'Pending'),
         ('accepted', 'Accepted'),
         ('expired', 'Expired'),
+    ]
+    ROLE_CHOICES = [
+        ('TEACHER', 'Teacher'),
+        ('STUDENT', 'Student'),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -224,6 +228,7 @@ class TeacherInvitation(models.Model):
     email = models.EmailField()
     first_name = models.CharField(max_length=100)
     last_name = models.CharField(max_length=100, blank=True, default='')
+    invitation_role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='TEACHER')
     token = models.CharField(max_length=100, unique=True, default=_generate_invitation_token)
     invited_by = models.ForeignKey(
         User, on_delete=models.SET_NULL, null=True, blank=True, related_name='sent_invitations',
@@ -239,6 +244,7 @@ class TeacherInvitation(models.Model):
         indexes = [
             models.Index(fields=['token']),
             models.Index(fields=['tenant', 'status']),
+            models.Index(fields=['tenant', 'invitation_role', 'status']),
             models.Index(fields=['email']),
         ]
 
@@ -257,3 +263,4 @@ class TeacherInvitation(models.Model):
 
 # Password history (reuse prevention) + SAML auth audit events.
 from .password_history_models import PasswordHistory, SAMLAuthEvent  # noqa: E402, F401
+from .twofa_models import BackupCode, EncryptedTOTPSecret  # noqa: E402, F401

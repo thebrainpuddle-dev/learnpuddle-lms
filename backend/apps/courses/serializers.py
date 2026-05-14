@@ -21,7 +21,8 @@ logger = logging.getLogger(__name__)
 #   • views.py: the nested Prefetch that loads group members for the N+1 fix
 #   • serializers.py: the DB-fallback COUNT query in get_assigned_teacher_count
 # Keep these in sync by referencing this single constant.
-ACTIVE_TEACHER_FILTERS = {"role": "TEACHER", "is_active": True}
+TEACHER_ROLES = ("TEACHER", "HOD", "IB_COORDINATOR")
+ACTIVE_TEACHER_FILTERS = {"role__in": TEACHER_ROLES, "is_active": True}
 
 
 class ContentSerializer(serializers.ModelSerializer):
@@ -141,7 +142,7 @@ class CourseListSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'title', 'slug', 'description', 'thumbnail', 'thumbnail_url',
             'is_mandatory', 'deadline', 'estimated_hours',
-            'is_published', 'is_active', 'module_count', 'content_count',
+            'is_published', 'is_active', 'assigned_to_all', 'module_count', 'content_count',
             'assigned_teacher_count', 'completion_rate',
             'created_by_name', 'created_at', 'updated_at'
         ]
@@ -174,8 +175,7 @@ class CourseListSerializer(serializers.ModelSerializer):
                 return cached
             return User.objects.filter(
                 tenant=obj.tenant,
-                role='TEACHER',
-                is_active=True
+                **ACTIVE_TEACHER_FILTERS,
             ).count()
 
         # Use the prefetched M2M sets so we don't issue extra queries per course.
@@ -291,8 +291,7 @@ class CourseDetailSerializer(serializers.ModelSerializer):
             teachers_qs = User.all_objects.filter(
                 tenant=request.tenant,
                 is_deleted=False,
-            ).exclude(
-                role__in=['SUPER_ADMIN', 'SCHOOL_ADMIN'],
+                **ACTIVE_TEACHER_FILTERS,
             )
             sections_qs = Section.all_objects.filter(
                 tenant=request.tenant

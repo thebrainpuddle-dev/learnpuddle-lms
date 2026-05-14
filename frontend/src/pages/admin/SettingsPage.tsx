@@ -1575,8 +1575,7 @@ function TokenRevealModal({
   const [copied, setCopied] = React.useState(false);
 
   const handleCopy = () => {
-    navigator.clipboard
-      .writeText(tokenValue)
+    Promise.resolve(navigator.clipboard.writeText(tokenValue))
       .then(() => {
         setCopied(true);
         toast.success('Token copied', 'Paste it into your IdP / HR system now — it cannot be retrieved again.');

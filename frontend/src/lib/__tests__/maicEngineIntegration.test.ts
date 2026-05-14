@@ -202,14 +202,9 @@ describe('Engine integration — engine-driven discussion', () => {
     expect(useMAICStageStore.getState().speechText).not.toBe('after');
   });
 
-  test('manual discussion also opens the gate (engine pauses, fires onDiscussionPending)', async () => {
-    // Reality check: although `maicActionEngine.executeDiscussion`
-    // bails on `triggerMode !== 'auto'`, the playback engine's own
-    // `case 'discussion'` handler unconditionally saves the checkpoint
-    // and fires `onDiscussionPending`. So a scripted "manual" action
-    // still paints the DiscussionGateCard — the user has to click Skip.
-    // This test is here so if we later change that semantics it flags
-    // loudly rather than silently altering UX.
+  test('manual discussion continues playback without opening the gate', async () => {
+    // Manual discussion markers are teacher-controlled affordances. They
+    // should not interrupt lecture playback or paint the DiscussionGateCard.
     const onDiscussionPending = vi.fn();
     const { pe } = buildEngines({ onDiscussionPending });
     pe.loadScene({
@@ -224,8 +219,9 @@ describe('Engine integration — engine-driven discussion', () => {
     } as never);
     pe.play();
     await settle(1500);
-    expect(onDiscussionPending).toHaveBeenCalledTimes(1);
-    expect(pe.getState()).toBe('paused');
+    expect(onDiscussionPending).not.toHaveBeenCalled();
+    expect(pe.getState()).toBe('idle');
+    expect(useMAICStageStore.getState().speechText).toBe('after manual');
   });
 
   test('resumeAfterDiscussion advances past the discussion action without re-firing it', async () => {

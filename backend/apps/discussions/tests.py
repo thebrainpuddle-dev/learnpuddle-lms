@@ -45,6 +45,45 @@ def _auth(user):
     return client
 
 
+def _make_section(tenant):
+    """Create the minimum real section scope required by discussion threads."""
+    from apps.academics.models import GradeBand, Grade, Section
+
+    band, _ = GradeBand.all_objects.get_or_create(
+        tenant=tenant,
+        short_code='DISC',
+        defaults={'name': 'Discussion Band', 'order': 1},
+    )
+    grade, _ = Grade.all_objects.get_or_create(
+        tenant=tenant,
+        short_code='DISC',
+        defaults={'grade_band': band, 'name': 'Discussion Grade', 'order': 1},
+    )
+    section, _ = Section.all_objects.get_or_create(
+        tenant=tenant,
+        grade=grade,
+        name='A',
+        academic_year='2026-27',
+    )
+    return section
+
+
+def _thread_payload(tenant, **overrides):
+    payload = {
+        'title': 'New Thread',
+        'body': 'Thread body content here.',
+        'section_id': str(_make_section(tenant).id),
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _make_thread(**kwargs):
+    tenant = kwargs['tenant']
+    kwargs.setdefault('section', _make_section(tenant))
+    return DiscussionThread.objects.create(**kwargs)
+
+
 HOST_A = 'test.lms.com'
 HOST_B = 'other.lms.com'
 
@@ -93,7 +132,7 @@ class DiscussionThreadCRUDTestCase(TestCase):
         client = _auth(self.teacher)
         response = client.post(
             '/api/v1/discussions/threads/',
-            {'title': 'New Thread', 'body': 'Thread body content here.'},
+            _thread_payload(self.tenant, title='New Thread', body='Thread body content here.'),
             HTTP_HOST=HOST_A,
         )
         self.assertEqual(response.status_code, 201)
@@ -104,7 +143,7 @@ class DiscussionThreadCRUDTestCase(TestCase):
         client = _auth(self.admin)
         response = client.post(
             '/api/v1/discussions/threads/',
-            {'title': 'Admin Thread', 'body': 'Admin body.'},
+            _thread_payload(self.tenant, title='Admin Thread', body='Admin body.'),
             HTTP_HOST=HOST_A,
         )
         self.assertEqual(response.status_code, 201)
@@ -133,7 +172,7 @@ class DiscussionThreadCRUDTestCase(TestCase):
         client = _auth(self.teacher)
         response = client.post(
             '/api/v1/discussions/threads/',
-            {'title': 'Auto-subscribe Thread', 'body': 'Some content.'},
+            _thread_payload(self.tenant, title='Auto-subscribe Thread', body='Some content.'),
             HTTP_HOST=HOST_A,
         )
         self.assertEqual(response.status_code, 201)
@@ -148,7 +187,7 @@ class DiscussionThreadCRUDTestCase(TestCase):
     # ------------------------------------------------------------------ #
 
     def test_list_threads_returns_paginated_response(self):
-        DiscussionThread.objects.create(
+        _make_thread(
             tenant=self.tenant, title='T1', body='B1', author=self.teacher
         )
         client = _auth(self.teacher)
@@ -158,10 +197,10 @@ class DiscussionThreadCRUDTestCase(TestCase):
         self.assertIn('count', response.data)
 
     def test_list_threads_filters_by_status(self):
-        DiscussionThread.objects.create(
+        _make_thread(
             tenant=self.tenant, title='Open', body='B', author=self.teacher, status='open'
         )
-        DiscussionThread.objects.create(
+        _make_thread(
             tenant=self.tenant, title='Closed', body='B', author=self.teacher, status='closed'
         )
         client = _auth(self.teacher)
@@ -176,7 +215,7 @@ class DiscussionThreadCRUDTestCase(TestCase):
     # ------------------------------------------------------------------ #
 
     def test_get_thread_detail_increments_view_count(self):
-        thread = DiscussionThread.objects.create(
+        thread = _make_thread(
             tenant=self.tenant, title='View Thread', body='Body', author=self.teacher
         )
         self.assertEqual(thread.view_count, 0)
@@ -191,7 +230,7 @@ class DiscussionThreadCRUDTestCase(TestCase):
         self.assertEqual(thread.view_count, 1)
 
     def test_get_thread_detail_shows_subscription_status(self):
-        thread = DiscussionThread.objects.create(
+        thread = _make_thread(
             tenant=self.tenant, title='Sub Thread', body='Body', author=self.teacher
         )
         client = _auth(self.teacher)
@@ -202,7 +241,7 @@ class DiscussionThreadCRUDTestCase(TestCase):
         self.assertIn('is_subscribed', response.data)
 
     def test_get_thread_detail_shows_can_edit_and_can_delete(self):
-        thread = DiscussionThread.objects.create(
+        thread = _make_thread(
             tenant=self.tenant, title='Perm Thread', body='Body', author=self.teacher
         )
         client = _auth(self.teacher)
@@ -222,7 +261,7 @@ class DiscussionThreadCRUDTestCase(TestCase):
     # ------------------------------------------------------------------ #
 
     def test_author_can_update_thread(self):
-        thread = DiscussionThread.objects.create(
+        thread = _make_thread(
             tenant=self.tenant, title='Original', body='Body', author=self.teacher
         )
         client = _auth(self.teacher)
@@ -236,7 +275,7 @@ class DiscussionThreadCRUDTestCase(TestCase):
 
     def test_non_author_teacher_cannot_update_thread(self):
         other_teacher = _make_user('other@disctest.com', 'pass', self.tenant, first='Other')
-        thread = DiscussionThread.objects.create(
+        thread = _make_thread(
             tenant=self.tenant, title='Original', body='Body', author=self.teacher
         )
         client = _auth(other_teacher)
@@ -248,7 +287,7 @@ class DiscussionThreadCRUDTestCase(TestCase):
         self.assertEqual(response.status_code, 403)
 
     def test_admin_can_update_any_thread(self):
-        thread = DiscussionThread.objects.create(
+        thread = _make_thread(
             tenant=self.tenant, title='Teacher Thread', body='Body', author=self.teacher
         )
         client = _auth(self.admin)
@@ -265,7 +304,7 @@ class DiscussionThreadCRUDTestCase(TestCase):
     # ------------------------------------------------------------------ #
 
     def test_teacher_cannot_delete_thread(self):
-        thread = DiscussionThread.objects.create(
+        thread = _make_thread(
             tenant=self.tenant, title='To Delete', body='Body', author=self.teacher
         )
         client = _auth(self.teacher)
@@ -276,7 +315,7 @@ class DiscussionThreadCRUDTestCase(TestCase):
         self.assertTrue(DiscussionThread.objects.filter(id=thread.id).exists())
 
     def test_admin_can_delete_any_thread(self):
-        thread = DiscussionThread.objects.create(
+        thread = _make_thread(
             tenant=self.tenant, title='Admin Delete', body='Body', author=self.teacher
         )
         client = _auth(self.admin)
@@ -285,6 +324,32 @@ class DiscussionThreadCRUDTestCase(TestCase):
         )
         self.assertEqual(response.status_code, 204)
         self.assertFalse(DiscussionThread.objects.filter(id=thread.id).exists())
+
+
+@override_settings(
+    ALLOWED_HOSTS=['test.lms.com', 'other.lms.com', 'testserver', 'localhost'],
+    PLATFORM_DOMAIN='lms.com',
+)
+class StudentDiscussionThreadListTestCase(TestCase):
+    """Tests for student-scoped thread listing."""
+
+    def setUp(self):
+        self.tenant = _make_tenant('Test School', 'disc-student', 'test', 'student-disc@test.com')
+        self.student = _make_user(
+            'student@disctest.com',
+            'pass123',
+            self.tenant,
+            role='STUDENT',
+            first='Student',
+        )
+
+    def test_unassigned_student_gets_empty_paginated_thread_list(self):
+        client = _auth(self.student)
+        response = client.get('/api/v1/student/discussions/threads/?page=1', HTTP_HOST=HOST_A)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['count'], 0)
+        self.assertEqual(response.data['results'], [])
 
 
 @override_settings(
@@ -301,7 +366,7 @@ class DiscussionCrossTenantIsolationTestCase(TestCase):
         self.user_a = _make_user('user@a.com', 'pass', self.tenant_a)
         self.user_b = _make_user('user@b.com', 'pass', self.tenant_b)
 
-        self.thread_a = DiscussionThread.objects.create(
+        self.thread_a = _make_thread(
             tenant=self.tenant_a, title='A Thread', body='Private to A', author=self.user_a
         )
 
@@ -337,7 +402,7 @@ class DiscussionReplyTestCase(TestCase):
         self.other_teacher = _make_user('other@reply.com', 'pass', self.tenant, first='Other')
         self.admin = _make_user('admin@reply.com', 'pass', self.tenant, role='SCHOOL_ADMIN')
 
-        self.thread = DiscussionThread.objects.create(
+        self.thread = _make_thread(
             tenant=self.tenant, title='Reply Thread', body='Body', author=self.teacher
         )
 
@@ -528,7 +593,7 @@ class DiscussionModerationTestCase(TestCase):
         self.tenant = _make_tenant('Test School', 'disc-mod', 'test', 'mod@test.com')
         self.admin = _make_user('admin@mod.com', 'pass', self.tenant, role='SCHOOL_ADMIN')
         self.teacher = _make_user('teacher@mod.com', 'pass', self.tenant)
-        self.thread = DiscussionThread.objects.create(
+        self.thread = _make_thread(
             tenant=self.tenant, title='Mod Thread', body='Body', author=self.teacher
         )
         self.reply = DiscussionReply.objects.create(
@@ -589,7 +654,7 @@ class DiscussionSubscriptionTestCase(TestCase):
     def setUp(self):
         self.tenant = _make_tenant('Test School', 'disc-sub', 'test', 'sub@test.com')
         self.teacher = _make_user('teacher@sub.com', 'pass', self.tenant)
-        self.thread = DiscussionThread.objects.create(
+        self.thread = _make_thread(
             tenant=self.tenant, title='Sub Thread', body='Body', author=self.teacher
         )
 
@@ -653,13 +718,13 @@ class DiscussionModelTestCase(TestCase):
         self.teacher = _make_user('teacher@model.com', 'pass', self.tenant)
 
     def test_thread_str(self):
-        thread = DiscussionThread.objects.create(
+        thread = _make_thread(
             tenant=self.tenant, title='Model Thread', body='Body', author=self.teacher
         )
         self.assertEqual(str(thread), 'Model Thread')
 
     def test_reply_depth_top_level_is_zero(self):
-        thread = DiscussionThread.objects.create(
+        thread = _make_thread(
             tenant=self.tenant, title='Depth Thread', body='Body', author=self.teacher
         )
         reply = DiscussionReply.objects.create(
@@ -668,7 +733,7 @@ class DiscussionModelTestCase(TestCase):
         self.assertEqual(reply.depth, 0)
 
     def test_reply_depth_nested_is_correct(self):
-        thread = DiscussionThread.objects.create(
+        thread = _make_thread(
             tenant=self.tenant, title='Nested Thread', body='Body', author=self.teacher
         )
         level0 = DiscussionReply.objects.create(
@@ -684,7 +749,7 @@ class DiscussionModelTestCase(TestCase):
         self.assertEqual(level2.depth, 2)
 
     def test_update_reply_stats_on_thread(self):
-        thread = DiscussionThread.objects.create(
+        thread = _make_thread(
             tenant=self.tenant, title='Stats Thread', body='Body', author=self.teacher
         )
         DiscussionReply.objects.create(

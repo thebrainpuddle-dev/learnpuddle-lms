@@ -34,7 +34,7 @@ describe('Phase3TtsFallbackDemo', () => {
   });
 
   test('clicking Start fires onSpeechStart → tts-state becomes "speaking"', () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
       const { container } = render(<Phase3TtsFallbackDemo />);
       fireEvent.click(screen.getByTestId('phase3-tts-start'));
@@ -52,7 +52,7 @@ describe('Phase3TtsFallbackDemo', () => {
   });
 
   test('reading-timer completion fires onSpeechEnd → tts-state becomes "ended"', async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
       const { container } = render(<Phase3TtsFallbackDemo />);
       fireEvent.click(screen.getByTestId('phase3-tts-start'));
@@ -73,7 +73,7 @@ describe('Phase3TtsFallbackDemo', () => {
   });
 
   test('Stop returns the demo to idle', () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
       const { container } = render(<Phase3TtsFallbackDemo />);
       fireEvent.click(screen.getByTestId('phase3-tts-start'));

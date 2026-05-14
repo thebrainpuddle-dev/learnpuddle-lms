@@ -7,7 +7,7 @@
 //   - closes cleanly on unmount.
 
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
-import { renderHook, act } from '@testing-library/react';
+import { renderHook, act, waitFor } from '@testing-library/react';
 import { useMaicClassroomChannel } from '../useMaicClassroomChannel';
 import { useMaicMediaGenerationStore } from '../../stores/maicMediaGenerationStore';
 import { useAuthStore } from '../../stores/authStore';
@@ -16,6 +16,10 @@ import { useAuthStore } from '../../stores/authStore';
 
 class MockWebSocket {
   static instances: MockWebSocket[] = [];
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static CLOSING = 2;
+  static CLOSED = 3;
   url: string;
   protocols: string | string[] | undefined;
   readyState = 0;
@@ -24,6 +28,7 @@ class MockWebSocket {
   onerror: (() => void) | null = null;
   onclose: ((e: { code: number }) => void) | null = null;
   closed = false;
+  private openListeners: Array<() => void> = [];
 
   constructor(url: string, protocols?: string | string[]) {
     this.url = url;
@@ -34,6 +39,9 @@ class MockWebSocket {
   open() {
     this.readyState = 1;
     this.onopen?.();
+    const listeners = [...this.openListeners];
+    this.openListeners = [];
+    listeners.forEach((listener) => listener());
   }
 
   receive(data: unknown) {
@@ -45,6 +53,15 @@ class MockWebSocket {
     this.closed = true;
     this.readyState = 3;
     this.onclose?.({ code });
+  }
+
+  addEventListener(type: string, listener: () => void, options?: { once?: boolean }) {
+    if (type !== 'open') return;
+    if (options?.once) {
+      this.openListeners.push(listener);
+    } else {
+      this.openListeners.push(listener);
+    }
   }
 }
 
@@ -72,11 +89,15 @@ afterEach(() => {
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 describe('useMaicClassroomChannel', () => {
-  test('opens a WS to the right URL with the Bearer subprotocol', () => {
+  async function waitForSocket() {
+    await waitFor(() => expect(MockWebSocket.instances.length).toBe(1));
+    return MockWebSocket.instances[0];
+  }
+
+  test('opens a WS to the right URL with the Bearer subprotocol', async () => {
     renderHook(() => useMaicClassroomChannel('classroom-uuid-1'));
 
-    expect(MockWebSocket.instances.length).toBe(1);
-    const ws = MockWebSocket.instances[0];
+    const ws = await waitForSocket();
     expect(ws.url).toMatch(/\/ws\/maic\/classrooms\/classroom-uuid-1\/$/);
     expect(ws.protocols).toEqual(['Bearer.test-jwt']);
   });
@@ -98,9 +119,9 @@ describe('useMaicClassroomChannel', () => {
     expect(MockWebSocket.instances.length).toBe(0);
   });
 
-  test('dispatches maic.image.task events into the store', () => {
+  test('dispatches maic.image.task events into the store', async () => {
     renderHook(() => useMaicClassroomChannel('classroom-uuid-1'));
-    const ws = MockWebSocket.instances[0];
+    const ws = await waitForSocket();
 
     act(() => {
       ws.open();
@@ -119,9 +140,9 @@ describe('useMaicClassroomChannel', () => {
     expect(task?.src).toBe('https://cdn.example/wired.jpg');
   });
 
-  test('ignores malformed JSON', () => {
+  test('ignores malformed JSON', async () => {
     renderHook(() => useMaicClassroomChannel('classroom-uuid-1'));
-    const ws = MockWebSocket.instances[0];
+    const ws = await waitForSocket();
 
     act(() => {
       ws.open();
@@ -134,9 +155,9 @@ describe('useMaicClassroomChannel', () => {
     );
   });
 
-  test('ignores non-matching event types', () => {
+  test('ignores non-matching event types', async () => {
     renderHook(() => useMaicClassroomChannel('classroom-uuid-1'));
-    const ws = MockWebSocket.instances[0];
+    const ws = await waitForSocket();
 
     act(() => {
       ws.open();
@@ -153,22 +174,39 @@ describe('useMaicClassroomChannel', () => {
     );
   });
 
-  test('closes the WS cleanly on unmount', () => {
+  test('closes an open WS cleanly on unmount', async () => {
     const { unmount } = renderHook(() =>
       useMaicClassroomChannel('classroom-uuid-1'),
     );
-    const ws = MockWebSocket.instances[0];
+    const ws = await waitForSocket();
 
     expect(ws.closed).toBe(false);
+    act(() => {
+      ws.open();
+    });
     unmount();
     expect(ws.closed).toBe(true);
   });
 
-  test('auth rejection (4001) does not trigger reconnect', () => {
-    const setTimeoutSpy = vi.spyOn(global, 'setTimeout');
+  test('waits for a handshaking WS to open before closing on unmount', async () => {
+    const { unmount } = renderHook(() =>
+      useMaicClassroomChannel('classroom-uuid-1'),
+    );
+    const ws = await waitForSocket();
 
+    unmount();
+    expect(ws.closed).toBe(false);
+
+    act(() => {
+      ws.open();
+    });
+    expect(ws.closed).toBe(true);
+  });
+
+  test('auth rejection (4001) does not trigger reconnect', async () => {
     renderHook(() => useMaicClassroomChannel('classroom-uuid-1'));
-    const ws = MockWebSocket.instances[0];
+    const ws = await waitForSocket();
+    const setTimeoutSpy = vi.spyOn(global, 'setTimeout');
 
     // Drop existing setTimeout calls (if any) so we only inspect those
     // that follow the close — the hook itself doesn't queue any timers

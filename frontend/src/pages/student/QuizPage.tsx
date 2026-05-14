@@ -27,7 +27,13 @@ type Question = QuizData['questions'][number];
 
 // ─── Honor Code Gate ─────────────────────────────────────────────────────────
 
-function HonorCodeGate({ onAccept }: { onAccept: () => void }) {
+function HonorCodeGate({
+  onAccept,
+  isStarting,
+}: {
+  onAccept: () => void;
+  isStarting: boolean;
+}) {
   return (
     <div className="flex items-center justify-center min-h-[50vh]">
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm max-w-lg w-full p-6 sm:p-8 text-center">
@@ -51,6 +57,7 @@ function HonorCodeGate({ onAccept }: { onAccept: () => void }) {
           className="bg-indigo-600 hover:bg-indigo-700 focus:ring-indigo-500 w-full sm:w-auto"
           leftIcon={<ShieldCheck className="h-4 w-4" />}
           onClick={onAccept}
+          loading={isStarting}
         >
           I agree — start quiz
         </Button>
@@ -370,7 +377,10 @@ export const QuizPage: React.FC = () => {
   // ── Fetch quiz ─────────────────────────────────────────
   const { data, isLoading } = useQuery({
     queryKey: ['studentQuiz', assignmentId],
-    queryFn: () => studentService.getQuizDetail(assignmentId as string),
+    queryFn: async () => {
+      const quiz = await studentService.getQuizDetail(assignmentId as string);
+      return quiz ?? null;
+    },
     enabled: Boolean(assignmentId),
   });
 
@@ -403,11 +413,28 @@ export const QuizPage: React.FC = () => {
     : 0;
   const isSubmitted = data?.submission != null;
 
+  // ── Start/resume mutation ──────────────────────────────
+  const startMutation = useMutation({
+    mutationFn: () => studentService.startQuiz(assignmentId as string),
+    onSuccess: (startedData) => {
+      queryClient.setQueryData(['studentQuiz', assignmentId], startedData);
+      setHonorAccepted(true);
+    },
+    onError: (err: any) => {
+      const msg =
+        err?.response?.data?.error ??
+        err?.response?.data?.detail ??
+        'Unable to start this quiz. Please try again.';
+      toast.error('Could not start quiz', msg);
+    },
+  });
+
   // ── Submit mutation ────────────────────────────────────
   const submitMutation = useMutation({
     mutationFn: () =>
       studentService.submitQuiz(assignmentId as string, answers),
     onSuccess: () => {
+      setShowConfirm(false);
       toast.success('Quiz submitted', 'Your answers have been recorded.');
       queryClient.invalidateQueries({ queryKey: ['studentQuiz', assignmentId] });
       queryClient.invalidateQueries({ queryKey: ['studentAssignments'] });
@@ -468,9 +495,35 @@ export const QuizPage: React.FC = () => {
     );
   }
 
+  if (data.attempts_exhausted) {
+    return (
+      <div className="text-center py-20">
+        <ClipboardList className="h-10 w-10 mx-auto text-gray-200 mb-3" />
+        <h3 className="text-[15px] font-semibold text-tp-text mb-1">
+          No quiz attempts remaining
+        </h3>
+        <p className="text-[13px] text-gray-400 mb-4">
+          You have used all available attempts for this quiz.
+        </p>
+        <button
+          onClick={() => navigate('/student/assignments')}
+          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-[12px] font-medium bg-indigo-50 text-indigo-600 hover:bg-indigo-100 transition-colors"
+        >
+          <ArrowLeft className="h-3.5 w-3.5" />
+          Back to Assignments
+        </button>
+      </div>
+    );
+  }
+
   // ── Honor code gate ────────────────────────────────────
   if (!honorAccepted) {
-    return <HonorCodeGate onAccept={() => setHonorAccepted(true)} />;
+    return (
+      <HonorCodeGate
+        onAccept={() => startMutation.mutate()}
+        isStarting={startMutation.isPending}
+      />
+    );
   }
 
   // ── Active quiz ────────────────────────────────────────

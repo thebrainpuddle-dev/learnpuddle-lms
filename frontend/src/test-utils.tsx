@@ -20,6 +20,11 @@ const createTestQueryClient = () =>
     },
   });
 
+const ROUTER_FUTURE_FLAGS = {
+  v7_relativeSplatPath: true,
+  v7_startTransition: true,
+};
+
 interface CustomRenderOptions extends Omit<RenderOptions, 'wrapper'> {
   initialRoute?: string;
   useMemoryRouter?: boolean;
@@ -38,9 +43,11 @@ function customRender(
 
   const Wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const RouterComponent = useMemoryRouter ? (
-      <MemoryRouter initialEntries={[initialRoute]}>{children}</MemoryRouter>
+      <MemoryRouter future={ROUTER_FUTURE_FLAGS} initialEntries={[initialRoute]}>
+        {children}
+      </MemoryRouter>
     ) : (
-      <BrowserRouter>{children}</BrowserRouter>
+      <BrowserRouter future={ROUTER_FUTURE_FLAGS}>{children}</BrowserRouter>
     );
 
     return (

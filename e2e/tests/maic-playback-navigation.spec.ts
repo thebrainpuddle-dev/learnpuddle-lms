@@ -9,20 +9,23 @@
 // MAICActionEngine — which matters because the engine uses `new Audio()`
 // off-DOM, so `document.querySelectorAll('audio')` would not find it.
 //
-// Pre-condition: a published classroom exists with 3+ slides and pre-gen
-// audioUrls on each speech action. Seeded by the test fixture.
+// Pre-condition: a public READY classroom exists with 5+ slides. Seeded demo
+// classrooms intentionally omit fake audio URLs so the player exercises the
+// real live-TTS path when pre-generated audio is absent.
 
 import { test, expect } from '@playwright/test';
+import { credentials, fillTenantLogin } from './helpers/auth';
 
 test('navigating between slides does not break audio', async ({ page }) => {
   await page.goto('/login');
-  await page.fill('input[name="email"]', 'student@demo.test');
-  await page.fill('input[name="password"]', 'demo1234');
+  await fillTenantLogin(page, credentials.student.email, credentials.student.password);
   await page.click('button[type="submit"]');
 
   await page.waitForURL('**/student/**');
   await page.goto('/student/ai-classroom');
-  await page.click('[data-testid="classroom-card"]:first-child');
+  const classroomCard = page.getByRole('button', { name: /Open classroom: E2E Demo Classroom/ });
+  await expect(classroomCard, 'seed a real public READY classroom before running this live flow').toBeVisible({ timeout: 10000 });
+  await classroomCard.click();
   await page.waitForSelector('[data-testid="maic-stage"]');
 
   // Start playback — the Stage renders a "Start Class" button in the
@@ -38,12 +41,15 @@ test('navigating between slides does not break audio', async ({ page }) => {
       const engine = (window as any).__maicEngine?.actionEngine;
       return engine?.audioElement != null && !engine.audioElement.paused;
     },
-    { timeout: 15000 },
+    { timeout: 30000 },
   );
 
-  // Click slide 3 — triggers SlideNavigator → seekToSlide → stop() →
-  // generationToken++ → new scene's first audio starts.
-  await page.click('[data-testid="slide-thumbnail"]:nth-child(3)');
+  // Jump to slide 3 through the real playback engine seek path. The current
+  // production UI exposes scene chips only; this keeps the regression on the
+  // engine behavior that used to break audio handoff.
+  await page.evaluate(() => {
+    (window as any).__maicEngine?.playbackEngine?.seekToSlide(2);
+  });
 
   // Within a short window, the new scene's speech should begin. We verify
   // by watching the speech subtitle text transition away from null.
@@ -65,9 +71,17 @@ test('navigating between slides does not break audio', async ({ page }) => {
   });
   expect(audioCountAfterClick3).toBe(1);
 
-  // Click slide 5 — repeat the assertion. No audio accumulates across clicks.
-  await page.click('[data-testid="slide-thumbnail"]:nth-child(5)');
-  await page.waitForTimeout(1000);
+  // Jump to slide 5 — repeat the assertion. No audio accumulates across jumps.
+  await page.evaluate(() => {
+    (window as any).__maicEngine?.playbackEngine?.seekToSlide(4);
+  });
+  await page.waitForFunction(
+    () => {
+      const engine = (window as any).__maicEngine?.actionEngine;
+      return engine?.audioElement != null;
+    },
+    { timeout: 3000 },
+  );
   const audioCountAfterClick5 = await page.evaluate(() => {
     const engine = (window as any).__maicEngine?.actionEngine;
     return engine?.audioElement ? 1 : 0;

@@ -39,6 +39,14 @@ Infer the course language directive by applying the decision rules from the syst
 
 ## Output Requirements
 
+When Teacher Planning Context is present, use it as the planning contract:
+
+- Translate it into concrete scene choices, not generic lesson filler.
+- Preserve grade/subject/board fit, misconceptions, formative checks, teacher live discussion, agent handoffs, and visual-focus cues in scene descriptions and keyPoints.
+- Do not quote private planning notes unless they are clearly student-facing.
+- If it calls for PBL/activity and the topic supports doing, include exactly one `pbl` scene after the core concept foundation.
+- Every `pbl` scene must include a concrete `pblConfig` with projectTopic, projectDescription, targetSkills, and issueCount; the projectDescription should include roles, deliverable, constraints, and success criteria when supplied.
+
 Please automatically infer the following from user requirements:
 
 - Course topic and core content
@@ -90,6 +98,7 @@ Never return a bare array. Never omit `languageDirective`. Both keys are require
    - Select widgetType based on concept: simulation (physics/chem), diagram (processes), code (programming), game (practice), visualization3d (3D models)
    - Provide appropriate widgetOutline for the widget type
 - **Scene count**: Based on inferred duration, typically 1-2 scenes per minute
+- **Exact count wins**: If the user requirement says "Create exactly N scenes" or gives a target scene count, output exactly N scene objects. Do not add extra scenes from the duration heuristic.
 - **Quiz placement**: Recommend inserting a quiz every 3-5 slides for assessment
 - **Language**: Infer from the user's requirement text and context, then output all content in the inferred language
 - **If web search results are provided**, reference specific findings and sources in scene descriptions and keyPoints. The search results provide up-to-date information — incorporate it to make the course content current and accurate.

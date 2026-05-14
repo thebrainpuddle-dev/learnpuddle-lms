@@ -19,7 +19,7 @@
 //   SearchPage debounces input changes by 300ms. All tests use real timers
 //   + waitFor({ timeout: 2000 }) which comfortably outlasts the 300ms debounce.
 //   This avoids the fake-timer + findBy interaction where waitFor's polling
-//   setTimeout freezes under vi.useFakeTimers().
+//   setTimeout freezes under vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }).
 
 import React from 'react';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
@@ -116,7 +116,7 @@ const SEARCH_TIMEOUT = 2000; // generous timeout for 300ms debounce + async reso
 // ── helpers ───────────────────────────────────────────────────────────────────
 function renderPage() {
   return render(
-    <MemoryRouter>
+    <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <SearchPage />
     </MemoryRouter>
   );

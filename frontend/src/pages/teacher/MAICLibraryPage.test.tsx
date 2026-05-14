@@ -86,7 +86,7 @@ function makeClient() {
 function renderPage() {
   return render(
     <QueryClientProvider client={makeClient()}>
-      <MemoryRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <MAICLibraryPage />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -125,7 +125,7 @@ function makeSection() {
 
 describe('MAICLibraryPage', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     // Default: empty list
     mockListClassrooms.mockResolvedValue({ data: [] });
     mockMySections.mockResolvedValue({ data: [] });
@@ -209,6 +209,22 @@ describe('MAICLibraryPage', () => {
     });
     renderPage();
     expect(await screen.findByText('DRAFT')).toBeInTheDocument();
+  });
+
+  it('shows Not assigned for non-public classrooms without sections', async () => {
+    mockListClassrooms.mockResolvedValue({
+      data: [makeClassroom({ is_public: false, assigned_sections: [] })],
+    });
+    renderPage();
+    expect(await screen.findByText('Not assigned')).toBeInTheDocument();
+  });
+
+  it('shows All students only for public classrooms without sections', async () => {
+    mockListClassrooms.mockResolvedValue({
+      data: [makeClassroom({ is_public: true, assigned_sections: [] })],
+    });
+    renderPage();
+    expect(await screen.findByText('All students')).toBeInTheDocument();
   });
 
   // ── Navigation ───────────────────────────────────────────────────────────────

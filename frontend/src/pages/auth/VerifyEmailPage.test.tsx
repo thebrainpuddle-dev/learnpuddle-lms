@@ -42,7 +42,7 @@ const mockedApi = api as unknown as {
 
 const renderPage = () =>
   render(
-    <MemoryRouter initialEntries={['/verify-email']}>
+    <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={['/verify-email']}>
       <VerifyEmailPage />
     </MemoryRouter>
   );

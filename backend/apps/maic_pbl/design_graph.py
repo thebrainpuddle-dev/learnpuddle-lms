@@ -188,6 +188,7 @@ class GeneratePBLConfig:
     target_skills: list[str] = field(default_factory=list)
     issue_count: int = 3
     language_directive: str = ""
+    teacher_context: str = ""
 
 
 @dataclass
@@ -239,6 +240,7 @@ async def generate_pbl_project(
             target_skills=list(config.target_skills),
             issue_count=config.issue_count,
             language_directive=config.language_directive,
+            teacher_context=config.teacher_context,
         )
     )
 

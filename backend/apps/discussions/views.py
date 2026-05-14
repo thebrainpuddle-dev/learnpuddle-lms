@@ -158,6 +158,21 @@ def _get_teacher_section_ids(user, tenant):
     )
 
 
+def _resolve_thread_section(request):
+    """Resolve the section for generic thread creation."""
+    from apps.academics.models import Section
+
+    section_id = request.data.get('section_id')
+    if section_id:
+        return get_object_or_404(Section, id=section_id, tenant=request.tenant)
+
+    user_section = getattr(request.user, 'section_fk', None)
+    if user_section and user_section.tenant_id == request.tenant.id:
+        return user_section
+
+    return None
+
+
 # ============================================================
 # Student Views
 # ============================================================
@@ -177,7 +192,9 @@ def student_thread_list(request):
     """
     section = request.user.section_fk
     if not section:
-        return Response({'error': 'You are not assigned to a section'}, status=400)
+        paginator = DiscussionPagination()
+        empty_page = paginator.paginate_queryset(DiscussionThread.objects.none(), request)
+        return paginator.get_paginated_response([] if empty_page is not None else [])
 
     threads = DiscussionThread.objects.filter(
         tenant=request.tenant,
@@ -744,9 +761,16 @@ def discussion_thread_list_create(request):
         return Response({'error': 'Title is required'}, status=status.HTTP_400_BAD_REQUEST)
     if not body_raw:
         return Response({'error': 'Body is required'}, status=status.HTTP_400_BAD_REQUEST)
+    section = _resolve_thread_section(request)
+    if not section:
+        return Response({'error': 'section_id is required'}, status=status.HTTP_400_BAD_REQUEST)
     body = sanitize_rich_text_html(body_raw) if '<' in body_raw else body_raw
     thread = DiscussionThread.objects.create(
-        tenant=request.tenant, title=title, body=body, author=request.user,
+        tenant=request.tenant,
+        section=section,
+        title=title,
+        body=body,
+        author=request.user,
     )
     DiscussionSubscription.objects.get_or_create(thread=thread, user=request.user)
     return Response(

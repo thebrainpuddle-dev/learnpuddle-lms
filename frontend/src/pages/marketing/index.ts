@@ -1,1 +1,1 @@
-export { ProductLandingPage } from './ProductLandingPage';
+export { ProductLandingPage } from './product-site';

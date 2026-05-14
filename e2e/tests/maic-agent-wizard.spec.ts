@@ -10,14 +10,16 @@
 // data-testid="agent-card" and aria-label attributes on action buttons.
 
 import { test, expect } from '@playwright/test';
+import { credentials, ensureCredentialsConfigured, fillTenantLogin } from './helpers/auth';
 
 test.describe('Teacher AI classroom wizard — agent step', () => {
   test('teacher wizard generates and edits agents', async ({ page }) => {
+    ensureCredentialsConfigured('teacher');
+
     // Login
-    await page.goto('/login');
-    await page.fill('input[name="email"]', 'teacher@demo.test');
-    await page.fill('input[name="password"]', 'demo1234');
-    await page.click('button[type="submit"]');
+    await page.goto('/login', { waitUntil: 'domcontentloaded' });
+    await fillTenantLogin(page, credentials.teacher.email, credentials.teacher.password);
+    await page.getByRole('button', { name: /sign in/i }).click();
     await page.waitForURL('**/teacher/**');
 
     // Start a new classroom

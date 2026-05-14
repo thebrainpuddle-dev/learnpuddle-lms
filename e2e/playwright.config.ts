@@ -25,7 +25,7 @@ export default defineConfig({
   /* Shared settings for all the projects below. */
   use: {
     /* Base URL to use in actions like `await page.goto('/')`. */
-    baseURL: process.env.BASE_URL || 'http://localhost:3000',
+    baseURL: process.env.BASE_URL || 'http://demo.localhost:3000',
 
     /* Collect trace when retrying the failed test. */
     trace: 'on-first-retry',

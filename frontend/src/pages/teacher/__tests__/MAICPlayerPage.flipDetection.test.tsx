@@ -146,7 +146,7 @@ function mountPage(initialData: Record<string, unknown> | null): TestHarness {
 
   const { unmount } = render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
         initialEntries={[`/teacher/ai-classroom/${TEST_CLASSROOM_ID}`]}
       >
         <Routes>
@@ -166,7 +166,7 @@ function mountPage(initialData: Record<string, unknown> | null): TestHarness {
 
 describe('MAICPlayerPage flip-detection useEffect (SPRINT-2-BATCH-5-F10)', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     // Restore the getState mock after clearAllMocks resets fns but not factories.
     mockGetStoredClassroom.mockResolvedValue(null);
     mockSaveClassroom.mockResolvedValue(undefined);

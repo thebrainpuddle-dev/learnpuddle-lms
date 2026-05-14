@@ -151,7 +151,7 @@ function renderPage() {
   return render(
     <QueryClientProvider client={makeQueryClient()}>
       <ToastProvider>
-        <MemoryRouter>
+        <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
           <AssignmentsPage />
         </MemoryRouter>
       </ToastProvider>

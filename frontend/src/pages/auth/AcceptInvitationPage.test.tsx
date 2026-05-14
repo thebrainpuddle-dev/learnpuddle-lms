@@ -63,7 +63,7 @@ import { AcceptInvitationPage } from './AcceptInvitationPage';
 function renderPage() {
   return render(
     <QueryClientProvider client={makeQueryClient()}>
-      <MemoryRouter initialEntries={['/invitation/test-token']}>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={['/invitation/test-token']}>
         <AcceptInvitationPage />
       </MemoryRouter>
     </QueryClientProvider>,

@@ -159,8 +159,11 @@ class Course(SoftDeleteMixin, models.Model):
     
     def update_search_vector(self):
         """Update the search vector for full-text search."""
+        from django.db import connection
         from django.contrib.postgres.search import SearchVector
-        from django.db.models import Value
+
+        if connection.vendor != 'postgresql':
+            return
         
         # Combine title (weight A) and description (weight B)
         Course.objects.filter(pk=self.pk).update(

@@ -164,6 +164,19 @@ const ConfigSchema = z.object({
 });
 type ConfigFormData = z.infer<typeof ConfigSchema>;
 
+const DEFAULT_CONFIG_FORM_VALUES: ConfigFormData = {
+  xp_per_content_completion: 10,
+  xp_per_course_completion: 50,
+  xp_per_assignment_submission: 15,
+  xp_per_quiz_submission: 15,
+  xp_per_streak_day: 2,
+  streak_freeze_max: 2,
+  leaderboard_enabled: true,
+  leaderboard_anonymize: false,
+  opt_out_allowed: true,
+  is_active: true,
+};
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const PERIOD_OPTIONS = [
@@ -1141,7 +1154,10 @@ function ConfigTab() {
     queryFn: () => gamificationService.admin.getConfig(),
   });
 
-  const form = useZodForm({ schema: ConfigSchema });
+  const form = useZodForm({
+    schema: ConfigSchema,
+    defaultValues: DEFAULT_CONFIG_FORM_VALUES,
+  });
 
   // Populate form when config loads
   React.useEffect(() => {
@@ -1395,7 +1411,7 @@ export const AdminGamificationPage: React.FC = () => {
   // Fetch teachers for the XP adjustment modal
   const { data: teachersData } = useQuery({
     queryKey: ['adminTeachers'],
-    queryFn: () => fetchTeacherList(),
+    queryFn: async () => (await fetchTeacherList()) ?? [],
     staleTime: 5 * 60 * 1000,
   });
 

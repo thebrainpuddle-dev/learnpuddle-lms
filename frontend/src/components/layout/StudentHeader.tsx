@@ -20,6 +20,7 @@ import {
 import { cn } from '../../design-system/theme/cn';
 import { notificationService, Notification } from '../../services/notificationService';
 import { studentService } from '../../services/studentService';
+import type { StudentSearchResult } from '../../services/studentService';
 import { formatDistanceToNow } from 'date-fns';
 
 interface StudentHeaderProps {
@@ -48,7 +49,7 @@ export const StudentHeader: React.FC<StudentHeaderProps> = ({ onMenuClick }) => 
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [searchFocused, setSearchFocused] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [searchResults, setSearchResults] = useState<StudentSearchResult[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const [showSearchDropdown, setShowSearchDropdown] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -77,7 +78,10 @@ export const StudentHeader: React.FC<StudentHeaderProps> = ({ onMenuClick }) => 
     debounceTimerRef.current = setTimeout(async () => {
       try {
         const results = await studentService.searchStudentContent(searchQuery.trim());
-        setSearchResults(Array.isArray(results) ? results.slice(0, 6) : []);
+        setSearchResults([
+          ...(results.courses ?? []),
+          ...(results.assignments ?? []),
+        ].slice(0, 6));
         setShowSearchDropdown(true);
       } catch {
         setSearchResults([]);
@@ -219,15 +223,15 @@ export const StudentHeader: React.FC<StudentHeaderProps> = ({ onMenuClick }) => 
                 </p>
               </div>
               <div className="max-h-[280px] overflow-y-auto tp-scrollbar">
-                {searchResults.map((result: any, idx: number) => (
+                {searchResults.map((result, idx) => (
                   <button
                     key={result.id || idx}
                     type="button"
                     onMouseDown={(e) => {
                       e.preventDefault();
                       setShowSearchDropdown(false);
-                      if (result.course_id) {
-                        navigate(`/student/courses/${result.course_id}`);
+                      if (result.type === 'assignment') {
+                        navigate('/student/assignments');
                       } else if (result.id) {
                         navigate(`/student/courses/${result.id}`);
                       }
@@ -235,7 +239,7 @@ export const StudentHeader: React.FC<StudentHeaderProps> = ({ onMenuClick }) => 
                     className="w-full text-left px-3 py-2.5 hover:bg-gray-50/80 transition-colors flex items-center gap-2.5 border-b border-gray-50 last:border-b-0"
                   >
                     <div className="flex-shrink-0 h-7 w-7 rounded-lg bg-indigo-50 flex items-center justify-center">
-                      {result.content_type === 'DOCUMENT' ? (
+                      {result.type === 'assignment' ? (
                         <FileText className="h-3.5 w-3.5 text-indigo-500" />
                       ) : (
                         <BookOpen className="h-3.5 w-3.5 text-indigo-500" />

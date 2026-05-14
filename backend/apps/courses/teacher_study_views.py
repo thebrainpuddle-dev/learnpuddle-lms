@@ -199,8 +199,10 @@ def teacher_study_summary_generate(request):
                     status='READY',
                     summary_data=result_data,
                 )
+                yield f"data: {json.dumps({'type': 'done', 'summary_id': summary_pk, 'status': 'READY'})}\n\n"
             except Exception:
                 logger.exception("Failed to save study summary %s", summary_pk)
+                yield f"data: {json.dumps({'type': 'error', 'error': 'Failed to save study summary.'})}\n\n"
         else:
             StudySummary.all_objects.filter(pk=summary_pk).update(status='FAILED')
 
@@ -236,6 +238,10 @@ def teacher_study_summary_list(request):
     course_id = request.query_params.get('course_id')
     if course_id:
         qs = qs.filter(content__module__course__id=course_id)
+
+    content_id = request.query_params.get('content_id')
+    if content_id:
+        qs = qs.filter(content__id=content_id)
 
     results = []
     for summary in qs:

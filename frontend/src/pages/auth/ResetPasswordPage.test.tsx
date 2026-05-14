@@ -47,7 +47,7 @@ const mockedAuthService = authService as unknown as {
 
 const renderPage = () =>
   render(
-    <MemoryRouter initialEntries={['/reset-password']}>
+    <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={['/reset-password']}>
       <ResetPasswordPage />
     </MemoryRouter>
   );

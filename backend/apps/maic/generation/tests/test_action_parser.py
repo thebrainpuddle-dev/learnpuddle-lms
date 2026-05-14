@@ -6,6 +6,7 @@ import json
 from apps.maic.generation.action_parser import (
     parse_actions_from_structured_output,
 )
+from apps.maic.protocol import validate_action
 
 
 # ── Happy path ────────────────────────────────────────────────────
@@ -35,6 +36,16 @@ def test_text_items_become_speech_actions():
     assert out[0]["id"].startswith("action_")
 
 
+def test_text_items_preserve_agent_id_for_handoffs():
+    response = json.dumps([
+        {"type": "text", "agentId": "agent-2", "content": "Can I ask why this happens?"},
+    ])
+    out = parse_actions_from_structured_output(response)
+    assert len(out) == 1
+    assert out[0]["type"] == "speech"
+    assert out[0]["agentId"] == "agent-2"
+
+
 def test_supports_legacy_tool_name_format():
     """Some upstream LLM outputs use tool_name/parameters/tool_id
     instead of the new name/params/action_id."""
@@ -51,6 +62,72 @@ def test_supports_legacy_tool_name_format():
     assert out[0]["type"] == "spotlight"
     assert out[0]["id"] == "legacy_xyz"
     assert out[0]["elementId"] == "img_2"
+
+
+def test_normalizes_slide_element_target_aliases():
+    response = json.dumps([
+        {
+            "type": "action",
+            "name": "spotlight",
+            "params": {"target": "img_1", "dimness": "35%"},
+        },
+        {
+            "type": "action",
+            "name": "laser",
+            "params": {"element_id": "label_2", "colour": "#00ff00"},
+        },
+        {
+            "type": "action",
+            "name": "playVideo",
+            "params": {"targetId": "video_3"},
+        },
+    ])
+    out = parse_actions_from_structured_output(response, scene_type="slide")
+
+    assert [a["type"] for a in out] == ["spotlight", "laser", "play_video"]
+    assert out[0]["elementId"] == "img_1"
+    assert out[0]["dimOpacity"] == 0.35
+    assert "target" not in out[0]
+    assert "dimness" not in out[0]
+    assert out[1]["elementId"] == "label_2"
+    assert out[1]["color"] == "#00ff00"
+    assert "element_id" not in out[1]
+    assert out[2]["elementId"] == "video_3"
+    for action in out:
+        validate_action(action)
+
+
+def test_normalizes_highlight_action_name_to_spotlight():
+    response = json.dumps([
+        {"type": "action", "name": "highlight", "params": {"element_id": "text_1"}},
+    ])
+    out = parse_actions_from_structured_output(response, scene_type="slide")
+    assert [a["type"] for a in out] == ["spotlight"]
+    assert out[0]["elementId"] == "text_1"
+    validate_action(out[0])
+
+
+def test_preserves_widget_target_params():
+    response = json.dumps([
+        {"type": "action", "name": "widget_highlight", "params": {"target": "#answer"}},
+    ])
+    out = parse_actions_from_structured_output(response, scene_type="interactive")
+    assert [a["type"] for a in out] == ["widget_highlight"]
+    assert out[0]["target"] == "#answer"
+    assert "elementId" not in out[0]
+
+
+def test_supports_json_encoded_arguments_params():
+    response = json.dumps([
+        {
+            "type": "action",
+            "actionName": "laser_pointer",
+            "arguments": "{\"element_id\":\"chart_1\"}",
+        },
+    ])
+    out = parse_actions_from_structured_output(response, scene_type="slide")
+    assert [a["type"] for a in out] == ["laser"]
+    assert out[0]["elementId"] == "chart_1"
 
 
 def test_action_id_generated_when_missing():

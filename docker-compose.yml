@@ -1,0 +1,9 @@
+# Local development entrypoint.
+#
+# The actual local infra services live in backend/docker-compose.yml. Keeping
+# this wrapper at the repo root makes the documented `docker compose up -d`
+# command work without duplicating service definitions.
+name: backend
+
+include:
+  - path: backend/docker-compose.yml

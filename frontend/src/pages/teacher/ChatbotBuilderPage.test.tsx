@@ -89,7 +89,7 @@ const mockMySections = chatbotApi.mySections as ReturnType<typeof vi.fn>;
 
 function renderCreate() {
   return render(
-    <MemoryRouter initialEntries={['/teacher/chatbots/new']}>
+    <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={['/teacher/chatbots/new']}>
       <Routes>
         <Route path="/teacher/chatbots/new" element={<ChatbotBuilderPage />} />
       </Routes>
@@ -99,7 +99,7 @@ function renderCreate() {
 
 function renderEdit(id = 'bot-1') {
   return render(
-    <MemoryRouter initialEntries={[`/teacher/chatbots/${id}`]}>
+    <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={[`/teacher/chatbots/${id}`]}>
       <Routes>
         <Route path="/teacher/chatbots/:id" element={<ChatbotBuilderPage />} />
       </Routes>
@@ -143,7 +143,7 @@ function makeSection() {
 
 describe('ChatbotBuilderPage — create mode', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     mockMySections.mockResolvedValue({ data: [] });
     mockCreate.mockResolvedValue({ data: { ...makeChatbot(), id: 'new-bot-42' } });
     mockUpdate.mockResolvedValue({ data: makeChatbot() });
@@ -255,7 +255,7 @@ describe('ChatbotBuilderPage — create mode', () => {
 
 describe('ChatbotBuilderPage — edit mode', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     mockMySections.mockResolvedValue({ data: [] });
     mockDetail.mockResolvedValue({ data: makeChatbot() });
     mockUpdate.mockResolvedValue({ data: makeChatbot() });

@@ -49,7 +49,7 @@ function makeClient() {
 function renderPage() {
   return render(
     <QueryClientProvider client={makeClient()}>
-      <MemoryRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <MyClassesPage />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -100,7 +100,7 @@ const mockResponse = {
 
 describe('MyClassesPage', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
   });
 
   // ── Page header ─────────────────────────────────────────────────────────────

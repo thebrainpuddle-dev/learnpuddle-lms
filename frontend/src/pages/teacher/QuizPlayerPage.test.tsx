@@ -110,7 +110,7 @@ function renderPage(contentId = 'content-1') {
   const path = `/teacher/quiz/${contentId}`;
   return render(
     <QueryClientProvider client={makeClient()}>
-      <MemoryRouter initialEntries={[path]}>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={[path]}>
         <Routes>
           <Route
             path="/teacher/quiz/:contentId"
@@ -198,7 +198,7 @@ function resetStore() {
 
 describe('QuizPlayerPage', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     resetStore();
     mockStartAttempt.mockResolvedValue(makeStartResponse());
     mockSubmitAttempt.mockResolvedValue(makeSubmitResponse());

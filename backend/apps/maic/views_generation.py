@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from uuid import UUID
 
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -21,8 +22,26 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.maic.exceptions import MaicConfigError
+from apps.maic.llm_config import resolve_tenant_llm_runtime_config
+from apps.maic.permissions import MaicV2TenantPermission
+
 
 logger = logging.getLogger("apps.maic.views_generation")
+
+
+_LANGUAGE_LABELS = {
+    "en": "English",
+    "hi": "Hindi",
+    "es": "Spanish",
+    "fr": "French",
+    "de": "German",
+    "pt": "Portuguese",
+    "zh": "Chinese",
+    "ja": "Japanese",
+    "ko": "Korean",
+    "ar": "Arabic",
+}
 
 
 def _build_generation_ws_url(request: Request, job_id: str) -> str:
@@ -45,10 +64,10 @@ class MaicGenerationCreateView(APIView):
       specifications: str (optional) — free-form text with extra
                        constraints / preferences (passed verbatim to
                        the outline-generation prompt).
-      languageModelId: str (optional, default "stub") — provider id;
-                        "stub" is the deterministic test path,
-                        anything else routes to OpenRouter / etc via
-                        ai_adapter.resolve_chat_model.
+      languageModelId: str (optional) — normally omitted. Production
+                        resolves from the school's TenantAIConfig; a
+                        request override is accepted only when the
+                        deploy explicitly enables it.
 
     Response 202:
       { job_id: str, ws_url: str, tenant_id: str|int }
@@ -60,7 +79,7 @@ class MaicGenerationCreateView(APIView):
     completed. The client opens ws_url to watch progress.
     """
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, MaicV2TenantPermission]
 
     def post(self, request: Request) -> Response:
         user = request.user
@@ -85,7 +104,7 @@ class MaicGenerationCreateView(APIView):
 
         # ── Validate optional fields with defaults ──
         agent_count = body.get("agentCount", 4)
-        if not isinstance(agent_count, int) or not (1 <= agent_count <= 10):
+        if type(agent_count) is not int or not (1 <= agent_count <= 10):
             return Response(
                 {"error": "agentCount must be an int in [1, 10]"},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -112,10 +131,170 @@ class MaicGenerationCreateView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        language_model_id = body.get("languageModelId", "stub")
-        if not isinstance(language_model_id, str):
+        scene_count = body.get("sceneCount", None)
+        if scene_count is not None and (
+            type(scene_count) is not int or not (1 <= scene_count <= 20)
+        ):
             return Response(
-                {"error": "languageModelId must be a string"},
+                {"error": "sceneCount must be an int in [1, 20]"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        grade_level, grade_error = _optional_text(
+            _first_present(body, "gradeLevel", "grade_level"),
+            "gradeLevel",
+            max_chars=120,
+        )
+        if grade_error:
+            return Response({"error": grade_error}, status=status.HTTP_400_BAD_REQUEST)
+
+        subject, subject_error = _optional_text(
+            body.get("subject"),
+            "subject",
+            max_chars=160,
+        )
+        if subject_error:
+            return Response(
+                {"error": subject_error},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        syllabus_board, board_error = _optional_text(
+            _first_present(body, "syllabusBoard", "syllabus_board"),
+            "syllabusBoard",
+            max_chars=120,
+        )
+        if board_error:
+            return Response(
+                {"error": board_error},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        class_guide, guide_error = _optional_text(
+            _first_present(body, "classGuide", "class_guide"),
+            "classGuide",
+            max_chars=4000,
+        )
+        if guide_error:
+            return Response(
+                {"error": guide_error},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        pdf_text, pdf_error = _optional_text(
+            _first_present(body, "pdfText", "pdf_text"),
+            "pdfText",
+            max_chars=50000,
+        )
+        if pdf_error:
+            return Response(
+                {"error": pdf_error},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        research_context, research_error = _optional_text(
+            _first_present(body, "researchContext", "research_context"),
+            "researchContext",
+            max_chars=20000,
+        )
+        if research_error:
+            return Response(
+                {"error": research_error},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        agents, agents_error = _optional_agents(body.get("agents"))
+        if agents_error:
+            return Response(
+                {"error": agents_error},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        enable_pbl, pbl_error = _optional_bool(
+            body.get("enablePBL"),
+            "enablePBL",
+            default=True,
+        )
+        if pbl_error:
+            return Response({"error": pbl_error}, status=status.HTTP_400_BAD_REQUEST)
+
+        image_generation_default = _tenant_default_image_generation_enabled(tenant_id)
+        enable_image_generation, image_error = _optional_bool(
+            body.get("enableImageGeneration", body.get("enableImages")),
+            "enableImageGeneration",
+            default=image_generation_default,
+        )
+        if image_error:
+            return Response({"error": image_error}, status=status.HTTP_400_BAD_REQUEST)
+
+        enable_video_generation, video_error = _optional_bool(
+            body.get("enableVideoGeneration", body.get("enableVideos")),
+            "enableVideoGeneration",
+            default=False,
+        )
+        if video_error:
+            return Response({"error": video_error}, status=status.HTTP_400_BAD_REQUEST)
+
+        content_title = body.get("contentTitle", None)
+        if content_title is not None and not isinstance(content_title, str):
+            return Response(
+                {"error": "contentTitle must be a string"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        is_public = body.get("isPublic", None)
+        if is_public is not None and not isinstance(is_public, bool):
+            return Response(
+                {"error": "isPublic must be a boolean"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        course_id, course_error = _optional_uuid(body.get("courseId"), "courseId")
+        if course_error:
+            return Response(
+                {"error": course_error},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        module_id, module_error = _optional_uuid(body.get("moduleId"), "moduleId")
+        if module_error:
+            return Response(
+                {"error": module_error},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if getattr(user, "role", None) == "STUDENT":
+            if course_id or module_id:
+                return Response(
+                    {"error": "students cannot attach generated classrooms to LMS courses"},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            if is_public is True:
+                return Response(
+                    {"error": "students cannot publish generated classrooms"},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+        target_error, target_ids = _validate_lms_targets(
+            tenant_id=tenant_id,
+            course_id=course_id,
+            module_id=module_id,
+        )
+        if target_error:
+            return Response(
+                {"error": target_error},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            llm_config = resolve_tenant_llm_runtime_config(
+                tenant=getattr(user, "tenant", None),
+                tenant_id=tenant_id,
+                requested=body.get("languageModelId"),
+            )
+            language_model_id = str(llm_config["language_model_id"])
+        except MaicConfigError as exc:
+            return Response(
+                {"error": str(exc)},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -129,14 +308,65 @@ class MaicGenerationCreateView(APIView):
             enqueue_generation_chain,
         )
 
+        topic = topic.strip()
+        specifications = specifications.strip()
+        language = language.strip()
+        level = level.strip()
+        teacher_context = _build_teacher_context(
+            class_guide=class_guide,
+            grade_level=grade_level,
+            subject=subject,
+            syllabus_board=syllabus_board,
+            scene_count=scene_count,
+        )
+        requirement_text = _build_requirement_text(
+            topic=topic,
+            language=language,
+            level=level,
+            specifications=specifications,
+            scene_count=scene_count,
+            grade_level=grade_level,
+            subject=subject,
+            syllabus_board=syllabus_board,
+            enable_pbl=enable_pbl,
+        )
+
         requirements = {
             "topic": topic,
+            "requirement": requirement_text,
             "agentCount": agent_count,
             "language": language,
+            "languageLabel": _language_label(language),
             "level": level,
             "specifications": specifications,
             "languageModelId": language_model_id,
+            "enablePBL": enable_pbl,
+            "enableImageGeneration": enable_image_generation,
+            "enableVideoGeneration": enable_video_generation,
         }
+        if scene_count is not None:
+            requirements["sceneCount"] = scene_count
+        if grade_level:
+            requirements["gradeLevel"] = grade_level
+        if subject:
+            requirements["subject"] = subject
+        if syllabus_board:
+            requirements["syllabusBoard"] = syllabus_board
+        if class_guide:
+            requirements["classGuide"] = class_guide
+        if teacher_context:
+            requirements["teacherContext"] = teacher_context
+        if pdf_text:
+            requirements["pdfText"] = pdf_text
+        if research_context:
+            requirements["researchContext"] = research_context
+        if agents:
+            requirements["agents"] = agents
+        if content_title is not None:
+            requirements["contentTitle"] = content_title.strip()
+        if is_public is not None:
+            requirements["isPublic"] = is_public
+        requirements.update(target_ids)
 
         job = create_job_session(
             tenant_id=tenant_id,
@@ -167,3 +397,283 @@ class MaicGenerationCreateView(APIView):
             },
             status=status.HTTP_202_ACCEPTED,
         )
+
+
+class MaicGenerationDetailView(APIView):
+    """GET /api/maic/v2/generate/<job_id>/ — poll job state.
+
+    Mirrors OpenMAIC's async contract while keeping the heavy classroom
+    artifact in ``MAICClassroom``. By default the response strips generated
+    scene blobs from ``result``; pass ``?full=1`` for operator/debug reads.
+    """
+
+    permission_classes = [IsAuthenticated, MaicV2TenantPermission]
+
+    def get(self, request: Request, job_id: str) -> Response:
+        tenant_id = getattr(request.user, "tenant_id", None)
+        if tenant_id is None:
+            return Response(
+                {"error": "user has no tenant"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        from apps.maic.models import MaicGenerationJob
+
+        try:
+            job = MaicGenerationJob.objects.all_tenants().get(
+                pk=job_id,
+                tenant_id=tenant_id,
+            )
+        except MaicGenerationJob.DoesNotExist:
+            return Response(
+                {"error": "generation job not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        include_full = request.query_params.get("full") == "1"
+        result = _public_result(job.result or {}, include_full=include_full)
+        progress = job.progress or {}
+        scenes_generated = _scene_count(job.result or {}, progress)
+        total_scenes = (
+            progress.get("total")
+            or result.get("scenesCount")
+            or scenes_generated
+        )
+
+        return Response(
+            {
+                "job_id": job.id,
+                "status": job.status,
+                "step": progress.get("stage"),
+                "progress": progress,
+                "message": progress.get("message", ""),
+                "scenesGenerated": scenes_generated,
+                "totalScenes": total_scenes,
+                "result": result,
+                "error": job.error or None,
+                "done": job.status in {
+                    MaicGenerationJob.STATUS_SUCCEEDED,
+                    MaicGenerationJob.STATUS_FAILED,
+                },
+                "created_at": job.created_at.isoformat(),
+                "updated_at": job.updated_at.isoformat(),
+                "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+def _optional_uuid(value: Any, field_name: str) -> tuple[str | None, str | None]:
+    if value in (None, ""):
+        return None, None
+    if not isinstance(value, str):
+        return None, f"{field_name} must be a UUID string"
+    try:
+        return str(UUID(value)), None
+    except ValueError:
+        return None, f"{field_name} must be a valid UUID"
+
+
+def _first_present(body: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in body:
+            return body[key]
+    return None
+
+
+def _optional_text(
+    value: Any,
+    field_name: str,
+    *,
+    max_chars: int,
+) -> tuple[str | None, str | None]:
+    if value in (None, ""):
+        return None, None
+    if not isinstance(value, str):
+        return None, f"{field_name} must be a string"
+    trimmed = value.strip()
+    if not trimmed:
+        return None, None
+    if len(trimmed) > max_chars:
+        return None, f"{field_name} must be at most {max_chars} characters"
+    return trimmed, None
+
+
+def _optional_bool(
+    value: Any,
+    field_name: str,
+    *,
+    default: bool,
+) -> tuple[bool, str | None]:
+    if value is None:
+        return default, None
+    if not isinstance(value, bool):
+        return default, f"{field_name} must be a boolean"
+    return value, None
+
+
+def _tenant_default_image_generation_enabled(tenant_id: int) -> bool:
+    """Default v2 image generation from the tenant's real image provider.
+
+    Teachers should not have to know an implementation flag to get images in
+    production classrooms. Explicit request values still win; this only fills
+    the omitted-field case from TenantAIConfig.
+    """
+    from apps.courses.maic_models import TenantAIConfig
+
+    config = TenantAIConfig.objects.filter(tenant_id=tenant_id).first()
+    if config is None:
+        return False
+    provider = (config.image_provider or "").strip().lower()
+    return bool(provider and provider != "disabled")
+
+
+def _optional_agents(value: Any) -> tuple[list[dict[str, Any]], str | None]:
+    if value in (None, ""):
+        return [], None
+    if not isinstance(value, list):
+        return [], "agents must be a list"
+    if len(value) > 10:
+        return [], "agents must contain at most 10 items"
+    for idx, item in enumerate(value):
+        if not isinstance(item, dict):
+            return [], f"agents[{idx}] must be an object"
+    return value, None
+
+
+def _language_label(language: str) -> str:
+    value = language.strip()
+    return _LANGUAGE_LABELS.get(value.lower(), value or "English")
+
+
+def _build_requirement_text(
+    *,
+    topic: str,
+    language: str,
+    level: str,
+    specifications: str,
+    scene_count: int | None,
+    grade_level: str | None,
+    subject: str | None,
+    syllabus_board: str | None,
+    enable_pbl: bool,
+) -> str:
+    lines = [
+        f"Topic: {topic}",
+        f"Teaching language: {_language_label(language)}",
+        f"Difficulty level: {level}",
+    ]
+    if scene_count is not None:
+        lines.append(f"Create exactly {scene_count} scenes.")
+    if grade_level:
+        lines.append(f"Audience grade level: {grade_level}")
+    if subject:
+        lines.append(f"Subject: {subject}")
+    if syllabus_board:
+        lines.append(f"Syllabus/curriculum board: {syllabus_board}")
+    if enable_pbl:
+        lines.append(
+            "Include one project-based learning or hands-on collaboration "
+            "moment when the topic genuinely benefits from it; keep it "
+            "tightly connected to the lesson goal."
+        )
+    else:
+        lines.append(
+            "Do not include project-based learning scenes; use slide, quiz, "
+            "or interactive scenes only."
+        )
+    if specifications:
+        lines.extend(["", "Additional teacher requirements:", specifications])
+    return "\n".join(lines)
+
+
+def _build_teacher_context(
+    *,
+    class_guide: str | None,
+    grade_level: str | None,
+    subject: str | None,
+    syllabus_board: str | None,
+    scene_count: int | None,
+) -> str:
+    lines: list[str] = []
+    class_frame = [
+        f"Grade level: {grade_level}" if grade_level else "",
+        f"Subject: {subject}" if subject else "",
+        f"Syllabus/curriculum board: {syllabus_board}" if syllabus_board else "",
+        f"Target scene count: {scene_count}" if scene_count is not None else "",
+    ]
+    class_frame = [line for line in class_frame if line]
+    if class_frame:
+        lines.append("## Teacher Class Context")
+        lines.extend(f"- {line}" for line in class_frame)
+    if class_guide:
+        if lines:
+            lines.append("")
+        lines.append("## Teacher Class Guide")
+        lines.append(class_guide)
+    return "\n".join(lines)
+
+
+def _validate_lms_targets(
+    *,
+    tenant_id: int,
+    course_id: str | None,
+    module_id: str | None,
+) -> tuple[str | None, dict[str, str]]:
+    from apps.courses.models import Course, Module
+
+    resolved: dict[str, str] = {}
+    course = None
+    if course_id:
+        course = (
+            Course.all_objects.all_tenants()
+            .filter(pk=course_id, tenant_id=tenant_id, is_deleted=False)
+            .first()
+        )
+        if course is None:
+            return "courseId does not belong to this tenant", {}
+        resolved["courseId"] = str(course.id)
+
+    if module_id:
+        module = (
+            Module.objects.select_related("course")
+            .filter(
+                pk=module_id,
+                course__tenant_id=tenant_id,
+                course__is_deleted=False,
+            )
+            .first()
+        )
+        if module is None:
+            return "moduleId does not belong to this tenant", {}
+        if course is not None and module.course_id != course.id:
+            return "moduleId must belong to courseId", {}
+        resolved["moduleId"] = str(module.id)
+        resolved["courseId"] = str(module.course_id)
+
+    return None, resolved
+
+
+def _public_result(
+    result: dict[str, Any],
+    *,
+    include_full: bool,
+) -> dict[str, Any]:
+    if include_full:
+        return dict(result)
+    return {
+        key: value
+        for key, value in result.items()
+        if key not in {"scenes", "outlines"}
+    }
+
+
+def _scene_count(result: dict[str, Any], progress: dict[str, Any]) -> int:
+    scenes = result.get("scenes")
+    if isinstance(scenes, list):
+        return len(scenes)
+    completed = progress.get("completed")
+    try:
+        return int(completed)
+    except (TypeError, ValueError):
+        return 0

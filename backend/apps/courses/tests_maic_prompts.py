@@ -16,9 +16,11 @@ No LLM calls, no Django DB — pure string inspection. Run with:
 from __future__ import annotations
 
 from apps.courses.maic_generation_service import (
+    _normalize_scene_actions,
     build_actions_system_prompt,
     build_outline_system_prompt,
     build_scene_content_system_prompt,
+    find_prompt_placeholder_texts,
 )
 
 
@@ -44,8 +46,27 @@ def test_builders_accept_full_context():
             subject="Physics",
             syllabus_board="CBSE",
             audience_role="student",
+            class_guide="Use a misconception-first opening and one PBL checkpoint.",
         )
         assert isinstance(prompt, str) and prompt
+
+
+def test_class_guide_surfaces_in_all_prompt_builders():
+    guide = (
+        "Start with a classroom dilemma, include a misconception check, "
+        "then hand over to a PBL-style decision task."
+    )
+    for build in BUILDERS:
+        prompt = build(
+            grade_level="Grade 8",
+            subject="Science",
+            syllabus_board="CBSE",
+            audience_role="student",
+            class_guide=guide,
+        )
+        assert "TEACHER CLASS GUIDE" in prompt
+        assert "misconception check" in prompt
+        assert "PBL-style decision task" in prompt
 
 
 def test_grade_8_prompt_uses_accessible_register():
@@ -189,4 +210,105 @@ def test_scene_content_prompt_advertises_body_image_right_template():
     assert any(token in lower for token in ("optional", "may emit", "you may")), (
         "scene-content prompt makes typed-slot emission sound mandatory; "
         "it must stay additive so legacy free-form slides keep working"
+    )
+
+
+def test_action_normalizer_converts_speechlike_segments():
+    actions = [
+        {"type": "introduction", "agentId": "teacher", "text": "Welcome in."},
+        {"type": "recap", "content": "So the key idea is energy flow."},
+        {"type": "slide_transition", "slideIndex": 1},
+        {"type": "wb_draw_shape", "shape": "rect", "id": "box-1"},
+        {"type": "unknown_without_text"},
+    ]
+
+    _normalize_scene_actions(actions, [{"id": "teacher"}, {"id": "assistant"}])
+
+    assert actions == [
+        {"type": "speech", "agentId": "teacher", "text": "Welcome in."},
+        {
+            "type": "speech",
+            "content": "So the key idea is energy flow.",
+            "text": "So the key idea is energy flow.",
+            "agentId": "teacher",
+        },
+        {"type": "transition", "slideIndex": 1},
+        {
+            "type": "wb_draw_shape",
+            "shape": "rectangle",
+            "id": "box-1",
+            "left": 160,
+            "top": 120,
+            "width": 220,
+            "height": 90,
+        },
+    ]
+
+
+def test_action_normalizer_maps_frontend_contract_aliases():
+    actions = [
+        {"type": "laser_pointer", "target_id": "slot-title", "color": "#EF4444"},
+        {"type": "wb_draw_text", "text": "x = -b / 2a", "x": 140, "y": 80},
+        {"type": "wb_draw_shape", "shape": "rect", "x": 120, "y": 60, "color": "#3B82F6"},
+        {"type": "wb_draw_shape", "shape": "arrow", "x": 200, "y": 160, "width": 200, "height": 40},
+    ]
+
+    _normalize_scene_actions(actions, [{"id": "teacher"}])
+
+    assert actions == [
+        {"type": "laser", "target_id": "slot-title", "color": "#EF4444", "elementId": "slot-title"},
+        {
+            "type": "wb_draw_text",
+            "text": "x = -b / 2a",
+            "x": 140,
+            "y": 80,
+            "id": "wb-2",
+            "left": 140,
+            "top": 80,
+            "width": 520,
+            "height": 48,
+        },
+        {
+            "type": "wb_draw_shape",
+            "shape": "rectangle",
+            "x": 120,
+            "y": 60,
+            "color": "#3B82F6",
+            "id": "wb-3",
+            "left": 120,
+            "top": 60,
+            "stroke": "#3B82F6",
+            "width": 220,
+            "height": 90,
+        },
+        {
+            "type": "wb_draw_line",
+            "id": "wb-4",
+            "start": [200.0, 160.0],
+            "end": [400.0, 200.0],
+            "color": "#DC2626",
+            "width": 3.0,
+        },
+    ]
+
+
+def test_prompt_placeholder_detector_finds_copied_schema_examples():
+    payload = {
+        "slides": [
+            {
+                "title": "Quadratics through projectile motion",
+                "elements": [
+                    {"type": "text", "content": "<p>Main Title Text</p>"},
+                    {"type": "image", "alt": "Descriptive prompt for a relevant diagram or illustration"},
+                ],
+            }
+        ]
+    }
+
+    placeholders = find_prompt_placeholder_texts(payload)
+
+    assert any("Main Title Text" in value for value in placeholders)
+    assert any(
+        "Descriptive prompt for a relevant diagram or illustration" in value
+        for value in placeholders
     )

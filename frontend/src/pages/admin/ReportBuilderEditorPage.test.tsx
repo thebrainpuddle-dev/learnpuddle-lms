@@ -115,7 +115,7 @@ function makeClient() {
 function renderCreate() {
   return render(
     <QueryClientProvider client={makeClient()}>
-      <MemoryRouter initialEntries={['/admin/reports/builder/new']}>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={['/admin/reports/builder/new']}>
         <Routes>
           <Route path="/admin/reports/builder/new" element={<ReportBuilderEditorPage />} />
         </Routes>
@@ -128,7 +128,7 @@ function renderCreate() {
 function renderEdit() {
   return render(
     <QueryClientProvider client={makeClient()}>
-      <MemoryRouter initialEntries={['/admin/reports/builder/def-1/edit']}>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={['/admin/reports/builder/def-1/edit']}>
         <Routes>
           <Route
             path="/admin/reports/builder/:id/edit"
@@ -166,7 +166,7 @@ function makeSavedDefinition(overrides = {}) {
 
 describe('ReportBuilderEditorPage — create mode', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     mockCreate.mockResolvedValue(makeSavedDefinition({ id: 'new-def-99' }));
   });
 
@@ -254,7 +254,7 @@ describe('ReportBuilderEditorPage — create mode', () => {
 
 describe('ReportBuilderEditorPage — edit mode', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     mockUpdate.mockResolvedValue(makeDefinition());
   });
 

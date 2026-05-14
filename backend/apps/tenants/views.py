@@ -134,6 +134,12 @@ def tenant_config_view(request):
             "certificates": tenant.feature_certificates,
             "teacher_authoring": tenant.feature_teacher_authoring,
             "ai_studio": tenant.feature_ai_studio,
+            "sso": tenant.feature_sso,
+            "saml": tenant.feature_saml,
+            "2fa": tenant.feature_2fa,
+            "students": tenant.feature_students,
+            "maic": tenant.feature_maic,
+            "maic_v2": tenant.feature_maic_v2,
         },
     }
     if is_admin:

@@ -41,7 +41,7 @@ describe('ProtectedRoute', () => {
 
     it('should redirect to /login for unauthenticated users', () => {
       render(
-        <MemoryRouter initialEntries={['/protected']}>
+        <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={['/protected']}>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
             <Route
@@ -62,7 +62,7 @@ describe('ProtectedRoute', () => {
 
     it('should redirect to /super-admin/login for super admin routes', () => {
       render(
-        <MemoryRouter initialEntries={['/super-admin/dashboard']}>
+        <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={['/super-admin/dashboard']}>
           <Routes>
             <Route path="/super-admin/login" element={<SuperAdminLoginPage />} />
             <Route
@@ -107,7 +107,7 @@ describe('ProtectedRoute', () => {
 
     it('should render protected content for authenticated users', () => {
       render(
-        <MemoryRouter initialEntries={['/protected']}>
+        <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={['/protected']}>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
             <Route
@@ -150,7 +150,7 @@ describe('ProtectedRoute', () => {
       });
 
       render(
-        <MemoryRouter initialEntries={['/admin/settings']}>
+        <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={['/admin/settings']}>
           <Routes>
             <Route
               path="/admin/settings"
@@ -189,7 +189,7 @@ describe('ProtectedRoute', () => {
       });
 
       render(
-        <MemoryRouter initialEntries={['/admin/settings']}>
+        <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={['/admin/settings']}>
           <Routes>
             <Route path="/teacher/dashboard" element={<TeacherDashboard />} />
             <Route
@@ -230,7 +230,7 @@ describe('ProtectedRoute', () => {
       });
 
       render(
-        <MemoryRouter initialEntries={['/teacher/courses']}>
+        <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={['/teacher/courses']}>
           <Routes>
             <Route path="/admin/dashboard" element={<AdminDashboard />} />
             <Route
@@ -271,7 +271,7 @@ describe('ProtectedRoute', () => {
       });
 
       render(
-        <MemoryRouter initialEntries={['/admin/settings']}>
+        <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={['/admin/settings']}>
           <Routes>
             <Route path="/super-admin/dashboard" element={<SuperAdminDashboard />} />
             <Route
@@ -312,7 +312,7 @@ describe('ProtectedRoute', () => {
       });
 
       render(
-        <MemoryRouter initialEntries={['/shared/page']}>
+        <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={['/shared/page']}>
           <Routes>
             <Route
               path="/shared/page"
@@ -351,7 +351,7 @@ describe('ProtectedRoute', () => {
       });
 
       render(
-        <MemoryRouter initialEntries={['/teacher/dashboard']}>
+        <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={['/teacher/dashboard']}>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
             <Route

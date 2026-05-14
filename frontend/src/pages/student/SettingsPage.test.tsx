@@ -88,7 +88,7 @@ const PREFS_ALL_ON = {
 
 const renderPage = () =>
   render(
-    <MemoryRouter>
+    <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <SettingsPage />
     </MemoryRouter>,
   );

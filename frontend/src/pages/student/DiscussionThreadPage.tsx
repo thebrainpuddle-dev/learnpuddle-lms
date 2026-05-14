@@ -5,6 +5,7 @@
 import React, { useState, useCallback, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import DOMPurify from 'dompurify';
 import { cn } from '../../design-system/theme/cn';
 import { usePageTitle } from '../../hooks/usePageTitle';
 import { useAuthStore } from '../../stores/authStore';
@@ -74,6 +75,27 @@ function formatFullDate(dateStr: string): string {
   return new Date(dateStr).toLocaleDateString('en-US', {
     month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
   });
+}
+
+function renderDiscussionHtml(body: string): string {
+  const sanitized = DOMPurify.sanitize(body || '');
+  if (/<[a-z][\s\S]*>/i.test(body)) return sanitized;
+  return sanitized.replace(/\n/g, '<br />');
+}
+
+function RichDiscussionBody({
+  body,
+  className,
+}: {
+  body: string;
+  className?: string;
+}) {
+  return (
+    <div
+      className={cn('prose prose-sm max-w-none prose-slate text-gray-700', className)}
+      dangerouslySetInnerHTML={{ __html: renderDiscussionHtml(body) }}
+    />
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -241,7 +263,7 @@ const ReplyCard: React.FC<{
             </div>
           </div>
         ) : (
-          <p className="text-[13px] text-gray-700 leading-relaxed whitespace-pre-wrap mb-2.5">{reply.body}</p>
+          <RichDiscussionBody body={reply.body} className="mb-2.5 text-[13px] leading-relaxed" />
         )}
 
         {!editing && (
@@ -462,7 +484,7 @@ export const StudentDiscussionThreadPage: React.FC = () => {
           </div>
         </div>
 
-        <div className="text-[14px] text-gray-700 leading-relaxed whitespace-pre-wrap mb-4">{thread.body}</div>
+        <RichDiscussionBody body={thread.body} className="mb-4 text-[14px] leading-relaxed" />
 
         <div className="flex items-center gap-4 text-[12px] text-gray-400 border-t border-gray-100 pt-3">
           <span className="inline-flex items-center gap-1.5"><EyeIcon /> {thread.view_count} views</span>

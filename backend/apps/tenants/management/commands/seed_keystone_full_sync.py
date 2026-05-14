@@ -842,18 +842,69 @@ class Command(BaseCommand):
         try:
             from apps.courses.maic_models import MAICClassroom
             maic_extras = [
-                {"title": "deep learning advance", "topic": "deep learning advance", "language": "en", "status": "READY", "is_public": True, "creator": priya, "est_minutes": 75, "num_scenes": 15},
-                {"title": "Machine Learning Advance", "topic": "Machine Learning Advance", "language": "en", "status": "READY", "is_public": False, "creator": priya, "est_minutes": 65, "num_scenes": 14},
-                {"title": "Claude mythos", "topic": "Claude mythos", "language": "en", "status": "READY", "is_public": False, "creator": priya, "est_minutes": 75, "num_scenes": 14},
-                {"title": "deep learning", "topic": "deep learning", "language": "en", "status": "READY", "is_public": True, "creator": teacher, "est_minutes": 70, "num_scenes": 15},
-                {"title": "Claude", "topic": "Claude", "language": "en", "status": "READY", "is_public": True, "creator": teacher, "est_minutes": 60, "num_scenes": 15},
-                {"title": "AI marketing", "topic": "AI marketing", "language": "en", "status": "READY", "is_public": True, "creator": teacher, "est_minutes": 56, "num_scenes": 13},
-                {"title": "OpenAI", "topic": "OpenAI", "language": "en", "status": "READY", "is_public": True, "creator": teacher, "est_minutes": 25, "num_scenes": 6},
-                {"title": "Photosynthesis", "topic": "Photosynthesis", "language": "en", "status": "READY", "is_public": True, "creator": teacher, "est_minutes": 15, "num_scenes": 4},
-                {"title": "LIO", "topic": "LIO", "language": "en", "status": "READY", "is_public": False, "creator": priya, "est_minutes": 75, "num_scenes": 15},
-                {"title": "LIO", "topic": "LIO", "language": "en", "status": "READY", "is_public": False, "creator": priya, "est_minutes": 60, "num_scenes": 15},
+                {"title": "deep learning advance", "topic": "deep learning advance", "language": "en", "status": "DRAFT", "is_public": False, "creator": priya, "est_minutes": 0, "num_scenes": 0},
+                {"title": "Machine Learning Advance", "topic": "Machine Learning Advance", "language": "en", "status": "DRAFT", "is_public": False, "creator": priya, "est_minutes": 0, "num_scenes": 0},
+                {"title": "Claude mythos", "topic": "Claude mythos", "language": "en", "status": "DRAFT", "is_public": False, "creator": priya, "est_minutes": 0, "num_scenes": 0},
+                {"title": "deep learning", "topic": "deep learning", "language": "en", "status": "DRAFT", "is_public": False, "creator": teacher, "est_minutes": 0, "num_scenes": 0},
+                {"title": "Claude", "topic": "Claude", "language": "en", "status": "DRAFT", "is_public": False, "creator": teacher, "est_minutes": 0, "num_scenes": 0},
+                {"title": "AI marketing", "topic": "AI marketing", "language": "en", "status": "DRAFT", "is_public": False, "creator": teacher, "est_minutes": 0, "num_scenes": 0},
+                {"title": "OpenAI", "topic": "OpenAI", "language": "en", "status": "DRAFT", "is_public": False, "creator": teacher, "est_minutes": 0, "num_scenes": 0},
+                {"title": "Photosynthesis", "topic": "Photosynthesis", "language": "en", "status": "DRAFT", "is_public": False, "creator": teacher, "est_minutes": 0, "num_scenes": 0},
+                {"title": "LIO", "topic": "LIO", "language": "en", "status": "DRAFT", "is_public": False, "creator": priya, "est_minutes": 0, "num_scenes": 0},
             ]
             maic_count = 0
+            repaired = 0
+            for classroom in MAICClassroom.objects.filter(tenant=tenant, status="READY"):
+                meta = classroom.content_meta or {}
+                has_playable_content = bool(
+                    classroom.content_scenes
+                    and isinstance(meta, dict)
+                    and isinstance(meta.get("slides"), list)
+                    and meta.get("slides")
+                )
+                if not has_playable_content:
+                    classroom.status = "DRAFT"
+                    classroom.is_public = False
+                    classroom.scene_count = 0
+                    classroom.estimated_minutes = 0
+                    classroom.save(update_fields=[
+                        "status",
+                        "is_public",
+                        "scene_count",
+                        "estimated_minutes",
+                        "updated_at",
+                    ])
+                    repaired += 1
+            if repaired:
+                self.stdout.write(f"  {repaired} empty READY classrooms moved back to DRAFT.")
+            deduped = 0
+            seen_keys = set()
+            for mc in maic_extras:
+                creator = mc.get("creator")
+                if not creator:
+                    continue
+                key = (mc["title"], creator.id)
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                empty_duplicates = list(
+                    MAICClassroom.objects.filter(
+                        tenant=tenant,
+                        title=mc["title"],
+                        creator=creator,
+                        status="DRAFT",
+                        scene_count=0,
+                        estimated_minutes=0,
+                        content_scenes=[],
+                        content_agents=[],
+                        content_meta={},
+                    ).order_by("-updated_at")
+                )
+                for duplicate in empty_duplicates[1:]:
+                    duplicate.delete()
+                    deduped += 1
+            if deduped:
+                self.stdout.write(f"  Removed {deduped} duplicate empty MAIC classrooms.")
             default_config = {
                 "agents": [
                     {"role": "professor", "name": "Dr. Smith", "expertise": "Subject Expert", "personality": "Knowledgeable and encouraging"},
@@ -870,13 +921,13 @@ class Command(BaseCommand):
                     continue
                 config = dict(default_config)
                 config["generation_params"] = {"num_scenes": scenes, "estimated_minutes": est}
-                # Check if already exists by title + creator
+                # Check if already exists by title + creator. The previous
+                # seed let the same "LIO" demo row accumulate, which made the
+                # teacher library look duplicated and broken.
                 existing = MAICClassroom.objects.filter(
                     tenant=tenant, title=mc["title"], creator=creator,
                 ).count()
-                if mc["title"] in ("LIO",) and existing >= 2:
-                    continue
-                if existing > 0 and mc["title"] not in ("LIO",):
+                if existing > 0:
                     continue
                 MAICClassroom.objects.create(
                     tenant=tenant, creator=creator, config=config,
@@ -894,7 +945,7 @@ class Command(BaseCommand):
             chatbot_extras = [
                 {
                     "name": "IB Physics Assistant",
-                    "persona": "study_buddy",
+                    "persona_preset": "study_buddy",
                     "block_off_topic": True,
                     "is_active": True,
                     "creator": priya,
@@ -903,35 +954,35 @@ class Command(BaseCommand):
                 },
                 {
                     "name": "Physics",
-                    "persona": "study_buddy",
+                    "persona_preset": "study_buddy",
                     "block_off_topic": True,
                     "is_active": True,
                     "creator": teacher,
                 },
                 {
                     "name": "Physics (Copy)",
-                    "persona": "study_buddy",
+                    "persona_preset": "study_buddy",
                     "block_off_topic": True,
                     "is_active": True,
                     "creator": teacher,
                 },
                 {
                     "name": "Lab",
-                    "persona": "study_buddy",
+                    "persona_preset": "study_buddy",
                     "block_off_topic": True,
                     "is_active": False,
                     "creator": teacher,
                 },
                 {
                     "name": "Social",
-                    "persona": "study_buddy",
+                    "persona_preset": "study_buddy",
                     "block_off_topic": True,
                     "is_active": False,
                     "creator": teacher,
                 },
                 {
                     "name": "vdfv",
-                    "persona": "study_buddy",
+                    "persona_preset": "study_buddy",
                     "block_off_topic": True,
                     "is_active": True,
                     "creator": teacher,

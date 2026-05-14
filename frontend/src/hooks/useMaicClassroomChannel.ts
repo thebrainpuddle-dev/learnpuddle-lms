@@ -57,7 +57,12 @@ export function useMaicClassroomChannel(
   const [status, setStatus] = useState<MaicClassroomChannelStatus>('idle');
 
   const wsRef = useRef<WebSocket | null>(null);
+  const mountedRef = useRef(false);
+  const reconnectAllowedRef = useRef(false);
   const reconnectAttemptsRef = useRef(0);
+  const connectTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
   );
@@ -77,18 +82,63 @@ export function useMaicClassroomChannel(
     return delay + Math.random() * 1000;
   }, []);
 
+  const clearReconnectTimeout = useCallback(() => {
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = undefined;
+    }
+  }, []);
+
+  const clearConnectTimeout = useCallback(() => {
+    if (connectTimeoutRef.current) {
+      clearTimeout(connectTimeoutRef.current);
+      connectTimeoutRef.current = undefined;
+    }
+  }, []);
+
+  const closeSocket = useCallback((ws: WebSocket | null) => {
+    if (!ws) return;
+    try {
+      if (ws.readyState === WebSocket.CONNECTING) {
+        ws.addEventListener(
+          'open',
+          () => {
+            try {
+              ws.close(1000);
+            } catch {
+              // ignore
+            }
+          },
+          { once: true },
+        );
+        return;
+      }
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.close(1000);
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
   const connect = useCallback(() => {
-    if (!enabled || !classroomId || !isAuthenticated || !accessToken) {
+    if (
+      !mountedRef.current ||
+      !enabled ||
+      !classroomId ||
+      !isAuthenticated ||
+      !accessToken
+    ) {
       return;
     }
     if (wsRef.current) {
       // Replace any existing connection — caller changed classroomId.
-      try {
-        wsRef.current.close(1000);
-      } catch {
-        // ignore
-      }
+      const previous = wsRef.current;
+      wsRef.current = null;
+      closeSocket(previous);
     }
+    reconnectAllowedRef.current = true;
+    clearReconnectTimeout();
 
     setStatus('connecting');
 
@@ -97,11 +147,17 @@ export function useMaicClassroomChannel(
     wsRef.current = ws;
 
     ws.onopen = () => {
+      if (!mountedRef.current || wsRef.current !== ws) {
+        return;
+      }
       setStatus('connected');
       reconnectAttemptsRef.current = 0;
     };
 
     ws.onmessage = (event) => {
+      if (!mountedRef.current || wsRef.current !== ws) {
+        return;
+      }
       try {
         const data = JSON.parse(event.data) as MaicImageTaskEvent;
         if (data?.type === 'maic.image.task') {
@@ -117,6 +173,9 @@ export function useMaicClassroomChannel(
     };
 
     ws.onclose = (closeEvent) => {
+      if (!mountedRef.current || wsRef.current !== ws) {
+        return;
+      }
       setStatus('disconnected');
       wsRef.current = null;
 
@@ -128,7 +187,12 @@ export function useMaicClassroomChannel(
       reconnectAttemptsRef.current++;
       if (reconnectAttemptsRef.current <= maxReconnectAttempts) {
         const delay = getReconnectDelay();
-        reconnectTimeoutRef.current = setTimeout(connect, delay);
+        reconnectTimeoutRef.current = setTimeout(() => {
+          reconnectTimeoutRef.current = undefined;
+          if (mountedRef.current && reconnectAllowedRef.current) {
+            connect();
+          }
+        }, delay);
       }
     };
   }, [
@@ -138,27 +202,64 @@ export function useMaicClassroomChannel(
     accessToken,
     maxReconnectAttempts,
     getReconnectDelay,
+    clearReconnectTimeout,
+    closeSocket,
   ]);
 
   useEffect(() => {
-    if (enabled && classroomId && isAuthenticated && accessToken) {
-      connect();
-    }
+    mountedRef.current = true;
     return () => {
-      if (wsRef.current) {
-        try {
-          wsRef.current.close(1000);
-        } catch {
-          // ignore
-        }
-        wsRef.current = null;
-      }
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-      }
+      mountedRef.current = false;
+      reconnectAllowedRef.current = false;
+      clearConnectTimeout();
+      clearReconnectTimeout();
+      const ws = wsRef.current;
+      wsRef.current = null;
+      closeSocket(ws);
       reconnectAttemptsRef.current = 0;
     };
-  }, [enabled, classroomId, isAuthenticated, accessToken, connect]);
+  }, [clearConnectTimeout, clearReconnectTimeout, closeSocket]);
+
+  useEffect(() => {
+    const shouldConnect = Boolean(
+      enabled && classroomId && isAuthenticated && accessToken,
+    );
+    reconnectAllowedRef.current = shouldConnect;
+    clearConnectTimeout();
+    if (shouldConnect) {
+      connectTimeoutRef.current = setTimeout(() => {
+        connectTimeoutRef.current = undefined;
+        if (mountedRef.current && reconnectAllowedRef.current) {
+          connect();
+        }
+      }, 0);
+    } else {
+      clearReconnectTimeout();
+      const ws = wsRef.current;
+      wsRef.current = null;
+      closeSocket(ws);
+      reconnectAttemptsRef.current = 0;
+      setStatus('idle');
+    }
+    return () => {
+      reconnectAllowedRef.current = false;
+      clearConnectTimeout();
+      clearReconnectTimeout();
+      const ws = wsRef.current;
+      wsRef.current = null;
+      closeSocket(ws);
+      reconnectAttemptsRef.current = 0;
+    };
+  }, [
+    enabled,
+    classroomId,
+    isAuthenticated,
+    accessToken,
+    connect,
+    clearConnectTimeout,
+    clearReconnectTimeout,
+    closeSocket,
+  ]);
 
   return status;
 }

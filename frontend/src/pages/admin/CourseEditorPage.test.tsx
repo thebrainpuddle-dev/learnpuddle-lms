@@ -117,7 +117,7 @@ describe('CourseEditorPage tab URL stability', () => {
 
     return render(
       <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={[path]}>
+        <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={[path]}>
           <Routes>
             <Route
               path="/admin/courses/:courseId"
@@ -235,7 +235,7 @@ describe('CourseEditorPage hash-scroll (TASK-063 L3)', () => {
 
     render(
       <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={['/admin/courses/abc#content-abc123']}>
+        <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={['/admin/courses/abc#content-abc123']}>
           <Routes>
             <Route path="/admin/courses/:courseId" element={<CourseEditorPage />} />
           </Routes>

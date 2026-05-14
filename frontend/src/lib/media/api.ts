@@ -22,8 +22,8 @@ import type {
   VideoGenerationResult,
 } from './types';
 
-const IMAGE_ENDPOINT = '/api/maic/v2/media/generate-image/';
-const VIDEO_ENDPOINT = '/api/maic/v2/media/generate-video/';
+const IMAGE_ENDPOINT = '/maic/v2/media/generate-image/';
+const VIDEO_ENDPOINT = '/maic/v2/media/generate-video/';
 
 export async function generateImage(
   req: ImageGenerationRequest,

@@ -2,6 +2,8 @@
 
 import os
 from django.core.management.base import BaseCommand
+from apps.courses.demo_maic_seed import ensure_demo_ai_config, ensure_demo_maic_classroom
+from apps.courses.demo_student_seed import ensure_demo_student_portal_content
 from apps.tenants.services import TenantService
 from apps.tenants.models import Tenant
 from apps.users.models import User
@@ -61,6 +63,8 @@ class Command(BaseCommand):
             tenant = Tenant.objects.get(subdomain='demo')
             self.stdout.write(self.style.WARNING('Demo tenant already exists'))
             self._ensure_users(tenant)
+            self._ensure_maic_demo(tenant)
+            self._ensure_student_demo_content(tenant)
             self._print_credentials(tenant)
             return
 
@@ -95,6 +99,8 @@ class Command(BaseCommand):
 
         # Create teacher and student accounts
         self._ensure_users(tenant)
+        self._ensure_maic_demo(tenant)
+        self._ensure_student_demo_content(tenant)
 
         self.stdout.write(self.style.SUCCESS('\n  Demo tenant created successfully!\n'))
         self._print_credentials(tenant)
@@ -113,15 +119,49 @@ class Command(BaseCommand):
                 },
             )
             if created:
-                user.set_password(user_data['password'])
-                user.save()
                 self.stdout.write(f"  Created {user_data['role']}: {user_data['email']}")
+            user.first_name = user_data['first_name']
+            user.last_name = user_data['last_name']
+            user.role = user_data['role']
+            user.tenant = tenant
+            user.is_active = True
+            user.set_password(user_data['password'])
+            user.save()
 
-        # Ensure MAIC is enabled
-        if not tenant.feature_maic:
-            tenant.feature_maic = True
-            tenant.save(update_fields=['feature_maic'])
-            self.stdout.write('  Enabled feature_maic on tenant')
+        feature_updates = []
+        for field in (
+            'feature_maic',
+            'feature_ai_studio',
+            'feature_students',
+            'feature_video_upload',
+            'feature_auto_quiz',
+            'feature_transcripts',
+            'feature_certificates',
+            'feature_teacher_authoring',
+        ):
+            if not getattr(tenant, field):
+                setattr(tenant, field, True)
+                feature_updates.append(field)
+        if feature_updates:
+            tenant.save(update_fields=feature_updates)
+            self.stdout.write(f"  Enabled demo features: {', '.join(feature_updates)}")
+
+    def _ensure_maic_demo(self, tenant: Tenant) -> None:
+        """Ensure the demo student portal has one real, playable MAIC classroom."""
+        ensure_demo_ai_config(tenant)
+        teacher = User.objects.get(email=DEMO_USERS[1]['email'])
+        classroom = ensure_demo_maic_classroom(tenant=tenant, teacher=teacher)
+        self.stdout.write(f"  Ensured MAIC demo classroom: {classroom.title} ({classroom.id})")
+
+    def _ensure_student_demo_content(self, tenant: Tenant) -> None:
+        """Ensure student portal smoke tests have real non-empty demo data."""
+        seeded = ensure_demo_student_portal_content(tenant)
+        self.stdout.write(
+            "  Ensured student demo content: "
+            f"course={seeded['course_id']} "
+            f"thread={seeded['thread_id']} "
+            f"chatbot={seeded['chatbot_id']}"
+        )
 
     def _print_credentials(self, tenant: Tenant) -> None:
         """Print login credentials table."""

@@ -26,6 +26,7 @@ class Command(BaseCommand):
             return
 
         now = timezone.now()
+        academic_year = tenant.current_academic_year or "2026-27"
         teachers = list(User.objects.all_tenants().filter(tenant=tenant, role="TEACHER", is_deleted=False))
         students = list(User.objects.all_tenants().filter(tenant=tenant, role="STUDENT", is_deleted=False))
         admin = User.objects.all_tenants().filter(tenant=tenant, role="SCHOOL_ADMIN", is_deleted=False).first()
@@ -59,7 +60,7 @@ class Command(BaseCommand):
                         tenant=tenant,
                         teacher=teacher,
                         subject=subj,
-                        defaults={"academic_year": "2025-26"},
+                        academic_year=academic_year,
                     )
                     if created:
                         ta_count += 1

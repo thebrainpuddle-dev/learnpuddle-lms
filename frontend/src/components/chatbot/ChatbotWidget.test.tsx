@@ -59,7 +59,7 @@ function resetStore() {
 
 function renderLauncher(courseId = 'course-abc') {
   return render(
-    <MemoryRouter>
+    <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <ChatbotLauncher courseId={courseId} />
     </MemoryRouter>,
   );
@@ -301,7 +301,7 @@ describe('ChatbotWidget — citation chip navigation', () => {
   // TEST 7: citation chip click navigates
   it('clicking a citation chip navigates to the correct content URL', async () => {
     render(
-      <MemoryRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <ChatbotMessage answer={happyAnswer} courseId="course-abc" />
       </MemoryRouter>,
     );
@@ -489,7 +489,7 @@ describe('ChatbotWidget — grounded=false fallback card', () => {
   // TEST 13: ungrounded answer shows fallback UI
   it('renders fallback card with helper text when grounded=false', () => {
     render(
-      <MemoryRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <ChatbotMessage answer={ungroundedAnswer} courseId="course-abc" />
       </MemoryRouter>,
     );
@@ -542,7 +542,7 @@ describe('ChatbotHistory component', () => {
   // TEST 15: ChatbotHistory renders items
   it('renders history items correctly', () => {
     render(
-      <MemoryRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <ChatbotHistory
           items={historyItems}
           isLoading={false}
@@ -556,7 +556,7 @@ describe('ChatbotHistory component', () => {
 
   it('renders empty state when no items', () => {
     render(
-      <MemoryRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <ChatbotHistory items={[]} isLoading={false} onDelete={vi.fn()} />
       </MemoryRouter>,
     );
@@ -566,7 +566,7 @@ describe('ChatbotHistory component', () => {
 
   it('renders loading spinner when isLoading=true', () => {
     render(
-      <MemoryRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <ChatbotHistory items={[]} isLoading={true} onDelete={vi.fn()} />
       </MemoryRouter>,
     );
@@ -592,7 +592,7 @@ describe('ChatbotWidget — unknown source_type citation chip (TASK-061 L4)', ()
     };
 
     render(
-      <MemoryRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <ChatbotMessage answer={answerWithBogusSource} courseId="course-abc" />
       </MemoryRouter>,
     );

@@ -15,6 +15,7 @@ interface AudioPlayerProps {
 
 export const AudioPlayer = React.memo<AudioPlayerProps>(function AudioPlayer({ audioUrl }) {
   const audioRef = useRef<HTMLAudioElement>(null);
+  const lastInvalidAudioUrlRef = useRef<string | null>(null);
 
   const isPlaying = useMAICStageStore((s) => s.isPlaying);
   const setPlaying = useMAICStageStore((s) => s.setPlaying);
@@ -26,6 +27,23 @@ export const AudioPlayer = React.memo<AudioPlayerProps>(function AudioPlayer({ a
   const audioVolume = useMAICSettingsStore((s) => s.audioVolume);
   const playbackSpeed = useMAICSettingsStore((s) => s.playbackSpeed);
   const autoPlay = useMAICSettingsStore((s) => s.autoPlay);
+  const playableAudioUrl = isPlayableAudioUrl(audioUrl) ? audioUrl : undefined;
+
+  useEffect(() => {
+    if (!audioUrl || playableAudioUrl) {
+      lastInvalidAudioUrlRef.current = null;
+      return;
+    }
+
+    if (lastInvalidAudioUrlRef.current !== audioUrl) {
+      lastInvalidAudioUrlRef.current = audioUrl;
+      console.warn('[MAIC] ignoring invalid slide audioUrl', audioUrl);
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('maic:tts-unavailable'));
+      }
+    }
+    setPlaying(false);
+  }, [audioUrl, playableAudioUrl, setPlaying]);
 
   // Sync volume
   useEffect(() => {
@@ -44,7 +62,7 @@ export const AudioPlayer = React.memo<AudioPlayerProps>(function AudioPlayer({ a
   // Play / pause based on isPlaying state
   useEffect(() => {
     const audio = audioRef.current;
-    if (!audio || !audioUrl) return;
+    if (!audio || !playableAudioUrl) return;
 
     if (isPlaying) {
       audio.play().catch(() => {
@@ -54,15 +72,15 @@ export const AudioPlayer = React.memo<AudioPlayerProps>(function AudioPlayer({ a
     } else {
       audio.pause();
     }
-  }, [isPlaying, audioUrl, setPlaying]);
+  }, [isPlaying, playableAudioUrl, setPlaying]);
 
   // Reset audio when URL changes (new slide)
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
 
-    if (audioUrl) {
-      audio.src = audioUrl;
+    if (playableAudioUrl) {
+      audio.src = playableAudioUrl;
       audio.load();
       if (isPlaying) {
         audio.play().catch(() => setPlaying(false));
@@ -72,7 +90,7 @@ export const AudioPlayer = React.memo<AudioPlayerProps>(function AudioPlayer({ a
       audio.load();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [audioUrl]);
+  }, [playableAudioUrl]);
 
   // Handle audio ended — only auto-advance when the playback engine is NOT
   // managing audio (engine drives its own scene progression via onSceneComplete).
@@ -105,3 +123,21 @@ export const AudioPlayer = React.memo<AudioPlayerProps>(function AudioPlayer({ a
     />
   );
 });
+
+function isPlayableAudioUrl(audioUrl?: string): audioUrl is string {
+  const value = audioUrl?.trim();
+  if (!value) return false;
+  try {
+    const base =
+      typeof window !== 'undefined' ? window.location.origin : 'http://localhost';
+    const parsed = new URL(value, base);
+    if (/\/api\/v1\/(?:teacher|student)\/maic\/generate\/tts\/?$/.test(parsed.pathname)) {
+      return false;
+    }
+  } catch {
+    if (/\/api\/v1\/(?:teacher|student)\/maic\/generate\/tts\/?($|[?#])/.test(value)) {
+      return false;
+    }
+  }
+  return true;
+}

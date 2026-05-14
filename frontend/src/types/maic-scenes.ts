@@ -1,7 +1,7 @@
 // types/maic-scenes.ts — Scene type system for MAIC classroom playback
 
 import type { MAICAction } from './maic-actions';
-import type { MAICSlideElement } from './maic';
+import type { MAICSlide, MAICSlideElement } from './maic';
 
 // ─── Audio Manifest (pre-generation pipeline state) ─────────────────────────
 
@@ -74,6 +74,8 @@ export type MAICSceneContent =
 export interface MAICSlideContent {
   type: 'slide';
   elements: MAICSlideElement[];
+  /** Full slide set for this scene. Action generation uses this for transitions and target IDs. */
+  slides?: MAICSlide[];
   background?: string;
   speakerScript?: string;
   audioUrl?: string;
@@ -121,4 +123,9 @@ export interface MAICInteractiveContent {
 export interface MAICPBLContent {
   type: 'pbl';
   projectConfig: import('./pbl').PBLProjectConfig;
+  /** Durable backend PBL session created during SaaS materialization.
+   *  When present, the renderer uses the real `/ws/maic/pbl/<id>/`
+   *  channel instead of the legacy chat fallback. */
+  pblSessionId?: string;
+  pblWsPath?: string;
 }

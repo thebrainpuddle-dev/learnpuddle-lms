@@ -13,6 +13,10 @@ RTIMG_PREFIX = "rtimg:"
 UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
 )
+UNSAFE_CSS_VALUE_RE = re.compile(
+    r"(expression\s*\(|url\s*\(|@import|javascript:|vbscript:|data:)",
+    re.IGNORECASE,
+)
 
 ALLOWED_TAGS = [
     "p",
@@ -79,6 +83,15 @@ ALLOWED_CSS_PROPS = {
     "width", "max-width",
 }
 
+DROP_WITH_CONTENT_TAGS = {
+    "script",
+    "style",
+    "iframe",
+    "object",
+    "embed",
+    "form",
+}
+
 
 def _normalize_style(style: str) -> str:
     if not style:
@@ -91,6 +104,8 @@ def _normalize_style(style: str) -> str:
         key = key.strip().lower()
         value = value.strip()
         if key not in ALLOWED_CSS_PROPS or not value:
+            continue
+        if UNSAFE_CSS_VALUE_RE.search(value):
             continue
         out.append(f"{key}: {value}")
     return "; ".join(out)
@@ -135,9 +150,13 @@ def sanitize_rich_text_html(raw_html: str) -> str:
     if not raw_html:
         return ""
 
+    preclean = BeautifulSoup(raw_html, "html.parser")
+    for dangerous in preclean.find_all(DROP_WITH_CONTENT_TAGS):
+        dangerous.decompose()
+
     css_sanitizer = CSSSanitizer(allowed_css_properties=list(ALLOWED_CSS_PROPS))
     cleaned = bleach.clean(
-        raw_html,
+        str(preclean),
         tags=ALLOWED_TAGS,
         attributes=ALLOWED_ATTRIBUTES,
         protocols=ALLOWED_PROTOCOLS,

@@ -17,12 +17,16 @@ import {
   Sparkles,
   Play,
   Globe,
+  ClipboardList,
+  Target,
+  RotateCcw,
 } from 'lucide-react';
 import { useMAICGeneration, type GenerationStep } from '../../hooks/useMAICGeneration';
 import { useMAICStageStore } from '../../stores/maicStageStore';
 import { useDraftCache } from '../../hooks/useDraftCache';
 import { maicApi } from '../../services/openmaicService';
 import type { MAICAgent, MAICGenerationConfig, MAICOutlineScene } from '../../types/maic';
+import { featureFlags } from '../../config/featureFlags';
 import { AgentGenerationStep } from './AgentGenerationStep';
 import { OutlineEditor } from './OutlineEditor';
 import { PDFUploader } from './PDFUploader';
@@ -112,6 +116,50 @@ const SUBJECT_SUGGESTIONS = [
   'Physical Education',
 ];
 
+function buildDefaultClassGuide(args: {
+  topic: string;
+  gradeLevel: string;
+  subject: string;
+  syllabusBoard: string;
+  sceneCount: number;
+}): string {
+  const topic = args.topic.trim() || 'this topic';
+  const audience = [
+    args.gradeLevel.trim() || 'general learners',
+    args.subject.trim() || 'the selected subject',
+    args.syllabusBoard.trim() && args.syllabusBoard !== 'Generic'
+      ? args.syllabusBoard.trim()
+      : '',
+  ].filter(Boolean).join(', ');
+
+  return [
+    `Audience and standard: ${audience}. Build a ${args.sceneCount}-scene AI classroom on "${topic}".`,
+    'Learning goal: Students should explain the core concept, use evidence or examples, and transfer it to a new situation.',
+    'Scene arc: Open with a concrete hook, build the idea through focused examples, add a checkpoint after every 2-3 teaching scenes, and end with a transfer task.',
+    'PBL/activity brief: When the topic benefits from doing, include one contextual role-based project, issue-board task, or hands-on decision with roles, deliverable, constraints, and success criteria.',
+    'Misconceptions to surface: Name the likely wrong ideas early and let a student-like agent challenge or clarify them.',
+    'Agent choreography: Use one teacher lead, one curious student, and one skeptic/coach handoff so discussion turns feel intentional instead of random.',
+    'Interaction and visual focus: Use laser/spotlight or whiteboard only where it directs attention to a specific idea, process, diagram, or calculation.',
+    'Assessment: Include formative checks with explanations for wrong answers, plus one final question a teacher can discuss live.',
+  ].join('\n');
+}
+
+function isGeneratedClassGuideDraft(value: string): boolean {
+  const text = value.trim();
+  if (!text) return false;
+  const legacyDefault =
+    text.startsWith('Learning goal: Build a') &&
+    text.includes('Class flow:') &&
+    text.includes('Teacher moves:') &&
+    text.includes('PBL/activity target:');
+  const currentDefault =
+    text.startsWith('Audience and standard:') &&
+    text.includes('Scene arc:') &&
+    text.includes('PBL/activity brief:') &&
+    text.includes('Agent choreography:');
+  return legacyDefault || currentDefault;
+}
+
 function stepFromGeneration(genStep: GenerationStep, currentWizardStep: WizardStep): WizardStep {
   // The wizard's 5 steps are: 1 Topic & Settings, 2 Meet your classroom,
   // 3 Review Outline, 4 Generating, 5 Complete. The generation hook only
@@ -162,6 +210,8 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
     useDraftCache<string>('maic.draft.subject.v2', '');
   const { value: syllabusBoard, setValue: setSyllabusBoard, clearDraft: clearBoardDraft } =
     useDraftCache<string>('maic.draft.syllabusBoard.v2', 'Generic');
+  const { value: classGuide, setValue: setClassGuide, clearDraft: clearClassGuideDraft } =
+    useDraftCache<string>('maic.draft.classGuide.v1', '');
   const [pdfText, setPdfText] = useState<string | undefined>();
   const [language, setLanguage] = useState('en');
   const [agentCount, setAgentCount] = useState(3);
@@ -171,6 +221,18 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
   // Agents chosen on the "Meet your classroom" step (WS-C) — become the
   // authoritative roster for outline + scene-content + scene-actions.
   const [agents, setAgents] = useState<MAICAgent[]>([]);
+  const defaultClassGuide = useMemo(
+    () =>
+      buildDefaultClassGuide({
+        topic,
+        gradeLevel,
+        subject,
+        syllabusBoard,
+        sceneCount,
+      }),
+    [topic, gradeLevel, subject, syllabusBoard, sceneCount],
+  );
+  const resolvedClassGuide = classGuide.trim() || defaultClassGuide;
 
   // Web search state.
   // `webSearchEnabled` is the ON/OFF toggle (default ON, OpenMAIC parity) —
@@ -196,10 +258,12 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
     startOutlineGeneration,
     updateOutline,
     startContentGeneration,
+    startV2Generation,
     retryScene,
     cancel,
     reset: resetGeneration,
   } = useMAICGeneration();
+  const useV2Generation = featureFlags.maicV2Enabled && featureFlags.maicGenerationUseV2;
 
   // Derive effective step (sync wizard step with generation state)
   const effectiveStep = stepFromGeneration(genStep, wizardStep);
@@ -257,8 +321,14 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
   // approves the agent roster so the outline can use it.
   const handleGoToAgents = useCallback(() => {
     if (!topic.trim()) return;
+    const firstDefaultLine = defaultClassGuide.split('\n')[0];
+    const generatedDraft = isGeneratedClassGuideDraft(classGuide);
+    const staleGeneratedDraft = generatedDraft && !classGuide.includes(firstDefaultLine);
+    if (!classGuide.trim() || staleGeneratedDraft) {
+      setClassGuide(defaultClassGuide);
+    }
     setWizardStep(2);
-  }, [topic]);
+  }, [classGuide, defaultClassGuide, setClassGuide, topic]);
 
   // Step 2 → Step 3 (outline). Starts outline generation using the approved
   // agents[] as input, then moves the wizard to the outline-review step.
@@ -271,14 +341,18 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
       setStoreAgents(approvedAgents);
       setAgentCount(approvedAgents.length);
 
-      // Combine PDF text and web search context for richer generation.
+      // Legacy generation only has a PDF text lane, so curated web context
+      // rides there. V2 has a dedicated researchContext field and keeps the
+      // sources separate for cleaner prompt grounding.
       const combinedContext =
         [pdfText, webSearchContext].filter(Boolean).join('\n\n---\n\n') || undefined;
+      const guide = resolvedClassGuide.trim();
 
       const config: MAICGenerationConfig = {
         topic: topic.trim(),
-        pdfText: combinedContext,
+        pdfText: useV2Generation ? pdfText : combinedContext,
         enableWebSearch: webSearchEnabled,
+        webSearchContext: webSearchEnabled ? webSearchContext : undefined,
         language,
         agentCount: approvedAgents.length,
         sceneCount,
@@ -290,7 +364,17 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
         gradeLevel: gradeLevel.trim() || undefined,
         subject: subject.trim() || undefined,
         syllabusBoard: syllabusBoard.trim() || undefined,
+        classGuide: guide || undefined,
       };
+
+      if (useV2Generation) {
+        setWizardStep(4);
+        const newId = await startV2Generation(config, approvedAgents);
+        if (newId) {
+          setClassroomId(newId);
+        }
+        return;
+      }
 
       setWizardStep(3);
       await startOutlineGeneration(config, approvedAgents);
@@ -306,6 +390,9 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
       gradeLevel,
       subject,
       syllabusBoard,
+      resolvedClassGuide,
+      useV2Generation,
+      startV2Generation,
       startOutlineGeneration,
       setStoreAgents,
     ],
@@ -329,12 +416,14 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
         ...(gradeLevel.trim() ? { grade_level: gradeLevel.trim() } : {}),
         ...(subject.trim() ? { subject: subject.trim() } : {}),
         ...(syllabusBoard.trim() ? { syllabus_board: syllabusBoard.trim() } : {}),
+        ...(resolvedClassGuide.trim() ? { class_guide: resolvedClassGuide.trim() } : {}),
         config: {
           agentCount,
           sceneCount: outline.scenes.length,
           ...(gradeLevel.trim() ? { grade_level: gradeLevel.trim() } : {}),
           ...(subject.trim() ? { subject: subject.trim() } : {}),
           ...(syllabusBoard.trim() ? { syllabus_board: syllabusBoard.trim() } : {}),
+          ...(resolvedClassGuide.trim() ? { class_guide: resolvedClassGuide.trim() } : {}),
         },
       });
 
@@ -346,7 +435,16 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
     } catch (err) {
       // Error is handled inside useMAICGeneration
     }
-  }, [outline, courseId, agentCount, gradeLevel, subject, syllabusBoard, startContentGeneration]);
+  }, [
+    outline,
+    courseId,
+    agentCount,
+    gradeLevel,
+    subject,
+    syllabusBoard,
+    resolvedClassGuide,
+    startContentGeneration,
+  ]);
 
   // ─── Step 4: Open classroom ───────────────────────────────────────────────
 
@@ -358,9 +456,18 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
       clearGradeDraft();
       clearSubjectDraft();
       clearBoardDraft();
+      clearClassGuideDraft();
       onComplete?.(classroomId);
     }
-  }, [classroomId, onComplete, clearTopicDraft, clearGradeDraft, clearSubjectDraft, clearBoardDraft]);
+  }, [
+    classroomId,
+    onComplete,
+    clearTopicDraft,
+    clearGradeDraft,
+    clearSubjectDraft,
+    clearBoardDraft,
+    clearClassGuideDraft,
+  ]);
 
   // ─── Outline change handler ───────────────────────────────────────────────
 
@@ -379,6 +486,7 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
     clearGradeDraft();
     clearSubjectDraft();
     clearBoardDraft();
+    clearClassGuideDraft();
     setPdfText(undefined);
     setLanguage('en');
     setAgentCount(3);
@@ -388,7 +496,14 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
     setWizardStep(1);
     setShowWebSearch(false);
     setWebSearchContext(undefined);
-  }, [resetGeneration, clearTopicDraft, clearGradeDraft, clearSubjectDraft, clearBoardDraft]);
+  }, [
+    resetGeneration,
+    clearTopicDraft,
+    clearGradeDraft,
+    clearSubjectDraft,
+    clearBoardDraft,
+    clearClassGuideDraft,
+  ]);
 
   // CG-P1-6 (2026-04-27): step 2 ("Meet your classroom") needs more
   // horizontal room than other steps so 4 agent cards don't crush
@@ -396,7 +511,7 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
   // generation progress, complete) read better at the original
   // narrower max-w-2xl. Single conditional instead of layout-shift
   // keyframes so the stepper stays visually stable.
-  const stepContainerWidthClass = effectiveStep === 2 ? 'max-w-4xl' : 'max-w-2xl';
+  const stepContainerWidthClass = effectiveStep === 2 ? 'max-w-5xl' : 'max-w-2xl';
 
   return (
     <div className={cn(stepContainerWidthClass, 'mx-auto')}>
@@ -710,14 +825,97 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
 
       {/* ─── Step 2: Meet your classroom (agent picker) ───────────────────── */}
       {effectiveStep === 2 && (
-        <AgentGenerationStep
-          topic={topic}
-          language={language}
-          role="teacher"
-          initialAgents={agents.length > 0 ? agents : undefined}
-          onBack={() => setWizardStep(1)}
-          onComplete={(approvedAgents) => void handleAgentsComplete(approvedAgents)}
-        />
+        <div className="space-y-5">
+          <section className="rounded-lg border border-indigo-100 bg-indigo-50/60 p-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="flex items-start gap-3">
+                <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white text-indigo-600 shadow-sm">
+                  <ClipboardList className="h-4 w-4" aria-hidden="true" />
+                </div>
+                <div className="min-w-0">
+                  <h2 className="text-base font-semibold text-slate-900">Prepare class guide</h2>
+                  <p className="mt-1 text-sm text-slate-600">
+                    This guide shapes the outline, slide substance, audio dialogue, checks, and agent handovers.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setClassGuide(defaultClassGuide)}
+                className="inline-flex items-center justify-center gap-1 rounded-lg border border-indigo-200 bg-white px-3 py-2 text-xs font-medium text-indigo-700 transition-colors hover:bg-indigo-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-1"
+              >
+                <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+                Reset guide
+              </button>
+            </div>
+
+            <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_1.2fr]">
+              <div className="rounded-lg border border-indigo-100 bg-white/80 p-3">
+                <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase text-indigo-700">
+                  <Target className="h-3.5 w-3.5" aria-hidden="true" />
+                  Class frame
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {[topic.trim(), gradeLevel || 'General learners', subject || 'Any subject', syllabusBoard, `${sceneCount} scenes`]
+                    .filter(Boolean)
+                    .map((item) => (
+                      <span
+                        key={item}
+                        className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-700"
+                      >
+                        {item}
+                      </span>
+                    ))}
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-indigo-100 bg-white/80 p-3">
+                <div className="mb-2 text-xs font-semibold uppercase text-indigo-700">Quality contract</div>
+                <div className="grid gap-1.5 sm:grid-cols-2">
+                  {[
+                    'Concept journey',
+                    'Misconceptions',
+                    'Formative checks',
+                    'Agent handovers',
+                    'PBL/activity moment',
+                    'Teacher live discussion',
+                  ].map((item) => (
+                    <span key={item} className="inline-flex items-center gap-1.5 text-xs text-slate-700">
+                      <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" aria-hidden="true" />
+                      {item}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <label htmlFor="maic-class-guide" className="mt-4 block text-sm font-medium text-slate-800">
+              Class guide
+            </label>
+            <textarea
+              id="maic-class-guide"
+              data-testid="maic-class-guide"
+              value={classGuide}
+              onChange={(e) => setClassGuide(e.target.value)}
+              maxLength={2000}
+              rows={7}
+              className="mt-1 w-full resize-y rounded-lg border border-indigo-100 bg-white px-3 py-2 text-sm leading-6 text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+            />
+            <div className="mt-1 text-right text-[11px] text-slate-500">
+              {classGuide.length}/2000
+            </div>
+          </section>
+
+          <AgentGenerationStep
+            topic={topic}
+            language={language}
+            role="teacher"
+            agentCount={agentCount}
+            initialAgents={agents.length > 0 ? agents : undefined}
+            onBack={() => setWizardStep(1)}
+            onComplete={(approvedAgents) => void handleAgentsComplete(approvedAgents)}
+          />
+        </div>
       )}
 
       {/* ─── Step 3: Outline streaming — Sprint 2 · A.2 ──────────────────────
@@ -831,7 +1029,7 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
       )}
 
       {/* ─── Step 4: Generation Progress ───────────────────────────────────── */}
-      {effectiveStep === 4 && (
+      {effectiveStep === 4 && genStep !== 'error' && (
         <div className="py-6 space-y-6">
           <GenerationVisualizer
             phase={phase}

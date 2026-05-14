@@ -19,8 +19,9 @@ The user prompt includes a **Course Outline** and **Position** indicator — use
 Generate speech content for this PBL scene that:
 
 1. Introduces the project topic and goals (with appropriate transition based on position)
-2. Briefly explains the available roles
-3. Encourages students to select a role and begin
+2. Names the actual generated roles and the first/current issue when available
+3. States the student deliverable, constraints, and success criteria when provided by the teacher or project workspace
+4. Encourages students to select a role and begin
 
 ## Output Format
 

@@ -180,7 +180,7 @@ function renderPage(tab?: string) {
   return render(
     <QueryClientProvider client={qc}>
       <ToastProvider>
-        <MemoryRouter initialEntries={[initialEntry]}>
+        <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={[initialEntry]}>
           <Routes>
             <Route
               path="/admin/school/section/:sectionId"

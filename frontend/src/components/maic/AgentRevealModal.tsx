@@ -14,7 +14,7 @@
 // edit/regenerate individual agents. The modal is strictly for the
 // *reveal*.
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Sparkles } from 'lucide-react';
 import type { MAICAgent } from '../../types/maic';
@@ -69,6 +69,19 @@ export const AgentRevealModal: React.FC<AgentRevealModalProps> = ({
 }) => {
   const revealed = useStaggeredReveal(agents.length, open);
   const allFlipped = revealed >= agents.length && agents.length > 0;
+  const continueRef = useRef<HTMLButtonElement | null>(null);
+
+  const handleContinue = useCallback(() => {
+    if (allFlipped) {
+      onContinue();
+    }
+  }, [allFlipped, onContinue]);
+
+  useEffect(() => {
+    if (open && allFlipped) {
+      continueRef.current?.focus();
+    }
+  }, [allFlipped, open]);
 
   // Progress dots at the bottom fill as cards flip.
   const dots = useMemo(
@@ -90,7 +103,7 @@ export const AgentRevealModal: React.FC<AgentRevealModalProps> = ({
       {open && (
         <motion.div
           key="agent-reveal-modal"
-          className="fixed inset-0 z-[90] flex items-center justify-center bg-black/45 backdrop-blur-md px-4"
+          className="fixed inset-0 z-[90] flex items-center justify-center overflow-y-auto bg-black/45 px-4 py-4 backdrop-blur-md"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
@@ -98,9 +111,15 @@ export const AgentRevealModal: React.FC<AgentRevealModalProps> = ({
           role="dialog"
           aria-modal="true"
           aria-label="Meet your classroom agents"
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              handleContinue();
+            }
+          }}
         >
           <motion.div
-            className="relative flex w-full max-w-5xl flex-col gap-6 rounded-2xl bg-white p-6 shadow-2xl"
+            className="relative flex max-h-[calc(100vh-2rem)] w-full max-w-5xl flex-col gap-6 overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl"
             initial={{ scale: 0.96, y: 8 }}
             animate={{ scale: 1, y: 0 }}
             transition={{ duration: 0.28, ease: FLIP_EASE }}
@@ -196,11 +215,15 @@ export const AgentRevealModal: React.FC<AgentRevealModalProps> = ({
                 reveal always plays fully. Skip is intentionally NOT
                 offered; the Promise-gated pattern means the teacher
                 always sees the full cast before proceeding. */}
-            <div className="flex justify-center">
+            <div className="-mx-6 -mb-6 flex justify-center border-t border-slate-100 bg-white px-6 py-4">
               <button
+                ref={continueRef}
+                data-testid="agent-reveal-continue"
                 type="button"
-                onClick={onContinue}
+                onClick={handleContinue}
+                onPointerUp={handleContinue}
                 disabled={!allFlipped}
+                aria-busy={!allFlipped}
                 className={cn(
                   'inline-flex items-center gap-2 rounded-lg px-5 py-2.5 text-sm font-semibold',
                   'focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500',

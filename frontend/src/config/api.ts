@@ -324,6 +324,71 @@ function onRefreshFailed(error: unknown) {
   refreshSubscribers = [];
 }
 
+function persistAccessToken(access: string) {
+  // Save back to whichever storage originally held the token
+  const tokenStorage = getTokenStorage();
+  tokenStorage.setItem('access_token', access);
+
+  // Update Zustand in-memory state so subsequent requests use new token
+  useAuthStore.setState({ accessToken: access });
+
+  // Update Zustand persisted storage — only in the ACTIVE storage
+  // for this session (not both), to avoid corrupting another user's
+  // persisted auth state in a different tab.
+  try {
+    const authData = tokenStorage.getItem('auth-storage');
+    if (authData) {
+      const parsed = JSON.parse(authData);
+      if (parsed?.state) {
+        parsed.state.accessToken = access;
+        tokenStorage.setItem('auth-storage', JSON.stringify(parsed));
+      }
+    }
+  } catch {
+    // Persisted storage sync is best-effort
+  }
+}
+
+/**
+ * Refresh the access token through the same mutex used by the Axios
+ * response interceptor. Non-Axios production paths, such as MAIC live TTS
+ * fetches, call this after a 401 so they recover instead of going silent.
+ */
+export async function refreshAccessTokenForRequests(): Promise<string> {
+  const refreshToken = getRefreshToken();
+
+  if (!refreshToken) {
+    terminateSession('session_expired');
+    throw new Error('No refresh token available');
+  }
+
+  if (isRefreshing) {
+    return new Promise((resolve, reject) => {
+      subscribeTokenRefresh(resolve, reject);
+    });
+  }
+
+  isRefreshing = true;
+
+  try {
+    const response = await axios.post(`${API_BASE_URL}/users/auth/refresh/`, {
+      refresh_token: refreshToken,
+    });
+
+    const { access } = response.data;
+    persistAccessToken(access);
+
+    isRefreshing = false;
+    onRefreshed(access);
+    return access;
+  } catch (refreshError) {
+    isRefreshing = false;
+    onRefreshFailed(refreshError);
+    terminateSession('session_expired');
+    throw refreshError;
+  }
+}
+
 /**
  * Response interceptor to handle token refresh (with mutex to prevent parallel refreshes)
  */
@@ -353,62 +418,13 @@ api.interceptors.response.use(
         return Promise.reject(error);
       }
 
-      // If another request is already refreshing, queue this one
-      if (isRefreshing) {
-        return new Promise((resolve, reject) => {
-          subscribeTokenRefresh(
-            (newToken: string) => {
-              originalRequest.headers.Authorization = `Bearer ${newToken}`;
-              resolve(api(originalRequest));
-            },
-            (err: unknown) => {
-              reject(err);
-            },
-          );
-        });
-      }
-
-      isRefreshing = true;
-
       try {
-        const response = await axios.post(`${API_BASE_URL}/users/auth/refresh/`, {
-          refresh_token: refreshToken,
-        });
-
-        const { access } = response.data;
-        // Save back to whichever storage originally held the token
-        const tokenStorage = getTokenStorage();
-        tokenStorage.setItem('access_token', access);
-
-        // Update Zustand in-memory state so subsequent requests use new token
-        useAuthStore.setState({ accessToken: access });
-
-        // Update Zustand persisted storage — only in the ACTIVE storage
-        // for this session (not both), to avoid corrupting another user's
-        // persisted auth state in a different tab.
-        try {
-          const authData = tokenStorage.getItem('auth-storage');
-          if (authData) {
-            const parsed = JSON.parse(authData);
-            if (parsed?.state) {
-              parsed.state.accessToken = access;
-              tokenStorage.setItem('auth-storage', JSON.stringify(parsed));
-            }
-          }
-        } catch {
-          // Persisted storage sync is best-effort
-        }
-
-        isRefreshing = false;
-        onRefreshed(access);
+        const access = await refreshAccessTokenForRequests();
 
         // Retry original request
         originalRequest.headers.Authorization = `Bearer ${access}`;
         return api(originalRequest);
       } catch (refreshError) {
-        isRefreshing = false;
-        onRefreshFailed(refreshError);
-        terminateSession('session_expired');
         return Promise.reject(refreshError);
       }
     }

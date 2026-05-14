@@ -29,7 +29,7 @@ afterEach(() => {
 });
 
 describe('useGenerateVideo', () => {
-  test('POSTs to /api/maic/v2/media/generate-video/ with the request body', async () => {
+  test('POSTs to /maic/v2/media/generate-video/ with the request body', async () => {
     const post = vi.spyOn(api, 'post').mockResolvedValueOnce({
       data: {
         media_id: 'v-1',
@@ -54,7 +54,7 @@ describe('useGenerateVideo', () => {
     });
 
     expect(post).toHaveBeenCalledWith(
-      '/api/maic/v2/media/generate-video/',
+      '/maic/v2/media/generate-video/',
       expect.objectContaining({ prompt: 'a river flowing', duration_seconds: 5 }),
     );
     // mutateAsync's resolved value is the direct truth source

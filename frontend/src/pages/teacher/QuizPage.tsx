@@ -15,7 +15,10 @@ export const QuizPage: React.FC = () => {
   const { data, isLoading } = useQuery({
     queryKey: ['quiz', assignmentId],
     enabled: Boolean(assignmentId),
-    queryFn: () => teacherService.getQuiz(assignmentId as string),
+    queryFn: async () => {
+      const quiz = await teacherService.getQuiz(assignmentId as string);
+      return quiz ?? null;
+    },
   });
 
   const initialAnswers = useMemo(() => data?.submission?.answers || {}, [data?.submission?.answers]);

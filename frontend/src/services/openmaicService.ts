@@ -44,6 +44,77 @@ export interface MAICVoice {
   suits: string[];
 }
 
+export interface MAICGenerationContextPayload {
+  grade_level?: string;
+  subject?: string;
+  syllabus_board?: string;
+  audience_role?: 'teacher' | 'student';
+  class_guide?: string;
+}
+
+export interface MAICV2GenerationRequest {
+  topic: string;
+  contentTitle?: string;
+  agentCount?: number;
+  sceneCount?: number;
+  language?: string;
+  level?: string;
+  specifications?: string;
+  courseId?: string;
+  moduleId?: string;
+  isPublic?: boolean;
+  gradeLevel?: string;
+  subject?: string;
+  syllabusBoard?: string;
+  classGuide?: string;
+  pdfText?: string;
+  researchContext?: string;
+  agents?: MAICAgent[];
+  enablePBL?: boolean;
+  enableImageGeneration?: boolean;
+  enableVideoGeneration?: boolean;
+}
+
+export interface MAICV2GenerationCreateResponse {
+  job_id: string;
+  ws_url: string;
+  tenant_id: string | number;
+}
+
+export interface MAICV2GenerationJobResponse {
+  job_id: string;
+  status: 'pending' | 'in_progress' | 'succeeded' | 'failed';
+  step?: number;
+  progress?: {
+    stage?: number;
+    completed?: number;
+    total?: number;
+    message?: string;
+  };
+  message?: string;
+  scenesGenerated?: number;
+  totalScenes?: number;
+  result?: {
+    classroomId?: string;
+    classroom_id?: string;
+    contentId?: string | null;
+    content_id?: string | null;
+    url?: string;
+    scenesCount?: number;
+    artifact?: {
+      classroomId?: string;
+      classroom_id?: string;
+      url?: string;
+    };
+    [key: string]: unknown;
+  };
+  error?: string | null;
+  done: boolean;
+  created_at: string;
+  updated_at: string;
+  completed_at?: string | null;
+}
+
 // ─── MAIC AI Classroom API (Teacher) ─────────────────────────────────────────
 
 export const maicApi = {
@@ -75,13 +146,21 @@ export const maicApi = {
     language: string;
     classroomId?: string;
     sceneIdx?: number;
-  }) => api.post('/v1/teacher/maic/generate/scene-content/', data),
+  } & MAICGenerationContextPayload) => api.post('/v1/teacher/maic/generate/scene-content/', data),
 
   generateImage: (data: { prompt: string; style?: string }) =>
     api.post('/v1/teacher/maic/generate/image/', data),
 
   generateClassroom: (data: Record<string, unknown>) =>
     api.post('/v1/teacher/maic/generate/classroom/', data),
+
+  generateV2Classroom: (data: MAICV2GenerationRequest) =>
+    api.post<MAICV2GenerationCreateResponse>('/maic/v2/generate/', data),
+
+  getV2GenerationJob: (jobId: string, opts?: { full?: boolean }) =>
+    api.get<MAICV2GenerationJobResponse>(`/maic/v2/generate/${jobId}/`, {
+      params: opts?.full ? { full: '1' } : undefined,
+    }),
 
   // Quiz grading
   quizGrade: (data: { question: string; answer: string; commentPrompt?: string }) =>
@@ -103,7 +182,8 @@ export const maicApi = {
     scene: { id: string; type: string; title: string; content: MAICScene['content'] };
     agents: MAICAgent[];
     language: string;
-  }) =>
+    classroomId?: string;
+  } & MAICGenerationContextPayload) =>
     api.post<{ actions: MAICAction[] }>('/v1/teacher/maic/generate/scene-actions/', data),
 
   generateAgentProfiles: (data: GenerateAgentProfilesRequest) =>
@@ -219,6 +299,14 @@ export const maicStudentApi = {
   // Topic validation (guardrail check)
   validateTopic: (data: { topic?: string; pdfText?: string }) =>
     api.post<{ allowed: boolean; is_educational: boolean; subject_area: string; confidence: number; reason: string }>('/v1/student/maic/validate-topic/', data),
+
+  generateV2Classroom: (data: MAICV2GenerationRequest) =>
+    api.post<MAICV2GenerationCreateResponse>('/maic/v2/generate/', data),
+
+  getV2GenerationJob: (jobId: string, opts?: { full?: boolean }) =>
+    api.get<MAICV2GenerationJobResponse>(`/maic/v2/generate/${jobId}/`, {
+      params: opts?.full ? { full: '1' } : undefined,
+    }),
 
   // Generation proxies (with guardrails)
   generateSceneContent: (data: { scene: MAICOutlineScene; agents: MAICAgent[]; language: string }) =>

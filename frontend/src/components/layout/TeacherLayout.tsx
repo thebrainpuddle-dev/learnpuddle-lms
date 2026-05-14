@@ -32,25 +32,30 @@ export const TeacherLayout: React.FC = () => {
     if (!isDesktop && sidebarOpen) setSidebarOpen(false);
   }, [location.pathname]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const immersiveClassroomPlayer =
+    /^\/teacher\/ai-classroom\/(?!new(?:\/|$))[^/]+$/.test(location.pathname);
+
   return (
     <div className="min-h-screen bg-tp-bg overflow-x-hidden">
       {/* Mobile sidebar drawer */}
-      {!isDesktop && (
+      {!immersiveClassroomPlayer && !isDesktop && (
         <TeacherSidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
       )}
 
       {/* Desktop sidebar */}
-      <div className="hidden lg:fixed lg:inset-y-0 lg:flex lg:w-[240px] lg:flex-col">
-        <TeacherSidebar open={true} />
-      </div>
+      {!immersiveClassroomPlayer && (
+        <div className="hidden lg:fixed lg:inset-y-0 lg:flex lg:w-[240px] lg:flex-col">
+          <TeacherSidebar open={true} />
+        </div>
+      )}
 
       {/* Main content area */}
-      <div className="flex min-w-0 flex-1 flex-col lg:pl-[240px]">
-        <TeacherHeader onMenuClick={() => setSidebarOpen(true)} />
+      <div className={`flex min-w-0 flex-1 flex-col ${immersiveClassroomPlayer ? '' : 'lg:pl-[240px]'}`}>
+        {!immersiveClassroomPlayer && <TeacherHeader onMenuClick={() => setSidebarOpen(true)} />}
 
         <main className="flex-1 min-w-0">
-          <div className="py-6 pb-16 lg:pb-6">
-            <div className="mx-auto max-w-[1400px] px-4 lg:px-6">
+          <div className={immersiveClassroomPlayer ? 'py-0 pb-0' : 'py-6 pb-16 lg:pb-6'}>
+            <div className={immersiveClassroomPlayer ? 'w-full px-0' : 'mx-auto max-w-[1400px] px-4 lg:px-6'}>
               <ErrorBoundary>
                 <Outlet />
               </ErrorBoundary>
@@ -60,7 +65,7 @@ export const TeacherLayout: React.FC = () => {
       </div>
 
       {/* Mobile bottom tab bar */}
-      <MobileBottomNav basePath="/teacher" />
+      {!immersiveClassroomPlayer && <MobileBottomNav basePath="/teacher" />}
     </div>
   );
 };

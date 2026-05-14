@@ -51,7 +51,16 @@ export type MaicEvent =
   | { type: 'cue_user'; data: { fromAgentId?: string } }
   | {
       type: 'speech_audio';
-      data: { audioId: string; format: string; base64?: string; url?: string };
+      data: {
+        audioId: string;
+        format: string;
+        audioB64?: string;
+        base64?: string;
+        url?: string;
+        audioUrl?: string;
+        messageId?: string;
+        agentId?: string;
+      };
     }
   | { type: 'error'; data: { message: string } };
 

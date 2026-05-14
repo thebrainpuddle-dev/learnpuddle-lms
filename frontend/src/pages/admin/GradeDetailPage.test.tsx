@@ -147,7 +147,7 @@ function renderPage(gradeId = GRADE_ID) {
   return render(
     <QueryClientProvider client={qc}>
       <ToastProvider>
-        <MemoryRouter initialEntries={[`/admin/school/grade/${gradeId}`]}>
+        <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={[`/admin/school/grade/${gradeId}`]}>
           <Routes>
             <Route path="/admin/school/grade/:gradeId" element={<GradeDetailPage />} />
           </Routes>

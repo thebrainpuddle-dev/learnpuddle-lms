@@ -87,7 +87,7 @@ def send_teacher_welcome_email(self, user_id: str, temp_password: str | None = N
 )
 def send_teacher_invitation_email(self, invitation_id: str):
     """
-    Send an invitation email to a teacher with a unique token-based link
+    Send an invitation email with a unique token-based link
     so they can set their own password and join the platform.
     """
     from apps.users.models import TeacherInvitation
@@ -101,6 +101,8 @@ def send_teacher_invitation_email(self, invitation_id: str):
     tenant = invitation.tenant
     school_name = tenant.name if tenant else "your organization"
     platform_name = getattr(settings, "PLATFORM_NAME", "LearnPuddle")
+    invitation_role = getattr(invitation, "invitation_role", "TEACHER") or "TEACHER"
+    role_label = "student" if invitation_role == "STUDENT" else "teacher"
     accept_url = build_tenant_url(tenant=tenant, path=f"/accept-invitation/{invitation.token}")
     forgot_password_url = build_tenant_url(tenant=tenant, path="/forgot-password")
     inviter_name = invitation.invited_by.get_full_name() if invitation.invited_by else "your administrator"
@@ -116,6 +118,7 @@ def send_teacher_invitation_email(self, invitation_id: str):
         "accept_url": accept_url,
         "expires_at": expires_at,
         "forgot_password_url": forgot_password_url,
+        "role_label": role_label,
     }
 
     try:
@@ -128,13 +131,13 @@ def send_teacher_invitation_email(self, invitation_id: str):
                 tenant=tenant,
                 bucket="onboarding",
                 template_name="teacher_invitation.html",
-                event="teacher_invitation",
+                event=f"{role_label}_invitation",
             ),
         )
-        logger.info("teacher invitation email sent to=%s invitation_id=%s", invitation.email, invitation_id)
+        logger.info("%s invitation email sent to=%s invitation_id=%s", role_label, invitation.email, invitation_id)
         return {"sent": True, "to": invitation.email}
     except Exception as exc:
-        logger.error("teacher invitation email failed to=%s invitation_id=%s err=%s", invitation.email, invitation_id, exc)
+        logger.error("%s invitation email failed to=%s invitation_id=%s err=%s", role_label, invitation.email, invitation_id, exc)
         raise self.retry(exc=exc)
 
 

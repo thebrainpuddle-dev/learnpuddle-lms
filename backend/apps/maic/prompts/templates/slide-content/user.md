@@ -14,6 +14,14 @@
 {{#if imageElementEnabled}}
 - **Available Media**: {{assignedImages}}
 {{/if}}
+{{#if generatedImageEnabled}}
+- **Generated Image Placeholders**:
+{{generatedMedia}}
+{{/if}}
+{{#if generatedVideoEnabled}}
+- **Generated Video Placeholders**:
+{{generatedMedia}}
+{{/if}}
 - **Canvas Size**: {{canvas_width}} × {{canvas_height}} px
 
 ## Output Requirements
@@ -34,6 +42,9 @@ Based on the scene information above, generate a complete Canvas/PPT component f
 {{/if}}
 {{#if generatedVideoEnabled}}
 - Use only the provided generated video IDs (for example, `gen_vid_1`) for video `src` fields
+{{/if}}
+{{#if generatedImageEnabled}}
+- Use only the provided generated image IDs (for example, `gen_img_1`) for image `src` fields
 {{/if}}
 5. All TextElement `height` values must be selected from the quick reference table in the system prompt
 

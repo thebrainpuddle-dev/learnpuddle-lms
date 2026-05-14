@@ -30,7 +30,7 @@ export const StudentLayout: React.FC = () => {
   // Close mobile sidebar on route change
   React.useEffect(() => {
     if (!isDesktop && sidebarOpen) setSidebarOpen(false);
-  }, [location.pathname]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isDesktop, location.pathname, sidebarOpen]);
 
   return (
     <div className="min-h-screen bg-tp-bg overflow-x-hidden">

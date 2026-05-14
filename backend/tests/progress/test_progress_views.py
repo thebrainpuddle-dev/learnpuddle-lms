@@ -52,6 +52,31 @@ def _make_assignment(tenant, course, module=None, content=None, title=None, **kw
     )
 
 
+def _list_results(data):
+    """Return list items from either paginated or plain-list DRF responses."""
+    return data.get("results", data) if isinstance(data, dict) else data
+
+
+def _quiz_answers(questions):
+    answers = {}
+    for q in questions:
+        if q.question_type == "MCQ":
+            answers[str(q.id)] = {"option_index": 0}
+        elif q.question_type == "TRUE_FALSE":
+            answers[str(q.id)] = {"value": True}
+        else:
+            answers[str(q.id)] = {"text": "Test answer"}
+    return answers
+
+
+def _start_quiz(teacher_client, assignment):
+    return teacher_client.post(
+        f"/api/v1/teacher/quizzes/{assignment.id}/start/",
+        data={},
+        format="json",
+    )
+
+
 def _make_quiz(tenant, assignment, **kwargs):
     """Create a Quiz linked to an assignment."""
     from apps.progress.models import Quiz
@@ -391,12 +416,13 @@ class TestAssignmentList:
         _assign_course_to_teacher(course, teacher_user)
         response = teacher_client.get("/api/v1/teacher/assignments/")
         assert response.status_code == 200
-        results = response.data.get("results", response.data)
+        results = _list_results(response.data)
         if results:
             item = results[0]
             assert "id" in item
             assert "title" in item
-            assert "course" in item
+            assert "course_id" in item
+            assert "course_title" in item
 
     def test_assignment_list_excludes_other_tenant_assignments(
         self, teacher_client, teacher_user, course, assignment,
@@ -420,7 +446,7 @@ class TestAssignmentList:
 
         response = teacher_client.get("/api/v1/teacher/assignments/")
         assert response.status_code == 200
-        results = response.data.get("results", response.data)
+        results = _list_results(response.data)
         titles = [a["title"] for a in results if isinstance(a, dict)]
         assert "Tenant B Assignment" not in titles
 
@@ -436,7 +462,7 @@ class TestAssignmentList:
         """Teacher with no course assignments gets an empty list."""
         response = teacher_client.get("/api/v1/teacher/assignments/")
         assert response.status_code == 200
-        results = response.data.get("results", response.data)
+        results = _list_results(response.data)
         assert isinstance(results, list)
 
 
@@ -626,13 +652,9 @@ class TestQuizSubmit:
         _assign_course_to_teacher(course, teacher_user)
         quiz = Quiz.objects.get(assignment=quiz_assignment)
         questions = QuizQuestion.objects.filter(quiz=quiz).order_by("order")
-
-        answers = {}
-        for q in questions:
-            if q.question_type == "MCQ":
-                answers[str(q.id)] = {"option_index": 0}  # "Option A" (correct)
-            elif q.question_type == "TRUE_FALSE":
-                answers[str(q.id)] = {"value": True}
+        start_response = _start_quiz(teacher_client, quiz_assignment)
+        assert start_response.status_code == 200
+        answers = _quiz_answers(questions)
 
         response = teacher_client.post(
             f"/api/v1/teacher/quizzes/{quiz_assignment.id}/submit/",
@@ -649,8 +671,9 @@ class TestQuizSubmit:
         _assign_course_to_teacher(course, teacher_user)
         quiz = Quiz.objects.get(assignment=quiz_assignment)
         questions = QuizQuestion.objects.filter(quiz=quiz).order_by("order")
-
-        answers = {str(q.id): {"option_index": 0} for q in questions}
+        start_response = _start_quiz(teacher_client, quiz_assignment)
+        assert start_response.status_code == 200
+        answers = _quiz_answers(questions)
 
         response = teacher_client.post(
             f"/api/v1/teacher/quizzes/{quiz_assignment.id}/submit/",
@@ -668,8 +691,9 @@ class TestQuizSubmit:
         _assign_course_to_teacher(course, teacher_user)
         quiz = Quiz.objects.get(assignment=quiz_assignment)
         questions = QuizQuestion.objects.filter(quiz=quiz).order_by("order")
-
-        answers = {str(q.id): {"option_index": 0} for q in questions}
+        start_response = _start_quiz(teacher_client, quiz_assignment)
+        assert start_response.status_code == 200
+        answers = _quiz_answers(questions)
         response = teacher_client.post(
             f"/api/v1/teacher/quizzes/{quiz_assignment.id}/submit/",
             data={"answers": answers},

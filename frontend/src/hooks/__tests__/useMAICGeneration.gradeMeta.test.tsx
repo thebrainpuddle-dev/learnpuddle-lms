@@ -24,12 +24,29 @@ vi.mock('../../lib/maicDb', () => ({
   saveClassroom: vi.fn().mockResolvedValue(undefined),
 }));
 
+const updateClassroomMock = vi.fn().mockResolvedValue({});
+const generateSceneContentMock = vi.fn().mockResolvedValue({
+  data: {
+    slides: [
+      {
+        id: 'slide-1',
+        title: 'Slide 1',
+        elements: [{ id: 'el-1', type: 'text', content: 'Hello', x: 0, y: 0, width: 100, height: 100 }],
+        background: '#fff',
+      },
+    ],
+  },
+});
+const generateSceneActionsMock = vi.fn().mockResolvedValue({
+  data: { actions: [{ type: 'speech', agentId: 'a1', text: 'hello' }] },
+});
+
 vi.mock('../../services/openmaicService', () => ({
   maicApi: {
     pingClassroomProgress: vi.fn().mockResolvedValue({}),
-    updateClassroom: vi.fn().mockResolvedValue({}),
-    generateSceneContent: vi.fn().mockResolvedValue({ data: { slides: [] } }),
-    generateSceneActions: vi.fn().mockResolvedValue({ data: { actions: [] } }),
+    updateClassroom: (...args: unknown[]) => updateClassroomMock(...args),
+    generateSceneContent: (...args: unknown[]) => generateSceneContentMock(...args),
+    generateSceneActions: (...args: unknown[]) => generateSceneActionsMock(...args),
   },
 }));
 
@@ -90,6 +107,9 @@ const baseConfig: MAICGenerationConfig = {
 describe('useMAICGeneration — FULL-1 grade-aware body mapping', () => {
   beforeEach(() => {
     streamMAICMock.mockClear();
+    updateClassroomMock.mockClear();
+    generateSceneContentMock.mockClear();
+    generateSceneActionsMock.mockClear();
     useAuthStore.setState({ accessToken: 'test-token' } as never);
   });
 
@@ -102,6 +122,7 @@ describe('useMAICGeneration — FULL-1 grade-aware body mapping', () => {
         gradeLevel: 'Grade 9',
         subject: 'Mathematics',
         syllabusBoard: 'CBSE',
+        classGuide: 'Use misconception checks and one PBL handoff.',
       });
     });
 
@@ -114,6 +135,7 @@ describe('useMAICGeneration — FULL-1 grade-aware body mapping', () => {
     expect(args.body.grade_level).toBe('Grade 9');
     expect(args.body.subject).toBe('Mathematics');
     expect(args.body.syllabus_board).toBe('CBSE');
+    expect(args.body.class_guide).toBe('Use misconception checks and one PBL handoff.');
     // Sanity: legacy fields still flow through.
     expect(args.body.topic).toBe('Photosynthesis');
     expect(args.body.language).toBe('en');
@@ -131,6 +153,7 @@ describe('useMAICGeneration — FULL-1 grade-aware body mapping', () => {
     expect(body).not.toHaveProperty('grade_level');
     expect(body).not.toHaveProperty('subject');
     expect(body).not.toHaveProperty('syllabus_board');
+    expect(body).not.toHaveProperty('class_guide');
   });
 
   it('omits snake_case keys when grade fields are whitespace-only', async () => {
@@ -142,6 +165,7 @@ describe('useMAICGeneration — FULL-1 grade-aware body mapping', () => {
         gradeLevel: '   ',
         subject: '\t',
         syllabusBoard: '',
+        classGuide: '   ',
       });
     });
 
@@ -149,5 +173,61 @@ describe('useMAICGeneration — FULL-1 grade-aware body mapping', () => {
     expect(body).not.toHaveProperty('grade_level');
     expect(body).not.toHaveProperty('subject');
     expect(body).not.toHaveProperty('syllabus_board');
+    expect(body).not.toHaveProperty('class_guide');
+  });
+
+  it('threads class context into scene content and scene actions calls', async () => {
+    streamMAICMock.mockImplementationOnce(async ({ onEvent, onDone }: any) => {
+      onEvent({
+        type: 'outline',
+        data: {
+          topic: 'Photosynthesis',
+          language: 'en',
+          totalMinutes: 8,
+          agents: [
+            { id: 'a1', name: 'Asha', role: 'professor', avatar: 'A', color: '#111' },
+            { id: 'a2', name: 'Ben', role: 'student', avatar: 'B', color: '#222' },
+          ],
+          scenes: [
+            {
+              id: 'scene-1',
+              title: 'Leaf Lab',
+              description: 'Explore how leaves make food.',
+              type: 'lecture',
+              estimatedMinutes: 4,
+              agentIds: ['a1', 'a2'],
+              slideCount: 3,
+            },
+          ],
+        },
+      });
+      onDone();
+    });
+    const handle = renderHook();
+
+    await act(async () => {
+      await handle.current.startOutlineGeneration({
+        ...baseConfig,
+        gradeLevel: 'Grade 6',
+        subject: 'Science',
+        syllabusBoard: 'CBSE',
+        classGuide: 'Start with a plant mystery and ask the student agent to voice misconceptions.',
+      });
+    });
+    await act(async () => {
+      await handle.current.startContentGeneration('classroom-ctx');
+    });
+
+    const contentBody = generateSceneContentMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(contentBody.grade_level).toBe('Grade 6');
+    expect(contentBody.subject).toBe('Science');
+    expect(contentBody.syllabus_board).toBe('CBSE');
+    expect(contentBody.class_guide).toContain('plant mystery');
+
+    const actionsBody = generateSceneActionsMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(actionsBody.grade_level).toBe('Grade 6');
+    expect(actionsBody.subject).toBe('Science');
+    expect(actionsBody.syllabus_board).toBe('CBSE');
+    expect(actionsBody.class_guide).toContain('student agent');
   });
 });

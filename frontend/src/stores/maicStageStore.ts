@@ -4,6 +4,34 @@ import { create } from 'zustand';
 import type { MAICSlide, MAICAgent, MAICViewMode, MAICChatMessage } from '../types/maic';
 import type { MAICScene, MAICEngineMode, MAICDiscussionSessionType, SceneSlideBounds, MAICNote } from '../types/maic-scenes';
 
+function boundsForScene(
+  bounds: SceneSlideBounds[],
+  sceneIdx: number,
+): SceneSlideBounds | undefined {
+  return bounds.find((b) => b.sceneIdx === sceneIdx);
+}
+
+function boundsForSlide(
+  bounds: SceneSlideBounds[],
+  slideIdx: number,
+): SceneSlideBounds | undefined {
+  return bounds.find((b) => slideIdx >= b.startSlide && slideIdx <= b.endSlide);
+}
+
+function normalizeSceneSlideBounds(
+  scenes: MAICScene[],
+  slides: MAICSlide[],
+  bounds: SceneSlideBounds[],
+): SceneSlideBounds[] {
+  const maxSlideIdx = slides.length - 1;
+  return bounds.filter((bound) => {
+    const scene = scenes[bound.sceneIdx];
+    if (!scene || scene.content.type !== 'slide') return false;
+    if (bound.startSlide < 0 || bound.endSlide < bound.startSlide) return false;
+    return bound.endSlide <= maxSlideIdx;
+  });
+}
+
 interface MAICStageState {
   // Slides
   slides: MAICSlide[];
@@ -162,11 +190,9 @@ export const useMAICStageStore = create<MAICStageState>((set, get) => ({
     const updates: Partial<MAICStageState> = { currentSlideIndex: clamped };
     // Derive scene index from bounds if available
     if (sceneSlideBounds.length > 0) {
-      const sceneIdx = sceneSlideBounds.findIndex(
-        (b) => clamped >= b.startSlide && clamped <= b.endSlide,
-      );
-      if (sceneIdx >= 0) {
-        updates.currentSceneIndex = sceneIdx;
+      const bound = boundsForSlide(sceneSlideBounds, clamped);
+      if (bound) {
+        updates.currentSceneIndex = bound.sceneIdx;
       }
     } else {
       // Legacy 1:1 fallback
@@ -214,8 +240,12 @@ export const useMAICStageStore = create<MAICStageState>((set, get) => ({
     if (max < 0) return;
     const clamped = Math.max(0, Math.min(index, max));
     // Jump to the first slide of the target scene
-    if (sceneSlideBounds.length > 0 && sceneSlideBounds[clamped]) {
-      set({ currentSceneIndex: clamped, currentSlideIndex: sceneSlideBounds[clamped].startSlide });
+    if (sceneSlideBounds.length > 0) {
+      const bound = boundsForScene(sceneSlideBounds, clamped);
+      set({
+        currentSceneIndex: clamped,
+        ...(bound ? { currentSlideIndex: bound.startSlide } : {}),
+      });
     } else {
       // Legacy 1:1 fallback
       set({ currentSceneIndex: clamped, currentSlideIndex: clamped });
@@ -229,11 +259,16 @@ export const useMAICStageStore = create<MAICStageState>((set, get) => ({
   },
 
   // Multi-slide scene bounds
-  setSceneSlideBounds: (bounds) => set({ sceneSlideBounds: bounds }),
+  setSceneSlideBounds: (bounds) => {
+    const { scenes, slides } = get();
+    set({ sceneSlideBounds: normalizeSceneSlideBounds(scenes, slides, bounds) });
+  },
   getCurrentSceneSlides: () => {
     const { slides, currentSceneIndex, sceneSlideBounds } = get();
-    if (sceneSlideBounds.length > 0 && sceneSlideBounds[currentSceneIndex]) {
-      const { startSlide, endSlide } = sceneSlideBounds[currentSceneIndex];
+    if (sceneSlideBounds.length > 0) {
+      const bound = boundsForScene(sceneSlideBounds, currentSceneIndex);
+      if (!bound) return [];
+      const { startSlide, endSlide } = bound;
       return slides.slice(startSlide, endSlide + 1);
     }
     // Legacy 1:1 fallback — return the single slide at currentSceneIndex

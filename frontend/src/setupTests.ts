@@ -8,6 +8,31 @@ import '@testing-library/jest-dom';
 // This is the standard migration shim — remove once all tests import from 'vitest' directly.
 (globalThis as any).jest = vi;
 
+// Keep the test DOM in standards mode so renderers such as KaTeX exercise the
+// same document mode they see in the Vite app.
+if (!document.doctype) {
+  document.insertBefore(
+    document.implementation.createDocumentType('html', '', ''),
+    document.documentElement
+  );
+}
+if (document.compatMode !== 'CSS1Compat') {
+  Object.defineProperty(document, 'compatMode', {
+    configurable: true,
+    value: 'CSS1Compat',
+  });
+}
+
+// happy-dom does not currently expose Element#getAnimations. Headless UI falls
+// back to its own warning polyfill when the API is absent, so provide the
+// browser API shape up front for tests that render real dialogs/transitions.
+if (typeof Element !== 'undefined' && !Element.prototype.getAnimations) {
+  Object.defineProperty(Element.prototype, 'getAnimations', {
+    configurable: true,
+    value: () => [],
+  });
+}
+
 // ── localStorage / sessionStorage polyfill ──
 //
 // happy-dom in this vitest config emits a `--localstorage-file was provided

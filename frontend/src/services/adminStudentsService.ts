@@ -55,6 +55,7 @@ export interface StudentInvitation {
   email: string;
   first_name: string;
   last_name: string;
+  invitation_role?: 'TEACHER' | 'STUDENT';
   status: 'pending' | 'accepted' | 'expired';
   created_at: string;
   expires_at: string;

@@ -130,7 +130,7 @@ function StageInner({
   );
 
   // ── Channel + buffered state ───────────────────────────────────
-  const { status: channelStatus, events, send } = useMaicClassroomChannelV2({
+  const { status: channelStatus, events, closeCode, send } = useMaicClassroomChannelV2({
     sessionId,
     baseUrl,
     autoConnect,
@@ -269,13 +269,14 @@ function StageInner({
   }, [persistence]);
 
   // ── Derived render state ───────────────────────────────────────
-  const messageOrder = useMemo(
-    () => (buffer.currentAgent ? [buffer.currentAgent.messageId] : []),
-    [buffer.currentAgent],
-  );
-
   const speaking = engineMode === 'playing' && buffer.status !== 'idle';
   const canStart = channelStatus === 'open' && !backendKicked;
+  const channelError =
+    channelStatus === 'error'
+      ? 'Could not connect to the classroom stream. Check the backend and try again.'
+      : channelStatus === 'closed' && backendKicked && buffer.status !== 'completed'
+        ? `Classroom stream closed${closeCode ? ` (code ${closeCode})` : ''}. Restart to continue.`
+        : null;
 
   return (
     <div
@@ -352,11 +353,18 @@ function StageInner({
 
       <Transcript
         textByMessageId={buffer.textByMessageId}
-        messageOrder={messageOrder}
+        messageOrder={buffer.messageOrder}
+        agentsByMessageId={buffer.agentsByMessageId}
         status={buffer.status}
         thinkingStage={buffer.thinkingStage}
         cueingUser={buffer.cueingUser}
       />
+
+      {channelError && (
+        <p data-testid="maic-v2-channel-error" className="text-sm text-destructive">
+          {channelError}
+        </p>
+      )}
 
       {buffer.lastError && (
         <p data-testid="maic-v2-stage-error" className="text-sm text-destructive">

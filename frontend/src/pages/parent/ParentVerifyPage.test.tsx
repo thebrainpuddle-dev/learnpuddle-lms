@@ -46,7 +46,7 @@ const mockSetSession = vi.fn();
 function renderPageWithToken(token?: string) {
   const search = token ? `?token=${token}` : '';
   return render(
-    <MemoryRouter initialEntries={[`/parent/verify${search}`]}>
+    <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={[`/parent/verify${search}`]}>
       <ParentVerifyPage />
     </MemoryRouter>,
   );
@@ -67,9 +67,8 @@ const VERIFY_SUCCESS = {
 describe('ParentVerifyPage', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    sessionStorage.clear();
     mockedUseParentStore.mockReturnValue({ setSession: mockSetSession });
-    // Stub sessionStorage to avoid side-effects
-    vi.spyOn(Storage.prototype, 'getItem').mockReturnValue(null);
   });
 
   // ── 1. Verifying state ────────────────────────────────────────────────────
@@ -164,10 +163,7 @@ describe('ParentVerifyPage', () => {
     });
 
     it('falls back to sessionStorage email when response has no parent_email', async () => {
-      vi.spyOn(Storage.prototype, 'getItem').mockImplementation((key) => {
-        if (key === 'parent_email') return 'stored@example.com';
-        return null;
-      });
+      sessionStorage.setItem('parent_email', 'stored@example.com');
       const dataWithoutEmail = { ...VERIFY_SUCCESS, parent_email: undefined };
       mockedVerifyToken.mockResolvedValue(dataWithoutEmail);
       renderPageWithToken('magic-abc-123');

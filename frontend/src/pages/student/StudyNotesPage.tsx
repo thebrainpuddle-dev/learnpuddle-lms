@@ -3,7 +3,7 @@
 // Two-panel layout: left panel is a course content browser (accordion),
 // right panel shows the AI StudySummaryPanel for the selected content.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   Search, BookOpen, FileText, Video, Type, ChevronDown, ChevronRight,
   Sparkles, Check,
@@ -13,6 +13,7 @@ import { studentService, type StudentCourseListItem, type StudentCourseDetail } 
 import { StudySummaryPanel } from '../../components/student/StudySummaryPanel';
 import { usePageTitle } from '../../hooks/usePageTitle';
 import { cn } from '../../design-system/theme/cn';
+import type { StudySummaryListItem } from '../../types/studySummary';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -42,6 +43,9 @@ const CONTENT_COLORS: Record<string, string> = {
   TEXT: 'bg-emerald-50 text-emerald-500',
 };
 
+const EMPTY_COURSES: StudentCourseListItem[] = [];
+const EMPTY_SUMMARIES: StudySummaryListItem[] = [];
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function isSummarizable(ct: { content_type: string; has_transcript?: boolean }): boolean {
@@ -60,29 +64,29 @@ export function StudyNotesPage() {
   const [courseDetails, setCourseDetails] = useState<Map<string, StudentCourseDetail>>(new Map());
   const [loadingCourses, setLoadingCourses] = useState<Set<string>>(new Set());
   const [selectedContent, setSelectedContent] = useState<SelectedContent | null>(null);
-  const [summaryExistsMap, setSummaryExistsMap] = useState<Set<string>>(new Set());
   const [isMobileBrowserOpen, setIsMobileBrowserOpen] = useState(true);
 
   // Fetch course list
-  const { data: courses = [], isLoading } = useQuery({
+  const { data: courses = EMPTY_COURSES, isLoading } = useQuery({
     queryKey: ['student', 'courses'],
     queryFn: () => studentService.getStudentCourses(),
   });
 
   // Fetch summary list to know which content has summaries
-  const { data: summaries = [] } = useQuery({
+  const { data: summaries = EMPTY_SUMMARIES } = useQuery({
     queryKey: ['student', 'study-summaries'],
     queryFn: () => studentService.getStudySummaries(),
   });
 
-  useEffect(() => {
-    const readyIds = new Set(
-      summaries
-        .filter((s) => s.status === 'READY')
-        .map((s) => s.content_id),
-    );
-    setSummaryExistsMap(readyIds);
-  }, [summaries]);
+  const summaryExistsMap = useMemo(
+    () =>
+      new Set(
+        summaries
+          .filter((s) => s.status === 'READY')
+          .map((s) => s.content_id),
+      ),
+    [summaries],
+  );
 
   // Build course items grouped by course
   const courseItems = useMemo(() => {

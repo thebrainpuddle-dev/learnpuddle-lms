@@ -46,6 +46,7 @@ vi.mock('react-router-dom', async (importOriginal) => {
 vi.mock('../../services/studentService', () => ({
   studentService: {
     getQuizDetail: vi.fn(),
+    startQuiz: vi.fn(),
     submitQuiz: vi.fn(),
   },
 }));
@@ -62,6 +63,7 @@ vi.mock('../../hooks/usePageTitle', () => ({ usePageTitle: vi.fn() }));
 
 import { studentService } from '../../services/studentService';
 const mockGetQuizDetail = studentService.getQuizDetail as ReturnType<typeof vi.fn>;
+const mockStartQuiz = studentService.startQuiz as ReturnType<typeof vi.fn>;
 const mockSubmitQuiz = studentService.submitQuiz as ReturnType<typeof vi.fn>;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -77,7 +79,7 @@ const makeQueryClient = () =>
 function renderPage() {
   return render(
     <QueryClientProvider client={makeQueryClient()}>
-      <MemoryRouter initialEntries={['/student/quizzes/asgn-1']}>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={['/student/quizzes/asgn-1']}>
         <QuizPage />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -153,6 +155,13 @@ const MOCK_QUIZ_SUBMITTED = {
 describe('Student QuizPage', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    mockStartQuiz.mockResolvedValue({
+      ...MOCK_QUIZ_DATA,
+      current_attempt: {
+        attempt_number: 1,
+        started_at: '2026-04-01T09:00:00Z',
+      },
+    });
     mockSubmitQuiz.mockResolvedValue({
       quiz_id: 'quiz-1',
       assignment_id: 'asgn-1',
@@ -254,8 +263,14 @@ describe('Student QuizPage', () => {
       await user.click(
         await screen.findByRole('button', { name: /i agree.*start quiz/i }),
       );
+      await waitFor(() => expect(mockStartQuiz).toHaveBeenCalledWith('asgn-1'));
       return user;
     }
+
+    it('starts the quiz attempt through the production start endpoint before showing questions', async () => {
+      await renderAndAccept();
+      expect(screen.getByText('What is 2 + 2?')).toBeInTheDocument();
+    });
 
     it('hides the honor-code gate after clicking "I agree"', async () => {
       await renderAndAccept();

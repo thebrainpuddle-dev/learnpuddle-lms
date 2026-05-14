@@ -43,7 +43,9 @@ const TrashIcon = () => (
 function ClassroomCard({ classroom, onClick }: { classroom: MAICClassroomMeta; onClick: () => void }) {
   return (
     <button
+      type="button"
       onClick={onClick}
+      aria-label={`Open classroom: ${classroom.title}`}
       className="text-left w-full bg-white rounded-xl border border-gray-200 p-5 hover:border-indigo-300 hover:shadow-md transition-all duration-150 group"
     >
       <h3 className="text-sm font-semibold text-gray-900 line-clamp-2 group-hover:text-indigo-700 transition-colors mb-2">

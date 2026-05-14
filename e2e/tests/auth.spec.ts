@@ -7,14 +7,8 @@ import {
   credentials,
   dismissTourIfPresent,
   ensureCredentialsConfigured,
+  fillTenantLogin,
 } from './helpers/auth';
-
-async function fillTenantLogin(page: any, email: string, password: string) {
-  const emailInput = page.locator('input[name="email"]').first();
-  const passwordInput = page.locator('input[name="password"]').first();
-  await emailInput.fill(email);
-  await passwordInput.fill(password);
-}
 
 test.describe('Authentication', () => {
   test.beforeEach(async ({ page }) => {
@@ -22,8 +16,8 @@ test.describe('Authentication', () => {
   });
 
   test('shows login form', async ({ page }) => {
-    await expect(page.getByRole('heading', { name: /sign in/i })).toBeVisible();
-    await expect(page.getByLabel(/email/i)).toBeVisible();
+    await expect(page.getByText(/sign in to continue/i)).toBeVisible();
+    await expect(page.getByLabel(/email|student\/teacher id/i)).toBeVisible();
     await expect(page.getByLabel(/password/i)).toBeVisible();
     await expect(page.getByLabel(/remember me/i)).toBeVisible();
     await expect(page.getByRole('button', { name: /sign in/i })).toBeVisible();

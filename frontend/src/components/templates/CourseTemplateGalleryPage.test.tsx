@@ -121,7 +121,7 @@ function renderGallery() {
   return render(
     <QueryClientProvider client={makeQueryClient()}>
       <ToastProvider>
-        <MemoryRouter>
+        <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
           <CourseTemplateGalleryPage />
         </MemoryRouter>
       </ToastProvider>

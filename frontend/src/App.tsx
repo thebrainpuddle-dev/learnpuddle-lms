@@ -366,6 +366,21 @@ function AppContent() {
   useSessionLifecycle();
   const dashboardPath = getDashboardPathForRole(user?.role);
   const onPlatformHost = isPlatformRequest();
+  const previousAuthIdentityRef = React.useRef<string | null>(null);
+
+  React.useEffect(() => {
+    const authIdentity = isAuthenticated && user
+      ? `${user.tenant_subdomain ?? 'platform'}:${user.role}:${user.id}`
+      : null;
+    const previousAuthIdentity = previousAuthIdentityRef.current;
+
+    if (previousAuthIdentity !== authIdentity) {
+      if (previousAuthIdentity !== null || authIdentity === null) {
+        queryClient.clear();
+      }
+      previousAuthIdentityRef.current = authIdentity;
+    }
+  }, [isAuthenticated, user?.id, user?.role, user?.tenant_subdomain]);
 
   // On startup, validate any persisted token by calling /auth/me/.
   // If the token is expired or missing, clear auth and redirect to login
@@ -423,6 +438,12 @@ function AppContent() {
 
   return (
     <Routes>
+      {/* Public Routes — Product website preview.
+          This route is intentionally host-independent so local development can
+          inspect the marketing site without changing tenant-host settings. */}
+      <Route path="/product" element={<RoutePage><ProductLandingPage /></RoutePage>} />
+      <Route path="/website" element={<RoutePage><ProductLandingPage /></RoutePage>} />
+
       {/* Public Routes — Tenant login (school admin + teachers) */}
       <Route
         path="/login"
@@ -797,7 +818,12 @@ function App() {
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
         <ToastProvider>
-          <BrowserRouter>
+          <BrowserRouter
+            future={{
+              v7_relativeSplatPath: true,
+              v7_startTransition: true,
+            }}
+          >
             <OfflineIndicator />
             <TourProvider>
               <AppContent />

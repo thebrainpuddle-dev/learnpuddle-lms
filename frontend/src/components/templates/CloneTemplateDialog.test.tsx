@@ -67,7 +67,7 @@ function renderDialog(template: CourseTemplateListItem | null = TEMPLATE, onClos
   return render(
     <QueryClientProvider client={makeQueryClient()}>
       <ToastProvider>
-        <MemoryRouter>
+        <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
           <CloneTemplateDialog template={template} onClose={onClose} />
         </MemoryRouter>
       </ToastProvider>

@@ -144,7 +144,7 @@ describe('App', () => {
           level: 1,
         }),
       ).toBeInTheDocument();
-      expect(screen.getByText(/talks back/i)).toBeInTheDocument();
+      expect(screen.getByText(/responds/i)).toBeInTheDocument();
     }, { timeout: 5000 });
   });
 
@@ -162,7 +162,7 @@ describe('App', () => {
           level: 1,
         }),
       ).toBeInTheDocument();
-      expect(screen.getByText(/talks back/i)).toBeInTheDocument();
+      expect(screen.getByText(/responds/i)).toBeInTheDocument();
     }, { timeout: 5000 });
   });
 });

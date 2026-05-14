@@ -90,7 +90,9 @@ describe('EMPTY_SCENE_BUFFER', () => {
   test('starts at status=idle with empty containers', () => {
     expect(EMPTY_SCENE_BUFFER.status).toBe('idle');
     expect(EMPTY_SCENE_BUFFER.currentAgent).toBeNull();
+    expect(EMPTY_SCENE_BUFFER.agentsByMessageId).toEqual({});
     expect(EMPTY_SCENE_BUFFER.textByMessageId).toEqual({});
+    expect(EMPTY_SCENE_BUFFER.messageOrder).toEqual([]);
     expect(EMPTY_SCENE_BUFFER.actions).toEqual([]);
     expect(EMPTY_SCENE_BUFFER.audioByMessageId).toEqual({});
     expect(EMPTY_SCENE_BUFFER.cueingUser).toBe(false);
@@ -151,6 +153,8 @@ describe('applyEvent agent_start', () => {
       agentAvatar: null,
       agentColor: '#3b82f6',
     });
+    expect(next.agentsByMessageId['m-1']).toEqual(next.currentAgent);
+    expect(next.messageOrder).toEqual(['m-1']);
     expect(next.status).toBe('streaming');
   });
 
@@ -171,6 +175,13 @@ describe('applyEvent agent_start', () => {
     let buf = applyEvent(EMPTY_SCENE_BUFFER, textDelta('hello', 'm-7'));
     buf = applyEvent(buf, agentStart('m-7'));
     expect(buf.textByMessageId['m-7']).toBe('hello');
+    expect(buf.messageOrder).toEqual(['m-7']);
+  });
+
+  test('does not duplicate messageOrder when agent_start follows early text', () => {
+    let buf = applyEvent(EMPTY_SCENE_BUFFER, textDelta('early', 'm-7'));
+    buf = applyEvent(buf, agentStart('m-7'));
+    expect(buf.messageOrder).toEqual(['m-7']);
   });
 });
 
@@ -199,6 +210,7 @@ describe('applyEvent text_delta', () => {
     // agent_start is processed.  Buffer must tolerate this.
     const buf = applyEvent(EMPTY_SCENE_BUFFER, textDelta('hi', 'm-?'));
     expect(buf.textByMessageId['m-?']).toBe('hi');
+    expect(buf.messageOrder).toEqual(['m-?']);
   });
 });
 
@@ -253,7 +265,7 @@ describe('applyEvent speech_audio', () => {
         format: 'mp3',
         messageId: 'm-1',
         agentId: 'default-1',
-      } as never,
+      },
     };
     const buf = applyEvent(EMPTY_SCENE_BUFFER, event);
     expect(buf.audioByMessageId['m-1']).toEqual({
@@ -263,12 +275,13 @@ describe('applyEvent speech_audio', () => {
       messageId: 'm-1',
       agentId: 'default-1',
     });
+    expect(buf.messageOrder).toEqual(['m-1']);
   });
 
   test('ignores frames missing audioId', () => {
     const event: MaicEvent = {
       type: 'speech_audio',
-      data: { format: 'mp3', messageId: 'm-1' } as never,
+      data: { audioId: '', format: 'mp3', messageId: 'm-1' },
     };
     const buf = applyEvent(EMPTY_SCENE_BUFFER, event);
     expect(buf.audioByMessageId).toEqual({});
@@ -282,10 +295,40 @@ describe('applyEvent speech_audio', () => {
         base64: 'BBB=',
         format: 'mp3',
         messageId: 'm-2',
-      } as never,
+      },
     };
     const buf = applyEvent(EMPTY_SCENE_BUFFER, event);
     expect(buf.audioByMessageId['m-2'].audioB64).toBe('BBB=');
+  });
+
+  test('stores URL-backed speech audio frames', () => {
+    const event: MaicEvent = {
+      type: 'speech_audio',
+      data: {
+        audioId: 'aud-url',
+        url: 'https://cdn.example.test/audio.mp3',
+        format: 'mp3',
+        messageId: 'm-url',
+        agentId: 'default-1',
+      },
+    };
+    const buf = applyEvent(EMPTY_SCENE_BUFFER, event);
+    expect(buf.audioByMessageId['m-url'].audioUrl).toBe(
+      'https://cdn.example.test/audio.mp3',
+    );
+  });
+
+  test('falls back to currentAgent metadata when speech frame omits ids', () => {
+    let buf = applyEvent(EMPTY_SCENE_BUFFER, agentStart('m-current', 'agent-1'));
+    buf = applyEvent(buf, {
+      type: 'speech_audio',
+      data: { audioId: 'aud-current', audioB64: 'AAA=', format: 'mp3' },
+    });
+    expect(buf.audioByMessageId['m-current']).toMatchObject({
+      audioId: 'aud-current',
+      messageId: 'm-current',
+      agentId: 'agent-1',
+    });
   });
 });
 
@@ -366,7 +409,7 @@ describe('reduceEvents — end-to-end', () => {
           format: 'mp3',
           messageId: 'm-1',
           agentId: 'default-1',
-        } as never,
+        },
       },
       agentEnd('m-1'),
     ];
@@ -375,6 +418,7 @@ describe('reduceEvents — end-to-end', () => {
     expect(buf.status).toBe('completed');
     expect(buf.currentAgent?.agentName).toBe('AI teacher');
     expect(buf.textByMessageId['m-1']).toBe('Hello students. Today we will learn.');
+    expect(buf.messageOrder).toEqual(['m-1']);
     expect(buf.actions).toHaveLength(1);
     expect(buf.actions[0].type).toBe('wb_open');
     expect(buf.audioByMessageId['m-1'].audioId).toBe('speech-aaa');
@@ -393,6 +437,25 @@ describe('reduceEvents — end-to-end', () => {
     const buf = reduceEvents(events);
     expect(buf.status).toBe('completed');
     expect(buf.cueingUser).toBe(true);
+  });
+
+  test('keeps all agent turns in arrival order', () => {
+    const events: MaicEvent[] = [
+      agentStart('m-1', 'teacher', 'Teacher', '#2563eb'),
+      textDelta('First turn.', 'm-1'),
+      agentEnd('m-1', 'teacher'),
+      agentStart('m-2', 'coach', 'Coach', '#16a34a'),
+      textDelta('Second turn.', 'm-2'),
+      agentEnd('m-2', 'coach'),
+    ];
+    const buf = reduceEvents(events);
+    expect(buf.messageOrder).toEqual(['m-1', 'm-2']);
+    expect(buf.textByMessageId).toMatchObject({
+      'm-1': 'First turn.',
+      'm-2': 'Second turn.',
+    });
+    expect(buf.agentsByMessageId['m-1'].agentName).toBe('Teacher');
+    expect(buf.agentsByMessageId['m-2'].agentName).toBe('Coach');
   });
 
   test('error mid-stream surfaces in lastError', () => {

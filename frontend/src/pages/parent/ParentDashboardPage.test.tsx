@@ -132,7 +132,7 @@ const OVERVIEW_DATA = {
 function renderPage() {
   return render(
     <QueryClientProvider client={makeQueryClient()}>
-      <MemoryRouter initialEntries={['/parent/dashboard']}>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={['/parent/dashboard']}>
         <ParentDashboardPage />
       </MemoryRouter>
     </QueryClientProvider>,

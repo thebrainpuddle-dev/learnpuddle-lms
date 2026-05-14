@@ -31,9 +31,22 @@ describe('featureFlags', () => {
     expect(mod.featureFlags.maicV2Enabled).toBe(expected);
   });
 
-  test('undefined env value → false (not enabled)', async () => {
+  test.each([
+    ['true', true],
+    ['1', true],
+    ['false', false],
+    ['', false],
+  ])('VITE_MAIC_GENERATION_USE_V2=%s → maicGenerationUseV2=%s', async (value, expected) => {
+    vi.stubEnv('VITE_MAIC_GENERATION_USE_V2', value);
+    const mod = await import('../featureFlags');
+    expect(mod.featureFlags.maicGenerationUseV2).toBe(expected);
+  });
+
+  test('undefined env values keep v2 kill-switch off but generation v2-first', async () => {
     vi.stubEnv('VITE_MAIC_V2_ENABLED', undefined as unknown as string);
+    vi.stubEnv('VITE_MAIC_GENERATION_USE_V2', undefined as unknown as string);
     const mod = await import('../featureFlags');
     expect(mod.featureFlags.maicV2Enabled).toBe(false);
+    expect(mod.featureFlags.maicGenerationUseV2).toBe(true);
   });
 });

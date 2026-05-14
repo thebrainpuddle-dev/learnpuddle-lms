@@ -24,7 +24,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-from django.test import override_settings
 
 from apps.billing.views import _is_tenant_redirect_url_allowed
 
@@ -56,9 +55,13 @@ TENANT = _tenant(subdomain="demo")
 # ===========================================================================
 
 
-@override_settings(DEBUG=False, PLATFORM_DOMAIN=PLATFORM_DOMAIN)
 class TestRedirectUrlProductionMode:
     """Redirect URL validation in production (DEBUG=False, HTTPS required)."""
+
+    @pytest.fixture(autouse=True)
+    def _production_settings(self, settings):
+        settings.DEBUG = False
+        settings.PLATFORM_DOMAIN = PLATFORM_DOMAIN
 
     # --- ALLOW ---
 
@@ -218,9 +221,13 @@ class TestRedirectUrlProductionMode:
 # ===========================================================================
 
 
-@override_settings(DEBUG=True, PLATFORM_DOMAIN=PLATFORM_DOMAIN)
 class TestRedirectUrlDebugMode:
     """In DEBUG mode localhost variants must be additionally accepted."""
+
+    @pytest.fixture(autouse=True)
+    def _debug_settings(self, settings):
+        settings.DEBUG = True
+        settings.PLATFORM_DOMAIN = PLATFORM_DOMAIN
 
     def test_https_tenant_subdomain_still_allowed_in_debug(self):
         assert _is_tenant_redirect_url_allowed(
@@ -271,9 +278,13 @@ class TestRedirectUrlDebugMode:
 # ===========================================================================
 
 
-@override_settings(DEBUG=False, PLATFORM_DOMAIN=PLATFORM_DOMAIN)
 class TestRedirectUrlCrossTenantIsolation:
     """Two separate tenant objects must not share allowed redirect URL sets."""
+
+    @pytest.fixture(autouse=True)
+    def _production_settings(self, settings):
+        settings.DEBUG = False
+        settings.PLATFORM_DOMAIN = PLATFORM_DOMAIN
 
     def test_tenant_a_url_rejected_for_tenant_b(self):
         tenant_a = _tenant(subdomain="alpha")

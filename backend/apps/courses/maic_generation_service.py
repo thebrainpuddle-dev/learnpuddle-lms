@@ -39,6 +39,8 @@ v1 routes remain mounted only while the flag is False.
 import io
 import json
 import logging
+import os
+import re
 import uuid
 
 import requests as http_requests
@@ -50,7 +52,6 @@ from apps.courses.maic_voices import (
     VOICE_BY_ID,
     infer_gender_from_name,
     voice_matches_role,
-    voices_for_gender,
 )
 from apps.courses.prompts.loader import load_prompt
 
@@ -69,8 +70,73 @@ from utils.metrics import (
     maic_scene_generation_total,
     time_llm_call,
 )
+from .maic_media_safety import should_strip_generated_image_src
 
 logger = logging.getLogger(__name__)
+
+
+_PROMPT_PLACEHOLDER_TEXTS = {
+    "main title text",
+    "a compelling subtitle or tagline",
+    "brief overview of what we will cover in this lesson...",
+    "first key point explained clearly",
+    "second key point with detail",
+    "third key point with example",
+    "fourth key point with application",
+    "descriptive prompt for a relevant diagram or illustration",
+    "welcome everyone! today we are going to explore a fascinating topic...",
+}
+def _plain_prompt_text(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip().lower()
+
+
+def is_prompt_placeholder_text(value: object) -> bool:
+    """Return True when an LLM copied an example string from our prompt.
+
+    Small local models sometimes produce valid JSON by copying the schema
+    example verbatim. That content is syntactically valid but not classroom
+    content, so it must fail quality gates before the row can become READY.
+    """
+    return _plain_prompt_text(value) in _PROMPT_PLACEHOLDER_TEXTS
+
+
+def find_prompt_placeholder_texts(payload: object) -> list[str]:
+    """Return prompt-example strings found anywhere in a generated payload."""
+    found: list[str] = []
+
+    def walk(value: object) -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if key in {"content", "text", "title", "speakerScript", "alt"}:
+                    if is_prompt_placeholder_text(child):
+                        found.append(str(child))
+                walk(child)
+            return
+        if isinstance(value, list):
+            for item in value:
+                walk(item)
+
+    walk(payload)
+    return found
+
+
+def _has_prompt_placeholders(payload: object) -> bool:
+    return bool(find_prompt_placeholder_texts(payload))
+
+
+def _should_strip_generated_image_src(src: object) -> bool:
+    """Return True for unsafe or known placeholder image URLs.
+
+    Fresh LLM/sidecar responses should not smuggle random placeholder URLs
+    around the tenant image pipeline. Valid persisted media paths are allowed;
+    empty values are handled by the deferred image-fill task.
+    """
+    return should_strip_generated_image_src(src)
 
 # ─── Scene Content Length Budgets ────────────────────────────────────────────
 #
@@ -545,13 +611,289 @@ AGENT_COLOR_PALETTE: frozenset[str] = frozenset({
     "#9F1239",  # cranberry
     "#334155",  # slate
 })
+AGENT_COLOR_ORDER: tuple[str, ...] = (
+    "#4338CA",
+    "#0F766E",
+    "#D97706",
+    "#166534",
+    "#9F1239",
+    "#334155",
+)
 AGENT_AVATAR_SET: frozenset[str] = frozenset({
     "👨‍🏫", "👩‍🏫", "🧑‍🎓", "👨‍🎓", "👩‍🎓", "🧕", "🙋‍♀️", "🙋‍♂️",
 })
+AGENT_AVATAR_ORDER: tuple[str, ...] = (
+    "👨‍🏫",
+    "👩‍🏫",
+    "🧑‍🎓",
+    "👨‍🎓",
+    "👩‍🎓",
+    "🧕",
+    "🙋‍♀️",
+    "🙋‍♂️",
+)
+_FALLBACK_FIRST_NAMES: dict[str, tuple[str, ...]] = {
+    "male": ("Aarav", "Rohan", "Rehaan", "Arjun", "Prabhat", "Kabir"),
+    "female": ("Priya", "Neha", "Anjali", "Aditi", "Kavya", "Riya"),
+}
+_FALLBACK_LAST_NAMES: tuple[str, ...] = (
+    "Sharma",
+    "Iyer",
+    "Menon",
+    "Rao",
+    "Desai",
+    "Nair",
+)
+_ROLE_PERSONA_DEFAULTS: dict[str, tuple[str, str, str]] = {
+    "professor": (
+        "Patient subject expert who anchors the lesson in clear examples.",
+        "Curriculum explanation and misconception repair.",
+        "Warm, structured, and precise.",
+    ),
+    "teaching_assistant": (
+        "Supportive coach who translates difficult ideas into student-friendly steps.",
+        "Guided practice and formative checks.",
+        "Encouraging, crisp, and practical.",
+    ),
+    "student": (
+        "Curious learner who voices realistic questions and doubts.",
+        "Peer perspective and sense-making.",
+        "Conversational, honest, and inquisitive.",
+    ),
+    "student_rep": (
+        "Student representative who connects the class discussion to learner needs.",
+        "Peer synthesis and class sentiment.",
+        "Reflective and collaborative.",
+    ),
+    "moderator": (
+        "Conversation host who keeps the discussion moving.",
+        "Turn-taking and recap.",
+        "Clear, balanced, and energetic.",
+    ),
+}
 
 
 class AgentValidationError(ValueError):
     """Raised when a generated agent roster fails validation."""
+
+
+_AGENT_ROLE_ALIASES: dict[str, str] = {
+    "professor": "professor",
+    "prof": "professor",
+    "teacher": "professor",
+    "lead_teacher": "professor",
+    "leadteacher": "professor",
+    "instructor": "professor",
+    "subject_expert": "professor",
+    "subjectexpert": "professor",
+    "teaching_assistant": "teaching_assistant",
+    "teachingassistant": "teaching_assistant",
+    "assistant": "teaching_assistant",
+    "ta": "teaching_assistant",
+    "co_teacher": "teaching_assistant",
+    "coteacher": "teaching_assistant",
+    "tutor": "teaching_assistant",
+    "guide": "teaching_assistant",
+    "student": "student",
+    "learner": "student",
+    "pupil": "student",
+    "student_rep": "student_rep",
+    "studentrep": "student_rep",
+    "student_representative": "student_rep",
+    "studentrepresentative": "student_rep",
+    "class_representative": "student_rep",
+    "classrepresentative": "student_rep",
+    "moderator": "moderator",
+    "host": "moderator",
+}
+
+
+def _normalize_agent_role(value: object) -> str:
+    """Map common LLM role drift back to our canonical agent role enum."""
+    raw = str(value or "").strip().lower()
+    token = re.sub(r"[^a-z0-9]+", "_", raw).strip("_")
+    token = re.sub(r"_+", "_", token)
+    compact = token.replace("_", "")
+    return _AGENT_ROLE_ALIASES.get(token) or _AGENT_ROLE_ALIASES.get(compact) or token
+
+
+def _canonical_role_slots(role_slots: list[dict]) -> list[dict]:
+    """Return validated-enough canonical slots for prompting and repair.
+
+    The request validator lives at the API boundary. This helper is deliberately
+    narrower: it only canonicalizes roles and ignores malformed/empty slots so
+    the normal validation/retry path can report the real downstream error.
+    """
+    canonical: list[dict] = []
+    for slot in role_slots or []:
+        if not isinstance(slot, dict):
+            continue
+        role = _normalize_agent_role(slot.get("role"))
+        try:
+            count = int(slot.get("count", 0))
+        except (TypeError, ValueError):
+            continue
+        if role and count > 0:
+            canonical.append({"role": role, "count": count})
+    return canonical
+
+
+def _role_slot_sequence(role_slots: list[dict]) -> list[str]:
+    sequence: list[str] = []
+    for slot in _canonical_role_slots(role_slots):
+        sequence.extend([slot["role"]] * slot["count"])
+    return sequence
+
+
+_AGENT_HONORIFIC_RE = re.compile(
+    r"^(?:(?:dr|prof|mr|mrs|ms|miss|shri|smt)\.?\s+)+",
+    re.IGNORECASE,
+)
+_AGENT_HONORIFIC_TOKENS: frozenset[str] = frozenset({
+    "dr",
+    "dr.",
+    "prof",
+    "prof.",
+    "mr",
+    "mr.",
+    "mrs",
+    "mrs.",
+    "ms",
+    "ms.",
+    "miss",
+    "shri",
+    "smt",
+    "smt.",
+})
+
+
+def _bare_agent_name(name: object) -> str:
+    return _AGENT_HONORIFIC_RE.sub("", str(name or "").strip()).strip()
+
+
+def _honorific_for_agent(agent: dict) -> str:
+    role = agent.get("role")
+    if role == "professor":
+        return "Dr."
+    if role in {"teaching_assistant", "moderator"}:
+        inferred = infer_gender_from_name(agent.get("name", ""))
+        if inferred == "male":
+            return "Mr."
+        if inferred == "female":
+            return "Ms."
+        voice = VOICE_BY_ID.get(agent.get("voiceId"))
+        return "Mr." if voice and voice.get("gender") == "male" else "Ms."
+    return ""
+
+
+def _normalize_agent_name_for_role(agent: dict) -> str | None:
+    """Align visible honorifics with the repaired canonical role."""
+    if not isinstance(agent, dict) or not agent.get("name"):
+        return None
+    bare = _bare_agent_name(agent.get("name"))
+    if not bare:
+        return None
+    prefix = _honorific_for_agent(agent)
+    normalized = f"{prefix} {bare}".strip()
+    if normalized != agent.get("name"):
+        before = agent.get("name")
+        agent["name"] = normalized
+        return f"normalized name for {agent.get('id') or bare}: {before!r} -> {normalized!r}"
+    return None
+
+
+def _coerce_agent_roles_to_slots(
+    agents: list[dict],
+    role_slots: list[dict],
+) -> tuple[list[dict], list[str]]:
+    """Repair LLM role aliases/count drift without inventing agents.
+
+    Small local models often produce a perfectly usable roster but miss an
+    exact role count, e.g. two professors and no teaching assistant. The
+    teacher wizard should not fail there: if the agent count matches the
+    requested slots, keep agents that already fit available capacity and
+    reassign overflow agents to the missing roles. Voice/schema validation
+    still runs after this, so bad rosters do not silently pass.
+    """
+    if not isinstance(agents, list):
+        return agents, []
+
+    fixed: list[dict] = [dict(agent) if isinstance(agent, dict) else agent for agent in agents]
+    sequence = _role_slot_sequence(role_slots)
+    if not sequence:
+        return fixed, []
+
+    expected_counts: dict[str, int] = {}
+    for role in sequence:
+        expected_counts[role] = expected_counts.get(role, 0) + 1
+
+    remaining = dict(expected_counts)
+    overflow_indices: list[int] = []
+    notes: list[str] = []
+
+    for index, agent in enumerate(fixed):
+        if not isinstance(agent, dict):
+            overflow_indices.append(index)
+            continue
+        original_role = agent.get("role")
+        normalized_role = _normalize_agent_role(original_role)
+        if normalized_role and normalized_role != original_role:
+            agent["role"] = normalized_role
+            notes.append(
+                f"normalized role for {agent.get('id') or agent.get('name')}: "
+                f"{original_role!r} -> {normalized_role!r}"
+            )
+        if remaining.get(normalized_role, 0) > 0:
+            remaining[normalized_role] -= 1
+        else:
+            overflow_indices.append(index)
+
+    if len(fixed) < len(sequence):
+        return fixed, notes
+
+    missing_roles: list[str] = []
+    for role in sequence:
+        if remaining.get(role, 0) > 0:
+            missing_roles.append(role)
+            remaining[role] -= 1
+
+    for index, target_role in zip(overflow_indices, missing_roles):
+        agent = fixed[index]
+        if not isinstance(agent, dict):
+            continue
+        previous_role = agent.get("role")
+        if previous_role == target_role:
+            continue
+        agent["role"] = target_role
+        notes.append(
+            f"repaired role slot for {agent.get('id') or agent.get('name')}: "
+            f"{previous_role!r} -> {target_role!r}"
+        )
+
+    if len(fixed) > len(sequence):
+        remaining_for_trim = dict(expected_counts)
+        trimmed: list[dict] = []
+        for agent in fixed:
+            if not isinstance(agent, dict):
+                continue
+            role = agent.get("role")
+            if remaining_for_trim.get(role, 0) > 0:
+                trimmed.append(agent)
+                remaining_for_trim[role] -= 1
+            else:
+                notes.append(
+                    f"dropped extra agent outside requested slots: "
+                    f"{agent.get('id') or agent.get('name')}"
+                )
+        fixed = trimmed
+
+    for agent in fixed:
+        if isinstance(agent, dict):
+            note = _normalize_agent_name_for_role(agent)
+            if note:
+                notes.append(note)
+
+    return fixed, notes
 
 
 def validate_agents(agents: list[dict], role_slots: list[dict]) -> None:
@@ -627,6 +969,9 @@ def validate_agents(agents: list[dict], role_slots: list[dict]) -> None:
 
 def _build_llm_headers(config: TenantAIConfig) -> dict:
     """Build auth headers for the LLM provider."""
+    if config.llm_provider == "ollama":
+        return {"Content-Type": "application/json"}
+
     api_key = config.get_llm_api_key()
     return {
         "Authorization": f"Bearer {api_key}",
@@ -647,6 +992,13 @@ def _get_llm_url(config: TenantAIConfig) -> str:
     provider default on rejection (logged).
     """
     from utils.url_safety import safe_outbound_url_or_fallback
+    if config.llm_provider == "ollama":
+        # Ollama is deployment infrastructure, not a tenant-controlled
+        # outbound URL. Keep it on the operator env path so local/private
+        # addresses are possible without weakening the school-admin SSRF guard.
+        base_url = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+        return f"{base_url.rstrip('/')}/v1/chat/completions"
+
     provider_urls = {
         "openai": "https://api.openai.com/v1/chat/completions",
         "openrouter": "https://openrouter.ai/api/v1/chat/completions",
@@ -678,7 +1030,7 @@ def _call_llm(config: TenantAIConfig, system_prompt: str, user_prompt: str,
     headers = _build_llm_headers(config)
 
     payload = {
-        "model": config.llm_model,
+        "model": _llm_model_name(config),
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -694,7 +1046,12 @@ def _call_llm(config: TenantAIConfig, system_prompt: str, user_prompt: str,
     # signal we want to alert on.
     with time_llm_call(provider=provider, path=caller):
         try:
-            resp = http_requests.post(url, headers=headers, json=payload, timeout=120)
+            resp = http_requests.post(
+                url,
+                headers=headers,
+                json=payload,
+                timeout=_llm_timeout_seconds(provider),
+            )
             resp.raise_for_status()
             data = resp.json()
             choices = data.get("choices") or []
@@ -742,6 +1099,25 @@ def _call_llm(config: TenantAIConfig, system_prompt: str, user_prompt: str,
                 ),
             )
     return None
+
+
+def _llm_timeout_seconds(provider: str) -> float:
+    """HTTP read timeout for legacy generation providers."""
+    provider_key = str(provider or "").lower()
+    default = 300.0 if provider_key == "ollama" else 120.0
+    env_key = "OLLAMA_TIMEOUT_SECONDS" if provider_key == "ollama" else "LLM_TIMEOUT_SECONDS"
+    try:
+        return float(os.environ.get(env_key, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _llm_model_name(config: TenantAIConfig) -> str:
+    """Provider-specific model slug for legacy teacher-portal generation."""
+    model = str(config.llm_model or "").strip()
+    if config.llm_provider == "ollama":
+        return model.removeprefix("ollama/").removeprefix("ollama:") or model
+    return model
 
 
 def _parse_json_from_llm(text: str) -> dict | list | None:
@@ -939,19 +1315,20 @@ def _call_llm_with_json_retry(
 # ─── Agent Profile Generation ────────────────────────────────────────────────
 
 def _auto_fix_voice_gender_mismatches(agents: list[dict]) -> tuple[list[dict], list[str]]:
-    """Deterministically swap voiceIds to repair name↔voice gender mismatches.
+    """Deterministically swap voiceIds to repair invalid agent voices.
 
     LLMs are inconsistent about matching voice gender to Indian first-name
-    convention even with explicit instructions. Rather than fail the whole
-    generation when a mismatch slips through, try to fix it locally.
+    convention and role suitability even with explicit instructions. Rather
+    than fail the whole generation when a repairable voice issue slips
+    through, try to fix it locally.
 
     Uses a two-pass release-then-reassign strategy to handle the common
     "swap chain" case — e.g. agent-1 has Priya+male-voice and agent-2 has
     Arjun+female-voice. If we fix them one at a time, the first fix sees
     no free female voice (still held by agent-2) and bails out. So we
-    first release all mismatched agents' voices into a free pool, then
-    assign each mismatched agent a fresh gender-matched voice from that
-    pool. Correctly-paired agents keep their voices untouched.
+    first release all invalid voices into a free pool, then assign each
+    affected agent a fresh role-safe and, when known, gender-matched voice
+    from that pool. Correctly-paired agents keep their voices untouched.
 
     Returns a new list (leaves the input untouched) plus a list of
     human-readable fix notes for logging. Only returns a valid roster
@@ -961,35 +1338,40 @@ def _auto_fix_voice_gender_mismatches(agents: list[dict]) -> tuple[list[dict], l
     fixed: list[dict] = [dict(a) for a in agents]
     notes: list[str] = []
 
-    # Pass 1: identify mismatched agents + release their voices.
-    mismatched_indices: list[int] = []
+    # Pass 1: identify invalid voices + release them.
+    invalid_indices: list[int] = []
     kept_voices: set[str] = set()
     for i, a in enumerate(fixed):
         voice_id = a.get("voiceId")
         voice = VOICE_BY_ID.get(voice_id) if voice_id else None
-        if not voice:
-            kept_voices.add(voice_id) if voice_id else None
-            continue
+        role = a.get("role")
         inferred = infer_gender_from_name(a.get("name", ""))
-        if inferred == "unknown" or inferred == voice["gender"]:
-            kept_voices.add(voice_id)
+        if (
+            not voice
+            or voice_id in kept_voices
+            or not voice_matches_role(voice_id, role)
+            or (inferred != "unknown" and inferred != voice["gender"])
+        ):
+            invalid_indices.append(i)
             continue
-        mismatched_indices.append(i)
+        kept_voices.add(voice_id)
 
-    # Pass 2: assign each mismatched agent a fresh matched voice.
-    for i in mismatched_indices:
+    # Pass 2: assign each invalid agent a fresh valid voice.
+    for i in invalid_indices:
         a = fixed[i]
         old_voice = a.get("voiceId")
         inferred = infer_gender_from_name(a.get("name", ""))
+        role = a.get("role")
         candidates = [
-            v for v in voices_for_gender(inferred)
+            v for v in AZURE_IN_VOICES
             if v["id"] not in kept_voices
-            and a.get("role") in v.get("suits", [])
+            and role in v.get("suits", [])
+            and (inferred == "unknown" or v["gender"] == inferred)
         ]
         if not candidates:
             notes.append(
-                f"could not auto-fix {a.get('name')!r}: no unused "
-                f"{inferred} voice available for role {a.get('role')!r}"
+                f"could not auto-fix {a.get('name')!r}: no unused valid "
+                f"voice available for role {role!r}"
             )
             # Intentionally do NOT add the old (wrong) voice back to the
             # kept pool — it might have just been taken by a prior fix
@@ -1001,15 +1383,307 @@ def _auto_fix_voice_gender_mismatches(agents: list[dict]) -> tuple[list[dict], l
 
         # Prefer voices whose suits list contains ONLY the matching role
         # (e.g. Prabhat -> professor), then fall back to any candidate.
-        exact = [v for v in candidates if v["suits"] == [a.get("role")]]
+        exact = [v for v in candidates if v["suits"] == [role]]
         picked = exact[0] if exact else candidates[0]
 
         a["voiceId"] = picked["id"]
         kept_voices.add(picked["id"])
         notes.append(
             f"auto-swapped {a.get('name')!r}: {old_voice} -> {picked['id']} "
-            f"(matched {inferred} voice)"
+            f"(matched {inferred} voice for role {role})"
         )
+
+    return fixed, notes
+
+
+def _missing_roles_for_agents(
+    agents: list[dict],
+    role_slots: list[dict],
+) -> list[str]:
+    counts: dict[str, int] = {}
+    for agent in agents:
+        if isinstance(agent, dict):
+            role = _normalize_agent_role(agent.get("role"))
+            counts[role] = counts.get(role, 0) + 1
+
+    missing: list[str] = []
+    for role in _role_slot_sequence(role_slots):
+        if counts.get(role, 0) > 0:
+            counts[role] -= 1
+        else:
+            missing.append(role)
+    return missing
+
+
+def _fallback_agent_for_role(role: str, index: int) -> dict:
+    gender = "male" if role == "professor" else "female"
+    first_names = _FALLBACK_FIRST_NAMES[gender]
+    last_name = _FALLBACK_LAST_NAMES[index % len(_FALLBACK_LAST_NAMES)]
+    prefix = "Dr." if role == "professor" else ("Mr." if gender == "male" else "Ms.")
+    if role in {"student", "student_rep"}:
+        prefix = ""
+    name = f"{prefix} {first_names[index % len(first_names)]} {last_name}".strip()
+    personality, expertise, speaking_style = _ROLE_PERSONA_DEFAULTS.get(
+        role,
+        _ROLE_PERSONA_DEFAULTS["student"],
+    )
+    return {
+        "id": f"agent-{index + 1}",
+        "name": name,
+        "role": role,
+        "avatar": AGENT_AVATAR_ORDER[index % len(AGENT_AVATAR_ORDER)],
+        "color": AGENT_COLOR_ORDER[index % len(AGENT_COLOR_ORDER)],
+        "voiceId": AGENT_VOICE_MAP.get(role) or AZURE_IN_VOICES[index % len(AZURE_IN_VOICES)]["id"],
+        "voiceProvider": "azure",
+        "personality": personality,
+        "expertise": expertise,
+        "speakingStyle": speaking_style,
+    }
+
+
+def _role_slot_counts(role_slots: list[dict]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for slot in role_slots:
+        if not isinstance(slot, dict):
+            continue
+        role = _normalize_agent_role(slot.get("role"))
+        try:
+            count = int(slot.get("count") or 0)
+        except (TypeError, ValueError):
+            count = 0
+        if count > 0:
+            counts[role] = counts.get(role, 0) + count
+    return counts
+
+
+def _voice_candidates_for_role(role: str) -> list[dict]:
+    return [voice for voice in AZURE_IN_VOICES if role in voice.get("suits", [])]
+
+
+def _assign_contract_voices(
+    agents: list[dict],
+    role_slots: list[dict],
+    notes: list[str],
+) -> None:
+    """Assign a unique feasible Azure voice to each agent.
+
+    The five-voice Indian roster is tight when a class asks for five agents
+    (for example professor + TA + 3 students). A greedy one-agent-at-a-time
+    repair can let broad roles consume voices that scarce roles require.
+    This allocator handles scarce role groups first and then aligns names to
+    the final voice gender.
+    """
+    expected_counts = _role_slot_counts(role_slots)
+    role_order: dict[str, int] = {}
+    for index, role in enumerate(_role_slot_sequence(role_slots)):
+        role_order.setdefault(role, index)
+
+    indexes_by_role: dict[str, list[int]] = {}
+    for index, agent in enumerate(agents):
+        role = _normalize_agent_role(agent.get("role"))
+        indexes_by_role.setdefault(role, []).append(index)
+
+    roles = sorted(
+        indexes_by_role,
+        key=lambda role: (
+            len(_voice_candidates_for_role(role))
+            - expected_counts.get(role, len(indexes_by_role[role])),
+            len(_voice_candidates_for_role(role)),
+            role_order.get(role, 999),
+        ),
+    )
+
+    used_voice_ids: set[str] = set()
+    for role in roles:
+        for agent_index in indexes_by_role[role]:
+            agent = agents[agent_index]
+            pool = [
+                voice
+                for voice in _voice_candidates_for_role(role)
+                if voice["id"] not in used_voice_ids
+            ]
+            if not pool:
+                notes.append(
+                    f"could not assign unique voice for {agent.get('id')}: no unused voice suits {role}"
+                )
+                continue
+
+            voice_id = agent.get("voiceId")
+            current = VOICE_BY_ID.get(voice_id) if voice_id else None
+            inferred = infer_gender_from_name(agent.get("name", ""))
+            pool_ids = {voice["id"] for voice in pool}
+            if (
+                current is not None
+                and current["id"] not in used_voice_ids
+                and current["id"] in pool_ids
+                and (inferred == "unknown" or current["gender"] == inferred)
+            ):
+                picked = current
+            else:
+                gender_matches = [
+                    voice
+                    for voice in pool
+                    if inferred == "unknown" or voice["gender"] == inferred
+                ]
+                exact = [voice for voice in pool if voice.get("suits") == [role]]
+                picked = (gender_matches or exact or pool)[0]
+
+            if voice_id != picked["id"]:
+                notes.append(
+                    f"assigned valid voice for {agent.get('id')}: {voice_id!r} -> {picked['id']!r}"
+                )
+            agent["voiceId"] = picked["id"]
+            agent["voiceProvider"] = "azure"
+            used_voice_ids.add(picked["id"])
+
+    for index, agent in enumerate(agents):
+        _align_agent_name_to_voice(agent, index=index, notes=notes)
+
+
+def _fallback_agent_roster_for_slots(role_slots: list[dict]) -> list[dict]:
+    agents = [
+        _fallback_agent_for_role(role, index)
+        for index, role in enumerate(_role_slot_sequence(role_slots))
+    ]
+    notes: list[str] = []
+    _assign_contract_voices(agents, role_slots, notes)
+    return agents
+
+
+def _agent_last_name(name: object, fallback_index: int) -> str:
+    tokens = [
+        token.strip(".,")
+        for token in str(name or "").split()
+        if token.strip(".,")
+    ]
+    tokens = [token for token in tokens if token.lower() not in _AGENT_HONORIFIC_TOKENS]
+    if len(tokens) >= 2:
+        return tokens[-1]
+    return _FALLBACK_LAST_NAMES[fallback_index % len(_FALLBACK_LAST_NAMES)]
+
+
+def _align_agent_name_to_voice(
+    agent: dict,
+    *,
+    index: int,
+    notes: list[str],
+) -> None:
+    voice = VOICE_BY_ID.get(agent.get("voiceId"))
+    if not voice:
+        return
+    voice_gender = voice["gender"]
+    inferred = infer_gender_from_name(agent.get("name", ""))
+    if inferred == "unknown" and str(agent.get("name") or "").strip():
+        note = _normalize_agent_name_for_role(agent)
+        if note:
+            notes.append(note)
+        return
+    if inferred == voice_gender and str(agent.get("name") or "").strip():
+        note = _normalize_agent_name_for_role(agent)
+        if note:
+            notes.append(note)
+        return
+
+    first_names = _FALLBACK_FIRST_NAMES.get(
+        voice_gender,
+        _FALLBACK_FIRST_NAMES["female"],
+    )
+    last_name = _agent_last_name(agent.get("name"), index)
+    before = agent.get("name")
+    agent["name"] = f"{first_names[index % len(first_names)]} {last_name}"
+    note = _normalize_agent_name_for_role(agent)
+    if before != agent.get("name"):
+        notes.append(
+            f"aligned name for {agent.get('id')}: {before!r} -> {agent.get('name')!r}"
+        )
+    if note:
+        notes.append(note)
+
+
+def _repair_agent_contract(
+    agents: list[dict],
+    role_slots: list[dict],
+) -> tuple[list[dict], list[str]]:
+    """Final production repair for LLM rosters that are useful but invalid.
+
+    The LLM still supplies the roster's topic flavor, names, and personas.
+    This pass only enforces deterministic platform contracts that should
+    never make the wizard fail: exact role slots, unique real voices, valid
+    colors, valid avatars, and obvious name/voice gender alignment.
+    """
+    notes: list[str] = []
+    fixed, role_notes = _coerce_agent_roles_to_slots(agents, role_slots)
+    notes.extend(role_notes)
+    fixed = [agent for agent in fixed if isinstance(agent, dict)]
+
+    for role in _missing_roles_for_agents(fixed, role_slots):
+        fixed.append(_fallback_agent_for_role(role, len(fixed)))
+        notes.append(f"created missing {role} agent from production fallback")
+
+    fixed, role_notes = _coerce_agent_roles_to_slots(fixed, role_slots)
+    notes.extend(role_notes)
+    fixed = [agent for agent in fixed if isinstance(agent, dict)]
+
+    used_ids: set[str] = set()
+    for index, agent in enumerate(fixed):
+        raw_id = str(agent.get("id") or f"agent-{index + 1}").strip()
+        agent_id = raw_id or f"agent-{index + 1}"
+        if agent_id in used_ids:
+            agent_id = f"agent-{index + 1}"
+        if agent.get("id") != agent_id:
+            notes.append(f"normalized id for agent {index + 1}: {agent.get('id')!r} -> {agent_id!r}")
+            agent["id"] = agent_id
+        used_ids.add(agent_id)
+
+        role = _normalize_agent_role(agent.get("role"))
+        if agent.get("role") != role:
+            notes.append(
+                f"normalized role for {agent_id}: {agent.get('role')!r} -> {role!r}"
+            )
+            agent["role"] = role
+
+        personality, expertise, speaking_style = _ROLE_PERSONA_DEFAULTS.get(
+            role,
+            _ROLE_PERSONA_DEFAULTS["student"],
+        )
+        agent.setdefault("personality", personality)
+        agent.setdefault("expertise", expertise)
+        agent.setdefault("speakingStyle", speaking_style)
+        if not str(agent.get("personality") or "").strip():
+            agent["personality"] = personality
+        if not str(agent.get("expertise") or "").strip():
+            agent["expertise"] = expertise
+        if not str(agent.get("speakingStyle") or "").strip():
+            agent["speakingStyle"] = speaking_style
+        agent["voiceProvider"] = "azure"
+
+    _assign_contract_voices(fixed, role_slots, notes)
+
+    used_colors: set[str] = set()
+    for index, agent in enumerate(fixed):
+        color = agent.get("color")
+        if color not in AGENT_COLOR_PALETTE or color in used_colors:
+            color = next(
+                candidate
+                for candidate in AGENT_COLOR_ORDER
+                if candidate not in used_colors
+            )
+            notes.append(f"assigned valid color for {agent.get('id')}: {color}")
+            agent["color"] = color
+        used_colors.add(color)
+
+    used_avatars: set[str] = set()
+    for index, agent in enumerate(fixed):
+        avatar = agent.get("avatar")
+        if avatar not in AGENT_AVATAR_SET or avatar in used_avatars:
+            avatar = next(
+                candidate
+                for candidate in AGENT_AVATAR_ORDER
+                if candidate not in used_avatars
+            )
+            notes.append(f"assigned valid avatar for {agent.get('id')}: {avatar}")
+            agent["avatar"] = avatar
+        used_avatars.add(avatar)
 
     return fixed, notes
 
@@ -1034,17 +1708,19 @@ def generate_agent_profiles_json(
     Raises AgentValidationError on persistent failure after 3 attempts.
     """
     system_prompt = load_prompt("agent_profiles")
+    canonical_role_slots = _canonical_role_slots(role_slots)
 
     # Build the rendered system prompt by filling in template variables baked
     # into the markdown: {{topic}}, {{language}}, {{role_slots_json}}, {{voices_json}}.
     rendered = system_prompt.replace("{{topic}}", topic)
     rendered = rendered.replace("{{language}}", language)
-    rendered = rendered.replace("{{role_slots_json}}", json.dumps(role_slots, indent=2))
+    rendered = rendered.replace("{{role_slots_json}}", json.dumps(canonical_role_slots, indent=2))
     rendered = rendered.replace("{{voices_json}}", json.dumps(AZURE_IN_VOICES, indent=2))
 
     base_user_prompt = f'Generate the agents for the topic "{topic}" in {language}.'
 
     last_error = None
+    last_agents: list[dict] | None = None
     # NOTE: Intentionally retains its own retry loop — the voice-gender
     # auto-fix below (_auto_fix_voice_gender_mismatches) is a mid-attempt
     # repair not modeled by _call_llm_with_json_retry(). Unifying would
@@ -1059,7 +1735,8 @@ def generate_agent_profiles_json(
                 f"{base_user_prompt}\n\n"
                 f"Your previous attempt failed validation with this error: {last_error}\n"
                 "Fix this specifically. Double-check voice gender against the "
-                "first name of every agent BEFORE returning."
+                "first name of every agent BEFORE returning. Match the exact "
+                f"requested role slots: {json.dumps(canonical_role_slots)}."
             )
 
         raw = _call_llm(config, rendered, user_prompt, temperature=0.9, max_tokens=2048)
@@ -1070,8 +1747,17 @@ def generate_agent_profiles_json(
         if not parsed or not isinstance(parsed, dict) or "agents" not in parsed:
             last_error = "invalid JSON"
             continue
+        if isinstance(parsed.get("agents"), list):
+            last_agents = parsed["agents"]
+        coerced_agents, role_notes = _coerce_agent_roles_to_slots(
+            parsed["agents"],
+            canonical_role_slots,
+        )
+        if role_notes:
+            logger.info("Agent role-slot repair notes: %s", "; ".join(role_notes))
+            parsed["agents"] = coerced_agents
         try:
-            validate_agents(parsed["agents"], role_slots)
+            validate_agents(parsed["agents"], canonical_role_slots)
             return parsed
         except AgentValidationError as e:
             last_error = str(e)
@@ -1081,15 +1767,38 @@ def generate_agent_profiles_json(
             fixed, notes = _auto_fix_voice_gender_mismatches(parsed["agents"])
             if notes:
                 logger.info("Auto-fix notes: %s", "; ".join(notes))
+            fixed, role_notes = _coerce_agent_roles_to_slots(fixed, canonical_role_slots)
+            if role_notes:
+                logger.info("Agent role-slot repair notes after voice fix: %s", "; ".join(role_notes))
             try:
-                validate_agents(fixed, role_slots)
+                validate_agents(fixed, canonical_role_slots)
                 parsed["agents"] = fixed
                 logger.info("Agent roster auto-fixed after attempt %d", attempt + 1)
                 return parsed
             except AgentValidationError as e2:
                 logger.info("Auto-fix insufficient: %s", e2)
                 last_error = str(e2)
+                last_agents = fixed
                 continue
+
+    if last_agents:
+        repaired, notes = _repair_agent_contract(last_agents, canonical_role_slots)
+        if notes:
+            logger.warning(
+                "Agent roster repaired after LLM retries failed: %s",
+                "; ".join(notes),
+            )
+        try:
+            validate_agents(repaired, canonical_role_slots)
+            return {"agents": repaired}
+        except AgentValidationError as repair_error:
+            logger.error(
+                "Agent roster repair failed validation; using deterministic fallback: %s",
+                repair_error,
+            )
+            fallback = _fallback_agent_roster_for_slots(canonical_role_slots)
+            validate_agents(fallback, canonical_role_slots)
+            return {"agents": fallback}
 
     raise AgentValidationError(
         f"generation failed after 3 attempts: {last_error}"
@@ -1431,8 +2140,16 @@ def _audience_preamble(audience_role: str) -> str:
     return "AUDIENCE: students in the indicated grade band."
 
 
+def _class_guide_text(class_guide: str) -> str:
+    """Bound the teacher-authored class guide before prompt insertion."""
+    text = str(class_guide or "").strip()
+    if not text:
+        return ""
+    return text[:4000]
+
+
 def _context_block(grade_level: str, subject: str, syllabus_board: str,
-                   audience_role: str) -> str:
+                   audience_role: str, class_guide: str = "") -> str:
     """Compose the CONTEXT preamble injected at the top of every system
     prompt. Ordering matters: audience → grade band → subject → board → anchor
     example. Keep the label lines terse; LLMs pattern-match on them."""
@@ -1451,6 +2168,13 @@ def _context_block(grade_level: str, subject: str, syllabus_board: str,
     lines.append(f"Syllabus board: {board} — {_BOARD_GUIDANCE[board]}")
     if band_info["anchor"]:
         lines.append(band_info["anchor"])
+    guide = _class_guide_text(class_guide)
+    if guide:
+        lines.extend([
+            "=== TEACHER CLASS GUIDE ===",
+            guide,
+            "=== END CLASS GUIDE ===",
+        ])
     lines.append("=== END CONTEXT ===")
     return "\n".join(lines)
 
@@ -1511,12 +2235,13 @@ Rules:
 
 def build_outline_system_prompt(grade_level: str = "", subject: str = "",
                                 syllabus_board: str = "Generic",
-                                audience_role: str = "student") -> str:
+                                audience_role: str = "student",
+                                class_guide: str = "") -> str:
     """Compose the outline system prompt, with a context preamble tailored
     to the grade band, subject, board, and audience. Defaults mean callers
     that don't pass any context get near-identical behavior to the pre-
     refactor prompt."""
-    return f"{_context_block(grade_level, subject, syllabus_board, audience_role)}\n\n{_OUTLINE_BODY}"
+    return f"{_context_block(grade_level, subject, syllabus_board, audience_role, class_guide)}\n\n{_OUTLINE_BODY}"
 
 
 # Back-compat: some call sites / tests may still import this constant.
@@ -1530,7 +2255,8 @@ def generate_outline_sse(topic: str, language: str, agents: list[dict],
                          grade_level: str = "",
                          subject: str = "",
                          syllabus_board: str = "Generic",
-                         audience_role: str = "student"):
+                         audience_role: str = "student",
+                         class_guide: str = ""):
     """
     Generator that yields SSE-formatted strings for outline streaming.
     Used as the body of a StreamingHttpResponse.
@@ -1569,6 +2295,9 @@ def generate_outline_sse(topic: str, language: str, agents: list[dict],
         user_prompt += f"\nSyllabus board: {syllabus_board}"
     if audience_role:
         user_prompt += f"\nAudience: {audience_role}"
+    guide = _class_guide_text(class_guide)
+    if guide:
+        user_prompt += f"\n\nTeacher class guide:\n{guide}"
     user_prompt += (
         "\n\nAgent roster (use these ids when assigning agents to scenes):\n"
         f"{json.dumps(agent_roster_for_prompt, indent=2)}\n"
@@ -1585,6 +2314,7 @@ def generate_outline_sse(topic: str, language: str, agents: list[dict],
         subject=subject,
         syllabus_board=syllabus_board,
         audience_role=audience_role,
+        class_guide=class_guide,
     )
 
     # Call LLM. CG-P0-7: 4096 → 6144 so 9-12 scene outlines with the new
@@ -1812,11 +2542,12 @@ For quiz scenes, return:
 def build_scene_content_system_prompt(grade_level: str = "",
                                       subject: str = "",
                                       syllabus_board: str = "Generic",
-                                      audience_role: str = "student") -> str:
+                                      audience_role: str = "student",
+                                      class_guide: str = "") -> str:
     """Compose the scene-content system prompt with an audience/grade/board
     preamble. Defaults preserve pre-refactor behavior for callers that don't
     thread the new params through."""
-    return f"{_context_block(grade_level, subject, syllabus_board, audience_role)}\n\n{_SCENE_CONTENT_BODY}"
+    return f"{_context_block(grade_level, subject, syllabus_board, audience_role, class_guide)}\n\n{_SCENE_CONTENT_BODY}"
 
 
 # Back-compat constant.
@@ -1828,29 +2559,32 @@ def _fill_image_urls(parsed: dict, scene_id: str, *,
                      tenant_id: str | None = None,
                      classroom_id: str | None = None,
                      scene_idx: int | None = None) -> dict:
-    """Post-process slides to fill in image URLs using image_service.
+    """Scrub image fields before deferred media generation.
 
-    When `image_provider == 'disabled'`, skip the fetch entirely and stamp
-    `meta.imageProviderDisabled = true` on each image element so the
-    frontend renders an honest "AI images off" placeholder rather than a
-    random Unsplash photo. Any fetch error is logged (not silenced) so
-    ops can see what providers are failing.
-
-    CG-P0-9: when ``tenant_id`` + ``classroom_id`` + ``scene_idx`` are all
-    provided, ``fetch_scene_image`` will save Imagen/Nano-Banana bytes to
-    ``default_storage`` (real /media URL) instead of returning a base64
-    ``data:`` URL that the frontend strips. Per-slide ``slide_idx`` is
-    appended into the storage path so multi-slide scenes don't collide.
+    The Celery ``fill_classroom_images`` task is the only place that should
+    call image providers. This helper keeps the synchronous generation
+    response lean and safe: unsafe/placeholder URLs are stripped, disabled
+    providers are stamped honestly, and empty ``src`` values are left empty
+    for the deferred task to fill.
     """
-    from apps.courses.image_service import fetch_scene_image
 
     disabled = (image_provider or "disabled").lower() == "disabled"
     slides = parsed.get("slides", [])
-    have_storage_ctx = bool(tenant_id and classroom_id and scene_idx is not None)
+    # Context args are retained for API compatibility with old callers.
+    _ = (tenant_id, classroom_id, scene_idx)
     for slide_idx, slide in enumerate(slides):
         for element in slide.get("elements", []):
             if element.get("type") != "image":
                 continue
+            if _should_strip_generated_image_src(element.get("src")):
+                logger.warning(
+                    "scrubbing generated image src scene=%s slide=%d element=%s src=%r",
+                    scene_id,
+                    slide_idx,
+                    element.get("id"),
+                    element.get("src"),
+                )
+                element["src"] = ""
             if element.get("src"):
                 continue
             if disabled:
@@ -1858,31 +2592,6 @@ def _fill_image_urls(parsed: dict, scene_id: str, *,
                 # placeholder instead of guessing at stock photos.
                 meta = element.setdefault("meta", {})
                 meta["imageProviderDisabled"] = True
-                continue
-            keyword = element.get("content", "educational illustration")
-            try:
-                if have_storage_ctx:
-                    # Compose a unique scene_index per (scene_idx, slide_idx)
-                    # so multiple images in the same scene don't overwrite
-                    # each other in storage. 100 slides per scene is far
-                    # beyond anything we generate so the multiplier is safe.
-                    composite_idx = (scene_idx * 100) + slide_idx
-                    url = fetch_scene_image(
-                        keyword,
-                        tenant_id=tenant_id,
-                        lesson_id=classroom_id,
-                        scene_index=composite_idx,
-                    )
-                else:
-                    url = fetch_scene_image(keyword)
-                element["src"] = url
-            except Exception as exc:  # noqa: BLE001 — log + fail open
-                logger.warning(
-                    "image fill failed scene=%s slide=%d keyword=%r err=%s",
-                    scene_id, slide_idx, keyword, exc,
-                )
-                # src stays empty; frontend falls back to the generic
-                # broken-image placeholder (not the Unsplash random).
     return parsed
 
 
@@ -1910,6 +2619,7 @@ def generate_scene_content(scene: dict, agents: list, language: str,
                            subject: str = "",
                            syllabus_board: str = "Generic",
                            audience_role: str = "student",
+                           class_guide: str = "",
                            classroom_id: str | None = None,
                            tenant_id: str | None = None,
                            scene_idx: int | None = None) -> dict | None:
@@ -2023,6 +2733,9 @@ Generate exactly {slide_count} slides following the layout guidelines (title sli
         ctx_lines.append(f"Audience: {audience_role}")
     if ctx_lines:
         user_prompt += "\nContext:\n" + "\n".join(f"  - {line}" for line in ctx_lines) + "\n"
+    guide = _class_guide_text(class_guide)
+    if guide:
+        user_prompt += "\nTeacher class guide:\n" + guide + "\n"
 
     # CG-P0-7 (2026-04-27): inject the outline-committed substance
     # (`teachingObjective` + `keyPoints`) so the slide-content LLM call
@@ -2050,6 +2763,7 @@ Generate exactly {slide_count} slides following the layout guidelines (title sli
         subject=subject,
         syllabus_board=syllabus_board,
         audience_role=audience_role,
+        class_guide=class_guide,
     )
     # Pick the validator for the shape the current branch actually needs:
     # quiz scenes must contain "questions"; lecture/other scenes must
@@ -2062,7 +2776,11 @@ Generate exactly {slide_count} slides following the layout guidelines (title sli
             return isinstance(p, dict) and "questions" in p
     else:
         def _scene_content_validator(p):
-            return isinstance(p, dict) and ("slides" in p or "slide" in p)
+            return (
+                isinstance(p, dict)
+                and ("slides" in p or "slide" in p)
+                and not _has_prompt_placeholders(p)
+            )
 
     parsed, _raw = _call_llm_with_json_retry(
         config, scene_system_prompt, user_prompt,
@@ -2154,6 +2872,18 @@ Generate exactly {slide_count} slides following the layout guidelines (title sli
             slide.pop("template", None)
             slide.pop("slots", None)
         parsed["slides"] = [slide]
+
+    placeholders = find_prompt_placeholder_texts(parsed)
+    if placeholders:
+        logger.warning(
+            "scene-content rejected copied prompt placeholders scene=%s placeholders=%s",
+            scene_id,
+            placeholders[:5],
+        )
+        maic_scene_generation_total.labels(
+            scene_type=scene_type, outcome="fallback"
+        ).inc()
+        return _fallback_scene_content(scene, image_provider=image_provider)
 
     _fill_image_urls(
         parsed,
@@ -2433,8 +3163,8 @@ Return a valid JSON object:
 ACTION TYPES (14 types — use all of these for maximum engagement):
 
 1. speech       — Agent speaks (requires: agentId, text). 1-3 sentences each.
-2. spotlight    — Highlight element glow (requires: elementId, duration in ms)
-3. highlight    — Color overlay on element (requires: elementId, color hex like "#DBEAFE")
+2. spotlight    — Sustained focus on the element being explained (requires: elementId, duration in ms)
+3. highlight    — Brief color emphasis on a key element (requires: elementId, color hex like "#DBEAFE")
 4. transition   — Advance to next slide (requires: slideIndex — 0-based index of the target slide). CRITICAL for multi-slide scenes.
 5. wb_open      — Open whiteboard overlay (no params)
 6. wb_draw_text — Draw text on whiteboard (requires: text, x, y, fontSize, color)
@@ -2445,7 +3175,7 @@ ACTION TYPES (14 types — use all of these for maximum engagement):
 11. wb_edit_code  — Mutate an existing code block (requires: targetId matching a prior wb_draw_code id, operation ["insert_after"|"replace_lines"|"delete_lines"], lineStart, optional lineEnd, optional content[]). Use to make code appear a few lines at a time, interleaved with speech, so the agent is "typing" the code live.
 12. wb_close    — Close whiteboard overlay (no params)
 13. wb_clear    — Clear whiteboard content (no params)
-14. discussion  — Start discussion segment (requires: sessionType ["qa"|"roundtable"], topic, agentIds)
+14. discussion  — Optional teacher-led discussion marker (requires: sessionType ["qa"|"roundtable"], topic, agentIds, triggerMode:"manual")
 
 CRITICAL RULES:
 - VOICE DISCIPLINE: You MUST write speech text that reflects each agent's `speakingStyle` through ENGLISH register only — warm vs crisp, Socratic vs supportive, formal vs informal. Each agent's lines should be identifiable as that agent's voice without relying on non-English words.
@@ -2475,11 +3205,11 @@ CRITICAL RULES:
     speech ("…equals the net force acting on the body.")
     wb_close
   For code walkthroughs, prefer wb_draw_code (seed) + a sequence of wb_edit_code inserts so the code appears a few lines at a time, each chunk narrated by a brief speech action. That produces the "typing code live" feel.
-- Discussion segments: if you include a "discussion" action, set `"triggerMode": "manual"` so the panel only opens when the teacher clicks the Roundtable button. Never rely on discussions auto-popping mid-scene.
+- Discussion segments: use at most ONE discussion action per scene, only at a natural checkpoint. Always set `"triggerMode": "manual"` so playback continues and the teacher opens Roundtable explicitly.
 - Speech text should feel like a real conversation, not reading from notes
 - Each speech should be 1-3 sentences (short, punchy, conversational)
 - Use the speaker's role style: professors explain authoritatively, assistants ask clarifying questions, student reps voice common confusions
-- Spotlight the heading element first, then key content elements on each slide
+- Spotlight the heading element first, then key content elements on each slide. Use laser sparingly for quick directional pointing at diagrams, images, or formula terms.
 - Speaker handoff: rely on natural TTS cadence between speakers. Do NOT insert beat/spacer actions between turns — the playback engine reflows audio with its own micro-gap.
 - For introduction scenes: each agent introduces themselves personally
 - Use element IDs from the slide content for spotlight/highlight actions
@@ -2490,10 +3220,11 @@ CRITICAL RULES:
 
 def build_actions_system_prompt(grade_level: str = "", subject: str = "",
                                 syllabus_board: str = "Generic",
-                                audience_role: str = "student") -> str:
+                                audience_role: str = "student",
+                                class_guide: str = "") -> str:
     """Compose the actions/director system prompt with a context preamble.
     Defaults preserve the pre-refactor (generic-audience) behavior."""
-    return f"{_context_block(grade_level, subject, syllabus_board, audience_role)}\n\n{_ACTIONS_BODY}"
+    return f"{_context_block(grade_level, subject, syllabus_board, audience_role, class_guide)}\n\n{_ACTIONS_BODY}"
 
 
 # Back-compat constant.
@@ -2506,6 +3237,7 @@ def generate_scene_actions(scene: dict, agents: list, language: str,
                            subject: str = "",
                            syllabus_board: str = "Generic",
                            audience_role: str = "student",
+                           class_guide: str = "",
                            classroom_id: str | None = None) -> dict | None:
     """Generate rich playback actions for a multi-slide scene. Returns parsed dict.
 
@@ -2582,11 +3314,11 @@ Agents in this scene:
 {agent_details}
 
 IMPORTANT:
-- Generate 15-25 actions with rich variety (speech, spotlight, highlight, whiteboard, discussion, transitions)
+- Generate 15-25 actions with rich variety (speech, spotlight, laser, highlight, whiteboard, transitions)
 - Include a "transition" action (with slideIndex) between EACH slide. First slide (index 0) is shown by default.
 - ALL agents must participate in dialogue — each agent speaks at least 3 times
 - Use whiteboard (wb_open, wb_draw_text/shape, wb_close) at least once for a key concept
-- Include at least one discussion action
+- Include a discussion action only when this scene has a genuine teacher-facilitated checkpoint; otherwise skip it
 - Create back-and-forth conversation, not monologue
 - Reference element IDs from the slides for spotlight and highlight actions
 """
@@ -2602,12 +3334,16 @@ IMPORTANT:
         ctx_lines.append(f"Audience: {audience_role}")
     if ctx_lines:
         user_prompt += "\nContext:\n" + "\n".join(f"  - {line}" for line in ctx_lines) + "\n"
+    guide = _class_guide_text(class_guide)
+    if guide:
+        user_prompt += "\nTeacher class guide:\n" + guide + "\n"
 
     actions_system_prompt = build_actions_system_prompt(
         grade_level=grade_level,
         subject=subject,
         syllabus_board=syllabus_board,
         audience_role=audience_role,
+        class_guide=class_guide,
     )
     parsed, _raw = _call_llm_with_json_retry(
         config, actions_system_prompt, user_prompt,
@@ -2624,9 +3360,12 @@ IMPORTANT:
             scene_type="scene_actions", outcome="fallback"
         ).inc()
         fallback = _fallback_actions(scene, assigned_agents)
-        _stamp_action_durations(fallback.get("actions", []))
+        fallback_actions = fallback.get("actions", [])
+        _normalize_scene_actions(fallback_actions, assigned_agents)
+        _stamp_action_durations(fallback_actions)
         return fallback
 
+    _normalize_scene_actions(parsed["actions"], assigned_agents)
     _stamp_action_durations(parsed["actions"])
     maic_scene_generation_total.labels(
         scene_type="scene_actions", outcome="ok"
@@ -2643,6 +3382,184 @@ IMPORTANT:
 # utterances ("Exactly.", "Right.") still register on screen.
 _SPEECH_MS_PER_CHAR = 55
 _SPEECH_MIN_MS = 800
+_KNOWN_ACTION_TYPES = {
+    "spotlight",
+    "laser",
+    "speech",
+    "play_video",
+    "wb_open",
+    "wb_close",
+    "wb_clear",
+    "wb_draw_text",
+    "wb_draw_shape",
+    "wb_draw_chart",
+    "wb_draw_latex",
+    "wb_draw_table",
+    "wb_draw_line",
+    "wb_draw_code",
+    "wb_edit_code",
+    "wb_delete",
+    "discussion",
+    "highlight",
+    "pause",
+    "transition",
+}
+_SPEECHLIKE_ACTION_TYPES = {
+    "answer",
+    "dialogue",
+    "explanation",
+    "intro",
+    "introduction",
+    "narration",
+    "question",
+    "recap",
+    "response",
+    "summary",
+    "teacher_speech",
+    "student_response",
+}
+_ACTION_TYPE_ALIASES = {
+    "slide_transition": "transition",
+    "transition_to_slide": "transition",
+    "laser_pointer": "laser",
+    "point": "laser",
+    "pointer": "laser",
+    "whiteboard_open": "wb_open",
+    "whiteboard_close": "wb_close",
+    "draw_text": "wb_draw_text",
+    "draw_shape": "wb_draw_shape",
+    "draw_line": "wb_draw_line",
+    "draw_latex": "wb_draw_latex",
+    "draw_chart": "wb_draw_chart",
+}
+
+
+def _normalize_scene_actions(actions: list, agents: list[dict]) -> None:
+    """Normalize LLM action labels to the playback engine contract in place.
+
+    Local/smaller models sometimes return narrative segment labels such as
+    ``introduction`` or ``recap`` even after JSON recovery succeeds. Those
+    entries usually contain perfectly usable dialogue text; leaving them as
+    unknown action types makes the player skip teacher/student handoffs.
+    """
+    if not isinstance(actions, list):
+        return
+
+    valid_agent_ids = [str(a.get("id")) for a in agents if isinstance(a, dict) and a.get("id")]
+    fallback_agent_id = valid_agent_ids[0] if valid_agent_ids else "agent-1"
+    normalized: list[dict] = []
+
+    for action in actions:
+        if not isinstance(action, dict):
+            continue
+        raw_type = str(action.get("type") or "").strip().lower()
+        action_type = _ACTION_TYPE_ALIASES.get(raw_type, raw_type)
+
+        if action_type in _SPEECHLIKE_ACTION_TYPES or action_type not in _KNOWN_ACTION_TYPES:
+            text = _extract_action_text(action)
+            if not text:
+                continue
+            action["type"] = "speech"
+            action["text"] = text
+            agent_id = str(action.get("agentId") or action.get("agent_id") or "")
+            if agent_id not in valid_agent_ids:
+                action["agentId"] = fallback_agent_id
+            else:
+                action["agentId"] = agent_id
+        else:
+            action["type"] = action_type
+
+        _normalize_action_fields(action, len(normalized))
+        if action.get("type") == "laser" and not action.get("elementId"):
+            continue
+        normalized.append(action)
+
+    actions[:] = normalized
+
+
+def _normalize_action_fields(action: dict, index: int) -> None:
+    """Normalize common LLM parameter variants to the frontend contract."""
+    action_type = action.get("type")
+
+    if action_type in {"spotlight", "highlight", "laser", "play_video", "wb_delete"}:
+        for alias in ("element_id", "elementID", "targetId", "target_id", "target", "element"):
+            value = action.get(alias)
+            if not action.get("elementId") and value:
+                action["elementId"] = value
+
+    if action_type == "laser" and not action.get("elementId"):
+        # A laser without a target is visually meaningless in the element-
+        # based classroom runtime, so let the caller skip it cleanly.
+        return
+
+    if (
+        isinstance(action_type, str)
+        and action_type.startswith("wb_")
+        and action_type not in {"wb_open", "wb_close", "wb_clear"}
+    ):
+        action.setdefault("id", f"wb-{index + 1}")
+
+    if action_type in {"wb_draw_text", "wb_draw_shape", "wb_draw_chart", "wb_draw_latex", "wb_draw_table"}:
+        if "left" not in action and "x" in action:
+            action["left"] = action.get("x")
+        if "top" not in action and "y" in action:
+            action["top"] = action.get("y")
+
+    if action_type == "wb_draw_text":
+        action.setdefault("left", 160)
+        action.setdefault("top", 90)
+        action.setdefault("width", 520)
+        action.setdefault("height", 48)
+
+    if action_type == "wb_draw_shape":
+        if action.get("color") and not action.get("stroke"):
+            action["stroke"] = action.get("color")
+        if action.get("shape") == "rect":
+            action["shape"] = "rectangle"
+        if action.get("shape") == "arrow":
+            left = _number_or(action.get("left", action.get("x")), 160)
+            top = _number_or(action.get("top", action.get("y")), 120)
+            width = _number_or(action.get("width"), 220)
+            height = _number_or(action.get("height"), 0)
+            color = action.get("color") or action.get("stroke") or "#DC2626"
+            stroke_width = _number_or(action.get("strokeWidth"), 3)
+            action.clear()
+            action.update({
+                "type": "wb_draw_line",
+                "id": f"wb-{index + 1}",
+                "start": [left, top],
+                "end": [left + width, top + height],
+                "color": color,
+                "width": stroke_width,
+            })
+            return
+        action.setdefault("left", 160)
+        action.setdefault("top", 120)
+        action.setdefault("width", 220)
+        action.setdefault("height", 90)
+
+    if action_type == "wb_draw_line":
+        if "start" not in action and {"x1", "y1"}.issubset(action):
+            action["start"] = [action.get("x1"), action.get("y1")]
+        if "end" not in action and {"x2", "y2"}.issubset(action):
+            action["end"] = [action.get("x2"), action.get("y2")]
+        if "width" not in action and "strokeWidth" in action:
+            action["width"] = action.get("strokeWidth")
+
+
+def _number_or(value: object, fallback: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _extract_action_text(action: dict) -> str:
+    for key in ("text", "content", "message", "line", "script", "utterance"):
+        value = action.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
 
 
 def _stamp_action_durations(actions: list) -> None:

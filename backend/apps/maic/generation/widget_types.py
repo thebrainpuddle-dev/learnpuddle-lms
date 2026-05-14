@@ -6,10 +6,9 @@ Source: THU-MAIC/OpenMAIC lib/types/widgets.ts (lines 1-201)
 Pydantic port of upstream's 5 widget config interfaces. Used by
 `_generate_widget_content` (scene_generator.py) to validate the
 embedded `<script id="widget-config">` JSON extracted from generated
-HTML. Validation is a quality gate — failure logs a warning and the
-caller proceeds with the raw dict so the widget still renders. The
-gate is for catching schema regressions in generation, not for
-transforming wire data.
+HTML. Validation is a quality gate; generation retries bad schemas and
+repairs from trusted outline metadata before exposing widgetConfig in
+the API.
 
 Field-for-field map of the upstream TS shapes. Adding a field here
 without a corresponding upstream field is a smell — keep these in
@@ -313,9 +312,7 @@ class Visualization3DConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["visualization3d"]
-    visualizationType: Literal[
-        "molecular", "solar", "anatomy", "geometry", "physics", "custom"
-    ]
+    visualizationType: Literal["molecular", "solar", "anatomy", "geometry", "physics", "custom"]
     description: str
     objects: list[Visualization3DObject]
     interactions: list[Visualization3DInteraction] | None = None
@@ -359,14 +356,10 @@ def validate_widget_config(
     Returns:
         (True, None) on success.
         (False, reason) on failure — `reason` is a single-line summary
-        suitable for logger.warning. The caller MUST keep using the
-        raw `config` dict either way (graceful degrade — the widget
-        renders even when the embedded JSON has schema drift).
+        suitable for logger.warning.
 
-    This is a QUALITY GATE, not a transform: we don't return the
-    validated/normalized model. Callers stick with the wire dict so
-    behavior stays identical to the pre-validation path on success
-    AND failure.
+    This is a quality gate, not a transform: callers decide whether to
+    retry, repair, or drop the malformed config.
     """
     if not isinstance(config, dict):
         return False, f"widget config is {type(config).__name__}, expected dict"

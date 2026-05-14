@@ -10,6 +10,7 @@ import { X, GripVertical } from 'lucide-react';
 import { useMAICStageStore } from '../../stores/maicStageStore';
 import type { MAICScene, MAICSceneType, SceneSlideBounds } from '../../types/maic-scenes';
 import type { MAICSlide } from '../../types/maic';
+import { useAuthBlobUrl } from '../../hooks/useAuthBlobUrl';
 import { cn } from '../../lib/utils';
 
 interface SceneSidebarProps {
@@ -63,11 +64,16 @@ function estimateMinutes(scene: MAICScene, slideCount: number): number {
 
 /** Mini thumbnail preview showing the first slide's content as a preview card */
 function SceneThumbnail({ slide, isActive }: { slide?: MAICSlide; isActive: boolean }) {
+  // Extract first text element as preview
+  const textEl = slide?.elements.find((e) => e.type === 'text');
+  const imageEl = slide?.elements.find((e) => e.type === 'image');
+  const imageSrc = (imageEl?.src || '').trim();
+  const protectedImageSrc = imageSrc.startsWith('/media/') ? imageSrc : null;
+  const imageBlobUrl = useAuthBlobUrl(protectedImageSrc);
+  const previewImageSrc = protectedImageSrc ? imageBlobUrl : imageSrc;
+
   if (!slide) return null;
 
-  // Extract first text element as preview
-  const textEl = slide.elements.find((e) => e.type === 'text');
-  const imageEl = slide.elements.find((e) => e.type === 'image');
   const previewText = textEl?.content?.replace(/\\n/g, ' ').replace(/<[^>]*>/g, '').slice(0, 60) || '';
 
   return (
@@ -81,8 +87,10 @@ function SceneThumbnail({ slide, isActive }: { slide?: MAICSlide; isActive: bool
       )}
       style={{ background: slide.background || '#ffffff' }}
     >
-      {imageEl?.src ? (
-        <img src={imageEl.src} alt="" className="w-full h-full object-cover rounded-sm" loading="lazy" />
+      {previewImageSrc ? (
+        <img src={previewImageSrc} alt="" className="w-full h-full object-cover rounded-sm" loading="lazy" />
+      ) : protectedImageSrc ? (
+        <span className="text-gray-300">Loading</span>
       ) : previewText ? (
         <span className="text-gray-500 line-clamp-3 text-center px-0.5">{previewText}</span>
       ) : (
@@ -136,10 +144,9 @@ export const SceneSidebar = React.memo<SceneSidebarProps>(function SceneSidebar(
   const sceneSlideInfo = useMemo(() => {
     const totalSlides = slides.length;
     if (scenes.length === 0 || totalSlides === 0) {
-      return scenes.map(() => ({ count: 1, startIdx: 0, endIdx: 0 }));
+      return scenes.map(() => ({ count: 0, startIdx: -1, endIdx: -1 }));
     }
 
-    // Use precise bounds from the store if available
     if (sceneSlideBounds.length > 0) {
       return scenes.map((_, si) => {
         const bounds = sceneSlideBounds.find((b) => b.sceneIdx === si);
@@ -147,7 +154,7 @@ export const SceneSidebar = React.memo<SceneSidebarProps>(function SceneSidebar(
           const count = bounds.endSlide - bounds.startSlide + 1;
           return { count, startIdx: bounds.startSlide, endIdx: bounds.endSlide };
         }
-        return { count: 1, startIdx: 0, endIdx: 0 };
+        return { count: 0, startIdx: -1, endIdx: -1 };
       });
     }
 
@@ -188,7 +195,7 @@ export const SceneSidebar = React.memo<SceneSidebarProps>(function SceneSidebar(
             Scenes
           </h2>
           <p className="text-[10px] text-gray-400 mt-0.5">
-            {scenes.length} scene{scenes.length !== 1 ? 's' : ''} &middot; {slides.length} slide{slides.length !== 1 ? 's' : ''}
+            {scenes.length} activit{scenes.length === 1 ? 'y' : 'ies'} &middot; {slides.length} slide screen{slides.length !== 1 ? 's' : ''}
           </p>
         </div>
         <button
@@ -244,7 +251,7 @@ export const SceneSidebar = React.memo<SceneSidebarProps>(function SceneSidebar(
                 {/* Thumbnail preview */}
                 <div className="shrink-0 w-16">
                   <SceneThumbnail
-                    slide={slides[info.startIdx]}
+                    slide={info.startIdx >= 0 ? slides[info.startIdx] : undefined}
                     isActive={isActive}
                   />
                 </div>
@@ -279,9 +286,11 @@ export const SceneSidebar = React.memo<SceneSidebarProps>(function SceneSidebar(
                     </span>
 
                     {/* Slide count badge */}
-                    <span className="text-[9px] text-gray-400 dark:text-gray-500">
-                      {info.count} slide{info.count !== 1 ? 's' : ''}
-                    </span>
+                    {info.count > 0 && (
+                      <span className="text-[9px] text-gray-400 dark:text-gray-500">
+                        {info.count} slide{info.count !== 1 ? 's' : ''}
+                      </span>
+                    )}
 
                     {/* Duration estimate */}
                     <span className="text-[9px] text-gray-400 dark:text-gray-500">

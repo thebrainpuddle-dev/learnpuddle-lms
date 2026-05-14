@@ -39,7 +39,6 @@ from unittest.mock import patch
 
 import pytest
 from django.db import IntegrityError, transaction
-from django.test import override_settings
 from django.utils import timezone
 
 from apps.courses.models import Content, Course, Module
@@ -410,8 +409,11 @@ class TestLeadDayParsing:
 
 
 @pytest.mark.django_db
-@override_settings(REMINDER_EMAIL_ENABLED=True)
 class TestDispatchCampaign:
+    @pytest.fixture(autouse=True)
+    def _enable_reminder_email(self, settings):
+        settings.REMINDER_EMAIL_ENABLED = True
+
     def _make_campaign(self, tenant, source="MANUAL"):
         return ReminderCampaign.all_objects.create(
             tenant=tenant,
@@ -545,8 +547,11 @@ class TestDispatchCampaign:
 
 
 @pytest.mark.django_db
-@override_settings(REMINDER_EMAIL_ENABLED=False)
 class TestDispatchCampaignEmailDisabled:
+    @pytest.fixture(autouse=True)
+    def _disable_reminder_email(self, settings):
+        settings.REMINDER_EMAIL_ENABLED = False
+
     def test_email_disabled_skips_send_but_marks_delivery_sent(
         self, rem_tenant, rem_teacher_a
     ):

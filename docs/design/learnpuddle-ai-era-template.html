@@ -1,0 +1,1275 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LearnPuddle AI-Era Product Site Template</title>
+  <style>
+    :root {
+      --ink: #16201c;
+      --muted: #5d6863;
+      --soft: #f8f5ef;
+      --paper: #fffdf8;
+      --line: #e7dfd2;
+      --mint: #1ca978;
+      --mint-2: #dff7eb;
+      --clay: #e95e35;
+      --clay-2: #ffe3d8;
+      --blue: #3156d4;
+      --blue-2: #e8eeff;
+      --gold: #e7af3f;
+      --rose: #f8d7cf;
+      --shadow: 0 24px 70px rgba(37, 28, 18, 0.13);
+      --radius: 8px;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+    }
+
+    a {
+      color: inherit;
+      text-decoration: none;
+    }
+
+    .page {
+      min-height: 100vh;
+      overflow: hidden;
+    }
+
+    .wrap {
+      width: min(1280px, calc(100% - 40px));
+      margin: 0 auto;
+    }
+
+    .nav {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      border-bottom: 1px solid rgba(231, 223, 210, 0.88);
+      background: rgba(255, 253, 248, 0.92);
+      backdrop-filter: blur(14px);
+    }
+
+    .nav-inner {
+      min-height: 72px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 760;
+      letter-spacing: -0.02em;
+    }
+
+    .brand-mark {
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      border-radius: 8px;
+      color: #fff;
+      background: linear-gradient(135deg, var(--clay), #f2ae4d 52%, var(--mint));
+      box-shadow: 0 10px 24px rgba(233, 94, 53, 0.24);
+      font-weight: 900;
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      color: #39443f;
+      font-size: 0.92rem;
+      font-weight: 650;
+    }
+
+    .btn {
+      min-height: 42px;
+      padding: 0 18px;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 9px;
+      font-size: 0.92rem;
+      font-weight: 760;
+      white-space: nowrap;
+    }
+
+    .btn-primary {
+      color: #fff;
+      background: var(--clay);
+      box-shadow: 0 12px 26px rgba(233, 94, 53, 0.26);
+    }
+
+    .btn-secondary {
+      color: var(--ink);
+      background: #fff;
+      border-color: var(--line);
+    }
+
+    .hero {
+      padding: 88px 0 54px;
+      background:
+        linear-gradient(180deg, rgba(248, 245, 239, 0.68) 0%, rgba(255, 253, 248, 0) 64%),
+        radial-gradient(circle at 78% 8%, rgba(49, 86, 212, 0.08), transparent 30%),
+        radial-gradient(circle at 9% 8%, rgba(28, 169, 120, 0.08), transparent 28%);
+    }
+
+    .hero-grid {
+      display: grid;
+      grid-template-columns: 0.78fr 1.22fr;
+      gap: 44px;
+      align-items: center;
+    }
+
+    .eyebrow {
+      width: fit-content;
+      margin: 0 0 18px;
+      padding: 8px 12px;
+      border: 1px solid #f4c9ba;
+      border-radius: 999px;
+      background: #fff5ef;
+      color: #a83b20;
+      font-size: 0.75rem;
+      font-weight: 820;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin-top: 0;
+    }
+
+    h1 {
+      margin-bottom: 20px;
+      font-size: clamp(3rem, 5.6vw, 5.05rem);
+      line-height: 0.96;
+      letter-spacing: -0.055em;
+    }
+
+    h1 span {
+      color: var(--clay);
+    }
+
+    .lead {
+      max-width: 620px;
+      color: #46514c;
+      font-size: clamp(1.05rem, 1.7vw, 1.24rem);
+      line-height: 1.65;
+    }
+
+    .hero-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 30px;
+    }
+
+    .proof-row {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 30px;
+      max-width: 620px;
+    }
+
+    .proof {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(255, 255, 255, 0.8);
+      padding: 13px;
+    }
+
+    .proof strong {
+      display: block;
+      font-size: 1.08rem;
+    }
+
+    .proof span {
+      display: block;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 0.78rem;
+      line-height: 1.35;
+    }
+
+    .builder {
+      position: relative;
+      border: 1px solid #ded8cc;
+      border-radius: 14px;
+      overflow: hidden;
+      background: #fff;
+      box-shadow: var(--shadow);
+    }
+
+    .builder-top {
+      height: 38px;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 0 15px;
+      border-bottom: 1px solid #edf0ec;
+      background: #fbfcff;
+    }
+
+    .dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: var(--rose);
+    }
+
+    .dot:nth-child(2) {
+      background: #f4d475;
+    }
+
+    .dot:nth-child(3) {
+      background: #7edfa7;
+    }
+
+    .url {
+      margin-left: auto;
+      margin-right: auto;
+      width: min(260px, 48%);
+      height: 16px;
+      border-radius: 999px;
+      background: #edf3ff;
+      color: #7280a7;
+      display: grid;
+      place-items: center;
+      font-size: 0.58rem;
+      font-weight: 700;
+    }
+
+    .builder-body {
+      display: grid;
+      grid-template-columns: 1fr;
+      min-height: 430px;
+    }
+
+    .source,
+    .pathway {
+      padding: 16px;
+      background: #f7f9f4;
+    }
+
+    .source {
+      display: grid;
+      grid-template-columns: auto repeat(3, minmax(0, 1fr));
+      align-items: center;
+      gap: 10px;
+      border-bottom: 1px solid #e7ecdf;
+    }
+
+    .pathway {
+      display: grid;
+      grid-template-columns: auto repeat(3, minmax(0, 1fr));
+      align-items: center;
+      gap: 10px;
+      border-top: 1px solid #e7ecdf;
+    }
+
+    .panel-label {
+      margin-bottom: 0;
+      color: #6b746f;
+      font-size: 0.7rem;
+      font-weight: 850;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .file-card,
+    .module-card,
+    .metric-card,
+    .template-card {
+      border: 1px solid #e3ddd1;
+      border-radius: var(--radius);
+      background: #fff;
+      box-shadow: 0 8px 20px rgba(37, 28, 18, 0.05);
+    }
+
+    .file-card {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 0;
+      padding: 11px;
+    }
+
+    .file-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      color: #fff;
+      background: var(--blue);
+      font-size: 0.84rem;
+      font-weight: 850;
+    }
+
+    .file-card:nth-of-type(3) .file-icon {
+      background: var(--mint);
+    }
+
+    .file-card:nth-of-type(4) .file-icon {
+      background: var(--gold);
+    }
+
+    .file-card b {
+      display: block;
+      font-size: 0.79rem;
+    }
+
+    .file-card small {
+      display: block;
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 0.68rem;
+    }
+
+    .ai-workspace {
+      position: relative;
+      padding: 20px 22px;
+      background:
+        linear-gradient(90deg, rgba(49, 86, 212, 0.06) 1px, transparent 1px),
+        linear-gradient(rgba(49, 86, 212, 0.06) 1px, transparent 1px),
+        #fff;
+      background-size: 26px 26px;
+    }
+
+    .workspace-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 18px;
+    }
+
+    .workspace-head h2 {
+      margin: 0;
+      font-size: 1.35rem;
+      letter-spacing: -0.035em;
+    }
+
+    .workspace-head p {
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: 0.84rem;
+      line-height: 1.5;
+    }
+
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 10px;
+      border-radius: 999px;
+      background: var(--mint-2);
+      color: #08734f;
+      font-size: 0.72rem;
+      font-weight: 850;
+      white-space: nowrap;
+    }
+
+    .status::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--mint);
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 18px;
+    }
+
+    .flow-step {
+      min-height: 92px;
+      padding: 13px;
+      border: 1px solid #e5e4de;
+      border-radius: var(--radius);
+      background: rgba(255, 255, 255, 0.92);
+    }
+
+    .flow-step i {
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      margin-bottom: 10px;
+      color: #fff;
+      background: var(--ink);
+      font-style: normal;
+      font-size: 0.8rem;
+      font-weight: 850;
+    }
+
+    .flow-step b {
+      display: block;
+      font-size: 0.82rem;
+    }
+
+    .flow-step span {
+      display: block;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 0.68rem;
+      line-height: 1.35;
+    }
+
+    .lesson-player {
+      display: grid;
+      grid-template-columns: 1.08fr 0.92fr;
+      gap: 12px;
+    }
+
+    .video-card {
+      min-height: 154px;
+      border-radius: var(--radius);
+      overflow: hidden;
+      background: linear-gradient(135deg, #17241f, #244c46);
+      color: #fff;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .play {
+      width: 46px;
+      height: 46px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      background: rgba(255, 255, 255, 0.16);
+      border: 1px solid rgba(255, 255, 255, 0.28);
+    }
+
+    .progress {
+      height: 7px;
+      border-radius: 999px;
+      overflow: hidden;
+      background: rgba(255, 255, 255, 0.24);
+    }
+
+    .progress span {
+      display: block;
+      width: 64%;
+      height: 100%;
+      background: #77e1b0;
+    }
+
+    .chat-card {
+      padding: 14px;
+      border: 1px solid #e3ddd1;
+      border-radius: var(--radius);
+      background: #fff;
+    }
+
+    .bubble {
+      margin-bottom: 9px;
+      padding: 10px;
+      border-radius: 8px;
+      background: #f2f4ee;
+      color: #33403a;
+      font-size: 0.76rem;
+      line-height: 1.42;
+    }
+
+    .bubble.ai {
+      background: var(--blue-2);
+    }
+
+    .module-card {
+      margin-bottom: 0;
+      padding: 12px;
+    }
+
+    .module-card b {
+      display: block;
+      font-size: 0.8rem;
+    }
+
+    .module-card small {
+      color: var(--muted);
+      font-size: 0.68rem;
+    }
+
+    .checkline {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      margin-top: 10px;
+      color: #287b58;
+      font-size: 0.72rem;
+      font-weight: 760;
+    }
+
+    .check {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      color: #fff;
+      background: var(--mint);
+      font-size: 0.62rem;
+    }
+
+    .section {
+      padding: 82px 0;
+    }
+
+    .section.alt {
+      background: var(--soft);
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+    }
+
+    .section-head {
+      display: grid;
+      grid-template-columns: 0.85fr 1fr;
+      gap: 32px;
+      align-items: end;
+      margin-bottom: 34px;
+    }
+
+    .section-head h2 {
+      margin-bottom: 0;
+      font-size: clamp(2.2rem, 4vw, 4.1rem);
+      line-height: 1;
+      letter-spacing: -0.055em;
+    }
+
+    .section-head p {
+      margin-bottom: 6px;
+      color: var(--muted);
+      font-size: 1.04rem;
+      line-height: 1.62;
+    }
+
+    .templates {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .template-card {
+      min-height: 240px;
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .template-card.education {
+      background: linear-gradient(180deg, #ffffff, #fff5ef);
+    }
+
+    .template-card.manufacturing {
+      background: linear-gradient(180deg, #ffffff, #eef6f1);
+    }
+
+    .template-card.corporate {
+      background: linear-gradient(180deg, #ffffff, #eef2ff);
+    }
+
+    .template-card.healthcare {
+      background: linear-gradient(180deg, #ffffff, #edf9f6);
+    }
+
+    .template-card.hospitality {
+      background: linear-gradient(180deg, #ffffff, #fff6df);
+    }
+
+    .template-card.academies {
+      background: linear-gradient(180deg, #ffffff, #f8edf8);
+    }
+
+    .template-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .template-card h3 {
+      margin-bottom: 7px;
+      font-size: 1.12rem;
+      letter-spacing: -0.025em;
+    }
+
+    .template-card p {
+      color: var(--muted);
+      font-size: 0.88rem;
+      line-height: 1.52;
+    }
+
+    .template-icon {
+      width: 42px;
+      height: 42px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      background: var(--ink);
+      color: #fff;
+      font-size: 1.2rem;
+    }
+
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+    }
+
+    .chip {
+      padding: 7px 9px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.72);
+      border: 1px solid rgba(22, 32, 28, 0.09);
+      font-size: 0.71rem;
+      font-weight: 780;
+    }
+
+    .insight-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+      align-items: stretch;
+    }
+
+    .insight-board {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #fff;
+      box-shadow: var(--shadow);
+      padding: 18px;
+    }
+
+    .insight-toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 14px;
+    }
+
+    .segmented {
+      display: flex;
+      gap: 4px;
+      padding: 4px;
+      border-radius: 8px;
+      background: #f4f0e9;
+    }
+
+    .segmented span {
+      padding: 7px 10px;
+      border-radius: 6px;
+      font-size: 0.72rem;
+      font-weight: 780;
+      color: var(--muted);
+    }
+
+    .segmented .active {
+      background: #fff;
+      color: var(--ink);
+      box-shadow: 0 4px 10px rgba(22, 32, 28, 0.08);
+    }
+
+    .metric-row {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
+    .metric-card {
+      padding: 13px;
+    }
+
+    .metric-card b {
+      display: block;
+      font-size: 1.25rem;
+    }
+
+    .metric-card span {
+      color: var(--muted);
+      font-size: 0.72rem;
+    }
+
+    .heatmap {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 7px;
+      padding: 14px;
+      border-radius: 8px;
+      background: #f8f6f1;
+    }
+
+    .cell {
+      aspect-ratio: 1;
+      border-radius: 6px;
+      background: #d9eadf;
+    }
+
+    .cell:nth-child(3n) {
+      background: #a7ddb9;
+    }
+
+    .cell:nth-child(4n) {
+      background: #f4cf7b;
+    }
+
+    .cell:nth-child(7n) {
+      background: #f0a58d;
+    }
+
+    .coach-card {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #16201c;
+      color: #fff;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      min-height: 420px;
+    }
+
+    .coach-card h3 {
+      font-size: 1.8rem;
+      line-height: 1.08;
+      letter-spacing: -0.045em;
+    }
+
+    .coach-card p {
+      color: #dce6df;
+      line-height: 1.6;
+    }
+
+    .coach-actions {
+      display: grid;
+      gap: 10px;
+    }
+
+    .coach-action {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 8px;
+      padding: 12px;
+      background: rgba(255, 255, 255, 0.06);
+      font-weight: 760;
+    }
+
+    .tenant-worlds {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+    }
+
+    .tenant-window {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      overflow: hidden;
+      background: #fff;
+      box-shadow: 0 16px 42px rgba(37, 28, 18, 0.08);
+    }
+
+    .tenant-window .bar {
+      height: 32px;
+      background: #fbfcff;
+      border-bottom: 1px solid #edf0ec;
+    }
+
+    .tenant-body {
+      padding: 16px;
+    }
+
+    .tenant-badge {
+      width: fit-content;
+      padding: 6px 8px;
+      border-radius: 999px;
+      font-size: 0.66rem;
+      font-weight: 850;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .school .tenant-badge {
+      background: var(--clay-2);
+      color: #a83b20;
+    }
+
+    .fitness .tenant-badge {
+      background: #e8f7e6;
+      color: #197048;
+    }
+
+    .enterprise .tenant-badge {
+      background: var(--blue-2);
+      color: #243fa2;
+    }
+
+    .tenant-window h3 {
+      margin: 14px 0 8px;
+      font-size: 1.2rem;
+    }
+
+    .tenant-lines {
+      display: grid;
+      gap: 8px;
+      margin: 18px 0;
+    }
+
+    .tenant-line {
+      height: 10px;
+      border-radius: 999px;
+      background: #eef0ec;
+    }
+
+    .tenant-line:nth-child(1) {
+      width: 88%;
+    }
+
+    .tenant-line:nth-child(2) {
+      width: 64%;
+    }
+
+    .tenant-line:nth-child(3) {
+      width: 74%;
+    }
+
+    .bottom-cta {
+      padding: 76px 0;
+      background: #16201c;
+      color: #fff;
+    }
+
+    .bottom-box {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 28px;
+      align-items: center;
+    }
+
+    .bottom-box h2 {
+      margin-bottom: 10px;
+      max-width: 760px;
+      font-size: clamp(2.2rem, 5vw, 4.4rem);
+      line-height: 0.98;
+      letter-spacing: -0.055em;
+    }
+
+    .bottom-box p {
+      margin-bottom: 0;
+      max-width: 610px;
+      color: #dce6df;
+      font-size: 1.05rem;
+      line-height: 1.6;
+    }
+
+    .note {
+      padding: 18px 0 34px;
+      color: var(--muted);
+      font-size: 0.82rem;
+      line-height: 1.5;
+    }
+
+    @media (max-width: 980px) {
+      .nav-links {
+        display: none;
+      }
+
+      .hero-grid,
+      .section-head,
+      .insight-grid,
+      .bottom-box {
+        grid-template-columns: 1fr;
+      }
+
+      .builder-body {
+        grid-template-columns: 1fr;
+      }
+
+      .source,
+      .pathway {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .source .panel-label,
+      .pathway .panel-label {
+        grid-column: 1 / -1;
+      }
+
+      .file-card,
+      .module-card {
+        margin-bottom: 0;
+      }
+
+      .templates,
+      .tenant-worlds {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 640px) {
+      .wrap {
+        width: min(100% - 24px, 1180px);
+      }
+
+      .hero {
+        padding-top: 52px;
+      }
+
+      .hero-actions,
+      .proof-row,
+      .metric-row,
+      .flow,
+      .lesson-player,
+      .templates,
+      .tenant-worlds,
+      .source,
+      .pathway {
+        grid-template-columns: 1fr;
+      }
+
+      .hero-actions .btn,
+      .bottom-box .btn {
+        width: 100%;
+      }
+
+      .builder {
+        border-radius: 10px;
+      }
+
+      .workspace-head {
+        display: block;
+      }
+
+      .status {
+        margin-top: 12px;
+      }
+
+      .section {
+        padding: 58px 0;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header class="nav">
+      <div class="wrap nav-inner">
+        <a class="brand" href="#">
+          <span class="brand-mark">L</span>
+          <span>LearnPuddle</span>
+        </a>
+        <nav class="nav-links" aria-label="Primary">
+          <a href="#templates">Templates</a>
+          <a href="#ai-workflow">AI workflow</a>
+          <a href="#insights">Insights</a>
+          <a href="#tenant-worlds">Tenant worlds</a>
+        </nav>
+        <a class="btn btn-primary" href="#demo">Book demo</a>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div class="wrap hero-grid">
+          <div>
+            <p class="eyebrow">AI-era learning platform</p>
+            <h1>Turn knowledge into learning that <span>responds.</span></h1>
+            <p class="lead">
+              LearnPuddle turns videos, documents, policies, and playbooks into branded learning portals with courses,
+              quizzes, captions, progress tracking, and insight-rich reports.
+            </p>
+            <div class="hero-actions">
+              <a class="btn btn-primary" href="#demo">Book a demo -></a>
+              <a class="btn btn-secondary" href="#templates">Explore templates</a>
+            </div>
+            <div class="proof-row" aria-label="Product proof">
+              <div class="proof">
+                <strong>10x</strong>
+                <span>faster course rollout from existing content</span>
+              </div>
+              <div class="proof">
+                <strong>91%</strong>
+                <span>sample completion benchmark for guided cohorts</span>
+              </div>
+              <div class="proof">
+                <strong>1 platform</strong>
+                <span>for schools, teams, branches, and academies</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="builder" id="ai-workflow" aria-label="Living course builder visual">
+            <div class="builder-top">
+              <span class="dot"></span>
+              <span class="dot"></span>
+              <span class="dot"></span>
+              <span class="url">learnpuddle.com/course-builder</span>
+            </div>
+            <div class="builder-body">
+              <aside class="source">
+                <div class="panel-label">Source knowledge</div>
+                <div class="file-card">
+                  <div class="file-icon">VID</div>
+                  <div><b>Workshop recording</b><small>47 min video</small></div>
+                </div>
+                <div class="file-card">
+                  <div class="file-icon">PDF</div>
+                  <div><b>Policy handbook</b><small>32 pages</small></div>
+                </div>
+                <div class="file-card">
+                  <div class="file-icon">SOP</div>
+                  <div><b>Safety checklist</b><small>Plant ops</small></div>
+                </div>
+              </aside>
+
+              <section class="ai-workspace">
+                <div class="workspace-head">
+                  <div>
+                    <h2>AI builds the learning path.</h2>
+                    <p>Structured modules, transcripts, quizzes, translations, and certificates from the work you already have.</p>
+                  </div>
+                  <span class="status">Generating</span>
+                </div>
+
+                <div class="flow">
+                  <div class="flow-step"><i>1</i><b>Upload</b><span>Video, PDF, DOCX, PPTX, or SOP.</span></div>
+                  <div class="flow-step"><i>2</i><b>Structure</b><span>Modules, outcomes, deadlines, and cohorts.</span></div>
+                  <div class="flow-step"><i>3</i><b>Teach</b><span>Captions, lesson chat, notes, and quizzes.</span></div>
+                  <div class="flow-step"><i>4</i><b>Prove</b><span>Reports, skills, certificates, and audit trail.</span></div>
+                </div>
+
+                <div class="lesson-player">
+                  <div class="video-card">
+                    <div class="play">▶</div>
+                    <div>
+                      <b>Lesson: Assessment moderation</b>
+                      <div class="progress"><span></span></div>
+                    </div>
+                  </div>
+                  <div class="chat-card">
+                    <div class="bubble">Ask this lesson: "Explain moderation for new teachers."</div>
+                    <div class="bubble ai">Here's a 3-step explanation with examples from the transcript.</div>
+                    <div class="bubble">Generate 5 quiz questions from this section.</div>
+                  </div>
+                </div>
+              </section>
+
+              <aside class="pathway">
+                <div class="panel-label">Published path</div>
+                <div class="module-card">
+                  <b>Module 1: Foundations</b>
+                  <small>Video + transcript</small>
+                  <div class="checkline"><span class="check">✓</span> Ready</div>
+                </div>
+                <div class="module-card">
+                  <b>Module 2: Practice</b>
+                  <small>Quiz + reflection</small>
+                  <div class="checkline"><span class="check">✓</span> Ready</div>
+                </div>
+                <div class="module-card">
+                  <b>Certificate</b>
+                  <small>Auto-issued at 80%</small>
+                  <div class="checkline"><span class="check">✓</span> Tracked</div>
+                </div>
+              </aside>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section alt" id="templates">
+        <div class="wrap">
+          <div class="section-head">
+            <h2>Start with the right training world.</h2>
+            <p>
+              LearnPuddle should feel purpose-built for each audience. Same platform underneath, different vocabulary,
+              metrics, program templates, and learner motivation on top.
+            </p>
+          </div>
+
+          <div class="templates">
+            <article class="template-card education">
+              <div>
+                <div class="template-top"><h3>Education</h3><span class="template-icon">🎓</span></div>
+                <p>CPD hours, IB certifications, faculty development, curriculum rollout, and department reports.</p>
+              </div>
+              <div class="chips"><span class="chip">CPD tracking</span><span class="chip">HOD views</span><span class="chip">Certificates</span></div>
+            </article>
+            <article class="template-card corporate">
+              <div>
+                <div class="template-top"><h3>Corporate L&amp;D</h3><span class="template-icon">▦</span></div>
+                <p>Onboarding, compliance, sales enablement, role-based pathways, and manager completion controls.</p>
+              </div>
+              <div class="chips"><span class="chip">SOPs</span><span class="chip">Renewals</span><span class="chip">Evidence</span></div>
+            </article>
+            <article class="template-card manufacturing">
+              <div>
+                <div class="template-top"><h3>Manufacturing</h3><span class="template-icon">⚙</span></div>
+                <p>Safety SOPs, machine readiness, supervisor sign-off, recertification cycles, and floor-level visibility.</p>
+              </div>
+              <div class="chips"><span class="chip">Safety</span><span class="chip">Readiness</span><span class="chip">Sign-off</span></div>
+            </article>
+            <article class="template-card healthcare">
+              <div>
+                <div class="template-top"><h3>Healthcare</h3><span class="template-icon">✚</span></div>
+                <p>Clinical protocols, recurring certifications, multi-role competency checks, and compliance reminders.</p>
+              </div>
+              <div class="chips"><span class="chip">Protocols</span><span class="chip">Renewals</span><span class="chip">Roles</span></div>
+            </article>
+            <article class="template-card hospitality">
+              <div>
+                <div class="template-top"><h3>Hospitality</h3><span class="template-icon">★</span></div>
+                <p>Guest experience standards, outlet launch onboarding, service drills, and branch-level scorecards.</p>
+              </div>
+              <div class="chips"><span class="chip">Frontline</span><span class="chip">Branches</span><span class="chip">Service</span></div>
+            </article>
+            <article class="template-card academies">
+              <div>
+                <div class="template-top"><h3>Academies</h3><span class="template-icon">◈</span></div>
+                <p>Branded learner journeys, cohorts, instructor workflows, paid programs, and certification tracks.</p>
+              </div>
+              <div class="chips"><span class="chip">Cohorts</span><span class="chip">Programs</span><span class="chip">Progress</span></div>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="insights">
+        <div class="wrap">
+          <div class="section-head">
+            <h2>Make learning visible enough to improve.</h2>
+            <p>
+              The product should show leaders where training is working, where people are stuck, and what action to take next.
+              This is the design language for insight, not just reporting.
+            </p>
+          </div>
+
+          <div class="insight-grid">
+            <div class="insight-board">
+              <div class="insight-toolbar">
+                <strong>Learning insight map</strong>
+                <div class="segmented"><span class="active">Skills</span><span>Cohorts</span><span>Deadlines</span></div>
+              </div>
+              <div class="metric-row">
+                <div class="metric-card"><b>91%</b><span>completion</span></div>
+                <div class="metric-card"><b>3</b><span>cohorts need reminders</span></div>
+                <div class="metric-card"><b>12</b><span>certificates ready</span></div>
+              </div>
+              <div class="heatmap" aria-label="Skill heatmap">
+                <span class="cell"></span><span class="cell"></span><span class="cell"></span><span class="cell"></span><span class="cell"></span><span class="cell"></span>
+                <span class="cell"></span><span class="cell"></span><span class="cell"></span><span class="cell"></span><span class="cell"></span><span class="cell"></span>
+                <span class="cell"></span><span class="cell"></span><span class="cell"></span><span class="cell"></span><span class="cell"></span><span class="cell"></span>
+                <span class="cell"></span><span class="cell"></span><span class="cell"></span><span class="cell"></span><span class="cell"></span><span class="cell"></span>
+              </div>
+            </div>
+
+            <aside class="coach-card">
+              <div>
+                <p class="eyebrow">Action layer</p>
+                <h3>Insight should end in the next useful move.</h3>
+                <p>
+                  Instead of passive charts, LearnPuddle can recommend reminders, quiz revisions, support lessons,
+                  and certification follow-ups.
+                </p>
+              </div>
+              <div class="coach-actions">
+                <div class="coach-action"><span>Send reminder to 3 cohorts</span><span>-></span></div>
+                <div class="coach-action"><span>Create support lesson for low skill area</span><span>-></span></div>
+                <div class="coach-action"><span>Export audit-ready evidence report</span><span>-></span></div>
+              </div>
+            </aside>
+          </div>
+        </div>
+      </section>
+
+      <section class="section alt" id="tenant-worlds">
+        <div class="wrap">
+          <div class="section-head">
+            <h2>Same engine. Different worlds.</h2>
+            <p>
+              Multi-tenancy is not just infrastructure. It is a brand promise: every organization gets a portal that feels like theirs.
+            </p>
+          </div>
+
+          <div class="tenant-worlds">
+            <article class="tenant-window school">
+              <div class="bar"></div>
+              <div class="tenant-body">
+                <span class="tenant-badge">School portal</span>
+                <h3>Keystone Faculty Hub</h3>
+                <div class="tenant-lines"><span class="tenant-line"></span><span class="tenant-line"></span><span class="tenant-line"></span></div>
+                <div class="chips"><span class="chip">CPD hours</span><span class="chip">IB logs</span><span class="chip">HOD view</span></div>
+              </div>
+            </article>
+            <article class="tenant-window fitness">
+              <div class="bar"></div>
+              <div class="tenant-body">
+                <span class="tenant-badge">Fitness academy</span>
+                <h3>Pulse Trainer Campus</h3>
+                <div class="tenant-lines"><span class="tenant-line"></span><span class="tenant-line"></span><span class="tenant-line"></span></div>
+                <div class="chips"><span class="chip">Programs</span><span class="chip">Nutrition</span><span class="chip">Milestones</span></div>
+              </div>
+            </article>
+            <article class="tenant-window enterprise">
+              <div class="bar"></div>
+              <div class="tenant-body">
+                <span class="tenant-badge">Enterprise L&amp;D</span>
+                <h3>Northstar Enablement</h3>
+                <div class="tenant-lines"><span class="tenant-line"></span><span class="tenant-line"></span><span class="tenant-line"></span></div>
+                <div class="chips"><span class="chip">Onboarding</span><span class="chip">SOPs</span><span class="chip">Compliance</span></div>
+              </div>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="bottom-cta" id="demo">
+        <div class="wrap bottom-box">
+          <div>
+            <h2>The site should sell transformation, not software inventory.</h2>
+            <p>
+              Every section should answer: what can this organization teach faster, track better, and improve because LearnPuddle exists?
+            </p>
+          </div>
+          <a class="btn btn-primary" href="#">Prototype CTA</a>
+        </div>
+      </section>
+    </main>
+
+    <footer class="wrap note">
+      Visual template for LearnPuddle product-site direction. Built as a static prototype so the design can be reviewed before porting into the React landing page.
+    </footer>
+  </div>
+</body>
+</html>

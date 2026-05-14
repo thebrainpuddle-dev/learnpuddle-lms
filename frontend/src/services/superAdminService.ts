@@ -24,6 +24,7 @@ export interface TenantListItem {
   plan_started_at: string | null;
   plan_expires_at: string | null;
   max_teachers: number;
+  max_students: number;
   max_courses: number;
   max_storage_mb: number;
   primary_color: string;
@@ -50,6 +51,13 @@ export interface TenantDetail extends TenantListItem {
   feature_groups: boolean;
   feature_certificates: boolean;
   feature_teacher_authoring?: boolean;
+  feature_ai_studio?: boolean;
+  feature_sso?: boolean;
+  feature_saml?: boolean;
+  feature_2fa?: boolean;
+  feature_students?: boolean;
+  feature_maic?: boolean;
+  feature_maic_v2?: boolean;
   internal_notes: string;
   published_course_count: number;
   admin_email: string | null;
@@ -58,6 +66,7 @@ export interface TenantDetail extends TenantListItem {
 
 export interface TenantUsage {
   teachers: { used: number; limit: number };
+  students?: { used: number; limit: number };
   courses: { used: number; limit: number };
   storage_mb: { used: number; limit: number };
 }
@@ -245,6 +254,13 @@ export const FEATURE_FLAGS = [
   { key: 'feature_groups', label: 'Groups' },
   { key: 'feature_certificates', label: 'Certificates' },
   { key: 'feature_teacher_authoring', label: 'Teacher Authoring' },
+  { key: 'feature_ai_studio', label: 'AI Studio' },
+  { key: 'feature_students', label: 'Student Portal' },
+  { key: 'feature_maic', label: 'MAIC Classroom' },
+  { key: 'feature_maic_v2', label: 'MAIC v2' },
+  { key: 'feature_sso', label: 'OAuth SSO' },
+  { key: 'feature_saml', label: 'SAML SSO' },
+  { key: 'feature_2fa', label: 'Two-Factor Auth' },
 ] as const;
 
 export interface DemoBooking {

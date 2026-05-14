@@ -22,7 +22,8 @@ the next scene_done event.
 
 Tenant isolation: the consumer rejects (4003) if the connecting
 user's tenant doesn't own the MaicGenerationJob row. Anonymous users
-are rejected (4001).
+are rejected (4001). MAIC v2 disabled globally or for the tenant
+rejects with 4403.
 """
 from __future__ import annotations
 
@@ -37,6 +38,14 @@ from apps.maic.models import MaicGenerationJob
 
 
 logger = logging.getLogger("apps.maic.generation.consumers")
+
+
+@database_sync_to_async
+def _user_has_maic_v2_access(user) -> bool:
+    """Run the shared MAIC v2 gate in a DB-safe sync context."""
+    from apps.maic.permissions import user_has_maic_v2_access
+
+    return user_has_maic_v2_access(user)
 
 
 @database_sync_to_async
@@ -82,6 +91,15 @@ class GenerationConsumer(AsyncJsonWebsocketConsumer):
                 self.user.id,
             )
             await self.close(code=4004)
+            return
+
+        if not await _user_has_maic_v2_access(self.user):
+            logger.warning(
+                "Generation WS: user %s tenant=%s failed v2 access gate",
+                self.user.id,
+                self.tenant_id,
+            )
+            await self.close(code=4403)
             return
 
         job = await _load_job(self.job_id, self.tenant_id)

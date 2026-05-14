@@ -6,6 +6,7 @@ import { useMAICStageStore } from '../stores/maicStageStore';
 import { streamMAIC } from '../lib/maicSSE';
 import { saveClassroom } from '../lib/maicDb';
 import { maicApi } from '../services/openmaicService';
+import type { MAICGenerationContextPayload } from '../services/openmaicService';
 import { setGenerationActive } from '../utils/generationLock';
 import { setLastActivityTimestamp } from '../utils/authSession';
 import type {
@@ -19,6 +20,9 @@ import type {
 import type { MAICScene, MAICSceneType, MAICSlideContent, MAICQuizContent, SceneSlideBounds } from '../types/maic-scenes';
 import type { MAICAction } from '../types/maic-actions';
 
+const V2_JOB_POLL_INTERVAL_MS = 2000;
+const V2_JOB_MAX_CONSECUTIVE_POLL_ERRORS = 5;
+
 /** Retry an async operation with exponential backoff. */
 async function withRetry<T>(fn: () => Promise<T>, retries = 2, baseDelayMs = 2000): Promise<T> {
   for (let attempt = 0; attempt <= retries; attempt++) {
@@ -30,6 +34,138 @@ async function withRetry<T>(fn: () => Promise<T>, retries = 2, baseDelayMs = 200
     }
   }
   throw new Error('Unreachable');
+}
+
+function generationContextFromConfig(config: MAICGenerationConfig): MAICGenerationContextPayload {
+  return {
+    ...(config.gradeLevel?.trim() ? { grade_level: config.gradeLevel.trim() } : {}),
+    ...(config.subject?.trim() ? { subject: config.subject.trim() } : {}),
+    ...(config.syllabusBoard?.trim() ? { syllabus_board: config.syllabusBoard.trim() } : {}),
+    ...(config.classGuide?.trim() ? { class_guide: config.classGuide.trim() } : {}),
+  };
+}
+
+function buildV2Specifications(config: MAICGenerationConfig): string {
+  return [
+    'Create a production-ready teacher-led AI classroom, not a static deck.',
+    `Target exactly ${config.sceneCount} scenes with a coherent lesson arc.`,
+    'Use slide, quiz, interactive, and PBL scene types only where they improve learning.',
+    'Prefer one meaningful PBL/activity handoff over shallow extra slides when the topic benefits from doing.',
+    'If a PBL/activity is used, place it after the concept foundation and include projectTopic, projectDescription, targetSkills, issueCount, roles, deliverable, constraints, and success criteria.',
+    'Every scene description and keyPoints should preserve the teacher guide intent: audience, standards, misconceptions, formative checks, PBL brief, and discussion handoffs.',
+    'Slides must be concise visual aids; spoken detail belongs in agent actions.',
+    'Choreograph spotlight/laser/discussion handovers so audio, visual focus, and agent turns stay synchronized; point first, then speak.',
+    config.classGuide?.trim()
+      ? 'Follow the teacher class guide as the controlling planning document.'
+      : '',
+  ].filter(Boolean).join('\n');
+}
+
+function pendingOutlineFromConfig(
+  config: MAICGenerationConfig,
+  agents: MAICAgent[],
+): MAICOutline {
+  const total = Math.max(1, config.sceneCount || 1);
+  const agentIds = agents.map((agent) => agent.id);
+  return {
+    topic: config.topic,
+    language: config.language,
+    agents,
+    totalMinutes: total * 2,
+    scenes: Array.from({ length: total }, (_, index) => ({
+      id: `v2-pending-${index + 1}`,
+      title: `Scene ${index + 1}`,
+      description: 'Prepared by the v2 PBL graph pipeline.',
+      type: 'lecture',
+      estimatedMinutes: 2,
+      agentIds,
+    })),
+  };
+}
+
+function waitForPollInterval(signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new DOMException('Generation cancelled', 'AbortError'));
+      return;
+    }
+    const timer = window.setTimeout(resolve, V2_JOB_POLL_INTERVAL_MS);
+    signal.addEventListener(
+      'abort',
+      () => {
+        window.clearTimeout(timer);
+        reject(new DOMException('Generation cancelled', 'AbortError'));
+      },
+      { once: true },
+    );
+  });
+}
+
+function v2ClassroomId(result: Awaited<ReturnType<typeof maicApi.getV2GenerationJob>>['data']['result']): string | null {
+  const artifact = result?.artifact;
+  return (
+    result?.classroomId ||
+    result?.classroom_id ||
+    artifact?.classroomId ||
+    artifact?.classroom_id ||
+    null
+  );
+}
+
+function generationErrorMessage(raw: string): string {
+  const message = raw.replace(/^RuntimeError:\s*/i, '').trim();
+  const lower = message.toLowerCase();
+  if (lower.includes('maic v2') && lower.includes('disabled for this deployment')) {
+    return 'AI Classroom v2 is disabled for this deployment. Enable the MAIC_V2_ENABLED backend flag before creating live classrooms.';
+  }
+  if (lower.includes('maic v2') && lower.includes('not enabled')) {
+    return 'AI Classroom v2 is not enabled for this school. Ask an admin to enable the tenant feature before creating live classrooms.';
+  }
+  if (lower.includes('ollama') && lower.includes('timed out')) {
+    return 'The AI provider took too long while preparing the class outline. Try again, or switch this school to a faster production model before running a full PBL classroom.';
+  }
+  if (lower.includes('workerlosterror') || lower.includes('signal 11') || lower.includes('sigsegv')) {
+    return 'The generation worker restarted unexpectedly while preparing scenes. Try again; if it repeats, run the worker with a safer concurrency setting and check the generation logs.';
+  }
+  if (lower.includes('no classroom was materialized')) {
+    return 'Generation finished but the classroom was not saved. Please try again; if it repeats, check the generation worker logs.';
+  }
+  if (lower.includes('network error') || lower.includes('failed to fetch')) {
+    return 'Lost connection while checking generation progress. The classroom may still be running; refresh the page or check the AI Classroom library.';
+  }
+  return message || 'Generation failed';
+}
+
+function generationErrorFromException(err: unknown): string {
+  const response = (err as { response?: { data?: unknown; status?: number } } | null)?.response;
+  const data = response?.data;
+  let serverMessage = '';
+
+  if (typeof data === 'string') {
+    serverMessage = data;
+  } else if (data && typeof data === 'object') {
+    const body = data as {
+      error?: unknown;
+      detail?: unknown;
+      message?: unknown;
+      messages?: Array<{ message?: unknown }>;
+    };
+    serverMessage = String(body.error || body.detail || body.message || '').trim();
+    if (!serverMessage && Array.isArray(body.messages)) {
+      serverMessage = body.messages
+        .map((item) => String(item?.message || '').trim())
+        .filter(Boolean)
+        .join(' ');
+    }
+  }
+
+  if (serverMessage) {
+    return generationErrorMessage(serverMessage);
+  }
+  if (response?.status === 403) {
+    return generationErrorMessage('MAIC v2 not enabled');
+  }
+  return generationErrorMessage(err instanceof Error ? err.message : 'Generation failed');
 }
 
 export type GenerationStep = 'idle' | 'outlining' | 'editing' | 'generating' | 'complete' | 'error';
@@ -65,6 +201,7 @@ interface UseMAICGenerationReturn {
   startOutlineGeneration: (config: MAICGenerationConfig, preSelectedAgents?: MAICAgent[]) => Promise<void>;
   updateOutline: (scenes: MAICOutlineScene[]) => void;
   startContentGeneration: (classroomId: string) => Promise<void>;
+  startV2Generation: (config: MAICGenerationConfig, preSelectedAgents?: MAICAgent[]) => Promise<string | null>;
   /** T4 — re-run content + actions for a single outline scene id. Used
    *  by the sidebar "retry" button on failed tiles. Clears the failure
    *  flag on success, re-marks it on re-failure. */
@@ -104,6 +241,7 @@ export function useMAICGeneration(): UseMAICGenerationReturn {
   }, []);
 
   const abortRef = useRef<AbortController | null>(null);
+  const generationContextRef = useRef<MAICGenerationContextPayload>({});
   const { accessToken } = useAuthStore();
   const { setSlides, setAgents, setScenes, setSceneSlideBounds } = useMAICStageStore();
 
@@ -123,6 +261,7 @@ export function useMAICGeneration(): UseMAICGenerationReturn {
     setError(null);
     setStartedAt(null);
     setFirstSceneReadyAt(null);
+    generationContextRef.current = {};
   }, [cancel]);
 
   const startOutlineGeneration = useCallback(
@@ -133,6 +272,8 @@ export function useMAICGeneration(): UseMAICGenerationReturn {
       setError(null);
       setProgress(0);
       setStartedAt(Date.now());
+      const generationContext = generationContextFromConfig(config);
+      generationContextRef.current = generationContext;
 
       const controller = new AbortController();
       abortRef.current = controller;
@@ -161,9 +302,7 @@ export function useMAICGeneration(): UseMAICGenerationReturn {
           // camelCase, but we send canonical snake_case here so the network
           // payload matches the documented API. Omit empty values entirely
           // so the backend's "Generic" / no-grade defaults apply.
-          ...(config.gradeLevel?.trim() ? { grade_level: config.gradeLevel.trim() } : {}),
-          ...(config.subject?.trim() ? { subject: config.subject.trim() } : {}),
-          ...(config.syllabusBoard?.trim() ? { syllabus_board: config.syllabusBoard.trim() } : {}),
+          ...generationContext,
           // When the wizard already picked a roster (WS-C), send it along so
           // the backend can reuse personality/voice mapping for outline prompts.
           ...(preSelectedAgents && preSelectedAgents.length > 0
@@ -285,6 +424,7 @@ export function useMAICGeneration(): UseMAICGenerationReturn {
             // that scrubSlideDataUrls then strips to empty.
             classroomId,
             sceneIdx: i,
+            ...generationContextRef.current,
           }),
         );
 
@@ -312,7 +452,7 @@ export function useMAICGeneration(): UseMAICGenerationReturn {
           type: sceneType,
           title: outlineScene.title,
           order: i + 1,
-          content: buildSceneContent(sceneType, primarySlide, res.data),
+          content: buildSceneContent(sceneType, primarySlide, res.data, sceneSlides),
           actions: [],
           multiAgent: outlineScene.agentIds.length > 0
             ? { enabled: true, agentIds: outlineScene.agentIds }
@@ -354,6 +494,8 @@ export function useMAICGeneration(): UseMAICGenerationReturn {
               },
               agents,
               language: outline.language,
+              classroomId,
+              ...generationContextRef.current,
             }),
           );
           if (actionsRes.data?.actions?.length) {
@@ -428,6 +570,7 @@ export function useMAICGeneration(): UseMAICGenerationReturn {
             scene_count: compactScenes.length,
             content: {
               slides: scrubSlideDataUrls(generatedSlides),
+              agents,
               scenes: playableScenes,
               sceneSlideBounds,
             },
@@ -487,6 +630,7 @@ export function useMAICGeneration(): UseMAICGenerationReturn {
             config: { agents, language: outline.language },
             content: {
               slides: scrubSlideDataUrls(generatedSlides),
+              agents,
               scenes: generatedScenes,
               sceneSlideBounds,
             },
@@ -520,6 +664,135 @@ export function useMAICGeneration(): UseMAICGenerationReturn {
     [outline, accessToken, setSlides, setScenes, setAgents, setSceneSlideBounds]
   );
 
+  const startV2Generation = useCallback(
+    async (config: MAICGenerationConfig, preSelectedAgents: MAICAgent[] = []) => {
+      if (!accessToken) return null;
+
+      const targetScenes = Math.max(1, config.sceneCount || 1);
+      const controller = new AbortController();
+      abortRef.current = controller;
+      generationContextRef.current = generationContextFromConfig(config);
+
+      setStep('generating');
+      setPhase('outline');
+      setCurrentSceneIdx(0);
+      setTotalScenes(targetScenes);
+      setOutline(pendingOutlineFromConfig(config, preSelectedAgents));
+      setProgress(3);
+      setError(null);
+      setStartedAt(Date.now());
+      setFirstSceneReadyAt(null);
+      setAgents(preSelectedAgents);
+
+      setGenerationActive(true);
+      const heartbeat = window.setInterval(() => {
+        setLastActivityTimestamp(Date.now());
+      }, 30_000);
+
+      try {
+        const createRes = await maicApi.generateV2Classroom({
+          topic: config.topic,
+          contentTitle: config.topic,
+          language: config.language,
+          level: config.gradeLevel || 'intermediate',
+          agentCount: preSelectedAgents.length || config.agentCount,
+          sceneCount: targetScenes,
+          specifications: buildV2Specifications(config),
+          courseId: config.courseId,
+          gradeLevel: config.gradeLevel,
+          subject: config.subject,
+          syllabusBoard: config.syllabusBoard,
+          classGuide: config.classGuide,
+          pdfText: config.pdfText,
+          researchContext: config.enableWebSearch ? config.webSearchContext : undefined,
+          agents: preSelectedAgents,
+          enablePBL: true,
+          enableImageGeneration: Boolean(config.enableImages),
+        });
+
+        const jobId = createRes.data.job_id;
+        let lastMessage = 'Queued';
+        let consecutivePollErrors = 0;
+
+        while (!controller.signal.aborted) {
+          await waitForPollInterval(controller.signal);
+          let jobRes: Awaited<ReturnType<typeof maicApi.getV2GenerationJob>>;
+          try {
+            jobRes = await maicApi.getV2GenerationJob(jobId);
+            consecutivePollErrors = 0;
+          } catch (err) {
+            consecutivePollErrors += 1;
+            if (consecutivePollErrors < V2_JOB_MAX_CONSECUTIVE_POLL_ERRORS) {
+              lastMessage = 'Reconnecting to generation progress...';
+              continue;
+            }
+            throw err;
+          }
+          const job = jobRes.data;
+          const jobProgress = job.progress || {};
+          const stage = Number(job.step ?? jobProgress.stage ?? 0);
+          const completed = Number(jobProgress.completed ?? job.scenesGenerated ?? 0);
+          const total = Number(jobProgress.total ?? job.totalScenes ?? targetScenes);
+          const normalizedTotal = Number.isFinite(total) && total > 0 ? total : targetScenes;
+          lastMessage = job.message || jobProgress.message || lastMessage;
+
+          setTotalScenes(normalizedTotal);
+          if (stage <= 1) {
+            setPhase('outline');
+            setCurrentSceneIdx(0);
+            setProgress(stage === 1 ? 18 : 6);
+          } else if (stage === 2) {
+            setPhase('content');
+            setCurrentSceneIdx(Math.min(Math.max(completed - 1, 0), normalizedTotal - 1));
+            const sceneRatio = normalizedTotal > 0 ? completed / normalizedTotal : 0;
+            setProgress(Math.min(94, Math.max(25, Math.round(25 + sceneRatio * 65))));
+          } else {
+            setPhase('saving');
+            setCurrentSceneIdx(Math.max(normalizedTotal - 1, 0));
+            setProgress(96);
+          }
+
+          if (job.status === 'failed') {
+            throw new Error(generationErrorMessage(job.error || lastMessage || 'Generation failed'));
+          }
+
+          if (job.status === 'succeeded' || job.done) {
+            const classroomId =
+              v2ClassroomId(job.result) ||
+              v2ClassroomId((await maicApi.getV2GenerationJob(jobId, { full: false })).data.result);
+            if (!classroomId) {
+              throw new Error('Generation completed but no classroom was materialized.');
+            }
+            setPhase('saving');
+            setCurrentSceneIdx(Math.max(normalizedTotal - 1, 0));
+            setProgress(100);
+            setStep('complete');
+            return classroomId;
+          }
+        }
+
+        throw new DOMException('Generation cancelled', 'AbortError');
+      } catch (err) {
+        if (err instanceof DOMException && err.name === 'AbortError') {
+          setStep('idle');
+          setPhase('idle');
+          return null;
+        }
+        const message = generationErrorFromException(err);
+        setError(message);
+        setStep('error');
+        return null;
+      } finally {
+        window.clearInterval(heartbeat);
+        setGenerationActive(false);
+        if (abortRef.current === controller) {
+          abortRef.current = null;
+        }
+      }
+    },
+    [accessToken, setAgents],
+  );
+
   // T4 — retry a single scene's action generation after it failed in
   // the main loop. Scoped to re-running actions (not content) because
   // content failures are rare and rebuilding flat slides + bounds on
@@ -549,6 +822,7 @@ export function useMAICGeneration(): UseMAICGenerationReturn {
         },
         agents: outline.agents,
         language: outline.language,
+        ...generationContextRef.current,
       });
       const fresh = { ...target, actions: actionsRes.data?.actions ?? [] };
       if (fresh.actions.length === 0) {
@@ -577,6 +851,7 @@ export function useMAICGeneration(): UseMAICGenerationReturn {
     startOutlineGeneration,
     updateOutline,
     startContentGeneration,
+    startV2Generation,
     retryScene,
     cancel,
     reset,
@@ -646,6 +921,7 @@ function buildSceneContent(
   slide: MAICSlide | undefined,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   responseData: any,
+  sceneSlides: MAICSlide[] = slide ? [slide] : [],
 ): MAICScene['content'] {
   if (sceneType === 'quiz' && responseData?.questions) {
     return {
@@ -666,6 +942,7 @@ function buildSceneContent(
   return {
     type: 'slide',
     elements: slide?.elements || [],
+    slides: sceneSlides,
     background: slide?.background,
     speakerScript: slide?.speakerScript,
     audioUrl: slide?.audioUrl,
@@ -704,47 +981,42 @@ function buildFallbackActions(scene: MAICScene, agents: MAICAgent[]): MAICAction
   const speakerB = assignedIds[1] || agents.find((a) => a.id !== speakerA)?.id || speakerA;
   if (!speakerA) return actions;
 
-  const script = slideContent.speakerScript?.trim() ?? '';
-  const elements = slideContent.elements ?? [];
-  const firstEl = elements[0]?.id;
-  const secondEl = elements[1]?.id;
+  const slides = slideContent.slides?.length
+    ? slideContent.slides
+    : [{
+        id: `${scene.id}-fallback-slide`,
+        title: scene.title,
+        elements: slideContent.elements ?? [],
+        speakerScript: slideContent.speakerScript,
+      }];
 
-  // Split the speakerScript into at most 3 chunks on sentence punctuation
-  // so each agent gets a bite rather than A monologuing the whole thing.
-  const chunks = script
-    .split(/(?<=[.!?])\s+/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-  const partA = chunks.slice(0, Math.max(1, Math.ceil(chunks.length / 3))).join(' ');
-  const partB = chunks.slice(partA ? 1 : 0, Math.max(2, Math.ceil((chunks.length * 2) / 3))).join(' ');
-  const partC = chunks.slice(Math.max(2, Math.ceil((chunks.length * 2) / 3))).join(' ');
+  slides.forEach((slide, index) => {
+    const elements = slide.elements ?? [];
+    const firstEl = elements[0]?.id;
+    const secondEl = elements[1]?.id;
+    const speakerId = index % 2 === 0 ? speakerA : speakerB;
+    const followUpId = speakerId === speakerA ? speakerB : speakerA;
+    const script = slide.speakerScript?.trim() || `Let's examine ${slide.title || scene.title}.`;
 
-  if (partA) {
-    actions.push({ type: 'speech', agentId: speakerA, text: partA });
-  }
-  if (firstEl) {
-    actions.push({ type: 'spotlight', elementId: firstEl, duration: 2500 });
-  }
-  actions.push({ type: 'pause', duration: 200 });
-  if (partB && speakerB) {
-    actions.push({ type: 'speech', agentId: speakerB, text: partB });
-  }
-  if (secondEl) {
-    actions.push({ type: 'highlight', elementId: secondEl, color: '#DBEAFE' });
-    actions.push({ type: 'pause', duration: 300 });
-  }
-  if (partC) {
-    actions.push({ type: 'speech', agentId: speakerA, text: partC });
-  } else if (!partB && !partC && partA && speakerB) {
-    // Short scripts — we only got partA. Add a closing acknowledgment
-    // from the second speaker so the scene ends on a hand-off beat
-    // rather than a single line.
-    actions.push({
-      type: 'speech',
-      agentId: speakerB,
-      text: 'Good framing — let\u2019s move on.',
-    });
-  }
+    if (index > 0) {
+      actions.push({ type: 'transition', slideIndex: index });
+    }
+    actions.push({ type: 'speech', agentId: speakerId, text: script });
+    if (firstEl) {
+      actions.push({ type: 'spotlight', elementId: firstEl, duration: 2500 });
+      actions.push({ type: 'laser', elementId: firstEl, color: '#2563EB', duration: 1200 });
+    }
+    if (secondEl) {
+      actions.push({ type: 'highlight', elementId: secondEl, color: '#DBEAFE' });
+    }
+    if (followUpId && followUpId !== speakerId && index < slides.length - 1) {
+      actions.push({
+        type: 'speech',
+        agentId: followUpId,
+        text: `That gives us the next anchor for ${slides[index + 1]?.title || scene.title}.`,
+      });
+    }
+  });
 
   return actions;
 }

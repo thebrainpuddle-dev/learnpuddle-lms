@@ -6,6 +6,23 @@
 import { useEffect, useState } from 'react';
 import { getAccessToken } from '../utils/authSession';
 
+function resolveTenantSubdomain(): string | null {
+  if (typeof window === 'undefined') return null;
+  const hostname = window.location.hostname;
+  if (
+    hostname !== 'localhost' &&
+    hostname !== '127.0.0.1' &&
+    !hostname.endsWith('.localhost')
+  ) {
+    return null;
+  }
+  return (
+    (hostname.endsWith('.localhost') ? hostname.replace('.localhost', '') : null) ||
+    sessionStorage.getItem('tenant_subdomain') ||
+    localStorage.getItem('tenant_subdomain')
+  );
+}
+
 export function useAuthBlobUrl(protectedUrl: string | null | undefined): string | null {
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
 
@@ -23,6 +40,8 @@ export function useAuthBlobUrl(protectedUrl: string | null | undefined): string 
         const token = getAccessToken();
         const headers: HeadersInit = {};
         if (token) headers['Authorization'] = `Bearer ${token}`;
+        const tenantSubdomain = resolveTenantSubdomain();
+        if (tenantSubdomain) headers['X-Tenant-Subdomain'] = tenantSubdomain;
 
         const res = await fetch(protectedUrl, { headers });
         if (!res.ok || res.status === 204) {

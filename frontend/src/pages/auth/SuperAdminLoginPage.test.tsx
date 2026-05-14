@@ -55,7 +55,7 @@ const mockSetLoading = vi.fn();
 
 function renderPage(search = '') {
   return render(
-    <MemoryRouter initialEntries={[`/super-admin/login${search}`]}>
+    <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={[`/super-admin/login${search}`]}>
       <SuperAdminLoginPage />
     </MemoryRouter>,
   );

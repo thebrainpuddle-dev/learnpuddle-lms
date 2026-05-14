@@ -331,14 +331,15 @@ def tenant_apply_plan(request, tenant_id):
 
     # Apply any extra overrides — only safe, plan-related fields
     ALLOWED_PLAN_OVERRIDES = {
-        "max_teachers", "max_courses", "max_storage_mb", "max_video_duration_minutes",
+        "max_teachers", "max_students", "max_courses", "max_storage_mb", "max_video_duration_minutes",
         "feature_video_upload", "feature_auto_quiz", "feature_transcripts",
         "feature_reminders", "feature_custom_branding", "feature_reports_export",
         "feature_groups", "feature_certificates", "feature_teacher_authoring",
-        "feature_ai_studio",
+        "feature_ai_studio", "feature_sso", "feature_saml", "feature_2fa",
+        "feature_students", "feature_maic", "feature_maic_v2",
         "is_trial", "trial_end_date", "plan_expires_at",
     }
-    INTEGER_FIELDS = {"max_teachers", "max_courses", "max_storage_mb", "max_video_duration_minutes"}
+    INTEGER_FIELDS = {"max_teachers", "max_students", "max_courses", "max_storage_mb", "max_video_duration_minutes"}
     overrides = {k: v for k, v in request.data.items() if k != "plan" and k in ALLOWED_PLAN_OVERRIDES}
     if overrides:
         # Validate integer fields are non-negative

@@ -2,7 +2,7 @@ import api from '../config/api';
 
 export interface Notification {
   id: string;
-  notification_type: 'REMINDER' | 'COURSE_ASSIGNED' | 'ASSIGNMENT_DUE' | 'ANNOUNCEMENT' | 'SYSTEM';
+  notification_type: 'REMINDER' | 'COURSE_ASSIGNED' | 'ASSIGNMENT_DUE' | 'ANNOUNCEMENT' | 'SYSTEM' | 'DISCUSSION_REPLY';
   title: string;
   message: string;
   course?: string;
@@ -46,6 +46,14 @@ export const notificationService = {
    */
   markAsRead: async (notificationId: string): Promise<Notification> => {
     const response = await api.post(`/notifications/${notificationId}/read/`);
+    return response.data;
+  },
+
+  /**
+   * Mark multiple notifications as read
+   */
+  markManyAsRead: async (ids: string[]): Promise<{ marked_read: number }> => {
+    const response = await api.post('/notifications/mark-read/', { ids });
     return response.data;
   },
 

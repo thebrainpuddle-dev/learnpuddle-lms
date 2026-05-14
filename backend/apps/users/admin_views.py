@@ -380,6 +380,7 @@ def _serialize_invitation(inv):
         "email": inv.email,
         "first_name": inv.first_name,
         "last_name": inv.last_name,
+        "invitation_role": inv.invitation_role,
         "status": inv.status,
         "created_at": inv.created_at.isoformat() if inv.created_at else None,
         "expires_at": inv.expires_at.isoformat() if inv.expires_at else None,
@@ -400,7 +401,10 @@ def teacher_invitations_view(request):
     tenant = request.tenant
 
     if request.method == "GET":
-        qs = TeacherInvitation.objects.filter(tenant=tenant).order_by("-created_at")
+        qs = TeacherInvitation.objects.filter(
+            tenant=tenant,
+            invitation_role="TEACHER",
+        ).order_by("-created_at")
         status_filter = request.GET.get("status")
         if status_filter:
             qs = qs.filter(status=status_filter)
@@ -429,6 +433,7 @@ def teacher_invitations_view(request):
         email=email,
         first_name=first_name,
         last_name=last_name,
+        invitation_role="TEACHER",
         invited_by=request.user,
         expires_at=timezone.now() + timezone.timedelta(days=7),
     )
@@ -494,6 +499,7 @@ def teacher_bulk_invite_view(request):
                 email=email,
                 first_name=first_name,
                 last_name=last_name,
+                invitation_role="TEACHER",
                 invited_by=request.user,
                 expires_at=timezone.now() + timezone.timedelta(days=7),
             )
@@ -532,6 +538,7 @@ def invitation_validate_view(request, token):
         "email": invitation.email,
         "first_name": invitation.first_name,
         "last_name": invitation.last_name,
+        "invitation_role": invitation.invitation_role,
         "school_name": invitation.tenant.name if invitation.tenant else "",
         "expires_at": invitation.expires_at.isoformat(),
     })
@@ -541,7 +548,7 @@ def invitation_validate_view(request, token):
 @permission_classes([AllowAny])
 @throttle_classes([InvitationAcceptThrottle])
 def invitation_accept_view(request, token):
-    """Public endpoint: accept an invitation and create the teacher account."""
+    """Public endpoint: accept an invitation and create the invited account."""
     try:
         invitation = TeacherInvitation.objects.select_related("tenant").get(token=token)
     except TeacherInvitation.DoesNotExist:
@@ -584,7 +591,7 @@ def invitation_accept_view(request, token):
         first_name=invitation.first_name,
         last_name=invitation.last_name,
         tenant=invitation.tenant,
-        role="TEACHER",
+        role=invitation.invitation_role,
         is_active=True,
         email_verified=True,
     )
@@ -597,4 +604,3 @@ def invitation_accept_view(request, token):
         "message": "Account created successfully. You can now log in.",
         "email": user.email,
     }, status=status.HTTP_201_CREATED)
-

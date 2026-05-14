@@ -4,17 +4,13 @@ Signal handlers for integrations_calendar.
 Hooks:
   - Assignment.post_save → enqueue sync_calendar_connection for any user
     whose CalendarConnection may be affected by a due_date change.
-
-Gap: Enrollment deadline signals are not fired explicitly — the sync_engine
-already re-reads enrollment_end_date on every beat-triggered sync. If near-
-realtime enrollment-deadline push is required, add a post_save handler on
-apps.courses.models.Enrollment here (Slice B / TASK-054 follow-up).
 """
 
 from __future__ import annotations
 
 import logging
 
+from django.db.models import Q
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 
@@ -46,6 +42,44 @@ def _enqueue_syncs_for_users(user_pks):
             )
 
 
+def _course_assigned_user_pks(course):
+    """
+    Return active teacher/student IDs assigned to a course.
+
+    The older calendar code referenced a removed Enrollment model. Current LMS
+    assignment state lives directly on Course M2M fields and, for teacher
+    cohorts, TeacherGroup membership.
+    """
+    from apps.users.models import User
+
+    teacher_qs = User.objects.all_tenants().filter(
+        tenant=course.tenant,
+        role__in=["TEACHER", "HOD", "IB_COORDINATOR"],
+        is_active=True,
+        is_deleted=False,
+    )
+    if not course.assigned_to_all:
+        group_ids = course.assigned_groups.values_list("id", flat=True)
+        teacher_ids = course.assigned_teachers.values_list("id", flat=True)
+        teacher_qs = teacher_qs.filter(
+            Q(id__in=teacher_ids) | Q(teacher_groups__in=group_ids)
+        ).distinct()
+
+    student_qs = User.objects.all_tenants().filter(
+        tenant=course.tenant,
+        role="STUDENT",
+        is_active=True,
+        is_deleted=False,
+    )
+    if not course.assigned_to_all_students:
+        student_ids = course.assigned_students.values_list("id", flat=True)
+        student_qs = student_qs.filter(id__in=student_ids)
+
+    return set(teacher_qs.values_list("id", flat=True)) | set(
+        student_qs.values_list("id", flat=True)
+    )
+
+
 # ---------------------------------------------------------------------------
 # Assignment post_save — trigger calendar sync when due_date changes
 # ---------------------------------------------------------------------------
@@ -65,18 +99,12 @@ def on_assignment_saved(sender, instance, created: bool, update_fields=None, **k
     if not instance.due_date:
         return
 
-    # Collect user PKs enrolled in this assignment's course.
+    # Collect user PKs assigned to this assignment's course.
     try:
-        from apps.courses.models import Enrollment
-
-        user_pks = list(
-            Enrollment.objects.filter(
-                course_id=instance.course_id,
-            ).values_list("user_id", flat=True)
-        )
+        user_pks = _course_assigned_user_pks(instance.course)
     except Exception:
         logger.exception(
-            "signals: failed to collect enrolled users for assignment %s",
+            "signals: failed to collect assigned users for assignment %s",
             instance.pk,
         )
         return

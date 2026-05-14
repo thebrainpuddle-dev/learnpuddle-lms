@@ -33,10 +33,44 @@ from apps.discussions.models import (
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_thread(tenant, user, title="Test Thread", body="Test body"):
-    """Create a DiscussionThread directly (no section required for generic views)."""
+def _make_section(tenant):
+    """Create the minimum real academic section required by discussion threads."""
+    from apps.academics.models import GradeBand, Grade, Section
+
+    band, _ = GradeBand.all_objects.get_or_create(
+        tenant=tenant,
+        short_code="DISC",
+        defaults={"name": "Discussion Band", "order": 1},
+    )
+    grade, _ = Grade.all_objects.get_or_create(
+        tenant=tenant,
+        short_code="DISC",
+        defaults={"grade_band": band, "name": "Discussion Grade", "order": 1},
+    )
+    section, _ = Section.all_objects.get_or_create(
+        tenant=tenant,
+        grade=grade,
+        name="A",
+        academic_year="2026-27",
+    )
+    return section
+
+
+def _thread_payload(tenant, **overrides):
+    payload = {
+        "title": "New Thread",
+        "body": "Thread content here",
+        "section_id": str(_make_section(tenant).id),
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _make_thread(tenant, user, title="Test Thread", body="Test body", section=None):
+    """Create a DiscussionThread directly with the required section scope."""
     return DiscussionThread.objects.create(
         tenant=tenant,
+        section=section or _make_section(tenant),
         title=title,
         body=body,
         author=user,
@@ -155,35 +189,35 @@ class TestThreadList:
 class TestThreadCreate:
     """POST /api/v1/discussions/threads/"""
 
-    def test_admin_can_create_thread(self, admin_client):
+    def test_admin_can_create_thread(self, admin_client, tenant):
         response = admin_client.post(
             "/api/v1/discussions/threads/",
-            data={"title": "New Thread", "body": "Thread content here"},
+            data=_thread_payload(tenant, title="New Thread", body="Thread content here"),
             format="json",
         )
         assert response.status_code == 201
         assert response.data["title"] == "New Thread"
 
-    def test_teacher_can_create_thread(self, teacher_client):
+    def test_teacher_can_create_thread(self, teacher_client, tenant):
         response = teacher_client.post(
             "/api/v1/discussions/threads/",
-            data={"title": "Teacher Thread", "body": "Teacher body"},
+            data=_thread_payload(tenant, title="Teacher Thread", body="Teacher body"),
             format="json",
         )
         assert response.status_code == 201
 
-    def test_create_without_title_returns_400(self, admin_client):
+    def test_create_without_title_returns_400(self, admin_client, tenant):
         response = admin_client.post(
             "/api/v1/discussions/threads/",
-            data={"body": "No title"},
+            data=_thread_payload(tenant, title="", body="No title"),
             format="json",
         )
         assert response.status_code == 400
 
-    def test_create_without_body_returns_400(self, admin_client):
+    def test_create_without_body_returns_400(self, admin_client, tenant):
         response = admin_client.post(
             "/api/v1/discussions/threads/",
-            data={"title": "No body"},
+            data=_thread_payload(tenant, title="No body", body=""),
             format="json",
         )
         assert response.status_code == 400
@@ -191,18 +225,19 @@ class TestThreadCreate:
     def test_created_thread_belongs_to_request_tenant(self, admin_client, tenant):
         response = admin_client.post(
             "/api/v1/discussions/threads/",
-            data={"title": "Tenant Check Thread", "body": "Body"},
+            data=_thread_payload(tenant, title="Tenant Check Thread", body="Body"),
             format="json",
         )
         assert response.status_code == 201
         thread = DiscussionThread.objects.get(id=response.data["id"])
         assert str(thread.tenant_id) == str(tenant.id)
+        assert str(thread.section.tenant_id) == str(tenant.id)
 
     def test_author_auto_subscribed_on_create(self, admin_client, admin_user, tenant):
         """Author is automatically subscribed to their thread."""
         response = admin_client.post(
             "/api/v1/discussions/threads/",
-            data={"title": "Auto Subscribe Thread", "body": "Body"},
+            data=_thread_payload(tenant, title="Auto Subscribe Thread", body="Body"),
             format="json",
         )
         assert response.status_code == 201

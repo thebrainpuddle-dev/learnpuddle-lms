@@ -436,6 +436,31 @@ def test_student_maic_classroom_update_allows_creator(
     assert student_classroom.title == "Renamed"
 
 
+def test_student_maic_classroom_detail_allows_creator_private_draft(
+    maic_tenant,
+    student_user,
+    student_classroom,
+):
+    """Student creators can reopen their own private in-progress classrooms."""
+    client = _client_for(student_user, maic_tenant)
+    url = f"/api/v1/student/maic/classrooms/{student_classroom.id}/"
+    resp = client.get(url)
+    assert resp.status_code == 200, resp.content
+    assert resp.json()["id"] == str(student_classroom.id)
+
+
+def test_student_maic_classroom_detail_rejects_peer_private_draft(
+    maic_tenant,
+    peer_student,
+    student_classroom,
+):
+    """Creator visibility must not leak private student classrooms to peers."""
+    client = _client_for(peer_student, maic_tenant)
+    url = f"/api/v1/student/maic/classrooms/{student_classroom.id}/"
+    resp = client.get(url)
+    assert resp.status_code == 404, resp.content
+
+
 def test_student_maic_classroom_delete_rejects_peer_student(
     maic_tenant,
     student_classroom,

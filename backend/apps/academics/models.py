@@ -197,3 +197,8 @@ class TeachingAssignment(models.Model):
 
     def __str__(self):
         return f"{self.teacher.get_full_name()} — {self.subject.name} ({self.academic_year})"
+
+
+# Keep side-module models registered in Django's app registry for management
+# commands, flush/sqlflush, and transaction-style async tests.
+from apps.academics.attendance_models import Attendance  # noqa: E402,F401

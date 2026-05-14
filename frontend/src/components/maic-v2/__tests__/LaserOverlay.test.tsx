@@ -138,7 +138,7 @@ describe('LaserOverlay', () => {
   });
 
   test('auto-clears via onClear at AUTO_CLEAR_MS=5000', () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const onClear = vi.fn();
     render(
       <MockSurface>
@@ -160,7 +160,7 @@ describe('LaserOverlay', () => {
   });
 
   test('does not call onClear if unmounted before timer fires', () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const onClear = vi.fn();
     const { unmount } = render(
       <MockSurface>

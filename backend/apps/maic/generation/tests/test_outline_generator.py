@@ -144,6 +144,43 @@ async def test_object_response_with_language_directive_extracted():
 
 
 @pytest.mark.asyncio
+async def test_image_enabled_repairs_missing_slide_media_generations():
+    response = json.dumps({
+        "languageDirective": "Teach in English.",
+        "outlines": [
+            {
+                "type": "slide",
+                "title": "Chloroplasts",
+                "description": "Explain how leaves capture light.",
+                "keyPoints": ["Chlorophyll absorbs light", "Leaves exchange gases"],
+            },
+            {"type": "quiz", "title": "Check", "quizConfig": {"questionCount": 2}},
+        ],
+    })
+
+    async def _fake_generate_text(*args, **kwargs):
+        return response
+
+    with patch(
+        "apps.maic.generation.outline_generator.generate_text",
+        new=_fake_generate_text,
+    ):
+        result = await generate_scene_outlines_from_requirements(
+            requirements={"requirement": "Teach photosynthesis"},
+            language_model_id="stub",
+            options={"image_generation_enabled": True},
+        )
+
+    outlines = result["data"]["outlines"]
+    slide = outlines[0]
+    assert slide["mediaGenerations"][0]["type"] == "image"
+    assert slide["mediaGenerations"][0]["elementId"].startswith("gen_img_")
+    assert "Chloroplasts" in slide["mediaGenerations"][0]["prompt"]
+    assert "Chlorophyll absorbs light" in slide["mediaGenerations"][0]["prompt"]
+    assert "mediaGenerations" not in outlines[1]
+
+
+@pytest.mark.asyncio
 async def test_legacy_flat_array_response_uses_default_directive():
     """When LLM returns just an array (legacy / fallback), the
     default directive applies."""
@@ -196,6 +233,60 @@ async def test_outlines_get_ids_and_order():
     assert outlines[2]["id"] and outlines[2]["id"] != ""
     # Generated ids unique
     assert outlines[0]["id"] != outlines[2]["id"]
+
+
+@pytest.mark.asyncio
+async def test_exact_scene_count_trims_extra_outlines_and_caps_tokens():
+    response = json.dumps({
+        "outlines": [
+            {"type": "slide", "title": f"Scene {i}"}
+            for i in range(1, 9)
+        ],
+    })
+    captured = {}
+
+    async def _fake(*args, **kwargs):
+        captured.update(kwargs)
+        return response
+
+    with patch(
+        "apps.maic.generation.outline_generator.generate_text", new=_fake
+    ):
+        result = await generate_scene_outlines_from_requirements(
+            requirements={"requirement": "Create exactly 6 scenes."},
+            language_model_id="stub",
+            options={"scene_count": 6},
+        )
+
+    assert result["success"]
+    outlines = result["data"]["outlines"]
+    assert len(outlines) == 6
+    assert outlines[-1]["title"] == "Scene 6"
+    assert captured["max_tokens"] == 3900
+
+
+@pytest.mark.asyncio
+async def test_exact_scene_count_shortfall_fails():
+    response = json.dumps({
+        "outlines": [
+            {"type": "slide", "title": "Only one"},
+        ],
+    })
+
+    async def _fake(*args, **kwargs):
+        return response
+
+    with patch(
+        "apps.maic.generation.outline_generator.generate_text", new=_fake
+    ):
+        result = await generate_scene_outlines_from_requirements(
+            requirements={"requirement": "Create exactly 3 scenes."},
+            language_model_id="stub",
+            options={"scene_count": 3},
+        )
+
+    assert not result["success"]
+    assert "Expected exactly 3 scene outlines" in result["error"]
 
 
 @pytest.mark.asyncio

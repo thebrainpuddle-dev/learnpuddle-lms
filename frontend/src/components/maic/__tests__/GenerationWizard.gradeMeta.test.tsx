@@ -57,6 +57,7 @@ vi.mock('../GenerationVisualizer', () => ({
 // covered in the companion hook test.
 const startOutlineGenerationMock = vi.fn();
 const startContentGenerationMock = vi.fn();
+const startV2GenerationMock = vi.fn();
 vi.mock('../../../hooks/useMAICGeneration', () => ({
   useMAICGeneration: () => ({
     step: 'idle',
@@ -72,6 +73,7 @@ vi.mock('../../../hooks/useMAICGeneration', () => ({
     startOutlineGeneration: startOutlineGenerationMock,
     updateOutline: vi.fn(),
     startContentGeneration: startContentGenerationMock,
+    startV2Generation: startV2GenerationMock,
     retryScene: vi.fn(),
     cancel: vi.fn(),
     reset: vi.fn(),
@@ -117,6 +119,7 @@ beforeEach(() => {
   window.localStorage.clear();
   startOutlineGenerationMock.mockReset();
   startContentGenerationMock.mockReset();
+  startV2GenerationMock.mockReset();
 });
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -169,5 +172,66 @@ describe('GenerationWizard — FULL-1 grade-aware fields', () => {
 
     const next = screen.getByRole('button', { name: /meet your classroom/i });
     expect(next).not.toBeDisabled();
+  });
+
+  it('prepares an editable class guide on Step 2 from the teacher settings', async () => {
+    render(<GenerationWizard />);
+
+    fireEvent.change(screen.getByLabelText(/topic/i), {
+      target: { value: 'Photosynthesis' },
+    });
+    fireEvent.change(screen.getByLabelText(/grade level/i), {
+      target: { value: 'Grade 6' },
+    });
+    fireEvent.change(screen.getByLabelText(/subject/i), {
+      target: { value: 'Science' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /meet your classroom/i }));
+
+    const guide = await screen.findByTestId('maic-class-guide') as HTMLTextAreaElement;
+    expect(guide.value).toContain('Photosynthesis');
+    expect(guide.value).toContain('Grade 6');
+    expect(guide.value).toContain('Science');
+    expect(guide.value).toContain('PBL/activity brief');
+    expect(guide.value).toContain('Agent choreography');
+    expect(guide.value).toContain('success criteria');
+
+    fireEvent.change(guide, {
+      target: { value: 'Open with a plant mystery, then run a misconception check.' },
+    });
+    expect(guide.value).toContain('plant mystery');
+  });
+
+  it('refreshes a stale generated class guide when teacher settings changed', async () => {
+    window.localStorage.setItem(
+      'maic.draft.classGuide.v1',
+      [
+        'Learning goal: Build a 6-scene AI classroom on "Old topic" for general learners.',
+        'Class flow: Start with a concrete hook.',
+        'Teacher moves: Surface likely misconceptions early.',
+        'PBL/activity target: Include one role-based task.',
+        'Assessment: Include formative checks.',
+      ].join('\n'),
+    );
+    render(<GenerationWizard />);
+
+    fireEvent.change(screen.getByLabelText(/topic/i), {
+      target: { value: 'Photosynthesis' },
+    });
+    fireEvent.change(screen.getByLabelText(/grade level/i), {
+      target: { value: 'Grade 6' },
+    });
+    fireEvent.change(screen.getByLabelText(/subject/i), {
+      target: { value: 'Science' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /meet your classroom/i }));
+
+    const guide = await screen.findByTestId('maic-class-guide') as HTMLTextAreaElement;
+    expect(guide.value).toContain('Audience and standard');
+    expect(guide.value).toContain('Photosynthesis');
+    expect(guide.value).toContain('Science');
+    expect(guide.value).toContain('PBL/activity brief');
+    expect(guide.value).not.toContain('Old topic');
+    expect(guide.value).not.toContain('Teacher moves:');
   });
 });

@@ -184,7 +184,7 @@ function renderOnSecurityTab() {
   return render(
     <QueryClientProvider client={queryClient}>
       <ToastProvider>
-        <MemoryRouter initialEntries={['/?tab=security']}>
+        <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={['/?tab=security']}>
           <SettingsPage />
         </MemoryRouter>
       </ToastProvider>

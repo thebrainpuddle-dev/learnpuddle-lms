@@ -80,7 +80,7 @@ function makeClient() {
 function renderPage() {
   return render(
     <QueryClientProvider client={makeClient()}>
-      <MemoryRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <ProfessionalGrowthPage />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -172,7 +172,7 @@ function makeEarnedBadges() {
 
 describe('ProfessionalGrowthPage', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     // Default: all queries resolve with valid data
     mockGetCompetency.mockResolvedValue(makeCompetency());
     mockGetBadgeDefs.mockResolvedValue(makeBadgeDefs());

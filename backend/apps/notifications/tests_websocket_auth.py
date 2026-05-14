@@ -8,7 +8,7 @@ They MUST be accepted via the WebSocket `Sec-WebSocket-Protocol` header
 using the `Bearer.<jwt>` convention.
 """
 
-from django.test import TestCase, override_settings
+from django.test import TransactionTestCase, override_settings
 from rest_framework_simplejwt.tokens import AccessToken
 from asgiref.sync import async_to_sync
 from channels.testing import WebsocketCommunicator
@@ -24,27 +24,26 @@ from apps.users.models import User
 
 
 @override_settings(ALLOWED_HOSTS=["*"])
-class WebSocketJWTSubprotocolAuthTests(TestCase):
+class WebSocketJWTSubprotocolAuthTests(TransactionTestCase):
     """Token must be read from subprotocols, never from the query string."""
 
-    @classmethod
-    def setUpTestData(cls):
-        cls.tenant = Tenant.objects.create(
+    def setUp(self):
+        self.tenant = Tenant.objects.create(
             name="WS Test School",
             slug="ws-test",
             subdomain="ws-test",
             email="ws@test.com",
             is_active=True,
         )
-        cls.teacher = User.objects.create_user(
+        self.teacher = User.objects.create_user(
             email="ws-teach@test.com",
             password="testpass123",
             first_name="W",
             last_name="S",
-            tenant=cls.tenant,
+            tenant=self.tenant,
             role="TEACHER",
         )
-        cls.access_token = str(AccessToken.for_user(cls.teacher))
+        self.access_token = str(AccessToken.for_user(self.teacher))
 
     # ---------- Helpers ----------
 

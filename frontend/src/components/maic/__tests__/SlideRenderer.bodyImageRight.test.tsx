@@ -11,9 +11,10 @@
 //      (sanity check that the new code path is opt-in only).
 
 import React from 'react';
-import { describe, test, expect, vi } from 'vitest';
+import { afterEach, describe, test, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { SlideRenderer } from '../SlideRenderer';
+import { useMaicMediaGenerationStore } from '../../../stores/maicMediaGenerationStore';
 import type { MAICSlide } from '../../../types/maic';
 
 // ─── Mocks ───────────────────────────────────────────────────────────────────
@@ -23,11 +24,20 @@ vi.mock('../../../stores/maicSettingsStore', () => ({
     selector({ slideTransition: 'none' }),
 }));
 
+vi.mock('../../../hooks/useAuthBlobUrl', () => ({
+  useAuthBlobUrl: (protectedUrl: string | null | undefined) =>
+    protectedUrl ? `blob:${protectedUrl}` : null,
+}));
+
 global.ResizeObserver = class ResizeObserver {
   observe() {}
   unobserve() {}
   disconnect() {}
 };
+
+afterEach(() => {
+  useMaicMediaGenerationStore.getState().resetAll();
+});
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
@@ -45,7 +55,7 @@ describe('SlideRenderer — body-image-right template (F4)', () => {
           bullets: ['Chlorophyll absorbs light', 'CO2 is fixed into sugar'],
         },
         image: {
-          src: 'https://images.example.com/photosynthesis.jpg',
+          src: '/media/tenant/1/maic/photosynthesis.jpg',
           alt: 'Diagram of photosynthesis',
         },
         footer: { text: 'Source: Botany 101 textbook' },
@@ -87,9 +97,36 @@ describe('SlideRenderer — body-image-right template (F4)', () => {
     const imgs = document.querySelectorAll('img');
     expect(imgs.length).toBeGreaterThan(0);
     expect(imgs[0].getAttribute('src')).toBe(
-      'https://images.example.com/photosynthesis.jpg',
+      'blob:/media/tenant/1/maic/photosynthesis.jpg',
     );
     expect(imgs[0].getAttribute('alt')).toBe('Diagram of photosynthesis');
+  });
+
+  test('maps backing element ids onto slot DOM nodes for action targeting', () => {
+    const slide: MAICSlide = {
+      id: 'tpl-targetable-slots',
+      title: 'Targetable slots',
+      template: 'body-image-right',
+      elements: [
+        { type: 'text', id: 'el-title', x: 0, y: 0, width: 100, height: 40, content: 'Title' },
+        { type: 'text', id: 'el-body', x: 0, y: 50, width: 100, height: 100, content: 'Body' },
+        { type: 'image', id: 'el-image', x: 100, y: 50, width: 100, height: 100, content: 'Parabola graph', src: '' },
+        { type: 'text', id: 'el-footer', x: 0, y: 170, width: 100, height: 30, content: 'Footer' },
+      ],
+      slots: {
+        title: { text: 'Quadratic launch' },
+        body: { text: 'Use the graph to reason about roots.' },
+        image: { src: '/media/tenant/1/maic/graph.jpg', alt: 'Parabola graph' },
+        footer: { text: 'Practice checkpoint' },
+      },
+    };
+
+    render(<SlideRenderer slide={slide} />);
+
+    expect(document.querySelector('[data-testid="slide-slot-title"]')?.id).toBe('el-title');
+    expect(document.querySelector('[data-testid="slide-slot-body"]')?.id).toBe('el-body');
+    expect(document.querySelector('[data-testid="slide-slot-image"]')?.id).toBe('el-image');
+    expect(document.querySelector('[data-testid="slide-slot-footer"]')?.id).toBe('el-footer');
   });
 
   test('shows shimmer skeleton when image src is empty AND imagesPending=true', () => {
@@ -182,6 +219,138 @@ describe('SlideRenderer — body-image-right template (F4)', () => {
     expect(screen.getByText('Pure free-form slide')).toBeDefined();
   });
 
+  test('uses v2 viewport metadata so 1000px OpenMAIC slides do not clip', () => {
+    const slide: MAICSlide = {
+      id: 'v2-viewport-slide',
+      title: 'V2 viewport',
+      viewportSize: 1000,
+      viewportRatio: 0.5625,
+      canvasWidth: 1000,
+      canvasHeight: 562.5,
+      elements: [
+        {
+          type: 'text',
+          id: 'wide-text',
+          x: 60,
+          y: 50,
+          width: 880,
+          height: 76,
+          content: 'Wide OpenMAIC text',
+        },
+      ],
+    };
+
+    render(<SlideRenderer slide={slide} />);
+
+    const canvas = document.querySelector(
+      '[data-testid="slide-design-canvas"]',
+    ) as HTMLElement | null;
+    expect(canvas).not.toBeNull();
+    expect(canvas?.style.width).toBe('1000px');
+    expect(canvas?.style.height).toBe('562.5px');
+    expect(screen.getByText('Wide OpenMAIC text')).toBeDefined();
+  });
+
+  test('suppresses empty image boxes with no src, prompt, task, or provider state', () => {
+    const slide: MAICSlide = {
+      id: 'empty-image-box',
+      title: 'Empty image box',
+      elements: [
+        {
+          type: 'image',
+          id: 'empty-image',
+          x: 60,
+          y: 120,
+          width: 880,
+          height: 300,
+          content: '',
+          src: '',
+        },
+      ],
+    };
+
+    render(<SlideRenderer slide={slide} imagesPending={false} />);
+
+    expect(screen.queryByText('Image unavailable')).toBeNull();
+    expect(document.querySelectorAll('img').length).toBe(0);
+  });
+
+  test('suppresses unresolved prompt-only image boxes and keeps canvas bounds stable', () => {
+    const slide: MAICSlide = {
+      id: 'prompt-only-image-box',
+      title: 'Prompt-only image box',
+      elements: [
+        {
+          type: 'text',
+          id: 'lesson-text',
+          x: 40,
+          y: 60,
+          width: 360,
+          height: 80,
+          content: 'What is water quality?',
+        },
+        {
+          type: 'image',
+          id: 'unfilled-image',
+          x: 300,
+          y: 980,
+          width: 400,
+          height: 300,
+          content: 'polluted_water_source.jpg',
+        },
+      ],
+    };
+
+    render(<SlideRenderer slide={slide} imagesPending={false} />);
+
+    expect(screen.getByText('What is water quality?')).toBeDefined();
+    expect(screen.queryByText('Image unavailable')).toBeNull();
+    expect(document.querySelectorAll('img').length).toBe(0);
+    const canvas = document.querySelector(
+      '[data-testid="slide-design-canvas"]',
+    ) as HTMLElement | null;
+    expect(canvas?.style.width).toBe('800px');
+    expect(canvas?.style.height).toBe('450px');
+  });
+
+  test('suppresses done image tasks when the resolved src is a blocked placeholder', () => {
+    useMaicMediaGenerationStore.getState().resetAll();
+    useMaicMediaGenerationStore.getState().hydrateFromMap('classroom-1', {
+      '0:0:0:placeholder-image': {
+        status: 'done',
+        src: 'https://placehold.co/800x450?text=pollution_types.jpg',
+      },
+    });
+    const slide: MAICSlide = {
+      id: 'placeholder-task-slide',
+      title: 'Placeholder task',
+      elements: [
+        {
+          type: 'image',
+          id: 'placeholder-image',
+          x: 60,
+          y: 120,
+          width: 400,
+          height: 260,
+          content: 'pollution_types.jpg',
+          src: 'https://placehold.co/800x450?text=pollution_types.jpg',
+        },
+      ],
+    };
+
+    render(
+      <SlideRenderer
+        slide={slide}
+        imagesPending={false}
+        sceneIndex={0}
+        slideIndex={0}
+      />,
+    );
+
+    expect(screen.queryByText('Image unavailable')).toBeNull();
+    expect(document.querySelectorAll('img').length).toBe(0);
+  });
+
   // ─── WAVE-6-F4-F3 — Empty-slot Unsplash bypass ───────────────────────────
   test('does NOT render Unsplash fallback or right-column track when slots.image is an empty object {}', () => {
     // Reviewer flagged that `hasImage = !!image` was true for `image: {}`,
@@ -260,5 +429,46 @@ describe('SlideRenderer — body-image-right template (F4)', () => {
     const titleEl = document.querySelector('[data-testid="slide-slot-title"]');
     expect(titleEl).not.toBeNull();
     expect(titleEl?.textContent).toBe('Inner');
+  });
+
+  test('trusts explicit v2 canvas size instead of expanding to off-canvas elements', () => {
+    const slide: MAICSlide = {
+      id: 'v2-outlier-canvas',
+      title: 'Stable canvas',
+      canvasWidth: 1000,
+      canvasHeight: 562.5,
+      viewportSize: 1000,
+      viewportRatio: 0.5625,
+      background: '#ffffff',
+      elements: [
+        {
+          id: 'title_001',
+          type: 'text',
+          x: 60,
+          y: 50,
+          width: 880,
+          height: 76,
+          content: 'Stable canvas',
+        },
+        {
+          id: 'bad_outlier',
+          type: 'text',
+          x: 60,
+          y: 2400,
+          width: 880,
+          height: 200,
+          content: 'This malformed element must not resize the slide.',
+        },
+      ],
+    };
+
+    render(<SlideRenderer slide={slide} />);
+
+    const canvas = document.querySelector(
+      '[data-testid="slide-design-canvas"]',
+    ) as HTMLElement | null;
+    expect(canvas).not.toBeNull();
+    expect(canvas?.style.width).toBe('1000px');
+    expect(canvas?.style.height).toBe('562.5px');
   });
 });

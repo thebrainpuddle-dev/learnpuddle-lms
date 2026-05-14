@@ -134,6 +134,28 @@ async function resolveClassroomId(page) {
   return classroomId;
 }
 
+/** @param {import('@playwright/test').Page} page */
+async function readEngineAudioDebug(page) {
+  return page.evaluate(() => {
+    const actionEngine = /** @type {any} */ (window).__maicEngine?.actionEngine;
+    if (typeof actionEngine?.getAudioDebugState === 'function') {
+      return actionEngine.getAudioDebugState();
+    }
+    const audio = actionEngine?.audioElement ?? actionEngine?._sharedAudio ?? null;
+    const ctx = actionEngine?._audioContext ?? null;
+    return {
+      audioCurrentTime: audio?.currentTime ?? 0,
+      audioPaused: audio?.paused ?? null,
+      audioEnded: audio?.ended ?? null,
+      audioReadyState: audio?.readyState ?? null,
+      audioNetworkState: audio?.networkState ?? null,
+      audioSrc: audio?.src ?? '',
+      contextCurrentTime: ctx?.currentTime ?? 0,
+      contextState: ctx?.state ?? null,
+    };
+  });
+}
+
 // ─── Tests ─────────────────────────────────────────────────────────────────────
 
 test.describe('MAIC Full Playback — TEST-P0-8', () => {
@@ -177,7 +199,7 @@ test.describe('MAIC Full Playback — TEST-P0-8', () => {
     await page.goto(`${BASE_URL}/teacher/ai-classroom/${classroomId}`);
 
     // For a READY classroom the "Start Class" overlay must appear.
-    const startButton = page.locator('button[aria-label*="Start class"]');
+    const startButton = page.locator('button[aria-label^="Start playback"][aria-label*="scene"]');
     await expect(startButton).toBeVisible({ timeout: 20_000 });
   });
 
@@ -189,7 +211,7 @@ test.describe('MAIC Full Playback — TEST-P0-8', () => {
     await page.goto(`${BASE_URL}/teacher/ai-classroom/${classroomId}`);
 
     // The top toolbar contains the playback speed cycling button (e.g. "1x").
-    await page.waitForSelector('button[aria-label*="Start class"]', { timeout: 20_000 });
+    await page.waitForSelector('button[aria-label^="Start playback"][aria-label*="scene"]', { timeout: 20_000 });
 
     const speedButton = page.locator('button[aria-label^="Playback speed"]');
     await expect(speedButton).toBeVisible();
@@ -201,7 +223,7 @@ test.describe('MAIC Full Playback — TEST-P0-8', () => {
     test.skip(!process.env.E2E_LIVE, 'Set E2E_LIVE=1 to run e2e tests');
 
     await page.goto(`${BASE_URL}/teacher/ai-classroom/${classroomId}`);
-    await page.waitForSelector('button[aria-label*="Start class"]', { timeout: 20_000 });
+    await page.waitForSelector('button[aria-label^="Start playback"][aria-label*="scene"]', { timeout: 20_000 });
 
     // data-testid="maic-stage" is the main content area from Stage.tsx line 588.
     const stage = page.locator('[data-testid="maic-stage"]');
@@ -220,7 +242,7 @@ test.describe('MAIC Full Playback — TEST-P0-8', () => {
     await page.goto(`${BASE_URL}/teacher/ai-classroom/${classroomId}`);
 
     // The "Start Class" overlay must be visible while playbackState === 'idle'.
-    const startOverlay = page.locator('button[aria-label*="Start class"]');
+    const startOverlay = page.locator('button[aria-label^="Start playback"][aria-label*="scene"]');
     await expect(startOverlay).toBeVisible({ timeout: 20_000 });
 
     // The play button in SlideNavigator should also be present (not yet playing).
@@ -237,15 +259,15 @@ test.describe('MAIC Full Playback — TEST-P0-8', () => {
     test.skip(!process.env.E2E_LIVE, 'Set E2E_LIVE=1 to run e2e tests');
 
     await page.goto(`${BASE_URL}/teacher/ai-classroom/${classroomId}`);
-    await page.waitForSelector('button[aria-label*="Start class"]', { timeout: 20_000 });
+    await page.waitForSelector('button[aria-label^="Start playback"][aria-label*="scene"]', { timeout: 20_000 });
 
     // Click the consent button — this fires startClass() which calls
     // audioContext.resume() (or creates the context on a user gesture).
-    await page.locator('button[aria-label*="Start class"]').click();
+    await page.locator('button[aria-label^="Start playback"][aria-label*="scene"]').click();
 
     // SPRINT-2-BATCH-9-F7: poll for the Start-Class overlay to disappear,
     // proving the consent gate fired and playbackState left 'idle'.
-    await expect(page.locator('button[aria-label*="Start class"]')).not.toBeVisible({
+    await expect(page.locator('button[aria-label^="Start playback"][aria-label*="scene"]')).not.toBeVisible({
       timeout: 10_000,
     });
 
@@ -281,10 +303,10 @@ test.describe('MAIC Full Playback — TEST-P0-8', () => {
     test.skip(!process.env.E2E_LIVE, 'Set E2E_LIVE=1 to run e2e tests');
 
     await page.goto(`${BASE_URL}/teacher/ai-classroom/${classroomId}`);
-    await page.waitForSelector('button[aria-label*="Start class"]', { timeout: 20_000 });
+    await page.waitForSelector('button[aria-label^="Start playback"][aria-label*="scene"]', { timeout: 20_000 });
 
     // Click Start Class so the engine initialises and scene index = 0.
-    await page.locator('button[aria-label*="Start class"]').click();
+    await page.locator('button[aria-label^="Start playback"][aria-label*="scene"]').click();
 
     // The sr-only live region in Stage.tsx has role="status" and aria-live="polite".
     // Its text content is "Scene 1 of N" (optionally followed by ": <scene title>").
@@ -311,10 +333,10 @@ test.describe('MAIC Full Playback — TEST-P0-8', () => {
     test.skip(!process.env.E2E_LIVE, 'Set E2E_LIVE=1 to run e2e tests');
 
     await page.goto(`${BASE_URL}/teacher/ai-classroom/${classroomId}`);
-    await page.waitForSelector('button[aria-label*="Start class"]', { timeout: 20_000 });
+    await page.waitForSelector('button[aria-label^="Start playback"][aria-label*="scene"]', { timeout: 20_000 });
 
     // Click Start Class
-    await page.locator('button[aria-label*="Start class"]').click();
+    await page.locator('button[aria-label^="Start playback"][aria-label*="scene"]').click();
 
     // Get scene count from the live region text.
     const liveRegion = page.locator('[role="status"][aria-live="polite"]').first();
@@ -352,9 +374,9 @@ test.describe('MAIC Full Playback — TEST-P0-8', () => {
     test.skip(!process.env.E2E_LIVE, 'Set E2E_LIVE=1 to run e2e tests');
 
     await page.goto(`${BASE_URL}/teacher/ai-classroom/${classroomId}`);
-    await page.waitForSelector('button[aria-label*="Start class"]', { timeout: 20_000 });
+    await page.waitForSelector('button[aria-label^="Start playback"][aria-label*="scene"]', { timeout: 20_000 });
 
-    await page.locator('button[aria-label*="Start class"]').click();
+    await page.locator('button[aria-label^="Start playback"][aria-label*="scene"]').click();
 
     // Count available scene chips.
     const chips = page.locator('[data-testid="scene-chip"]');
@@ -387,9 +409,9 @@ test.describe('MAIC Full Playback — TEST-P0-8', () => {
     test.skip(!process.env.E2E_LIVE, 'Set E2E_LIVE=1 to run e2e tests');
 
     await page.goto(`${BASE_URL}/teacher/ai-classroom/${classroomId}`);
-    await page.waitForSelector('button[aria-label*="Start class"]', { timeout: 20_000 });
+    await page.waitForSelector('button[aria-label^="Start playback"][aria-label*="scene"]', { timeout: 20_000 });
 
-    await page.locator('button[aria-label*="Start class"]').click();
+    await page.locator('button[aria-label^="Start playback"][aria-label*="scene"]').click();
 
     const liveRegion = page.locator('[role="status"][aria-live="polite"]').first();
     // SPRINT-2-BATCH-9-F7: poll for Scene-1 announcement.
@@ -412,7 +434,7 @@ test.describe('MAIC Full Playback — TEST-P0-8', () => {
     }).toMatch(/Scene 2 of \d+/);
 
     // The "Start Class" overlay must NOT be visible.
-    const startOverlay = page.locator('button[aria-label*="Start class"]');
+    const startOverlay = page.locator('button[aria-label^="Start playback"][aria-label*="scene"]');
     await expect(startOverlay).not.toBeVisible();
   });
 
@@ -426,7 +448,7 @@ test.describe('MAIC Full Playback — TEST-P0-8', () => {
     test.skip(!process.env.E2E_LIVE, 'Set E2E_LIVE=1 to run e2e tests');
 
     await page.goto(`${BASE_URL}/teacher/ai-classroom/${classroomId}`);
-    await page.waitForSelector('button[aria-label*="Start class"]', { timeout: 20_000 });
+    await page.waitForSelector('button[aria-label^="Start playback"][aria-label*="scene"]', { timeout: 20_000 });
 
     // Banner must NOT be visible while online.
     await expect(page.locator('[data-testid="offline-banner"]')).not.toBeVisible();
@@ -453,7 +475,7 @@ test.describe('MAIC Full Playback — TEST-P0-8', () => {
     test.skip(!process.env.E2E_LIVE, 'Set E2E_LIVE=1 to run e2e tests');
 
     await page.goto(`${BASE_URL}/teacher/ai-classroom/${classroomId}`);
-    await page.waitForSelector('button[aria-label*="Start class"]', { timeout: 20_000 });
+    await page.waitForSelector('button[aria-label^="Start playback"][aria-label*="scene"]', { timeout: 20_000 });
 
     // Episode 1: go offline.
     await context.setOffline(true);
@@ -486,9 +508,9 @@ test.describe('MAIC Full Playback — TEST-P0-8', () => {
     test.skip(!process.env.E2E_LIVE, 'Set E2E_LIVE=1 to run e2e tests');
 
     await page.goto(`${BASE_URL}/teacher/ai-classroom/${classroomId}`);
-    await page.waitForSelector('button[aria-label*="Start class"]', { timeout: 20_000 });
+    await page.waitForSelector('button[aria-label^="Start playback"][aria-label*="scene"]', { timeout: 20_000 });
 
-    await page.locator('button[aria-label*="Start class"]').click();
+    await page.locator('button[aria-label^="Start playback"][aria-label*="scene"]').click();
 
     const chips = page.locator('[data-testid="scene-chip"]');
     // SPRINT-2-BATCH-9-F7: wait for chips to render.
@@ -522,7 +544,7 @@ test.describe('MAIC Full Playback — TEST-P0-8', () => {
     test.skip(!process.env.E2E_LIVE, 'Set E2E_LIVE=1 to run e2e tests');
 
     await page.goto(`${BASE_URL}/teacher/ai-classroom/${classroomId}`);
-    await page.waitForSelector('button[aria-label*="Start class"]', { timeout: 20_000 });
+    await page.waitForSelector('button[aria-label^="Start playback"][aria-label*="scene"]', { timeout: 20_000 });
 
     // The SlideNavigator root has role="navigation" aria-label="Scene navigation".
     const nav = page.locator('[role="navigation"][aria-label="Scene navigation"]');
@@ -556,57 +578,27 @@ test.describe('MAIC Full Playback — TEST-P0-8', () => {
     test.skip(!process.env.E2E_LIVE, 'Set E2E_LIVE=1 to run e2e tests');
 
     await page.goto(`${BASE_URL}/teacher/ai-classroom/${classroomId}`);
-    await page.waitForSelector('button[aria-label*="Start class"]', { timeout: 20_000 });
-    await page.locator('button[aria-label*="Start class"]').click();
+    await page.waitForSelector('button[aria-label^="Start playback"][aria-label*="scene"]', { timeout: 20_000 });
+    await page.locator('button[aria-label^="Start playback"][aria-label*="scene"]').click();
 
-    // SPRINT-2-BATCH-9-F8: poll for either the <audio> currentTime OR the
-    // AudioContext currentTime to advance past zero — proves playback has
-    // STARTED.  Fixes the flake where a slow CI runner takes >2s and
-    // sample1/sample2 both come back as 0.
+    // SPRINT-2-BATCH-9-F8: poll the engine-owned audio element, not the
+    // silent DOM fallback <audio>. This keeps the probe on the real MAIC
+    // speech pipeline.
     await expect.poll(
-      async () => page.evaluate(() => {
-        const el = /** @type {HTMLAudioElement | null} */ (document.querySelector('audio'));
-        const ctx = /** @type {any} */ (window).__maicAudioCtx ?? null;
-        const elT = el ? el.currentTime : 0;
-        const ctxT = ctx ? ctx.currentTime : 0;
-        return Math.max(elT, ctxT);
-      }),
+      async () => (await readEngineAudioDebug(page)).audioCurrentTime,
       { timeout: 15_000 },
     ).toBeGreaterThan(0);
 
-    const sample1 = await page.evaluate(() => {
-      const el = /** @type {HTMLAudioElement | null} */ (document.querySelector('audio'));
-      const ctx = /** @type {any} */ (window).__maicAudioCtx ?? null;
-      return {
-        elTime: el ? el.currentTime : null,
-        ctxTime: ctx ? ctx.currentTime : null,
-        elPaused: el ? el.paused : null,
-      };
-    });
+    const sample1 = await readEngineAudioDebug(page);
 
-    // debounce: measure forward-progress over a 2s wall-clock interval —
+    // debounce: measure forward-progress over a real wall-clock interval —
     // this is a real time delta, not a settle wait, so the timeout stays.
-    await page.waitForTimeout(2000);
+    await page.waitForTimeout(750);
 
-    const sample2 = await page.evaluate(() => {
-      const el = /** @type {HTMLAudioElement | null} */ (document.querySelector('audio'));
-      const ctx = /** @type {any} */ (window).__maicAudioCtx ?? null;
-      return {
-        elTime: el ? el.currentTime : null,
-        ctxTime: ctx ? ctx.currentTime : null,
-        elPaused: el ? el.paused : null,
-      };
-    });
+    const sample2 = await readEngineAudioDebug(page);
+    const audioDelta = sample2.audioCurrentTime - sample1.audioCurrentTime;
 
-    // At least one of the two clocks must have advanced by >0.3s.
-    const elDelta = (sample1.elTime != null && sample2.elTime != null)
-      ? sample2.elTime - sample1.elTime
-      : 0;
-    const ctxDelta = (sample1.ctxTime != null && sample2.ctxTime != null)
-      ? sample2.ctxTime - sample1.ctxTime
-      : 0;
-
-    expect(elDelta + ctxDelta).toBeGreaterThan(0.3);
+    expect(audioDelta).toBeGreaterThan(0.2);
   });
 
   // ── Test 17: Full playback through every scene ─────────────────────────────
@@ -620,8 +612,8 @@ test.describe('MAIC Full Playback — TEST-P0-8', () => {
     test.skip(!process.env.E2E_LIVE, 'Set E2E_LIVE=1 to run e2e tests');
 
     await page.goto(`${BASE_URL}/teacher/ai-classroom/${classroomId}`);
-    await page.waitForSelector('button[aria-label*="Start class"]', { timeout: 20_000 });
-    await page.locator('button[aria-label*="Start class"]').click();
+    await page.waitForSelector('button[aria-label^="Start playback"][aria-label*="scene"]', { timeout: 20_000 });
+    await page.locator('button[aria-label^="Start playback"][aria-label*="scene"]').click();
 
     const liveRegion = page.locator('[role="status"][aria-live="polite"]').first();
     // SPRINT-2-BATCH-9-F7: poll for Scene-1 announcement before sampling.
@@ -673,15 +665,15 @@ test.describe('MAIC Full Playback — TEST-P0-8', () => {
     test.skip(!process.env.E2E_LIVE, 'Set E2E_LIVE=1 to run e2e tests');
 
     await page.goto(`${BASE_URL}/teacher/ai-classroom/${classroomId}`);
-    await page.waitForSelector('button[aria-label*="Start class"]', { timeout: 20_000 });
-    await page.locator('button[aria-label*="Start class"]').click();
+    await page.waitForSelector('button[aria-label^="Start playback"][aria-label*="scene"]', { timeout: 20_000 });
+    await page.locator('button[aria-label^="Start playback"][aria-label*="scene"]').click();
     // SPRINT-2-BATCH-9-F7: wait for the Start Class overlay to disappear
     // before interacting with chat — proves the engine is past idle.
-    await expect(page.locator('button[aria-label*="Start class"]')).not.toBeVisible({
+    await expect(page.locator('button[aria-label^="Start playback"][aria-label*="scene"]')).not.toBeVisible({
       timeout: 10_000,
     });
 
-    const chatInput = page.locator('[data-testid="chat-input"]');
+    const chatInput = page.locator('textarea[aria-label="Chat message input"]:visible');
     // Chat may be hidden behind a FAB on mobile; on desktop it is in a side
     // panel. Skip cleanly if not attached at desktop viewport.
     if ((await chatInput.count()) === 0) {

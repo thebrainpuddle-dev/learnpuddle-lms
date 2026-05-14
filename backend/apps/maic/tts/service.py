@@ -222,12 +222,16 @@ async def _synthesize_with_provider(
             format="mp3",
         )
     if provider == _PROVIDER_MINIMAX:
+        resolved_base_url = _validate_tenant_tts_base_url(
+            base_url,
+            fallback=_DEFAULT_MINIMAX_BASE_URL,
+        )
         audio_bytes = await _minimax_synthesize(
             text,
             voice=voice or _DEFAULT_MINIMAX_VOICE,
             speed=speed,
             api_key=api_key or os.environ.get("MINIMAX_API_KEY", ""),
-            base_url=base_url or _DEFAULT_MINIMAX_BASE_URL,
+            base_url=resolved_base_url,
             model=model or _DEFAULT_MINIMAX_MODEL,
         )
         return SpeechAudio(
@@ -236,12 +240,16 @@ async def _synthesize_with_provider(
             format="mp3",
         )
     if provider == _PROVIDER_ELEVENLABS:
+        resolved_base_url = _validate_tenant_tts_base_url(
+            base_url,
+            fallback=_DEFAULT_ELEVENLABS_BASE_URL,
+        )
         audio_bytes = await _elevenlabs_synthesize(
             text,
             voice=voice or _DEFAULT_ELEVENLABS_VOICE,
             speed=speed,
             api_key=api_key or os.environ.get("ELEVENLABS_API_KEY", ""),
-            base_url=base_url or _DEFAULT_ELEVENLABS_BASE_URL,
+            base_url=resolved_base_url,
             model=model or _DEFAULT_ELEVENLABS_MODEL,
         )
         return SpeechAudio(
@@ -254,6 +262,26 @@ async def _synthesize_with_provider(
         f"unknown TTS provider {provider!r}; "
         f"set {_PROVIDER_ENV}=edge|minimax|elevenlabs (or pass provider=)"
     )
+
+
+def _validate_tenant_tts_base_url(base_url: str | None, *, fallback: str) -> str:
+    """Validate tenant-supplied TTS base URLs before opening HTTP clients."""
+    if not base_url:
+        return fallback
+
+    from utils.url_safety import UnsafeURLError, validate_outbound_url
+
+    normalized = base_url.strip().rstrip("/")
+    try:
+        return validate_outbound_url(
+            normalized,
+            # Runtime provider clients still resolve independently, but this
+            # blocks literal loopback/private/link-local endpoints and banned
+            # host aliases before aiohttp ever sees the URL.
+            resolve_dns=False,
+        )
+    except UnsafeURLError as exc:
+        raise SpeechSynthesisError(f"unsafe TTS base_url: {exc}") from exc
 
 
 # ── Edge TTS provider ─────────────────────────────────────────────────

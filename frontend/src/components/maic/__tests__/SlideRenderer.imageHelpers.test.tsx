@@ -22,6 +22,11 @@ vi.mock('../../../stores/maicSettingsStore', () => ({
     selector({ slideTransition: 'none' }),
 }));
 
+vi.mock('../../../hooks/useAuthBlobUrl', () => ({
+  useAuthBlobUrl: (protectedUrl: string | null | undefined) =>
+    protectedUrl ? `blob:${protectedUrl}` : null,
+}));
+
 global.ResizeObserver = class ResizeObserver {
   observe() {}
   unobserve() {}
@@ -30,14 +35,14 @@ global.ResizeObserver = class ResizeObserver {
 
 describe('resolveImageSrc — SEC-P0-4 allow-list', () => {
   test('accepts https URLs', () => {
-    expect(resolveImageSrc('https://images.example.com/a.jpg')).toBe(
-      'https://images.example.com/a.jpg',
+    expect(resolveImageSrc('https://openai.com/favicon.ico')).toBe(
+      'https://openai.com/favicon.ico',
     );
   });
 
   test('accepts http URLs', () => {
-    expect(resolveImageSrc('http://images.example.com/a.jpg')).toBe(
-      'http://images.example.com/a.jpg',
+    expect(resolveImageSrc('http://127.0.0.1:8000/media/a.jpg')).toBe(
+      'http://127.0.0.1:8000/media/a.jpg',
     );
   });
 
@@ -46,9 +51,16 @@ describe('resolveImageSrc — SEC-P0-4 allow-list', () => {
   });
 
   test('trims whitespace before checking', () => {
-    expect(resolveImageSrc('   https://x.com/y.jpg   ')).toBe(
-      'https://x.com/y.jpg',
+    expect(resolveImageSrc('   https://openai.com/favicon.ico   ')).toBe(
+      'https://openai.com/favicon.ico',
     );
+  });
+
+  test('rejects reserved and placeholder image hosts', () => {
+    expect(resolveImageSrc('https://example.com/image.jpg')).toBeNull();
+    expect(resolveImageSrc('https://images.example.com/a.jpg')).toBeNull();
+    expect(resolveImageSrc('https://placehold.co/800x450')).toBeNull();
+    expect(resolveImageSrc('https://source.unsplash.com/800x450/?math')).toBeNull();
   });
 
   test('rejects data: URLs', () => {
@@ -83,7 +95,7 @@ describe('ImageWithFallbacks — render branches', () => {
   test('renders shimmer skeleton when taskStatus=pending (regardless of src)', () => {
     render(
       <ImageWithFallbacks
-        src="https://x.com/a.jpg"
+        src="https://openai.com/favicon.ico"
         alt="x"
         taskStatus="pending"
       />,
@@ -145,26 +157,42 @@ describe('ImageWithFallbacks — render branches', () => {
   test('renders <img> when src resolves and no other state', () => {
     render(
       <ImageWithFallbacks
-        src="https://images.example.com/a.jpg"
+        src="https://openai.com/favicon.ico"
         alt="diagram"
       />,
     );
     const imgs = document.querySelectorAll('img');
     expect(imgs.length).toBeGreaterThan(0);
-    expect(imgs[0].getAttribute('src')).toBe('https://images.example.com/a.jpg');
+    expect(imgs[0].getAttribute('src')).toBe('https://openai.com/favicon.ico');
     expect(imgs[0].getAttribute('alt')).toBe('diagram');
+    expect(imgs[0].className).toContain('object-contain');
+  });
+
+  test('renders protected media through authenticated blob URL', () => {
+    render(
+      <ImageWithFallbacks
+        src="/media/tenant/1/maic/photo.jpg"
+        alt="protected diagram"
+      />,
+    );
+
+    const imgs = document.querySelectorAll('img');
+    expect(imgs.length).toBeGreaterThan(0);
+    expect(imgs[0].getAttribute('src')).toBe('blob:/media/tenant/1/maic/photo.jpg');
+    expect(imgs[0].getAttribute('alt')).toBe('protected diagram');
   });
 
   test('renders <img> via suppressOnLoadShimmer (F4 template path) without on-load shimmer', () => {
     render(
       <ImageWithFallbacks
-        src="https://images.example.com/a.jpg"
+        src="https://openai.com/favicon.ico"
         alt="diagram"
         suppressOnLoadShimmer
       />,
     );
     const imgs = document.querySelectorAll('img');
     expect(imgs.length).toBe(1);
+    expect(imgs[0].className).toContain('object-contain');
     // The success path on the F4 template uses a simpler container — no
     // pre-load shimmer overlay competing for space inside the slot.
     expect(
@@ -191,12 +219,13 @@ describe('ImageWithFallbacks — render branches', () => {
     expect(screen.queryByText('AI images disabled')).toBeNull();
   });
 
-  test('returns null when src is empty and no other state is active', () => {
-    const { container } = render(
-      <ImageWithFallbacks src="" alt="x" />,
-    );
-    // No skeleton, no placeholder, no <img>. Caller is expected to provide
-    // a fallback (e.g. Unsplash) before invoking the helper in this case.
-    expect(container.firstChild).toBeNull();
+  test('renders an honest unavailable placeholder when src is empty and no other state is active', () => {
+    render(<ImageWithFallbacks src="" alt="Quadratic diagram" />);
+    expect(
+      document.querySelector('[data-testid="image-empty-placeholder"]'),
+    ).not.toBeNull();
+    expect(screen.getByText('Image unavailable')).toBeDefined();
+    expect(screen.getByText('Quadratic diagram')).toBeDefined();
+    expect(document.querySelector('img')).toBeNull();
   });
 });

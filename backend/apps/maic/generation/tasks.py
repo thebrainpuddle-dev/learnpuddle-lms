@@ -1,25 +1,22 @@
 """Celery tasks for the v2 generation pipeline (Phase 4 Session 6).
 
-This module wraps the synchronous in-process pipeline
-(`pipeline_runner.run_generation_pipeline`) into a Celery chain so the
-HTTP route can return a `{job_id}` immediately while the work runs in
-a worker.
+This module wraps the v2 outline/scene/materialization pipeline into a
+Celery chain so the HTTP route can return a `{job_id}` immediately
+while the work runs in a worker.
 
 MAIC-428.1 (this chunk) ships the outer chain skeleton:
 
     chain(outline_task.s(job_id), scene_dispatch_task.s(), finalize_task.s())
 
-  - outline_task: marks the job in_progress, runs Stage 1 (outlines)
-    via run_generation_pipeline (Stage 2 happens in scene_dispatch_task
-    instead). For 428.1 the simplest path is "Stage 1 here, scenes in
-    next task" — keeps one task per stage. The ordering matches the WS
-    consumer's expected progress events: outline_done → scene_done×N
-    → finalized.
+  - outline_task: marks the job in_progress and runs Stage 1
+    (outlines). Stage 2 happens in scene_dispatch_task. The ordering
+    matches the WS consumer's expected progress events:
+    outline_done → scene_done×N → finalized.
 
-  - scene_dispatch_task: 428.1 runs generate_full_scenes inline (the
-    in-process parallel asyncio.gather path). MAIC-428.2 fans out to
-    a chord(group(scene_task.s() for each), scenes_finalize.s()) and
-    drops the inline path.
+  - scene_dispatch_task: runs scene generation inside the stage task and
+    returns the assembled scene payload to finalize_task. A previous
+    fan-out implementation waited on a Celery chord from inside a worker;
+    real local Ollama validation showed that was not stable enough.
 
   - finalize_task: writes status=succeeded, fills result.scenes, sets
     completed_at, and emits the WS finalized event.
@@ -38,24 +35,24 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+import time
 from datetime import datetime, timezone
 from typing import Any
 
-from celery import chain, chord, group, shared_task
+from celery import chain, shared_task
 from django.db import DatabaseError, OperationalError
 
-from apps.maic.generation.pipeline_runner import (
-    create_generation_session,
-    run_generation_pipeline,
-)
-from apps.maic.generation.scene_generator import (
-    _generate_single_scene,
-    generate_full_scenes,
-)
+from apps.maic.generation.pipeline_runner import create_generation_session
+from apps.maic.generation.scene_generator import _generate_single_scene
 from apps.maic.generation.outline_generator import (
     generate_scene_outlines_from_requirements,
 )
+from apps.maic.generation.materializer import materialize_generation_artifact
 from apps.maic.models import MaicGenerationJob
+from apps.maic.orchestration.ai_adapter import use_llm_runtime_config
+from apps.maic.llm_config import resolve_tenant_llm_runtime_config
+from apps.courses.maic_models import TenantAIConfig
 
 
 _logger = logging.getLogger("apps.maic.generation.tasks")
@@ -108,6 +105,7 @@ def outline_task(job_id: str) -> dict:
     job = MaicGenerationJob.objects.get(pk=job_id)
     requirements = job.requirements or {}
     language_model_id = requirements.get("languageModelId", "stub")
+    llm_config = _runtime_config_for_job(job, language_model_id)
 
     job.status = MaicGenerationJob.STATUS_IN_PROGRESS
     job.progress = {
@@ -118,21 +116,26 @@ def outline_task(job_id: str) -> dict:
     }
     job.save(update_fields=["status", "progress", "updated_at"])
 
+    started = time.monotonic()
+
     async def _run():
         return await generate_scene_outlines_from_requirements(
             requirements,
-            None,
+            _pdf_text_for_requirements(requirements),
             None,
             language_model_id=language_model_id,
             callbacks=None,
+            options=_outline_options_for_requirements(requirements),
         )
 
-    result = asyncio.run(_run())
+    with use_llm_runtime_config(llm_config):
+        result = asyncio.run(_run())
     if not result.get("success") or "data" not in result:
         raise RuntimeError(result.get("error", "Stage 1 failed"))
 
     outlines = result["data"]["outlines"]
     language_directive = result["data"]["languageDirective"]
+    metrics = {"outline_ms": int((time.monotonic() - started) * 1000)}
 
     job.progress = {
         "stage": 1,
@@ -140,13 +143,21 @@ def outline_task(job_id: str) -> dict:
         "total": len(outlines),
         "message": "Outlines complete; generating scenes...",
     }
-    job.result = {"outlines": outlines, "languageDirective": language_directive}
-    job.save(update_fields=["progress", "result", "updated_at"])
-
-    _emit_progress(job_id, "outline_done", {
+    job.result = {
         "outlines": outlines,
         "languageDirective": language_directive,
-    })
+        "metrics": metrics,
+    }
+    job.save(update_fields=["progress", "result", "updated_at"])
+
+    _emit_progress(
+        job_id,
+        "outline_done",
+        {
+            "outlines": outlines,
+            "languageDirective": language_directive,
+        },
+    )
 
     return {
         "job_id": job_id,
@@ -169,30 +180,19 @@ def outline_task(job_id: str) -> dict:
     bind=True,
 )
 def scene_dispatch_task(self, stage1_payload: dict) -> dict:
-    """Stage 2 — fan out one scene_task per outline (MAIC-428.2).
+    """Stage 2 — generate one scene per outline.
 
-    Refactored from MAIC-428.1's inline generate_full_scenes to a
-    Celery chord:
-
-        chord(group(scene_task.s(...) for each outline), scenes_finalize.s())
-
-    Per-scene tasks run in parallel on Celery workers. Atomic progress
-    counter via Redis INCR (django_redis.get_redis_connection()) so
-    concurrent worker increments never race. The chord callback
-    (scenes_finalize_task) waits for all scenes, sorts by index, and
-    forwards the assembled list to finalize_task.
-
-    Eager-mode fallback: when CELERY_TASK_ALWAYS_EAGER is set (tests
-    + dev), the chord is executed in-process. Eager chord dispatch
-    semantics differ slightly from the broker path — the result of
-    `chord(group(...))(callback)` is still an AsyncResult, but with
-    .get() we can block on the callback's return synchronously.
+    Runs per-scene generation inline in this worker process and then calls
+    the same collector used by the earlier chord path. Celery workers should
+    not block waiting for subtasks dispatched into the same pool; that pattern
+    caused worker-loss crashes during real macOS/Ollama validation.
 
     The downstream finalize_task expects {"job_id", "scenes"} — we
-    pre-build the per-scene "task payloads" with index attached so
+    preserve the per-scene result shape with index attached so
     scenes_finalize_task can re-sort by original outline order.
     """
     job_id = stage1_payload["job_id"]
+    started = time.monotonic()
     outlines = stage1_payload["outlines"]
     language_directive = stage1_payload.get("languageDirective", "")
     language_model_id = stage1_payload.get("languageModelId", "stub")
@@ -200,7 +200,8 @@ def scene_dispatch_task(self, stage1_payload: dict) -> dict:
     job = MaicGenerationJob.objects.get(pk=job_id)
     requirements = job.requirements or {}
     agents = requirements.get("agents") or []
-    user_profile = requirements.get("userProfile") or ""
+    user_profile = _scene_user_profile_for_requirements(requirements)
+    teacher_context = _scene_teacher_context_for_requirements(requirements)
 
     total = len(outlines)
     stage_id = f"stage_{job_id}"
@@ -214,7 +215,7 @@ def scene_dispatch_task(self, stage1_payload: dict) -> dict:
     job.save(update_fields=["progress", "updated_at"])
 
     # Reset the Redis progress counter for this job. Idempotent —
-    # repeated chord dispatch (autoretry) starts from zero.
+    # repeated dispatch (autoretry) starts from zero.
     _reset_progress_counter(job_id)
 
     # Per-scene context — same for every scene, just include index +
@@ -226,29 +227,31 @@ def scene_dispatch_task(self, stage1_payload: dict) -> dict:
         "language_directive": language_directive,
         "agents": agents,
         "user_profile": user_profile,
+        "teacher_context": teacher_context,
         "stage_id": stage_id,
         "total": total,
         "all_titles": all_titles,
+        "image_generation_enabled": bool(
+            requirements.get("enableImageGeneration")
+            or requirements.get("enableImages")
+        ),
+        "video_generation_enabled": bool(
+            requirements.get("enableVideoGeneration")
+            or requirements.get("enableVideos")
+        ),
     }
 
-    # Empty outline = nothing to fan out. Return early so the chord
-    # doesn't dispatch with an empty group (which would just no-op).
+    # Empty outline = nothing to generate.
     if total == 0:
         return {"job_id": job_id, "scenes": []}
 
-    header = group(
-        scene_task.s(index=i, outline=outline, **base_args)
+    scene_results = [
+        scene_task.run(index=i, outline=outline, **base_args)
         for i, outline in enumerate(outlines)
-    )
-    callback = scenes_finalize_task.s(job_id=job_id, total=total)
-
-    chord_result = chord(header)(callback)
-
-    # In eager mode, chord returns an EagerResult — .get() returns
-    # the callback's payload synchronously. In broker mode, the
-    # outer chain captures this AsyncResult and the next task in the
-    # chain (finalize_task) receives the callback's return.
-    return chord_result.get(disable_sync_subtasks=False)
+    ]
+    stage2_payload = scenes_finalize_task.run(scene_results, job_id=job_id, total=total)
+    stage2_payload["scene_ms"] = int((time.monotonic() - started) * 1000)
+    return stage2_payload
 
 
 @shared_task(
@@ -270,6 +273,9 @@ def scene_task(
     stage_id: str,
     total: int,
     all_titles: list,
+    teacher_context: str = "",
+    image_generation_enabled: bool = False,
+    video_generation_enabled: bool = False,
 ) -> dict:
     """Per-scene worker task. One per outline.
 
@@ -279,20 +285,35 @@ def scene_task(
     new completed-count, and returns the assembled scene dict
     (index attached so scenes_finalize_task can sort).
 
-    Failures bubble up — the chord callback receives a SCENE-FAILED
-    sentinel via Celery's native task-failure path. We surface this
-    as scene=None in the result so scenes_finalize_task drops it
-    silently (matches the in-process generate_full_scenes contract).
+    Failures are surfaced as scene=None in the result so
+    scenes_finalize_task can fail the job loudly before materialization.
+    Every attempt also persists progress to the DB so polling clients
+    and page reloads do not appear stuck if the WebSocket event is missed.
     """
     ctx = {
         "pageIndex": index + 1,
         "totalPages": total,
         "allTitles": all_titles,
-        # previousSpeeches is empty under chord parallel — same
+        # previousSpeeches is empty under task-level generation — same
         # constraint as generate_full_scenes (Pass-A parity already
         # locked this).
         "previousSpeeches": [],
     }
+    media_config = _media_config_for_job_id(
+        job_id,
+        image_generation_enabled=image_generation_enabled,
+        video_generation_enabled=video_generation_enabled,
+    )
+    image_media_enabled = bool(
+        image_generation_enabled
+        and media_config is not None
+        and getattr(media_config, "image_provider", "disabled") != "disabled"
+    )
+    video_media_enabled = bool(
+        video_generation_enabled
+        and media_config is not None
+        and getattr(media_config, "video_provider", "disabled") != "disabled"
+    )
 
     async def _run():
         return await _generate_single_scene(
@@ -301,12 +322,18 @@ def scene_task(
             language_directive=language_directive,
             agents=agents,
             user_profile=user_profile,
+            teacher_context=teacher_context,
             ctx=ctx,
             stage_id=stage_id,
+            image_generation_enabled=image_media_enabled,
+            video_generation_enabled=video_media_enabled,
+            tenant_config=media_config,
         )
 
     try:
-        scene = asyncio.run(_run())
+        llm_config = _runtime_config_for_job_id(job_id, language_model_id)
+        with use_llm_runtime_config(llm_config):
+            scene = asyncio.run(_run())
     except Exception as exc:  # noqa: BLE001
         _logger.error(
             "scene_task[%d] for %r failed: %s",
@@ -317,13 +344,54 @@ def scene_task(
         scene = None
 
     completed = _incr_progress_counter(job_id)
-    _emit_progress(job_id, "scene_done", {
-        "completed": completed,
-        "total": total,
-        "index": index,
-    })
+    _persist_scene_progress(
+        job_id,
+        completed=completed,
+        total=total,
+        index=index,
+        scene_ok=scene is not None,
+    )
+    _emit_progress(
+        job_id,
+        "scene_done",
+        {
+            "completed": completed,
+            "total": total,
+            "index": index,
+        },
+    )
 
     return {"index": index, "scene": scene}
+
+
+def _runtime_config_for_job(job: MaicGenerationJob, language_model_id: str) -> dict | None:
+    if language_model_id in {"stub", "stub-director"}:
+        return None
+    return resolve_tenant_llm_runtime_config(
+        tenant_id=job.tenant_id,
+        requested=language_model_id,
+    )
+
+
+def _runtime_config_for_job_id(job_id: str, language_model_id: str) -> dict | None:
+    if language_model_id in {"stub", "stub-director"}:
+        return None
+    job = MaicGenerationJob.objects.only("tenant_id").get(pk=job_id)
+    return _runtime_config_for_job(job, language_model_id)
+
+
+def _media_config_for_job_id(
+    job_id: str,
+    *,
+    image_generation_enabled: bool,
+    video_generation_enabled: bool,
+) -> TenantAIConfig | None:
+    if not (image_generation_enabled or video_generation_enabled):
+        return None
+    job = MaicGenerationJob.objects.only("tenant_id").get(pk=job_id)
+    manager = TenantAIConfig.objects
+    qs = manager.all_tenants() if hasattr(manager, "all_tenants") else manager
+    return qs.filter(tenant_id=job.tenant_id).first()
 
 
 @shared_task(
@@ -336,16 +404,35 @@ def scenes_finalize_task(
     job_id: str,
     total: int,
 ) -> dict:
-    """Chord callback — collect scene_task results into ordered scene list.
+    """Collect scene_task results into ordered scene list.
 
-    Sorts by original outline index (chord results may arrive in any
-    order), drops any None scenes (failed scene_task runs), and hands
-    a flat scene list to finalize_task via the outer chain.
+    Sorts by original outline index and hands a flat scene list to
+    finalize_task. Any missing scene is a hard failure: a production
+    teacher classroom must not materialize with silently skipped pages.
     """
     scene_results = sorted(scene_results, key=lambda r: r["index"])
     scenes = [r["scene"] for r in scene_results if r.get("scene") is not None]
+    failed_indexes = [
+        int(r["index"]) + 1 for r in scene_results if r.get("scene") is None
+    ]
 
     job = MaicGenerationJob.objects.get(pk=job_id)
+    if failed_indexes:
+        job.progress = {
+            "stage": 2,
+            "completed": len(scenes),
+            "total": total,
+            "message": (
+                f"Generated {len(scenes)} of {total} scenes; failed scenes: "
+                f"{', '.join(str(i) for i in failed_indexes)}."
+            ),
+        }
+        job.save(update_fields=["progress", "updated_at"])
+        raise RuntimeError(
+            f"Generated {len(scenes)} of {total} scenes; "
+            f"failed scene indexes: {failed_indexes}"
+        )
+
     job.progress = {
         "stage": 2,
         "completed": len(scenes),
@@ -375,10 +462,24 @@ def finalize_task(stage2_payload: dict) -> dict:
     """
     job_id = stage2_payload["job_id"]
     scenes = stage2_payload["scenes"]
+    started = time.monotonic()
 
     job = MaicGenerationJob.objects.get(pk=job_id)
     existing_result = job.result or {}
     existing_result["scenes"] = scenes
+    artifact = materialize_generation_artifact(job, scenes)
+    if artifact:
+        existing_result.update(artifact)
+        existing_result["artifact"] = artifact
+    metrics = dict(existing_result.get("metrics") or {})
+    if stage2_payload.get("scene_ms") is not None:
+        metrics["scene_ms"] = int(stage2_payload["scene_ms"])
+    metrics["finalize_ms"] = int((time.monotonic() - started) * 1000)
+    if job.created_at:
+        metrics["total_ms"] = int(
+            (datetime.now(timezone.utc) - job.created_at).total_seconds() * 1000
+        )
+    existing_result["metrics"] = metrics
 
     job.status = MaicGenerationJob.STATUS_SUCCEEDED
     job.result = existing_result
@@ -387,19 +488,31 @@ def finalize_task(stage2_payload: dict) -> dict:
         "completed": len(scenes),
         "total": len(scenes),
         "message": "Generation complete!",
+        "metrics": metrics,
     }
     job.completed_at = datetime.now(timezone.utc)
     job.save(
         update_fields=[
-            "status", "result", "progress", "completed_at", "updated_at",
+            "status",
+            "result",
+            "progress",
+            "completed_at",
+            "updated_at",
         ]
     )
 
-    _emit_progress(job_id, "finalized", {
-        "sceneCount": len(scenes),
-    })
+    payload = {"sceneCount": len(scenes)}
+    if artifact:
+        payload.update(
+            {
+                "classroomId": artifact.get("classroomId"),
+                "contentId": artifact.get("contentId"),
+                "url": artifact.get("url"),
+            }
+        )
+    _emit_progress(job_id, "finalized", payload)
 
-    return {"job_id": job_id, "sceneCount": len(scenes)}
+    return {"job_id": job_id, "sceneCount": len(scenes), **artifact}
 
 
 # ── Failure path ──────────────────────────────────────────────────
@@ -439,6 +552,141 @@ def _progress_key(job_id: str) -> str:
     return f"maic:generation:progress:{job_id}"
 
 
+def _pdf_text_for_requirements(requirements: dict) -> str | None:
+    value = requirements.get("pdfText") or requirements.get("pdf_text")
+    if not isinstance(value, str):
+        return None
+    trimmed = value.strip()
+    return trimmed or None
+
+
+def _outline_options_for_requirements(requirements: dict) -> dict[str, Any]:
+    teacher_context = _scene_teacher_context_for_requirements(requirements)
+    options: dict[str, Any] = {
+        "scene_count": _target_scene_count_for_requirements(requirements),
+        "teacher_context": teacher_context,
+        "research_context": requirements.get("researchContext")
+        or requirements.get("research_context")
+        or "",
+        "image_generation_enabled": bool(
+            requirements.get("enableImageGeneration")
+            or requirements.get("enableImages")
+        ),
+        "video_generation_enabled": bool(
+            requirements.get("enableVideoGeneration")
+            or requirements.get("enableVideos")
+        ),
+    }
+    return options
+
+
+def _target_scene_count_for_requirements(requirements: dict) -> int | None:
+    try:
+        value = int(requirements.get("sceneCount") or requirements.get("scene_count"))
+    except (TypeError, ValueError):
+        value = 0
+    if value > 0:
+        return value
+
+    requirement = requirements.get("requirement")
+    if isinstance(requirement, str):
+        match = re.search(
+            r"\b(?:create|target|exactly)\s+exactly\s+(\d{1,2})\s+scenes?\b",
+            requirement,
+            re.IGNORECASE,
+        )
+        if not match:
+            match = re.search(
+                r"\b(?:create|target|exactly)\s+(\d{1,2})\s+scenes?\b",
+                requirement,
+                re.IGNORECASE,
+            )
+        if match:
+            return int(match.group(1))
+    return value if value > 0 else None
+
+
+def _teacher_planning_contract() -> str:
+    """Rules that turn Step 2 teacher guidance into generation constraints."""
+    return "\n".join(
+        [
+            "## Teacher Planning Contract",
+            "- Treat the teacher class context and class guide as the "
+            "controlling planning document for this classroom.",
+            "- Reflect grade level, subject, board, scene count, "
+            "misconceptions, checks, PBL/activity brief, and discussion "
+            "handoffs in scene choices.",
+            "- Do not quote private planning notes unless the note is clearly "
+            "student-facing.",
+            "- When a PBL scene is appropriate, the outline must include "
+            "pblConfig with projectTopic, projectDescription, targetSkills, "
+            "and issueCount.",
+            "- Put concrete handoff cues for agent discussion, teacher live "
+            "discussion, spotlight/laser focus, or whiteboard use in "
+            "descriptions and keyPoints.",
+        ]
+    )
+
+
+def _with_teacher_planning_contract(context: str) -> str:
+    text = context.strip()
+    if not text or "## Teacher Planning Contract" in text:
+        return text
+    return f"{_teacher_planning_contract()}\n\n{text}"
+
+
+def _scene_teacher_context_for_requirements(requirements: dict) -> str:
+    value = requirements.get("teacherContext")
+    if isinstance(value, str) and value.strip():
+        return _with_teacher_planning_contract(value)
+
+    lines: list[str] = []
+    class_frame = [
+        ("Grade level", requirements.get("gradeLevel") or requirements.get("grade_level")),
+        ("Subject", requirements.get("subject")),
+        (
+            "Syllabus/curriculum board",
+            requirements.get("syllabusBoard") or requirements.get("syllabus_board"),
+        ),
+        ("Target scene count", requirements.get("sceneCount")),
+    ]
+    clean_frame = [
+        f"- {label}: {raw}"
+        for label, raw in class_frame
+        if raw not in (None, "")
+    ]
+    if clean_frame:
+        lines.append("## Teacher Class Context")
+        lines.extend(clean_frame)
+
+    class_guide = requirements.get("classGuide") or requirements.get("class_guide")
+    if isinstance(class_guide, str) and class_guide.strip():
+        if lines:
+            lines.append("")
+        lines.append("## Teacher Class Guide")
+        lines.append(class_guide.strip())
+
+    return _with_teacher_planning_contract("\n".join(lines))
+
+
+def _scene_user_profile_for_requirements(requirements: dict) -> str:
+    parts: list[str] = []
+    user_profile = requirements.get("userProfile")
+    if isinstance(user_profile, str) and user_profile.strip():
+        parts.append(user_profile.strip())
+
+    teacher_context = _scene_teacher_context_for_requirements(requirements)
+    if teacher_context:
+        parts.append(
+            "## Teacher planning context\n"
+            "Use this for pacing, misconceptions, checks, discussion handoffs, "
+            "and agent choreography. Do not quote private planning notes "
+            "verbatim unless they are explicitly student-facing.\n"
+            f"{teacher_context}"
+        )
+    return "\n\n".join(parts)
+
+
 def _redis_connection():
     """Open a Redis connection from settings.REDIS_URL.
 
@@ -449,6 +697,7 @@ def _redis_connection():
     """
     import redis
     from django.conf import settings
+
     url = getattr(settings, "REDIS_URL", None) or "redis://localhost:6379/1"
     return redis.from_url(url)
 
@@ -465,9 +714,7 @@ def _reset_progress_counter(job_id: str) -> None:
         conn = _redis_connection()
         conn.delete(_progress_key(job_id))
     except Exception as exc:  # noqa: BLE001
-        _logger.warning(
-            "Redis counter reset failed for %s: %s", job_id, exc
-        )
+        _logger.warning("Redis counter reset failed for %s: %s", job_id, exc)
 
 
 def _incr_progress_counter(job_id: str) -> int:
@@ -489,10 +736,46 @@ def _incr_progress_counter(job_id: str) -> int:
         conn.expire(_progress_key(job_id), 3600)
         return int(value)
     except Exception as exc:  # noqa: BLE001
-        _logger.warning(
-            "Redis counter incr failed for %s: %s", job_id, exc
-        )
+        _logger.warning("Redis counter incr failed for %s: %s", job_id, exc)
         return 0
+
+
+def _persist_scene_progress(
+    job_id: str,
+    *,
+    completed: int,
+    total: int,
+    index: int,
+    scene_ok: bool,
+) -> None:
+    """Persist scene progress for polling clients and reload recovery."""
+    if completed <= 0:
+        return
+
+    message = (
+        f"Generated scene {completed} of {total}..."
+        if scene_ok
+        else f"Scene {index + 1} failed; continuing..."
+    )
+    try:
+        job = MaicGenerationJob.objects.get(pk=job_id)
+        current_completed = int((job.progress or {}).get("completed") or 0)
+        if current_completed > completed:
+            return
+        job.progress = {
+            "stage": 2,
+            "completed": completed,
+            "total": total,
+            "message": message,
+        }
+        job.save(update_fields=["progress", "updated_at"])
+    except Exception as exc:  # noqa: BLE001
+        _logger.warning(
+            "Scene progress persist failed for %s scene=%s: %s",
+            job_id,
+            index,
+            exc,
+        )
 
 
 def _emit_progress(job_id: str, event: str, payload: dict) -> None:
@@ -518,9 +801,7 @@ def _emit_progress(job_id: str, event: str, payload: dict) -> None:
             {"type": "generation.progress", "event": event, "payload": payload},
         )
     except Exception as exc:  # noqa: BLE001
-        _logger.warning(
-            "WS progress emit failed for %s/%s: %s", job_id, event, exc
-        )
+        _logger.warning("WS progress emit failed for %s/%s: %s", job_id, event, exc)
 
 
 def create_job_session(

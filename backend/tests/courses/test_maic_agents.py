@@ -523,15 +523,10 @@ def test_generate_agent_profiles_returns_valid(mock_llm, ai_config):
 
 @patch("apps.courses.maic_generation_service._call_llm")
 def test_generate_agent_profiles_retries_on_validation_error(mock_llm, ai_config):
-    # Use a mismatch the auto-fixer CAN'T repair (e.g. a male student
-    # sharing the male professor's voice — duplicate of a gender-
-    # matching voice). The auto-fix won't kick in because the genders
-    # already align per-agent; only the cross-roster duplicate check
-    # fails. That forces the LLM retry path to trigger.
+    # Use a mismatch the voice auto-fixer cannot repair: duplicate colors.
+    # That forces the LLM retry path to trigger.
     bad = sample_agents()
-    # agent-3 (Rohan, male, student) — steal agent-1's voice. Both are
-    # male so no gender mismatch exists for auto-fix to latch onto.
-    bad[2]["voiceId"] = bad[0]["voiceId"]
+    bad[2]["color"] = bad[0]["color"]
     good = sample_agents()
     mock_llm.side_effect = [
         json.dumps({"agents": bad}),
@@ -580,6 +575,207 @@ def test_generate_agent_profiles_auto_fixes_gender_mismatch(mock_llm, ai_config)
     by_name = {a["name"]: a["voiceId"] for a in result["agents"]}
     assert VOICE_BY_ID[by_name["Dr. Aarav Sharma"]]["gender"] == "male"
     assert VOICE_BY_ID[by_name["Ms. Priya Iyer"]]["gender"] == "female"
+
+
+@patch("apps.courses.maic_generation_service._call_llm")
+def test_generate_agent_profiles_repairs_role_count_drift(mock_llm, ai_config):
+    """Small local models can return useful agents with one role duplicated.
+
+    The product should preserve the roster and repair the role slot rather than
+    failing the teacher wizard before classroom generation starts.
+    """
+    bad = sample_agents()
+    bad[1]["role"] = "professor"  # duplicate professor, missing TA
+    bad[1]["name"] = "Prof. Priya Reddy"
+    mock_llm.return_value = json.dumps({"agents": bad})
+
+    result = generate_agent_profiles_json(
+        topic="Photosynthesis", language="en",
+        role_slots=[
+            {"role": "professor", "count": 1},
+            {"role": "teaching_assistant", "count": 1},
+            {"role": "student", "count": 1},
+        ],
+        config=ai_config,
+    )
+
+    assert mock_llm.call_count == 1
+    assert [agent["role"] for agent in result["agents"]] == [
+        "professor",
+        "teaching_assistant",
+        "student",
+    ]
+    assert result["agents"][1]["name"] == "Ms. Priya Reddy"
+    validate_agents(result["agents"], role_slots=[
+        {"role": "professor", "count": 1},
+        {"role": "teaching_assistant", "count": 1},
+        {"role": "student", "count": 1},
+    ])
+
+
+@patch("apps.courses.maic_generation_service._call_llm")
+def test_generate_agent_profiles_normalizes_role_aliases(mock_llm, ai_config):
+    bad = sample_agents()
+    bad[0]["role"] = "Prof"
+    bad[1]["role"] = "teachingassistant"
+    bad[2]["role"] = "learner"
+    mock_llm.return_value = json.dumps({"agents": bad})
+
+    result = generate_agent_profiles_json(
+        topic="Photosynthesis", language="en",
+        role_slots=[
+            {"role": "professor", "count": 1},
+            {"role": "teaching_assistant", "count": 1},
+            {"role": "student", "count": 1},
+        ],
+        config=ai_config,
+    )
+
+    assert mock_llm.call_count == 1
+    assert [agent["role"] for agent in result["agents"]] == [
+        "professor",
+        "teaching_assistant",
+        "student",
+    ]
+
+
+@patch("apps.courses.maic_generation_service._call_llm")
+def test_generate_agent_profiles_drops_extra_agents(mock_llm, ai_config):
+    bad = sample_agents() + [
+        {"id": "agent-4", "name": "Prof. Extra Rao", "role": "professor",
+         "avatar": "👩‍🎓", "color": "#166534",
+         "voiceId": "en-IN-NeerjaExpressiveNeural", "voiceProvider": "azure",
+         "personality": "Extra.", "expertise": "Extra.", "speakingStyle": "Extra."},
+    ]
+    mock_llm.return_value = json.dumps({"agents": bad})
+
+    result = generate_agent_profiles_json(
+        topic="Photosynthesis", language="en",
+        role_slots=[
+            {"role": "professor", "count": 1},
+            {"role": "teaching_assistant", "count": 1},
+            {"role": "student", "count": 1},
+        ],
+        config=ai_config,
+    )
+
+    assert mock_llm.call_count == 1
+    assert [agent["id"] for agent in result["agents"]] == ["agent-1", "agent-2", "agent-3"]
+    validate_agents(result["agents"], role_slots=[
+        {"role": "professor", "count": 1},
+        {"role": "teaching_assistant", "count": 1},
+        {"role": "student", "count": 1},
+    ])
+
+
+@patch("apps.courses.maic_generation_service._call_llm")
+def test_generate_agent_profiles_repairs_contract_after_persistent_llm_drift(
+    mock_llm,
+    ai_config,
+):
+    bad = [
+        {"id": "agent-1", "name": "Dr. Aarav Sharma", "role": "professor",
+         "avatar": "👨‍🏫", "color": "#4338CA",
+         "voiceId": "en-IN-AaravNeural", "voiceProvider": "azure",
+         "personality": "Patient.", "expertise": "Leads.", "speakingStyle": "Warm."},
+        {"id": "agent-2", "name": "Prof. Lakshmi Iyer", "role": "professor",
+         "avatar": "👨‍🏫", "color": "#4338CA",
+         "voiceId": "en-IN-NeerjaNeural", "voiceProvider": "azure",
+         "personality": "Kind.", "expertise": "Supports.", "speakingStyle": "Warm."},
+        {"id": "agent-3", "name": "Rohan Menon", "role": "student",
+         "avatar": "🙋‍♂️", "color": "#4338CA",
+         "voiceId": "en-IN-AaravNeural", "voiceProvider": "azure",
+         "personality": "Curious.", "expertise": "Asks.", "speakingStyle": "Friendly."},
+        {"id": "agent-4", "name": "Aarav Nair", "role": "student",
+         "avatar": "🙋‍♂️", "color": "#4338CA",
+         "voiceId": "en-IN-PrabhatNeural", "voiceProvider": "azure",
+         "personality": "Curious.", "expertise": "Asks.", "speakingStyle": "Friendly."},
+    ]
+    mock_llm.return_value = json.dumps({"agents": bad})
+    role_slots = [
+        {"role": "professor", "count": 1},
+        {"role": "teaching_assistant", "count": 1},
+        {"role": "student", "count": 2},
+    ]
+
+    result = generate_agent_profiles_json(
+        topic="Water quality",
+        language="en",
+        role_slots=role_slots,
+        config=ai_config,
+    )
+
+    assert mock_llm.call_count == 3
+    assert [agent["role"] for agent in result["agents"]] == [
+        "professor",
+        "teaching_assistant",
+        "student",
+        "student",
+    ]
+    validate_agents(result["agents"], role_slots=role_slots)
+    assert len({agent["voiceId"] for agent in result["agents"]}) == 4
+    assert len({agent["color"] for agent in result["agents"]}) == 4
+    assert len({agent["avatar"] for agent in result["agents"]}) == 4
+
+
+@patch("apps.courses.maic_generation_service._call_llm")
+def test_generate_agent_profiles_repairs_five_agent_voice_scarcity(
+    mock_llm,
+    ai_config,
+):
+    """The teacher wizard commonly asks for professor + TA + 3 students.
+
+    That exactly exhausts the five real Azure voices, so the repair pass must
+    allocate student voices before broader adult roles consume them.
+    """
+    bad = [
+        {"id": "agent-1", "name": "Dr. Lakshmi Iyer", "role": "professor",
+         "avatar": "👩‍🏫", "color": "#4338CA",
+         "voiceId": "hi-IN-SwaraNeural", "voiceProvider": "azure",
+         "personality": "Patient.", "expertise": "Leads.", "speakingStyle": "Warm."},
+        {"id": "agent-2", "name": "Rehaan Bose", "role": "teaching_assistant",
+         "avatar": "👨‍🎓", "color": "#0F766E",
+         "voiceId": "en-IN-NeerjaExpressiveNeural", "voiceProvider": "azure",
+         "personality": "Kind.", "expertise": "Supports.", "speakingStyle": "Warm."},
+        {"id": "agent-3", "name": "Meera Rao", "role": "student",
+         "avatar": "🙋‍♀️", "color": "#D97706",
+         "voiceId": "en-IN-NeerjaExpressiveNeural", "voiceProvider": "azure",
+         "personality": "Curious.", "expertise": "Asks.", "speakingStyle": "Friendly."},
+        {"id": "agent-4", "name": "Aashi Verma", "role": "student",
+         "avatar": "🙋‍♀️", "color": "#D97706",
+         "voiceId": "en-IN-NeerjaExpressiveNeural", "voiceProvider": "azure",
+         "personality": "Curious.", "expertise": "Asks.", "speakingStyle": "Friendly."},
+        {"id": "agent-5", "name": "Rohan Menon", "role": "student",
+         "avatar": "🙋‍♀️", "color": "#D97706",
+         "voiceId": "en-IN-AaravNeural", "voiceProvider": "azure",
+         "personality": "Curious.", "expertise": "Asks.", "speakingStyle": "Friendly."},
+    ]
+    mock_llm.return_value = json.dumps({"agents": bad})
+    role_slots = [
+        {"role": "professor", "count": 1},
+        {"role": "teaching_assistant", "count": 1},
+        {"role": "student", "count": 3},
+    ]
+
+    result = generate_agent_profiles_json(
+        topic="Water quality",
+        language="en",
+        role_slots=role_slots,
+        config=ai_config,
+    )
+
+    assert mock_llm.call_count == 3
+    assert [agent["role"] for agent in result["agents"]] == [
+        "professor",
+        "teaching_assistant",
+        "student",
+        "student",
+        "student",
+    ]
+    validate_agents(result["agents"], role_slots=role_slots)
+    assert len({agent["voiceId"] for agent in result["agents"]}) == 5
+    assert len({agent["color"] for agent in result["agents"]}) == 5
+    assert len({agent["avatar"] for agent in result["agents"]}) == 5
 
 
 # ---------------------------------------------------------------------------

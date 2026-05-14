@@ -37,9 +37,11 @@ def _unique_name(ext: str) -> str:
 
 def _extract_ext(filename: str) -> str:
     """Extract lowercase extension from filename."""
-    if '.' in (filename or ''):
-        return '.' + filename.rsplit('.', 1)[-1].lower()
-    return ''
+    basename = (filename or "").replace("\\", "/").rsplit("/", 1)[-1]
+    stem, dot, ext = basename.rpartition(".")
+    if not dot or not stem:
+        return ""
+    return f".{ext.lower()}"
 
 
 # -----------------------------------------------------------------------------

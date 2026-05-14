@@ -61,6 +61,10 @@ _MAX_PDF_CONTENT_CHARS: int = 50_000
 # requirement's language rather than defaulting to the training-
 # distribution prior.
 DEFAULT_LANGUAGE_DIRECTIVE = "Teach in the language that matches the user requirement."
+_OUTLINE_MIN_MAX_TOKENS = 2048
+_OUTLINE_MAX_MAX_TOKENS = 8192
+_OUTLINE_BASE_TOKENS = 1200
+_OUTLINE_TOKENS_PER_SCENE = 450
 
 
 # ── User requirements TypedDict ───────────────────────────────────
@@ -126,6 +130,7 @@ async def generate_scene_outlines_from_requirements(
     video_enabled = bool(options.get("video_generation_enabled", False))
     media_enabled = image_enabled or video_enabled
     has_source_images = bool(pdf_images and len(pdf_images) > 0)
+    target_scene_count = _target_scene_count(requirements, options)
 
     # User profile string (per upstream lines 81-84).
     user_profile_text = ""
@@ -184,6 +189,7 @@ async def generate_scene_outlines_from_requirements(
                 HumanMessage(content=prompts.user),
             ],
             language_model_id=language_model_id,
+            max_tokens=_outline_max_tokens(target_scene_count),
         )
     except Exception as exc:  # noqa: BLE001 — wrap into GenerationResult
         return {"success": False, "error": f"LLM call failed: {exc}"}
@@ -223,6 +229,32 @@ async def generate_scene_outlines_from_requirements(
         outline["order"] = index + 1
         enriched.append(outline)
 
+    # If the teacher wizard supplied an exact scene count, enforce it here.
+    # Extra outlines are usually the model following the generic duration
+    # heuristic instead of the explicit teacher count; trimming keeps the job
+    # bounded without inventing content. A shortfall fails loud so the caller
+    # can retry with a better provider/prompt instead of shipping a partial
+    # lesson by accident.
+    if target_scene_count is not None:
+        if len(enriched) < target_scene_count:
+            return {
+                "success": False,
+                "error": (
+                    f"Expected exactly {target_scene_count} scene outlines, "
+                    f"got {len(enriched)}"
+                ),
+            }
+        if len(enriched) > target_scene_count:
+            _logger.warning(
+                "Trimming outline response from %d to requested %d scenes",
+                len(enriched),
+                target_scene_count,
+            )
+            enriched = enriched[:target_scene_count]
+
+    if image_enabled:
+        enriched = _ensure_slide_media_generations(enriched)
+
     # Phase 4 stub: uniquify_media_element_ids is a no-op until
     # MAIC-423 (scene_builder) ships in Session 3. The call-site is
     # preserved for forward compatibility with Phase 5+ image-generation.
@@ -244,6 +276,94 @@ async def generate_scene_outlines_from_requirements(
             "outlines": result,
         },
     }
+
+
+def _target_scene_count(
+    requirements: UserRequirements,
+    options: dict[str, Any],
+) -> int | None:
+    raw = (
+        options.get("scene_count")
+        or options.get("sceneCount")
+        or requirements.get("sceneCount")  # type: ignore[typeddict-item]
+    )
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    if value < 1:
+        return None
+    return min(value, 20)
+
+
+def _ensure_slide_media_generations(
+    outlines: list[SceneOutline],
+) -> list[SceneOutline]:
+    """Guarantee one contextual image request for every slide scene.
+
+    Smaller local models often ignore the optional `mediaGenerations`
+    schema even when image generation is enabled. Without that placeholder,
+    slide-content generation either emits empty image boxes or no visual at
+    all. This repair keeps the pipeline production-real: the configured
+    provider still generates the media later, but it receives a concrete,
+    lesson-specific prompt.
+    """
+    repaired: list[SceneOutline] = []
+    for outline in outlines:
+        if outline.get("type") != "slide":
+            repaired.append(outline)
+            continue
+        media_generations = outline.get("mediaGenerations")
+        has_image = any(
+            isinstance(item, dict)
+            and item.get("type") == "image"
+            and str(item.get("elementId") or "").strip()
+            and str(item.get("prompt") or "").strip()
+            for item in (media_generations or [])
+        )
+        if has_image:
+            repaired.append(outline)
+            continue
+
+        next_outline = {**outline}
+        existing = media_generations if isinstance(media_generations, list) else []
+        next_outline["mediaGenerations"] = [
+            *existing,
+            {
+                "type": "image",
+                "elementId": f"gen_img_{_generate_outline_id()}",
+                "prompt": _media_prompt_for_outline(outline),
+                "aspectRatio": "16:9",
+            },
+        ]
+        repaired.append(next_outline)  # type: ignore[arg-type]
+    return repaired
+
+
+def _media_prompt_for_outline(outline: SceneOutline) -> str:
+    title = str(outline.get("title") or "Lesson visual").strip()
+    description = str(outline.get("description") or "").strip()
+    key_points = outline.get("keyPoints") or []
+    clean_points = [
+        str(point).strip()
+        for point in key_points
+        if str(point).strip()
+    ][:4]
+    focus = "; ".join(clean_points)
+    parts = [
+        f"Create a clear instructional visual for: {title}.",
+        description,
+        f"Show these lesson ideas: {focus}." if focus else "",
+        "Use an age-appropriate classroom diagram or realistic illustration, no decorative stock-photo style, no text-heavy poster.",
+    ]
+    return " ".join(part for part in parts if part).strip()[:900]
+
+
+def _outline_max_tokens(target_scene_count: int | None) -> int:
+    if target_scene_count is None:
+        return 4096
+    estimate = _OUTLINE_BASE_TOKENS + (target_scene_count * _OUTLINE_TOKENS_PER_SCENE)
+    return max(_OUTLINE_MIN_MAX_TOKENS, min(estimate, _OUTLINE_MAX_MAX_TOKENS))
 
 
 def apply_outline_fallbacks(

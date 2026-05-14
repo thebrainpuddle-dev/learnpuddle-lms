@@ -76,24 +76,21 @@ export const PresentationSpeechOverlay = React.memo<PresentationSpeechOverlayPro
             exit={{ y: bouncySwapOn ? 12 : 30, opacity: 0 }}
             transition={swapTransition}
             className={cn(
-              // Bottom-left of the stage, above the scene navigator and
-              // to the left of the center-anchored ProactiveCard, so the
-              // overlay never covers slide title/body content (prior
-              // top-left placement overlapped slide text). The stage has
-              // ~56px of bottom chrome (scene navigator) — bottom-16
-              // sits cleanly above it.
-              'absolute bottom-16 left-3 z-30',
+              // Top-left of the reserved stage chrome below the lesson
+              // surface. This keeps speaker status visible without covering
+              // slide title/body/image content on short viewports.
+              'absolute top-1 left-3 z-30',
               'flex items-center gap-2 sm:gap-3',
               'bg-black/70 backdrop-blur-md',
-              'rounded-2xl border border-white/10',
-              'px-2.5 py-2 sm:px-4 sm:py-3',
+              'rounded-xl border border-white/10',
+              'px-2 py-1.5 sm:px-3 sm:py-2',
               'max-w-[220px] sm:max-w-xs',
               'shadow-lg',
             )}
           >
             {/* Agent avatar (medium size) */}
             <div className="shrink-0">
-              <AgentAvatar agent={agent} isSpeaking={isSpeaking} size="md" />
+              <AgentAvatar agent={agent} isSpeaking={isSpeaking} size="sm" />
             </div>
 
             {/* Agent info + speech preview */}

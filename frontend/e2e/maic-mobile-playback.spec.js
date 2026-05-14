@@ -125,11 +125,11 @@ test.describe('MAIC Mobile Playback — TEST-P0-8 (iPhone 13 viewport)', () => {
     test.skip(!process.env.E2E_LIVE, 'Set E2E_LIVE=1 to run e2e tests');
 
     await page.goto(`${BASE_URL}/teacher/ai-classroom/${classroomId}`);
-    await page.waitForSelector('button[aria-label*="Start class"]', { timeout: 20_000 });
-    await page.locator('button[aria-label*="Start class"]').click();
+    await page.waitForSelector('button[aria-label^="Start playback"][aria-label*="scene"]', { timeout: 20_000 });
+    await page.locator('button[aria-label^="Start playback"][aria-label*="scene"]').click();
     // SPRINT-2-BATCH-9-F7: poll for Start Class overlay to disappear instead
     // of a fixed sleep — proves the consent gate transitioned cleanly.
-    await expect(page.locator('button[aria-label*="Start class"]')).not.toBeVisible({
+    await expect(page.locator('button[aria-label^="Start playback"][aria-label*="scene"]')).not.toBeVisible({
       timeout: 10_000,
     });
 

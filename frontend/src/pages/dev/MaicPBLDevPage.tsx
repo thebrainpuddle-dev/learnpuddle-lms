@@ -6,12 +6,11 @@
  * /ws/maic/pbl/<id>/). Two entry points:
  *
  *   /dev/pbl/<sessionId>            — load an existing MaicPBLSession
- *   /dev/pbl/<sessionId>?model=...  — override the chat model id
  *
  * To create a fresh session for testing:
  *   curl -X POST -H 'Authorization: Bearer <jwt>' \
  *        -H 'Content-Type: application/json' \
- *        -d '{"topic":"Fractions","languageModelId":"claude-x"}' \
+ *        -d '{"topic":"Fractions"}' \
  *        http://localhost:8000/api/maic/v2/pbl/projects/
  * The response payload includes session_id; paste it into the URL.
  *
@@ -77,7 +76,7 @@ export default function MaicPBLDevPage() {
     let cancelled = false;
     setLoadError(null);
     api
-      .get<PBLSessionResponse>(`/api/maic/v2/pbl/projects/${sessionId}/`)
+      .get<PBLSessionResponse>(`/maic/v2/pbl/projects/${sessionId}/`)
       .then((res) => {
         if (cancelled) return;
         setData(res.data);
@@ -107,7 +106,7 @@ export default function MaicPBLDevPage() {
         <pre className="mt-3 bg-gray-50 border border-gray-200 rounded p-3 text-xs overflow-x-auto">
 {`curl -X POST -H 'Authorization: Bearer <jwt>' \\
      -H 'Content-Type: application/json' \\
-     -d '{"topic":"Fractions","languageModelId":"claude-x"}' \\
+     -d '{"topic":"Fractions"}' \\
      http://localhost:8000/api/maic/v2/pbl/projects/`}
         </pre>
       </div>
@@ -136,8 +135,6 @@ export default function MaicPBLDevPage() {
     return <div className="p-8 text-sm text-gray-600">Loading PBL session…</div>;
   }
 
-  const modelOverride = searchParams.get('model') ?? 'claude-x';
-
   const pblContent: MAICPBLContent = {
     type: 'pbl',
     projectConfig: data.project_config,
@@ -152,15 +149,12 @@ export default function MaicPBLDevPage() {
         <span>status: {data.status}</span>
         <span className="text-gray-400">•</span>
         <span>language: {data.language}</span>
-        <span className="text-gray-400">•</span>
-        <span>model: {modelOverride}</span>
       </div>
       <div className="flex-1 min-h-0">
         <PBLRenderer
           content={pblContent}
           sceneId={`pbl-${data.session_id}`}
           pblSessionId={data.session_id}
-          languageModelId={modelOverride}
         />
       </div>
     </div>

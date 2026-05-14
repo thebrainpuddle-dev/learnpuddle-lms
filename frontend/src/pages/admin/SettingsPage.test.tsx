@@ -213,7 +213,7 @@ function renderAt(tab?: string) {
   return render(
     <QueryClientProvider client={queryClient}>
       <ToastProvider>
-        <MemoryRouter initialEntries={[initialPath]}>
+        <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={[initialPath]}>
           <SettingsPage />
         </MemoryRouter>
       </ToastProvider>

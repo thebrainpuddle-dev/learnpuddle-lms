@@ -204,6 +204,7 @@ Use `pbl` type when the course involves complex, multi-step project work that be
 - PBL is for substantial project work - do NOT use for simple exercises or single-step tasks
 - The `pblConfig.targetSkills` should list 2-5 specific skills students will develop
 - The `pblConfig.issueCount` should typically be 2-5 issues
+- When teacher planning context includes a PBL/activity brief, use it to shape the `pblConfig.projectDescription` with roles, deliverable, constraints, success criteria, and any misconception/checkpoint requirements.
 
 ---
 
@@ -326,6 +327,28 @@ Rules:
 }
 ```
 
+{{#if imageEnabled}}
+### mediaGenerations Structure
+
+For every `"slide"` scene, include one image media request that is specific
+to the scene's teaching purpose. Generic prompts such as "classroom",
+"education", "diagram", or the scene title alone are invalid.
+
+```json
+"mediaGenerations": [
+  {
+    "type": "image",
+    "elementId": "gen_img_scene_1",
+    "prompt": "Clear Grade 6 science diagram of chloroplasts in a leaf cell absorbing sunlight, with water and carbon dioxide inputs shown visually",
+    "aspectRatio": "16:9"
+  }
+]
+```
+
+Use `aspectRatio: "16:9"` for slide visuals unless the requirement asks
+for a different shape.
+{{/if}}
+
 ---
 
 ## Important Reminders
@@ -346,3 +369,6 @@ Rules:
 9. **Language**: Infer from the user's requirement text and context. Output all scene content in the inferred language.
 10. Regardless of information completeness, always output conforming JSON - do not ask questions or request more information
 11. **No teacher identity on slides**: Scene titles and keyPoints must be neutral and topic-focused. Never include the teacher's name or role (e.g., avoid "Teacher Wang's Tips", "Teacher's Wishes"). Use generic labels like "Tips", "Summary", "Key Takeaways" instead.
+{{#if imageEnabled}}
+12. Every `slide` scene must include a concrete `mediaGenerations` image request. The prompt must describe what learners should inspect, not decorative mood.
+{{/if}}

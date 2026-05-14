@@ -4,7 +4,7 @@ import {
   getBookDemoUrl,
   isExternalHttpUrl,
   useInlineBookDemo,
-} from '../../config/platform';
+} from '../../../config/platform';
 import {
   AcademicCapIcon,
   ChartBarIcon,
@@ -205,6 +205,726 @@ const statsItems = [
   { value: '24/7', label: 'Platform availability' },
   { value: '100%', label: 'Audit-ready evidence' },
 ];
+
+type LiveDemoKey = 'schools' | 'corporate' | 'fitness';
+
+type LiveDemoInputState = {
+  organization: string;
+  audience: string;
+  target: string;
+  source: string;
+};
+
+type LiveDemoConfig = {
+  key: LiveDemoKey;
+  label: string;
+  eyebrow: string;
+  title: string;
+  description: string;
+  audienceLabel: string;
+  targetLabel: string;
+  sourceLabel: string;
+  previewBadge: string;
+  accent: string;
+};
+
+type LiveDemoLayerId = 'source' | 'pathway' | 'practice' | 'evidence';
+
+type LiveDemoExplorerLayer = {
+  id: LiveDemoLayerId;
+  label: string;
+  eyebrow: string;
+  title: string;
+  description: string;
+  metric: string;
+  metricLabel: string;
+};
+
+const liveDemoTabs: LiveDemoConfig[] = [
+  {
+    key: 'schools',
+    label: 'Schools LMS',
+    eyebrow: 'Faculty development',
+    title: 'Build a school PD portal from a real training brief.',
+    description: 'Type a school program, CPD mandate, or workshop idea and watch the portal preview reshape around faculty learning.',
+    audienceLabel: 'Cohort or role',
+    targetLabel: 'CPD hour target',
+    sourceLabel: 'Training brief, policy, or workshop notes',
+    previewBadge: 'School learning portal',
+    accent: '#E8623A',
+  },
+  {
+    key: 'corporate',
+    label: 'Corporate L&D',
+    eyebrow: 'Workforce enablement',
+    title: 'Turn internal knowledge into role-based training.',
+    description: 'Draft an onboarding, compliance, sales, or SOP rollout and see the enterprise learning view update live.',
+    audienceLabel: 'Role or department',
+    targetLabel: 'Due window',
+    sourceLabel: 'SOP, policy, product, or onboarding notes',
+    previewBadge: 'Enterprise academy',
+    accent: '#3156D4',
+  },
+  {
+    key: 'fitness',
+    label: 'Gym & Nutrition',
+    eyebrow: 'Wellness coaching',
+    title: 'Preview a branded gym learning and nutrition tracker.',
+    description: 'Set a member goal, calorie target, and training focus to see how LearnPuddle can support fitness education.',
+    audienceLabel: 'Member group',
+    targetLabel: 'Daily calorie target',
+    sourceLabel: 'Training, nutrition, or habit focus',
+    previewBadge: 'Fitness learning hub',
+    accent: '#1CA978',
+  },
+];
+
+const liveDemoDefaults: Record<LiveDemoKey, LiveDemoInputState> = {
+  schools: {
+    organization: 'Keystone International School',
+    audience: 'Grade 6-10 faculty',
+    target: '50 CPD hours',
+    source:
+      'Run a teacher development pathway on assessment moderation, AI classroom practice, student feedback, and IB evidence logs.',
+  },
+  corporate: {
+    organization: 'Northstar Operations',
+    audience: 'Frontline managers',
+    target: '21 days',
+    source:
+      'Launch SOP certification for new branch managers covering service standards, safety checks, escalation, and product updates.',
+  },
+  fitness: {
+    organization: 'Pulse Performance Gym',
+    audience: 'Strength members',
+    target: '2,250 kcal',
+    source:
+      'Coach members through strength basics, protein planning, daily calorie awareness, hydration, recovery, and weekly progress habits.',
+  },
+};
+
+const liveDemoMetricLabels: Record<LiveDemoKey, string[]> = {
+  schools: ['Completion', 'CPD evidence', 'Departments'],
+  corporate: ['Readiness', 'SOP checks', 'Teams'],
+  fitness: ['Adherence', 'Calories', 'Streak'],
+};
+
+const liveDemoActionCopy: Record<LiveDemoKey, string[]> = {
+  schools: ['Generate quiz from workshop transcript', 'Send reminder to faculty behind target', 'Export CPD evidence report'],
+  corporate: ['Create manager checklist', 'Schedule renewal reminder', 'Export compliance packet'],
+  fitness: ['Log daily nutrition lesson', 'Adjust calorie habit prompt', 'Issue weekly progress badge'],
+};
+
+const heroProofItems = [
+  { value: '10x', label: 'faster course rollout from existing content' },
+  { value: '91%', label: 'guided completion benchmark for cohorts' },
+  { value: '1 platform', label: 'for schools, teams, branches, and academies' },
+];
+
+const trainingTemplateCards = [
+  {
+    key: 'education',
+    icon: AcademicCapIcon,
+    title: 'Education',
+    description: 'CPD hours, IB certifications, faculty development, curriculum rollout, and department reports.',
+    chips: ['CPD tracking', 'HOD views', 'Certificates'],
+  },
+  {
+    key: 'corporate',
+    icon: BuildingOfficeIcon,
+    title: 'Corporate L&D',
+    description: 'Onboarding, compliance, sales enablement, role-based pathways, and manager completion controls.',
+    chips: ['SOPs', 'Renewals', 'Evidence'],
+  },
+  {
+    key: 'manufacturing',
+    icon: WrenchScrewdriverIcon,
+    title: 'Manufacturing',
+    description: 'Safety SOPs, machine readiness, supervisor sign-off, recertification cycles, and floor-level visibility.',
+    chips: ['Safety', 'Readiness', 'Sign-off'],
+  },
+  {
+    key: 'healthcare',
+    icon: HeartIcon,
+    title: 'Healthcare',
+    description: 'Clinical protocols, recurring certifications, multi-role competency checks, and compliance reminders.',
+    chips: ['Protocols', 'Renewals', 'Roles'],
+  },
+  {
+    key: 'hospitality',
+    icon: StarIcon,
+    title: 'Hospitality',
+    description: 'Guest experience standards, outlet launch onboarding, service drills, and branch-level scorecards.',
+    chips: ['Frontline', 'Branches', 'Service'],
+  },
+  {
+    key: 'academies',
+    icon: RocketLaunchIcon,
+    title: 'Academies',
+    description: 'Branded learner journeys, cohorts, instructor workflows, paid programs, and certification tracks.',
+    chips: ['Cohorts', 'Programs', 'Progress'],
+  },
+];
+
+const liveDemoStopWords = new Set([
+  'about',
+  'after',
+  'along',
+  'also',
+  'and',
+  'covering',
+  'daily',
+  'from',
+  'into',
+  'learning',
+  'member',
+  'members',
+  'pathway',
+  'through',
+  'training',
+  'with',
+]);
+
+function getLiveDemoConfig(key: LiveDemoKey): LiveDemoConfig {
+  return liveDemoTabs.find((item) => item.key === key) ?? liveDemoTabs[0];
+}
+
+function getSourceKeywords(source: string): string[] {
+  const words = source
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, ' ')
+    .split(/\s+/)
+    .map((word) => word.trim())
+    .filter((word) => word.length > 3 && !liveDemoStopWords.has(word));
+
+  return Array.from(new Set(words)).slice(0, 4);
+}
+
+function titleCase(value: string): string {
+  return value
+    .split(/[\s-]+/)
+    .filter(Boolean)
+    .map((word) => `${word.charAt(0).toUpperCase()}${word.slice(1)}`)
+    .join(' ');
+}
+
+function getLiveDemoModules(key: LiveDemoKey, input: LiveDemoInputState, keywords: string[]): string[] {
+  const first = titleCase(keywords[0] ?? 'Foundation');
+  const second = titleCase(keywords[1] ?? (key === 'fitness' ? 'Nutrition' : 'Practice'));
+  const third = titleCase(keywords[2] ?? (key === 'corporate' ? 'Certification' : 'Evidence'));
+  const audience = input.audience.trim() || getLiveDemoConfig(key).audienceLabel;
+
+  if (key === 'fitness') {
+    return [
+      `${first} basics for ${audience}`,
+      `${second} plan and daily calories`,
+      `${third} habit check-in`,
+    ];
+  }
+
+  if (key === 'corporate') {
+    return [
+      `${first} onboarding path`,
+      `${second} SOP scenario checks`,
+      `${third} sign-off workflow`,
+    ];
+  }
+
+  return [
+    `${first} workshop module`,
+    `${second} classroom practice`,
+    `${third} and CPD reflection`,
+  ];
+}
+
+function getLiveDemoMetricValues(key: LiveDemoKey, input: LiveDemoInputState, source: string): string[] {
+  const completion = `${Math.min(96, 82 + Math.floor(source.length / 42))}%`;
+
+  if (key === 'fitness') {
+    return [completion, input.target.trim() || '2,200 kcal', '12 days'];
+  }
+
+  if (key === 'corporate') {
+    return [completion, '8 checks', input.audience.trim().split(/\s+/)[0] || '4 roles'];
+  }
+
+  return [completion, input.target.trim() || '50 hours', '6 teams'];
+}
+
+function getLiveDemoExplorerLayers(
+  key: LiveDemoKey,
+  input: LiveDemoInputState,
+  modules: string[],
+  metricValues: string[],
+  keywords: string[],
+): LiveDemoExplorerLayer[] {
+  const config = getLiveDemoConfig(key);
+  const audience = input.audience.trim() || config.audienceLabel;
+  const target = input.target.trim() || config.targetLabel;
+  const source = input.source.trim() || 'Type a brief to reshape this portal preview.';
+  const signal = titleCase(keywords[0] ?? (key === 'fitness' ? 'Nutrition' : key === 'corporate' ? 'SOP' : 'CPD'));
+  const secondSignal = titleCase(keywords[1] ?? (key === 'fitness' ? 'Recovery' : key === 'corporate' ? 'Readiness' : 'Classroom'));
+
+  if (key === 'fitness') {
+    return [
+      {
+        id: 'source',
+        label: 'Brief',
+        eyebrow: 'Input layer',
+        title: `${signal} coaching brief`,
+        description: source,
+        metric: target,
+        metricLabel: 'daily target',
+      },
+      {
+        id: 'pathway',
+        label: 'Plan',
+        eyebrow: 'Generated pathway',
+        title: modules[0] ?? 'Strength member basics',
+        description: `A member-facing path for ${audience} with lessons, check-ins, and habit prompts.`,
+        metric: `${modules.length}`,
+        metricLabel: 'learning blocks',
+      },
+      {
+        id: 'practice',
+        label: 'Habits',
+        eyebrow: 'Daily coaching',
+        title: `${secondSignal} habit loop`,
+        description: 'Calories, protein, hydration, recovery, and weekly reflection stay inside the same branded learning hub.',
+        metric: '12',
+        metricLabel: 'day streak',
+      },
+      {
+        id: 'evidence',
+        label: 'Progress',
+        eyebrow: 'Outcome proof',
+        title: 'Trainer-ready progress view',
+        description: 'Coaches see adherence, lesson completion, and nutrition consistency without spreadsheet follow-up.',
+        metric: metricValues[0],
+        metricLabel: 'adherence',
+      },
+    ];
+  }
+
+  if (key === 'corporate') {
+    return [
+      {
+        id: 'source',
+        label: 'SOP',
+        eyebrow: 'Input layer',
+        title: `${signal} source pack`,
+        description: source,
+        metric: '4',
+        metricLabel: 'knowledge sources',
+      },
+      {
+        id: 'pathway',
+        label: 'Path',
+        eyebrow: 'Generated pathway',
+        title: modules[0] ?? 'Manager onboarding path',
+        description: `Role-based modules for ${audience} with scenario checks and manager sign-off.`,
+        metric: `${modules.length}`,
+        metricLabel: 'modules',
+      },
+      {
+        id: 'practice',
+        label: 'Checks',
+        eyebrow: 'Practice layer',
+        title: `${secondSignal} scenario checks`,
+        description: 'Learners answer branch-level cases, complete checklists, and trigger reminders before deadlines drift.',
+        metric: metricValues[1],
+        metricLabel: 'SOP checks',
+      },
+      {
+        id: 'evidence',
+        label: 'Audit',
+        eyebrow: 'Evidence layer',
+        title: 'Compliance packet',
+        description: 'Every completion, quiz score, checklist, and manager action is ready for audit and leadership review.',
+        metric: metricValues[0],
+        metricLabel: 'readiness',
+      },
+    ];
+  }
+
+  return [
+    {
+      id: 'source',
+      label: 'Brief',
+      eyebrow: 'Input layer',
+      title: `${signal} training brief`,
+      description: source,
+      metric: target,
+      metricLabel: 'CPD goal',
+    },
+    {
+      id: 'pathway',
+      label: 'Path',
+      eyebrow: 'Generated pathway',
+      title: modules[0] ?? 'Faculty workshop module',
+      description: `Structured faculty development for ${audience}, with video, notes, quiz, and reflection evidence.`,
+      metric: `${modules.length}`,
+      metricLabel: 'modules',
+    },
+    {
+      id: 'practice',
+      label: 'Teach',
+      eyebrow: 'Classroom practice',
+      title: `${secondSignal} application loop`,
+      description: 'Teachers move from lesson content into classroom practice, discussion, quiz checks, and CPD reflection.',
+      metric: '5',
+      metricLabel: 'quiz prompts',
+    },
+    {
+      id: 'evidence',
+      label: 'Proof',
+      eyebrow: 'Evidence layer',
+      title: 'Principal and HOD evidence view',
+      description: 'Completion, reflections, department progress, and CPD reports are visible without manual chasing.',
+      metric: metricValues[0],
+      metricLabel: 'completion',
+    },
+  ];
+}
+
+function CourseBuilderPreview() {
+  return (
+    <div className="lp-course-builder" aria-label="AI course builder preview">
+      <div className="lp-course-builder-bar">
+        <span />
+        <span />
+        <span />
+        <strong>learnpuddle.com/course-builder</strong>
+      </div>
+
+      <div className="lp-course-builder-source">
+        <p>Source knowledge</p>
+        {[
+          ['VID', 'Workshop recording', '47 min video'],
+          ['PDF', 'Policy handbook', '32 pages'],
+          ['SOP', 'Safety checklist', 'Plant ops'],
+        ].map(([tag, title, meta]) => (
+          <div key={tag} className="lp-source-file">
+            <span>{tag}</span>
+            <div>
+              <b>{title}</b>
+              <small>{meta}</small>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="lp-course-builder-workspace">
+        <div className="lp-builder-heading">
+          <div>
+            <h2>AI builds the learning path.</h2>
+            <p>Modules, transcripts, quizzes, translations, and certificates from the work you already have.</p>
+          </div>
+          <span>Generating</span>
+        </div>
+
+        <div className="lp-builder-flow">
+          {[
+            ['1', 'Upload', 'Video, PDF, DOCX, PPTX, or SOP.'],
+            ['2', 'Structure', 'Modules, outcomes, deadlines, cohorts.'],
+            ['3', 'Teach', 'Captions, lesson chat, notes, quizzes.'],
+            ['4', 'Prove', 'Reports, skills, certificates, audit trail.'],
+          ].map(([step, title, body]) => (
+            <div key={step} className="lp-builder-step">
+              <i>{step}</i>
+              <b>{title}</b>
+              <span>{body}</span>
+            </div>
+          ))}
+        </div>
+
+        <div className="lp-builder-live-row">
+          <div className="lp-builder-video">
+            <div className="lp-builder-play">▶</div>
+            <div>
+              <b>Lesson: Assessment moderation</b>
+              <span />
+            </div>
+          </div>
+          <div className="lp-builder-chat">
+            <p>Ask this lesson: "Explain moderation for new teachers."</p>
+            <p>Generate 5 quiz questions from this section.</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="lp-course-builder-path">
+        <p>Published path</p>
+        {[
+          ['Module 1: Foundations', 'Video + transcript'],
+          ['Module 2: Practice', 'Quiz + reflection'],
+          ['Certificate', 'Auto-issued at 80%'],
+        ].map(([title, meta]) => (
+          <div key={title} className="lp-published-module">
+            <b>{title}</b>
+            <small>{meta}</small>
+            <span>Ready</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function LiveTemplateStudio({
+  activeDemo,
+  liveDemoInput,
+  onSelectDemo,
+  onUpdateField,
+}: {
+  activeDemo: LiveDemoKey;
+  liveDemoInput: LiveDemoInputState;
+  onSelectDemo: (key: LiveDemoKey) => void;
+  onUpdateField: (field: keyof LiveDemoInputState, value: string) => void;
+}) {
+  const config = getLiveDemoConfig(activeDemo);
+  const keywords = getSourceKeywords(liveDemoInput.source);
+  const modules = getLiveDemoModules(activeDemo, liveDemoInput, keywords);
+  const metricValues = getLiveDemoMetricValues(activeDemo, liveDemoInput, liveDemoInput.source);
+  const metricLabels = liveDemoMetricLabels[activeDemo];
+  const explorerLayers = getLiveDemoExplorerLayers(activeDemo, liveDemoInput, modules, metricValues, keywords);
+  const [activeLayerId, setActiveLayerId] = React.useState<LiveDemoLayerId>('pathway');
+  const activeLayer = explorerLayers.find((layer) => layer.id === activeLayerId) ?? explorerLayers[1] ?? explorerLayers[0]!;
+  const organization = liveDemoInput.organization.trim() || 'Your organization';
+  const audience = liveDemoInput.audience.trim() || config.audienceLabel;
+  const target = liveDemoInput.target.trim() || config.targetLabel;
+  const sourcePreview = liveDemoInput.source.trim() || 'Type a brief to reshape this portal preview.';
+  const modelTitle =
+    activeDemo === 'fitness'
+      ? 'Wellness learning model'
+      : activeDemo === 'corporate'
+        ? 'Enterprise academy model'
+        : 'Faculty development model';
+
+  return (
+    <div className={`lp-live-demo-shell lp-live-demo-${activeDemo}`}>
+      <div className="lp-live-demo-input-panel">
+        <div className="lp-live-demo-tabs" role="tablist" aria-label="Live demo templates">
+          {liveDemoTabs.map((item) => (
+            <button
+              key={item.key}
+              type="button"
+              role="tab"
+              aria-selected={activeDemo === item.key}
+              className={`lp-live-demo-tab ${activeDemo === item.key ? 'is-active' : ''}`}
+              onClick={() => onSelectDemo(item.key)}
+              style={{ '--demo-accent': item.accent } as React.CSSProperties}
+            >
+              <span>{item.eyebrow}</span>
+              {item.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="lp-live-demo-editor">
+          <div className="lp-live-demo-editor-head">
+            <p className="lp-card-eyebrow">{config.eyebrow}</p>
+            <h3>{config.title}</h3>
+            <p>{config.description}</p>
+          </div>
+
+          <label className="lp-live-field">
+            <span>Organization name</span>
+            <input
+              type="text"
+              aria-label="Organization name"
+              value={liveDemoInput.organization}
+              onChange={(event) => onUpdateField('organization', event.target.value)}
+            />
+          </label>
+
+          <div className="lp-live-field-row">
+            <label className="lp-live-field">
+              <span>{config.audienceLabel}</span>
+              <input
+                type="text"
+                aria-label={config.audienceLabel}
+                value={liveDemoInput.audience}
+                onChange={(event) => onUpdateField('audience', event.target.value)}
+              />
+            </label>
+            <label className="lp-live-field">
+              <span>{config.targetLabel}</span>
+              <input
+                type="text"
+                aria-label={config.targetLabel}
+                value={liveDemoInput.target}
+                onChange={(event) => onUpdateField('target', event.target.value)}
+              />
+            </label>
+          </div>
+
+          <label className="lp-live-field">
+            <span>{config.sourceLabel}</span>
+            <textarea
+              aria-label={config.sourceLabel}
+              value={liveDemoInput.source}
+              onChange={(event) => onUpdateField('source', event.target.value)}
+              rows={5}
+            />
+          </label>
+
+          <div className="lp-live-token-row" aria-label="Detected learning signals">
+            {(keywords.length ? keywords : ['course', 'quiz', 'insight']).map((keyword) => (
+              <span key={keyword}>{titleCase(keyword)}</span>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="lp-live-preview-panel" style={{ '--demo-accent': config.accent } as React.CSSProperties}>
+        <div className="lp-live-browser-bar">
+          <span />
+          <span />
+          <span />
+          <strong>{organization.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'tenant'}.learnpuddle.com</strong>
+        </div>
+
+        <div className="lp-live-preview-body">
+          <div className="lp-live-preview-top">
+            <div>
+              <p>{config.previewBadge}</p>
+              <h3>{organization}</h3>
+              <span>{audience} · {target}</span>
+            </div>
+            <div className="lp-live-preview-mark">
+              {activeDemo === 'schools' ? 'PD' : activeDemo === 'corporate' ? 'L&D' : 'GYM'}
+            </div>
+          </div>
+
+          <div className="lp-live-metrics">
+            {metricLabels.map((label, index) => (
+              <div key={label} className="lp-live-metric">
+                <strong>{metricValues[index]}</strong>
+                <span>{label}</span>
+              </div>
+            ))}
+          </div>
+
+          <div className="lp-live-forge-layout">
+            <section className="lp-live-forge-stage" aria-label="Interactive learning model explorer">
+              <div className="lp-live-forge-toolbar">
+                <div>
+                  <span>Learning Forge</span>
+                  <strong>{modelTitle}</strong>
+                </div>
+                <small>{keywords.length ? `${keywords.length} signals detected` : 'Ready for your brief'}</small>
+              </div>
+
+              <div className="lp-live-forge-body">
+                <div className="lp-live-layer-list" aria-label="Learning model layers">
+                  {explorerLayers.map((layer) => (
+                    <button
+                      key={layer.id}
+                      type="button"
+                      className={`lp-live-layer-button ${activeLayer.id === layer.id ? 'is-active' : ''}`}
+                      onClick={() => setActiveLayerId(layer.id)}
+                      aria-pressed={activeLayer.id === layer.id}
+                    >
+                      <span>{layer.label}</span>
+                      <strong>{layer.title}</strong>
+                    </button>
+                  ))}
+                </div>
+
+                <div className="lp-live-orbit-stage">
+                  <div className="lp-live-orbit" aria-label="Learning layer map">
+                    <span className="lp-live-orbit-ring lp-live-orbit-ring-a" />
+                    <span className="lp-live-orbit-ring lp-live-orbit-ring-b" />
+                    <span className="lp-live-orbit-ring lp-live-orbit-ring-c" />
+                    <div className="lp-live-orbit-core">
+                      <b>{keywords[0] ? titleCase(keywords[0]) : activeDemo === 'fitness' ? 'Wellness' : activeDemo === 'corporate' ? 'SOP' : 'CPD'}</b>
+                      <span>{organization}</span>
+                    </div>
+                    {explorerLayers.map((layer) => (
+                      <button
+                        key={layer.id}
+                        type="button"
+                        className={`lp-live-orbit-node lp-live-orbit-node-${layer.id} ${activeLayer.id === layer.id ? 'is-active' : ''}`}
+                        onClick={() => setActiveLayerId(layer.id)}
+                        aria-label={`Focus ${layer.label} layer`}
+                      >
+                        <span />
+                        <b>{layer.label}</b>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <article className="lp-live-layer-detail">
+                <div>
+                  <p>{activeLayer.eyebrow}</p>
+                  <h4>{activeLayer.title}</h4>
+                  <span>{activeLayer.description}</span>
+                </div>
+                <aside>
+                  <strong>{activeLayer.metric}</strong>
+                  <span>{activeLayer.metricLabel}</span>
+                </aside>
+              </article>
+            </section>
+
+            <aside className="lp-live-stack-panel">
+              <div className="lp-live-course-list">
+                <div className="lp-live-panel-label">Generated pathway</div>
+                {modules.map((module, index) => (
+                  <article key={module} className="lp-live-module-card">
+                    <span>{String(index + 1).padStart(2, '0')}</span>
+                    <div>
+                      <h4>{module}</h4>
+                      <p>{index === 0 ? 'Video, notes, and discussion' : index === 1 ? 'Quiz and practical checklist' : 'Certificate-ready evidence'}</p>
+                    </div>
+                  </article>
+                ))}
+              </div>
+
+              <div className="lp-live-action-card">
+                <div className="lp-live-panel-label">
+                  {activeDemo === 'fitness' ? 'Nutrition and habit layer' : 'Action queue'}
+                </div>
+                {activeDemo === 'fitness' ? (
+                  <div className="lp-live-nutrition">
+                    <div>
+                      <strong>{target}</strong>
+                      <span>Daily calorie plan</span>
+                    </div>
+                    <div>
+                      <strong>140g</strong>
+                      <span>Protein target</span>
+                    </div>
+                    <div>
+                      <strong>3.2L</strong>
+                      <span>Hydration reminder</span>
+                    </div>
+                  </div>
+                ) : (
+                  <ul className="lp-live-action-list">
+                    {liveDemoActionCopy[activeDemo].map((action) => (
+                      <li key={action}>
+                        <CheckCircleIcon className="lp-live-action-icon" aria-hidden="true" />
+                        {action}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <div className="lp-live-source-card">
+                  <span>Source signal</span>
+                  <p>{sourcePreview}</p>
+                </div>
+              </div>
+            </aside>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 declare global {
   interface CalApi {
@@ -602,6 +1322,9 @@ export const ProductLandingPage: React.FC = () => {
   const [showCalModal, setShowCalModal] = React.useState(false);
   const [calLoadError, setCalLoadError] = React.useState('');
   const [activeTab, setActiveTab] = React.useState<SolutionKey>('schools');
+  const [activeLiveDemo, setActiveLiveDemo] = React.useState<LiveDemoKey>('schools');
+  const [liveDemoInputs, setLiveDemoInputs] =
+    React.useState<Record<LiveDemoKey, LiveDemoInputState>>(liveDemoDefaults);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = React.useState(false);
 
   React.useEffect(() => {
@@ -702,7 +1425,18 @@ export const ProductLandingPage: React.FC = () => {
     setIsMobileMenuOpen(false);
   }, []);
 
+  const updateLiveDemoField = React.useCallback((field: keyof LiveDemoInputState, value: string) => {
+    setLiveDemoInputs((current) => ({
+      ...current,
+      [activeLiveDemo]: {
+        ...current[activeLiveDemo],
+        [field]: value,
+      },
+    }));
+  }, [activeLiveDemo]);
+
   const activeSolution = solutionContent[activeTab];
+  const activeLiveDemoInput = liveDemoInputs[activeLiveDemo];
 
   return (
     <div className="lp-page">
@@ -717,12 +1451,13 @@ export const ProductLandingPage: React.FC = () => {
             LearnPuddle
           </a>
           <nav className={`lp-nav ${isMobileMenuOpen ? 'is-open' : ''}`} aria-label="Primary">
+            <a href="#templates" onClick={closeMobileMenu}>Templates</a>
+            <a href="#live-demo" onClick={closeMobileMenu}>Live Demo</a>
             <a href="#platform" onClick={closeMobileMenu}>Platform</a>
             <a href="#solutions" onClick={closeMobileMenu}>Solutions</a>
             <a href="#industries" onClick={closeMobileMenu}>Industries</a>
             <a href="#security" onClick={closeMobileMenu}>Security</a>
             <a href="#demo" onClick={closeMobileMenu}>Demo</a>
-            <a href="#faq" onClick={closeMobileMenu}>FAQ</a>
           </nav>
           <div className="lp-header-actions">
             <CTAButton onClick={openBookDemo} className="lp-btn lp-btn-primary lp-header-cta-desktop">
@@ -752,12 +1487,12 @@ export const ProductLandingPage: React.FC = () => {
             <div className="lp-hero-copy">
               <p className="lp-pill">
                 <BoltIcon className="lp-pill-icon" aria-hidden="true" />
-                Learning Management Platform
+                AI-era learning platform
               </p>
-              <h1>Learning that <em>talks back.</em></h1>
+              <h1>Turn knowledge into learning that <em>responds.</em></h1>
               <p>
-                LearnPuddle gives schools, enterprises, and academies one platform to build courses,
-                track real progress, and prove outcomes — not just assign content.
+                LearnPuddle turns videos, documents, policies, and playbooks into branded learning
+                portals with courses, quizzes, captions, progress tracking, and insight-rich reports.
               </p>
               <ul className="lp-hero-outcomes">
                 {heroOutcomes.map((item) => (
@@ -772,24 +1507,22 @@ export const ProductLandingPage: React.FC = () => {
                   Book a Demo
                   <ArrowRightIcon className="lp-btn-icon" aria-hidden="true" />
                 </CTAButton>
-                <a href="#platform" className="lp-btn lp-btn-secondary">
-                  Explore Platform
+                <a href="#templates" className="lp-btn lp-btn-secondary">
+                  Explore Templates
                 </a>
+              </div>
+              <div className="lp-hero-proof-grid" aria-label="Product proof">
+                {heroProofItems.map((item) => (
+                  <div key={item.label} className="lp-hero-proof-card">
+                    <strong>{item.value}</strong>
+                    <span>{item.label}</span>
+                  </div>
+                ))}
               </div>
             </div>
 
-            <div className="lp-hero-panel" aria-label="Learning operations snapshot">
-              <div className="lp-hero-mockup-wrap">
-                <DashboardMockupSVG />
-                <div className="lp-hero-float-card lp-hero-float-card-tl">
-                  <div className="lp-float-dot lp-float-dot-green" />
-                  <div><strong>91%</strong><span>Completion</span></div>
-                </div>
-                <div className="lp-hero-float-card lp-hero-float-card-br">
-                  <div className="lp-float-dot lp-float-dot-blue" />
-                  <div><strong>24</strong><span>Active portals</span></div>
-                </div>
-              </div>
+            <div className="lp-hero-panel">
+              <CourseBuilderPreview />
             </div>
           </div>
         </section>
@@ -815,6 +1548,52 @@ export const ProductLandingPage: React.FC = () => {
                 <span className="lp-stat-label">{stat.label}</span>
               </div>
             ))}
+          </div>
+        </section>
+
+        {/* ── Template Gallery ── */}
+        <section id="templates" className="lp-section lp-section-templates">
+          <div className="lp-container">
+            <SectionHeader
+              kicker="Templates"
+              title="Start with the right training world."
+              description="LearnPuddle should feel purpose-built for each audience. Same engine underneath, different vocabulary, metrics, program templates, and learner motivation on top."
+            />
+            <div className="lp-template-grid">
+              {trainingTemplateCards.map((template) => (
+                <article key={template.key} className={`lp-template-card lp-template-card-${template.key}`}>
+                  <div className="lp-template-card-top">
+                    <h3>{template.title}</h3>
+                    <span className="lp-template-icon">
+                      <template.icon className="lp-template-icon-svg" aria-hidden="true" />
+                    </span>
+                  </div>
+                  <p>{template.description}</p>
+                  <div className="lp-template-chip-row">
+                    {template.chips.map((chip) => (
+                      <span key={chip}>{chip}</span>
+                    ))}
+                  </div>
+                </article>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        {/* ── Live Template Studio ── */}
+        <section id="live-demo" className="lp-section lp-section-live-demo">
+          <div className="lp-container">
+            <SectionHeader
+              kicker="Live Demo Lab"
+              title="Type a use case. Watch a branded LMS take shape."
+              description="A website-native preview for buyers: schools, enterprise teams, and fitness operators can see the tenant language, pathways, analytics, and next actions adapt to their own training context."
+            />
+            <LiveTemplateStudio
+              activeDemo={activeLiveDemo}
+              liveDemoInput={activeLiveDemoInput}
+              onSelectDemo={setActiveLiveDemo}
+              onUpdateField={updateLiveDemoField}
+            />
           </div>
         </section>
 

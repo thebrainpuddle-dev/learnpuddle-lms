@@ -206,6 +206,7 @@ export const StudentDiscussionPage: React.FC = () => {
           {threads.map((thread) => (
             <button
               key={thread.id}
+              data-testid="student-discussion-thread-card"
               onClick={() => navigate(`/student/discussions/${thread.id}`)}
               className="w-full text-left bg-white rounded-2xl border border-gray-100 p-4 hover:shadow-md transition-all shadow-sm group"
             >

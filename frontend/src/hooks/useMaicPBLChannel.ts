@@ -34,6 +34,10 @@ export type PBLEvent =
          *  consumer includes the next issue's title here so the
          *  workspace UI can advance without a refetch. */
         advancedTo: string | null;
+        /** Stable ids for live issue-board updates. Present when the
+         *  backend could resolve them from the persisted PBL session. */
+        completedIssueId?: string | null;
+        advancedToIssueId?: string | null;
       };
     }
   | { type: 'error'; data: { message: string } };
@@ -51,7 +55,6 @@ export type PBLSendMessage =
       data: {
         message: string;
         userRole?: string;
-        languageModelId: string;
       };
     }
   | { action: 'interrupt' };
@@ -67,6 +70,8 @@ export interface PBLAssembledMessage {
   /** True when Judge replied with COMPLETE — issue advanced. */
   complete: boolean;
   advancedTo: string | null;
+  completedIssueId: string | null;
+  advancedToIssueId: string | null;
 }
 
 export interface UseMaicPBLChannelOptions {
@@ -107,6 +112,8 @@ function _foldEvents(events: PBLEvent[]): PBLAssembledMessage[] {
         finished: false,
         complete: false,
         advancedTo: null,
+        completedIssueId: null,
+        advancedToIssueId: null,
       });
       continue;
     }
@@ -118,6 +125,8 @@ function _foldEvents(events: PBLEvent[]): PBLAssembledMessage[] {
       tail.finished = true;
       tail.complete = evt.data.complete;
       tail.advancedTo = evt.data.advancedTo;
+      tail.completedIssueId = evt.data.completedIssueId ?? null;
+      tail.advancedToIssueId = evt.data.advancedToIssueId ?? null;
     }
   }
   return out;

@@ -15,6 +15,7 @@ export interface TenantFeatures {
   teacher_authoring: boolean;
   ai_studio: boolean;
   maic: boolean;
+  maic_v2: boolean;
   /** SAML 2.0 SSO (per TASK-045). Distinct from OAuth-style `sso`. */
   saml: boolean;
   /** OAuth-style SSO (Google, Microsoft, Okta). */
@@ -104,6 +105,7 @@ const DEFAULT_FEATURES: TenantFeatures = {
   teacher_authoring: false,
   ai_studio: false,
   maic: false,
+  maic_v2: false,
   saml: false,
   sso: false,
   '2fa': false,
