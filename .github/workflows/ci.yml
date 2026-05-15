@@ -669,6 +669,11 @@ jobs:
           # ── Health check — auto-rollback on failure ───────────────────
           sleep 10
           if ! ./scripts/check-origin-health.sh docker-compose.prod.yml "$DOMAIN"; then
+            echo "::group::nginx diagnostics"
+            docker compose -f docker-compose.prod.yml ps nginx || true
+            docker compose -f docker-compose.prod.yml logs --tail=160 nginx || true
+            docker compose -f docker-compose.prod.yml run --rm -T nginx nginx -t || true
+            echo "::endgroup::"
             echo "::error::Health check failed after deploy — initiating rollback to ${PREV_SHA:-unknown}"
             if [ -n "$PREV_SHA" ]; then
               REGISTRY="ghcr.io/${{ github.repository }}"

@@ -194,9 +194,11 @@ Fix now queued:
 
 - `nginx/ssl/` is ignored by Git and excluded from Docker build contexts so origin certificates are never committed or uploaded.
 - `scripts/ensure-nginx-ssl.sh` normalizes both certificate naming conventions used by the repo (`fullchain.pem`/`privkey.pem` and `origin.pem`/`origin-key.pem`), copies from Let's Encrypt if present, and otherwise creates a temporary self-signed origin certificate so nginx can start and health checks can identify the real next issue.
+- The helper sets generated/copied cert ownership for the non-root nginx image user (`101:101`) on Linux hosts; this prevents root-owned `0600` bind-mounted private keys from crashing nginx in production.
 - The production workflow and `scripts/deploy-droplet.sh` call this helper immediately after checkout sync and before app restart.
 - `nginx/Dockerfile` also bakes a short-lived self-signed fallback certificate into the image so standalone smoke tests can run `nginx -t` without a host SSL mount.
 - Local production-config smoke also found duplicate `proxy_*_timeout` directives in the video upload and chatbot SSE locations. Those locations now set proxy headers directly instead of including `proxy_params` and then overriding the same timeout directives.
+- Production deploy now prints nginx `ps`, recent logs, and `nginx -t` diagnostics before rollback when origin health fails.
 
 Future review rule: any deploy cleanup (`git clean`, image pruning, bind mount changes) must explicitly preserve or regenerate non-repo operational secrets, especially nginx TLS material.
 

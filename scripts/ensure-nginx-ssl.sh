@@ -57,6 +57,15 @@ if ! certs_ready; then
 fi
 
 chmod 644 "$SSL_DIR/fullchain.pem" "$SSL_DIR/origin.pem"
-chmod 600 "$SSL_DIR/privkey.pem" "$SSL_DIR/origin-key.pem"
+
+# The nginx image runs as the non-root nginx user. On the official alpine image
+# that user/group is 101:101; use the numeric IDs so the host does not need a
+# matching nginx account. If a non-root local caller cannot chown, keep the key
+# readable enough for local Docker Desktop smoke tests.
+if chown 101:101 "$SSL_DIR/fullchain.pem" "$SSL_DIR/origin.pem" "$SSL_DIR/privkey.pem" "$SSL_DIR/origin-key.pem" 2>/dev/null; then
+  chmod 600 "$SSL_DIR/privkey.pem" "$SSL_DIR/origin-key.pem"
+else
+  chmod 644 "$SSL_DIR/privkey.pem" "$SSL_DIR/origin-key.pem"
+fi
 
 echo "nginx SSL files ready in $SSL_DIR"
