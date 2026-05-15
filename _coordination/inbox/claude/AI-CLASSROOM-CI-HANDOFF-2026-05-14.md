@@ -113,6 +113,41 @@ Those findings are useful product debt, but they are not the right blocker for e
 
 This still exercises the real local Django + Vite + seeded classroom + real browser/audio/player/mobile layout path. The wider teacher portal harness should move to a dedicated scheduled/manual E2E workflow after its local WebSocket routing and blank-section expectations are fixed.
 
+## Fifth CI Finding - Production Deploy Disk Exhaustion
+
+Run `25901346854` on commit `c072f28` proved the code/test pipeline was green:
+
+- Frontend test/build: green.
+- Backend suite: green in `34m15s`.
+- Local MAIC E2E smoke: green in `6m22s`.
+- Docker image build/push: green in `8m31s`.
+
+Production deploy still failed, but the old SSH heredoc and dirty-checkout failures were fixed. The new failure was infrastructure/build strategy:
+
+- Failing job: `deploy` / `Deploy to Production via SSH`.
+- Key log: `no space left on device`.
+- Path: `/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/...`
+- Trigger: production deploy locally rebuilt and exported the same heavy backend image separately for `web`, `asgi`, `worker`, and `beat`; the backend dependency set pulled large CUDA/NVIDIA `torch` transitive wheels through optional AI/media runtime packages.
+
+Follow-up fix in progress:
+
+- `docker-compose.prod.yml` now builds one backend image, `lms-backend:latest`, from `web`.
+- `asgi`, `worker`, `worker-tts`, `beat`, and `flower` reuse `lms-backend:latest` instead of each declaring an identical `build:`.
+- Production deploy now prunes stopped containers, Docker builder cache, and unused images before rebuilding. It does **not** prune volumes, preserving Postgres, Redis, media, and static volumes.
+- Production deploy now pulls only `db` and `redis`, then builds `nginx` and `web`.
+
+Claude should watch for this in future PRs: do not reintroduce duplicate backend image builds in production compose, and do not solve disk pressure by pruning Docker volumes. Longer-term, split optional heavy AI/TTS/transcription packages into dedicated worker images or CPU-only dependency constraints so `web`/`asgi` do not carry GPU-sized runtime layers.
+
+## Hybrid OpenMAIC Direction
+
+The factual fastest path is not to rebuild the classroom engine from scratch and not to paste random UI components. Treat OpenMAIC as the classroom engine/reference contract and LearnPuddle as the SaaS shell:
+
+- LearnPuddle owns tenant/auth/profile access, class ownership, DO Spaces keys, audit logs, publishing, and student/teacher permissions.
+- The OpenMAIC-style layer owns generation contracts, scene/action schemas, orchestration, playback/action execution, multi-agent/PBL flow, media actions, and eval harness.
+- Integration boundary: teacher creates in LearnPuddle; LearnPuddle sends a signed/tenant-scoped payload; the engine returns a validated classroom manifest/media manifest; LearnPuddle persists and serves it behind tenant/user authorization.
+
+This should improve output quality and speed because the engine contract/action/playback discipline comes across intact while SaaS isolation remains native to LearnPuddle.
+
 ## Remaining AI Classroom Foundation Work For Claude
 
 This commit makes CI/build stable. It does not finish the OpenMAIC-level classroom experience. Claude should pull latest `main`, branch, and work in focused PRs.

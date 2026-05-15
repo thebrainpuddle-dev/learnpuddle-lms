@@ -598,26 +598,30 @@ jobs:
           echo "Current deployed SHA: ${PREV_SHA:-none}"
           echo "Deploying new SHA: $NEW_SHA"
 
-          # ── Pull new images (skip locally-built services like nginx) ──
-          docker compose -f docker-compose.prod.yml pull --ignore-buildable
-
-          # ── Build nginx (frontend baked) + backend services ─────────
-          # docker-compose.prod.yml declares `build:` for web/asgi/worker/beat
-          # AND for nginx, so none of them are pulled from a registry by
-          # `compose pull --ignore-buildable`. If we don't rebuild them here
-          # the droplet keeps running whatever image was last built manually,
-          # and pushes to main have no visible effect on the backend.
-          # --no-cache on nginx because the frontend COPY has historically
-          # missed invalidation; backend builds can use cache (only the Django
-          # source COPY layer invalidates, which is what we want anyway).
           # Keep the deploy checkout deterministic. git clean -fd removes
           # non-ignored drift while preserving ignored secrets/assets such as
           # .env and media files.
           git fetch origin main
           git reset --hard origin/main
           git clean -fd
+
+          # ── Free Docker build/image cache before rebuilding ──────────
+          # The backend image includes optional media/AI runtime deps and can
+          # be large. Do not prune volumes here: postgres_data, redis_data,
+          # media_files, and static_files are production data.
+          docker system df || true
+          docker container prune -f || true
+          docker builder prune -af || true
+          docker image prune -af || true
+          docker system df || true
+
+          # ── Pull base services only, then build deploy images ─────────
+          # Backend runtime services all share lms-backend:latest. Building
+          # `web` once avoids exporting the same heavy Python image as web,
+          # asgi, worker, worker-tts, beat, and flower separately.
+          docker compose -f docker-compose.prod.yml pull db redis
           docker compose -f docker-compose.prod.yml build --no-cache nginx
-          docker compose -f docker-compose.prod.yml build web asgi worker beat
+          docker compose -f docker-compose.prod.yml build web
 
           # ── Run migrations BEFORE restarting (prevents schema mismatch) ─
           # IMPORTANT: every `docker compose run` below redirects stdin from
@@ -640,7 +644,7 @@ jobs:
             if [ -n "$PREV_SHA" ]; then
               REGISTRY="ghcr.io/${{ github.repository }}"
               docker pull "${REGISTRY}/backend:${PREV_SHA}" \
-                && docker tag "${REGISTRY}/backend:${PREV_SHA}" "${REGISTRY}/backend:latest"
+                && docker tag "${REGISTRY}/backend:${PREV_SHA}" "lms-backend:latest"
               docker compose -f docker-compose.prod.yml up -d --remove-orphans
               sleep 10
               if ./scripts/check-origin-health.sh docker-compose.prod.yml "$DOMAIN"; then

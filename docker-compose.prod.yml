@@ -55,6 +55,7 @@ services:
 
   web:
     <<: *common
+    image: lms-backend:latest
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -89,9 +90,7 @@ services:
 
   asgi:
     <<: *common
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    image: lms-backend:latest
     command: daphne -b 0.0.0.0 -p 8001 config.asgi:application
     env_file:
       - ./backend/.env
@@ -119,9 +118,7 @@ services:
 
   worker:
     <<: *common
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    image: lms-backend:latest
     command: celery -A config worker -l info --concurrency=4 -Q default,video,notifications
     env_file:
       - ./backend/.env
@@ -155,9 +152,7 @@ services:
   # ``TTS_WORKER_CONCURRENCY`` if your Azure/Edge plan allows more).
   worker-tts:
     <<: *common
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    image: lms-backend:latest
     command: >
       celery -A config worker -l info
       --concurrency=${TTS_WORKER_CONCURRENCY:-8}
@@ -188,9 +183,7 @@ services:
 
   beat:
     <<: *common
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    image: lms-backend:latest
     command: celery -A config beat -l info --pidfile=/tmp/celerybeat.pid --scheduler django_celery_beat.schedulers:DatabaseScheduler
     env_file:
       - ./backend/.env
@@ -217,9 +210,7 @@ services:
 
   flower:
     <<: *common
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    image: lms-backend:latest
     command: >
       celery -A config flower
       --port=5555
