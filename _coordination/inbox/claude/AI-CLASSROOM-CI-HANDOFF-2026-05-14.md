@@ -80,6 +80,18 @@ Repo inspection showed no Actions secrets or variables were configured for E2E, 
 
 Claude should watch for this in PRs: do not reintroduce a missing-secret hard stop, and do not replace the local fallback with mocked browser/audio/websocket behavior.
 
+## Third CI Finding - Stale MAIC E2E Classroom Endpoint
+
+The first local-stack E2E run (`25897173288`, commit `65db13d`) booted Postgres/Redis/Django/Vite successfully and seeded `create_demo_tenant`, but the MAIC playback specs all failed with:
+
+- `No READY classrooms found for this teacher.`
+
+Root cause: the Playwright specs were querying the stale non-production endpoint `/api/v1/maic/classrooms/?status=READY&page_size=5`. The production teacher API and frontend service use `/api/v1/teacher/maic/classrooms/`, and the seed creates the READY classroom for that teacher-owned path.
+
+Fix: `frontend/e2e/maic-full-playback.spec.js`, `frontend/e2e/maic-a11y-playback.spec.js`, and `frontend/e2e/maic-mobile-playback.spec.js` now resolve seeded READY classrooms through `/api/v1/teacher/maic/classrooms/?status=READY&page_size=5`.
+
+The same E2E log showed the teacher/student portal harnesses being cut off by Playwright's default 30s test timeout (`Target page, context or browser has been closed` / `page.goto: Test ended`). The harnesses intentionally sweep many real portal routes in one session, so `frontend/playwright.config.cjs` now sets a 120s per-test timeout while keeping workers at 1.
+
 ## Remaining AI Classroom Foundation Work For Claude
 
 This commit makes CI/build stable. It does not finish the OpenMAIC-level classroom experience. Claude should pull latest `main`, branch, and work in focused PRs.

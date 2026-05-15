@@ -41,7 +41,7 @@ async function resolveClassroomId(page) {
       sessionStorage.getItem('access_token') ??
       localStorage.getItem('access_token') ??
       '';
-    const r = await fetch('/api/v1/maic/classrooms/?status=READY&page_size=5', {
+    const r = await fetch('/api/v1/teacher/maic/classrooms/?status=READY&page_size=5', {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
     if (!r.ok) return '';

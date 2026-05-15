@@ -29,7 +29,7 @@
  *   E2E_CLASSROOM_ID (optional)
  *     UUID of a specific READY classroom to play. When omitted the test
  *     fetches the first READY classroom from the teacher's library via the
- *     API and uses that. The classroom must have at least 2 scenes with
+ *     canonical teacher API and uses that. The classroom must have at least 2 scenes with
  *     sceneSlideBounds populated (i.e. a fully generated classroom).
  *
  * ─── Prerequisites ────────────────────────────────────────────────────────────
@@ -97,7 +97,7 @@ async function loginAsTeacher(page) {
  * Resolve the classroom ID: use E2E_CLASSROOM_ID if set, otherwise fetch the
  * first READY classroom from the teacher's API library response.
  *
- * The MAIC API endpoint is /api/v1/maic/classrooms/?status=READY.
+ * The MAIC API endpoint is /api/v1/teacher/maic/classrooms/?status=READY.
  * We call it from within the browser page so cookies/JWT flow naturally.
  *
  * @param {import('@playwright/test').Page} page
@@ -113,7 +113,7 @@ async function resolveClassroomId(page) {
       localStorage.getItem('access_token') ??
       '';
 
-    const response = await fetch('/api/v1/maic/classrooms/?status=READY&page_size=5', {
+    const response = await fetch('/api/v1/teacher/maic/classrooms/?status=READY&page_size=5', {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
     if (!response.ok) return '';

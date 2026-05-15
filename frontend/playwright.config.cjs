@@ -36,6 +36,10 @@ module.exports = defineConfig({
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
+  // The live teacher/student harnesses intentionally sweep multiple real
+  // routes in one browser session; keep the per-test budget above the default
+  // 30s so the runner does not close pages mid-sweep.
+  timeout: 120000,
   // TODO(F8): workers is set to 1 because it is unknown whether the e2e tests
   // share state (same classroom UUID, same teacher session) in a way that would
   // cause races under parallel execution.  Before raising this value, verify
