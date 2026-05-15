@@ -63,6 +63,23 @@ Follow-up local validation:
 - Targeted SCIM sort tests: `7 passed`.
 - Full SCIM user/group/cross-tenant cluster: `173 passed`.
 
+## Second CI Finding - E2E Target Missing
+
+GitHub Actions run `25881902706` on commit `8ec44c8` proved the backend and frontend jobs were green, then failed only in `e2e-test` before tests started:
+
+- Run: https://github.com/thebrainpuddle-dev/learnpuddle-lms/actions/runs/25881902706
+- Failing job: `e2e-test`
+- Failing step: `Require E2E target is configured`
+- Key log line: `E2E_BASE_URL secret is not configured. Set it to your staging URL to enable E2E tests, or set repository variable E2E_SKIP_BLOCKING=true to temporarily bypass.`
+
+Repo inspection showed no Actions secrets or variables were configured for E2E, and the public demo/staging hosts were reachable but not usable with the deterministic local demo credentials. The fix is not to skip E2E by default. CI now resolves an E2E mode:
+
+- `external` when `E2E_BASE_URL` is configured, preserving the existing staging/preview `e2e/` suite.
+- `local` when `E2E_BASE_URL` is missing, starting a real local Postgres/Redis/Django/Vite stack, seeding `create_demo_tenant`, and running the MAIC Playwright suite with real browser playback.
+- `skip` only when `E2E_SKIP_BLOCKING=true`, kept as an explicit temporary emergency bypass.
+
+Claude should watch for this in PRs: do not reintroduce a missing-secret hard stop, and do not replace the local fallback with mocked browser/audio/websocket behavior.
+
 ## Remaining AI Classroom Foundation Work For Claude
 
 This commit makes CI/build stable. It does not finish the OpenMAIC-level classroom experience. Claude should pull latest `main`, branch, and work in focused PRs.
