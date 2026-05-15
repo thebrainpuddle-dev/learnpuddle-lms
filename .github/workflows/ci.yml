@@ -471,16 +471,16 @@ jobs:
             -o StrictHostKeyChecking=yes \
             -o ServerAliveInterval=30 \
             -o ServerAliveCountMax=3 \
-            "$STAGING_USER@$STAGING_HOST" 'bash -se' <<ENDSSH
+            "$STAGING_USER@$STAGING_HOST" "NEW_SHA=$NEW_SHA bash -se" <<'ENDSSH'
           set -euo pipefail
           cd /opt/lms-staging
-          DOMAIN="\$(awk -F= '/^STAGING_DOMAIN=/{print \$2}' .env.staging 2>/dev/null | tail -1 | tr -d '\r')"
-          if [ -z "\$DOMAIN" ]; then DOMAIN="staging.learnpuddle.com"; fi
+          DOMAIN="$(awk -F= '/^STAGING_DOMAIN=/{print $2}' .env.staging 2>/dev/null | tail -1 | tr -d '\r')"
+          if [ -z "$DOMAIN" ]; then DOMAIN="staging.learnpuddle.com"; fi
 
           # ── Capture rollback SHA before touching anything ──────────────
-          PREV_SHA="\$(cat .deployed-sha 2>/dev/null || echo '')"
-          echo "Current staging SHA: \${PREV_SHA:-none}"
-          echo "Deploying new staging SHA: ${NEW_SHA}"
+          PREV_SHA="$(cat .deployed-sha 2>/dev/null || echo '')"
+          echo "Current staging SHA: ${PREV_SHA:-none}"
+          echo "Deploying new staging SHA: $NEW_SHA"
 
           # Pull new staging images
           docker compose -f docker-compose.staging.yml pull < /dev/null
@@ -493,16 +493,16 @@ jobs:
 
           # ── Health check — auto-rollback on failure ───────────────────
           sleep 10
-          if ! ./scripts/check-origin-health.sh docker-compose.staging.yml "\$DOMAIN"; then
-            echo "::error::Staging health check failed after deploy — initiating rollback to \${PREV_SHA:-unknown}"
-            if [ -n "\$PREV_SHA" ]; then
+          if ! ./scripts/check-origin-health.sh docker-compose.staging.yml "$DOMAIN"; then
+            echo "::error::Staging health check failed after deploy — initiating rollback to ${PREV_SHA:-unknown}"
+            if [ -n "$PREV_SHA" ]; then
               REGISTRY="ghcr.io/${{ github.repository }}"
-              docker pull "\${REGISTRY}/backend:\${PREV_SHA}" \
-                && docker tag "\${REGISTRY}/backend:\${PREV_SHA}" "\${REGISTRY}/backend:staging"
+              docker pull "${REGISTRY}/backend:${PREV_SHA}" \
+                && docker tag "${REGISTRY}/backend:${PREV_SHA}" "${REGISTRY}/backend:staging"
               docker compose -f docker-compose.staging.yml up -d --remove-orphans < /dev/null
               sleep 10
-              if ./scripts/check-origin-health.sh docker-compose.staging.yml "\$DOMAIN"; then
-                echo "::notice::Rollback to \$PREV_SHA succeeded on staging."
+              if ./scripts/check-origin-health.sh docker-compose.staging.yml "$DOMAIN"; then
+                echo "::notice::Rollback to $PREV_SHA succeeded on staging."
               else
                 echo "::error::Rollback also failed on staging — manual intervention required!"
               fi
@@ -513,8 +513,8 @@ jobs:
           fi
 
           # ── Record new SHA for future rollbacks ───────────────────────
-          echo "${NEW_SHA}" > .deployed-sha
-          echo "Staging deployment of ${NEW_SHA} complete!"
+          echo "$NEW_SHA" > .deployed-sha
+          echo "Staging deployment of $NEW_SHA complete!"
           ENDSSH
 
   # ── Build & push Docker images (production - main branch) ────────────────
@@ -586,17 +586,17 @@ jobs:
             -o StrictHostKeyChecking=yes \
             -o ServerAliveInterval=30 \
             -o ServerAliveCountMax=3 \
-            "$DEPLOY_USER@$DEPLOY_HOST" 'bash -se' <<ENDSSH
+            "$DEPLOY_USER@$DEPLOY_HOST" "NEW_SHA=$NEW_SHA bash -se" <<'ENDSSH'
           set -euo pipefail
           cd /opt/lms
 
-          DOMAIN="\$(awk -F= '/^PLATFORM_DOMAIN=/{print \$2}' .env 2>/dev/null | tail -1 | tr -d '\r')"
-          if [ -z "\$DOMAIN" ]; then DOMAIN="localhost"; fi
+          DOMAIN="$(awk -F= '/^PLATFORM_DOMAIN=/{print $2}' .env 2>/dev/null | tail -1 | tr -d '\r')"
+          if [ -z "$DOMAIN" ]; then DOMAIN="localhost"; fi
 
           # ── Capture rollback SHA before touching anything ──────────────
-          PREV_SHA="\$(cat .deployed-sha 2>/dev/null || echo '')"
-          echo "Current deployed SHA: \${PREV_SHA:-none}"
-          echo "Deploying new SHA: ${NEW_SHA}"
+          PREV_SHA="$(cat .deployed-sha 2>/dev/null || echo '')"
+          echo "Current deployed SHA: ${PREV_SHA:-none}"
+          echo "Deploying new SHA: $NEW_SHA"
 
           # ── Pull new images (skip locally-built services like nginx) ──
           docker compose -f docker-compose.prod.yml pull --ignore-buildable
@@ -610,7 +610,12 @@ jobs:
           # --no-cache on nginx because the frontend COPY has historically
           # missed invalidation; backend builds can use cache (only the Django
           # source COPY layer invalidates, which is what we want anyway).
-          git pull origin main
+          # Keep the deploy checkout deterministic. git clean -fd removes
+          # non-ignored drift while preserving ignored secrets/assets such as
+          # .env and media files.
+          git fetch origin main
+          git reset --hard origin/main
+          git clean -fd
           docker compose -f docker-compose.prod.yml build --no-cache nginx
           docker compose -f docker-compose.prod.yml build web asgi worker beat
 
@@ -630,16 +635,16 @@ jobs:
 
           # ── Health check — auto-rollback on failure ───────────────────
           sleep 10
-          if ! ./scripts/check-origin-health.sh docker-compose.prod.yml "\$DOMAIN"; then
-            echo "::error::Health check failed after deploy — initiating rollback to \${PREV_SHA:-unknown}"
-            if [ -n "\$PREV_SHA" ]; then
+          if ! ./scripts/check-origin-health.sh docker-compose.prod.yml "$DOMAIN"; then
+            echo "::error::Health check failed after deploy — initiating rollback to ${PREV_SHA:-unknown}"
+            if [ -n "$PREV_SHA" ]; then
               REGISTRY="ghcr.io/${{ github.repository }}"
-              docker pull "\${REGISTRY}/backend:\${PREV_SHA}" \
-                && docker tag "\${REGISTRY}/backend:\${PREV_SHA}" "\${REGISTRY}/backend:latest"
+              docker pull "${REGISTRY}/backend:${PREV_SHA}" \
+                && docker tag "${REGISTRY}/backend:${PREV_SHA}" "${REGISTRY}/backend:latest"
               docker compose -f docker-compose.prod.yml up -d --remove-orphans
               sleep 10
-              if ./scripts/check-origin-health.sh docker-compose.prod.yml "\$DOMAIN"; then
-                echo "Rollback to \$PREV_SHA succeeded."
+              if ./scripts/check-origin-health.sh docker-compose.prod.yml "$DOMAIN"; then
+                echo "Rollback to $PREV_SHA succeeded."
               else
                 echo "::error::Rollback also failed — manual intervention required!"
               fi
@@ -650,6 +655,6 @@ jobs:
           fi
 
           # ── Record new SHA for future rollbacks ───────────────────────
-          echo "${NEW_SHA}" > .deployed-sha
-          echo "Production deployment of ${NEW_SHA} complete!"
+          echo "$NEW_SHA" > .deployed-sha
+          echo "Production deployment of $NEW_SHA complete!"
           ENDSSH
