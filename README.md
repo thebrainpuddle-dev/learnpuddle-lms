@@ -220,7 +220,7 @@ REACT_APP_API_URL=http://localhost:8000/api
 
 ## CI/CD (GitHub Actions)
 
-Pipeline file: `/Users/rakeshreddy/LMS/.github/workflows/ci.yml`
+Pipeline file: `.github/workflows/ci.yml`
 
 ### Branch behavior
 - `develop` push:
@@ -251,12 +251,16 @@ Deploy jobs use native OpenSSH (not `appleboy/ssh-action`) for reliability:
 1. Start SSH agent with private key.
 2. Pin host key with `ssh-keyscan` into `~/.ssh/known_hosts`.
 3. Run remote deploy script via `ssh ... 'bash -se'`:
-   - `docker compose pull`
+   - pull CI-built `backend:$SHA` and `nginx:$SHA` images from GHCR
+   - tag them locally as `lms-backend:latest` and `lms-nginx:latest`
+   - `docker compose pull db redis`
    - start `db` + `redis`
    - run `migrate`
    - run `collectstatic`
    - restart stack
    - run origin health check script
+
+Production deploys should not build backend or frontend/nginx images on the droplet during the normal CI path. The droplet should only pull immutable CI-built images, run migrations/static collection, restart, and health-check.
 
 ### Troubleshooting
 
@@ -284,7 +288,16 @@ If deploy still fails:
 If CI deploy is blocked, run this on the target server:
 ```bash
 cd /opt/lms
-docker compose -f docker-compose.prod.yml pull
+NEW_SHA=<commit-sha-to-deploy>
+REGISTRY=ghcr.io/thebrainpuddle-dev/learnpuddle-lms
+
+# Requires a GHCR token/user with read access to the repo packages.
+docker login ghcr.io
+docker pull "${REGISTRY}/backend:${NEW_SHA}"
+docker tag "${REGISTRY}/backend:${NEW_SHA}" lms-backend:latest
+docker pull "${REGISTRY}/nginx:${NEW_SHA}"
+docker tag "${REGISTRY}/nginx:${NEW_SHA}" lms-nginx:latest
+docker compose -f docker-compose.prod.yml pull db redis
 docker compose -f docker-compose.prod.yml up -d db redis
 docker compose -f docker-compose.prod.yml run --rm -T web python manage.py migrate --noinput
 docker compose -f docker-compose.prod.yml run --rm -T -u root web python manage.py collectstatic --noinput

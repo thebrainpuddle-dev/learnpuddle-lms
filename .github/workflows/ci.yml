@@ -79,7 +79,7 @@ jobs:
                  --cov-report=html \
                  --cov-report=term-missing \
                  --cov-report=json \
-                 --cov-fail-under=${COV_FAIL_UNDER} \
+                 --cov-fail-under="${COV_FAIL_UNDER}" \
                  -v
         working-directory: backend
 
@@ -433,6 +433,8 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: ./frontend
+          build-args: |
+            BUILD_SHA=${{ github.sha }}
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/frontend:staging
 
@@ -542,14 +544,19 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/backend:latest
             ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/backend:${{ github.sha }}
 
-      - name: Build & push frontend
+      - name: Build & push frontend/nginx
         uses: docker/build-push-action@v5
         with:
-          context: ./frontend
+          context: .
+          file: nginx/Dockerfile
+          build-args: |
+            BUILD_SHA=${{ github.sha }}
           push: true
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/frontend:latest
             ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/frontend:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/nginx:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/nginx:${{ github.sha }}
 
   # ── Deploy to Production (main branch) ──────────────────────────────────
   deploy:
@@ -557,6 +564,10 @@ jobs:
     needs: docker-build
     runs-on: ubuntu-latest
     environment: production
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      packages: read
     steps:
       - name: Start SSH agent
         uses: webfactory/ssh-agent@v0.9.0
@@ -580,7 +591,7 @@ jobs:
           DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || '22' }}
           NEW_SHA: ${{ github.sha }}
         run: |
-          ssh \
+          timeout 35m ssh \
             -p "$DEPLOY_PORT" \
             -o BatchMode=yes \
             -o StrictHostKeyChecking=yes \
@@ -590,6 +601,10 @@ jobs:
           set -euo pipefail
           cd /opt/lms
 
+          log_step() {
+            echo "== $(date -u +'%Y-%m-%dT%H:%M:%SZ') $* =="
+          }
+
           DOMAIN="$(awk -F= '/^PLATFORM_DOMAIN=/{print $2}' .env 2>/dev/null | tail -1 | tr -d '\r')"
           if [ -z "$DOMAIN" ]; then DOMAIN="localhost"; fi
 
@@ -598,6 +613,7 @@ jobs:
           echo "Current deployed SHA: ${PREV_SHA:-none}"
           echo "Deploying new SHA: $NEW_SHA"
 
+          log_step "Syncing deploy checkout"
           # Keep the deploy checkout deterministic. git clean -fd removes
           # non-ignored drift while preserving ignored secrets/assets such as
           # .env and media files.
@@ -605,26 +621,30 @@ jobs:
           git reset --hard origin/main
           git clean -fd
 
-          # ── Free Docker build/image cache before rebuilding ──────────
-          # The backend image includes optional media/AI runtime deps and can
-          # be large. Do not prune volumes here: postgres_data, redis_data,
-          # media_files, and static_files are production data.
+          log_step "Pruning Docker cache without touching volumes"
+          # Do not prune volumes here: postgres_data, redis_data, media_files,
+          # and static_files are production data.
           docker system df || true
           docker container prune -f || true
           docker builder prune -af || true
           docker image prune -af || true
           docker system df || true
 
-          # ── Pull deploy images ───────────────────────────────────────
-          # Backend runtime services all share lms-backend:latest. Use the
-          # CI-built GHCR image instead of rebuilding the heavy Python/AI
-          # image on the droplet; this avoids containerd disk exhaustion.
+          log_step "Pulling CI-built deploy images"
+          # Backend runtime services all share lms-backend:latest. The nginx
+          # image carries the built frontend bundle plus production nginx
+          # config. Pull both from GHCR instead of building on the droplet;
+          # this avoids containerd disk exhaustion and long silent builds.
           REGISTRY="ghcr.io/${{ github.repository }}"
+          printf '%s' '${{ secrets.GITHUB_TOKEN }}' \
+            | docker login ghcr.io -u '${{ github.actor }}' --password-stdin >/dev/null
           docker pull "${REGISTRY}/backend:${NEW_SHA}"
           docker tag "${REGISTRY}/backend:${NEW_SHA}" "lms-backend:latest"
+          docker pull "${REGISTRY}/nginx:${NEW_SHA}"
+          docker tag "${REGISTRY}/nginx:${NEW_SHA}" "lms-nginx:latest"
           docker compose -f docker-compose.prod.yml pull db redis
-          docker compose -f docker-compose.prod.yml build --no-cache nginx
 
+          log_step "Starting database and Redis"
           # ── Run migrations BEFORE restarting (prevents schema mismatch) ─
           # IMPORTANT: every `docker compose run` below redirects stdin from
           # /dev/null. Without it, compose-run swallows the heredoc's stdin
@@ -633,20 +653,32 @@ jobs:
           # skipped while the SSH step still reports exit 0 = success.
           # Found the hard way after a deploy shipped stale frontend.
           docker compose -f docker-compose.prod.yml up -d db redis < /dev/null
+          log_step "Running database migrations"
           docker compose -f docker-compose.prod.yml run --rm -T web python manage.py migrate --noinput < /dev/null
+          log_step "Collecting static assets"
           docker compose -f docker-compose.prod.yml run --rm -T -u root web python manage.py collectstatic --noinput < /dev/null
 
+          log_step "Restarting application services"
           # ── Restart all services with new code ────────────────────────
           docker compose -f docker-compose.prod.yml up -d --remove-orphans < /dev/null
 
+          log_step "Running origin health checks"
           # ── Health check — auto-rollback on failure ───────────────────
           sleep 10
           if ! ./scripts/check-origin-health.sh docker-compose.prod.yml "$DOMAIN"; then
             echo "::error::Health check failed after deploy — initiating rollback to ${PREV_SHA:-unknown}"
             if [ -n "$PREV_SHA" ]; then
               REGISTRY="ghcr.io/${{ github.repository }}"
-              docker pull "${REGISTRY}/backend:${PREV_SHA}" \
-                && docker tag "${REGISTRY}/backend:${PREV_SHA}" "lms-backend:latest"
+              if docker pull "${REGISTRY}/backend:${PREV_SHA}"; then
+                docker tag "${REGISTRY}/backend:${PREV_SHA}" "lms-backend:latest"
+              else
+                echo "::warning::Rollback backend image ${PREV_SHA} was not available; keeping current lms-backend tag."
+              fi
+              if docker pull "${REGISTRY}/nginx:${PREV_SHA}"; then
+                docker tag "${REGISTRY}/nginx:${PREV_SHA}" "lms-nginx:latest"
+              else
+                echo "::warning::Rollback nginx image ${PREV_SHA} was not available; keeping current lms-nginx tag."
+              fi
               docker compose -f docker-compose.prod.yml up -d --remove-orphans
               sleep 10
               if ./scripts/check-origin-health.sh docker-compose.prod.yml "$DOMAIN"; then

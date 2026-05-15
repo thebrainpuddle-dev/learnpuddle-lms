@@ -5,20 +5,20 @@
 # causing 404s when the volume had stale/wrong content.
 
 # Stage 1: Build React app
-FROM node:18-alpine AS frontend-build
-RUN apk add --no-cache git
+FROM node:20-alpine AS frontend-build
 WORKDIR /app
-ENV NODE_OPTIONS=--max-old-space-size=1536
+ARG BUILD_SHA=nogit
+ENV NODE_OPTIONS=--max-old-space-size=1536 \
+    BUILD_SHA=${BUILD_SHA}
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --legacy-peer-deps
 COPY frontend/ .
-COPY .git /tmp/.git
 # REACT_APP_* values come from frontend/.env.production via Vite's loadEnv.
 # Do NOT declare them as ENV here — Vite's loadEnv treats an existing (empty)
 # process.env entry as a user override and silently wins over the .env file.
 ENV GENERATE_SOURCEMAP=false \
     CI=false
-RUN GIT_DIR=/tmp/.git npm run build
+RUN npm run build
 
 # Stage 2: Nginx with frontend baked in
 FROM nginx:1.25-alpine

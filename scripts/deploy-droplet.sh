@@ -11,6 +11,8 @@ REPO_URL="${1:-https://github.com/thebrainpuddle-dev/learnpuddle-lms.git}"
 APP_DIR="/opt/lms"
 BRANCH="${DEPLOY_BRANCH:-main}"
 COMPOSE="docker compose --env-file .env -f docker-compose.prod.yml"
+DEPLOY_SHA="${DEPLOY_SHA:-}"
+REGISTRY="${REGISTRY:-ghcr.io/thebrainpuddle-dev/learnpuddle-lms}"
 
 echo "=== LearnPuddle Droplet Deployment ==="
 
@@ -63,35 +65,50 @@ if [ ! -f .env ]; then
     fi
 fi
 
-echo "Deploying commit: $(git rev-parse --short HEAD)"
+if [ -z "$DEPLOY_SHA" ]; then
+    DEPLOY_SHA="$(git rev-parse HEAD)"
+fi
+echo "Deploying commit: ${DEPLOY_SHA}"
 
-# Step 4: Start DB + Redis
+# Step 4: Pull immutable CI-built app images by default. Set
+# BUILD_ON_DROPLET=true only for an explicit emergency fallback; normal
+# production deploys should not compile backend/frontend images on the droplet.
+if [ "${BUILD_ON_DROPLET:-false}" = "true" ]; then
+    echo "BUILD_ON_DROPLET=true: building web and nginx images locally..."
+    $COMPOSE build web nginx
+else
+    echo "Pulling CI-built backend and nginx images from ${REGISTRY}..."
+    echo "If this fails with an auth error, run: docker login ghcr.io"
+    docker pull "${REGISTRY}/backend:${DEPLOY_SHA}"
+    docker tag "${REGISTRY}/backend:${DEPLOY_SHA}" lms-backend:latest
+    docker pull "${REGISTRY}/nginx:${DEPLOY_SHA}"
+    docker tag "${REGISTRY}/nginx:${DEPLOY_SHA}" lms-nginx:latest
+fi
+
+# Step 5: Start DB + Redis
 echo "Starting database and Redis..."
+$COMPOSE pull db redis
 $COMPOSE up -d db redis
 
 echo "Waiting 20s for DB to be ready..."
 sleep 20
 
-# Step 5: Build images that serve backend/frontend code
-echo "Building web and nginx images..."
-$COMPOSE build web nginx
-
-# Step 5: Migrations
+# Step 6: Migrations
 echo "Running migrations..."
-$COMPOSE run --rm web python manage.py migrate --noinput
+$COMPOSE run --rm -T web python manage.py migrate --noinput
 
 echo "Collecting static files (run as root to fix volume permissions)..."
-$COMPOSE run --rm -u root web python manage.py collectstatic --noinput
+$COMPOSE run --rm -T -u root web python manage.py collectstatic --noinput
 
-# Step 6: Superadmin bootstrap (non-blocking)
+# Step 7: Superadmin bootstrap (non-blocking)
 echo ""
 if [ -n "${DJANGO_SUPERUSER_EMAIL:-}" ] && [ -n "${DJANGO_SUPERUSER_PASSWORD:-}" ]; then
   echo "Creating superadmin via env vars if missing..."
   DJANGO_SUPERUSER_EMAIL="$DJANGO_SUPERUSER_EMAIL" \
   DJANGO_SUPERUSER_PASSWORD="$DJANGO_SUPERUSER_PASSWORD" \
-  $COMPOSE run --rm web python manage.py createsuperuser --noinput || true
+  $COMPOSE run --rm -T web python manage.py createsuperuser --noinput || true
 else
-  if $COMPOSE run --rm web python manage.py shell -c "from django.contrib.auth import get_user_model; import sys; U=get_user_model(); sys.exit(0 if U.objects.filter(is_superuser=True).exists() else 1)"; then
+  if $COMPOSE run --rm -T web python manage.py shell -c "from django.contrib.auth import get_user_model; import sys; U=get_user_model(); sys.exit(0 if U.objects.filter(is_superuser=True).exists() else 1)"; then
     echo "Superadmin already exists; skipping interactive createsuperuser step."
   else
     echo "No superadmin found. Create one manually when ready:"
@@ -99,9 +116,9 @@ else
   fi
 fi
 
-# Step 7: Start all services
-echo "Starting all services (force recreate to ensure new frontend bundle is served)..."
-$COMPOSE up -d --force-recreate
+# Step 8: Start all services
+echo "Starting all services..."
+$COMPOSE up -d --remove-orphans
 
 DOMAIN="$(awk -F= '/^PLATFORM_DOMAIN=/{print $2}' .env 2>/dev/null | tail -1 | tr -d '\r')"
 if [ -z "$DOMAIN" ]; then DOMAIN="localhost"; fi

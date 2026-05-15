@@ -246,6 +246,7 @@ services:
 
   nginx:
     <<: *common
+    image: ${NGINX_IMAGE:-lms-nginx:latest}
     build:
       context: .
       dockerfile: nginx/Dockerfile

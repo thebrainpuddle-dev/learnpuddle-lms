@@ -1,0 +1,16 @@
+*
+!frontend
+!frontend/**
+!nginx
+!nginx/**
+
+frontend/node_modules
+frontend/build
+frontend/dist
+frontend/e2e-report
+frontend/e2e-results
+frontend/.env
+frontend/.env.local
+frontend/.env.*.local
+!frontend/.env.production
+!frontend/.env.development

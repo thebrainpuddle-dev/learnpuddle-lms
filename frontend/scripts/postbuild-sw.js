@@ -18,7 +18,10 @@ if (!fs.existsSync(SW_PATH)) {
 
 let gitHash;
 try {
-  gitHash = execSync('git rev-parse --short HEAD').toString().trim();
+  gitHash = (process.env.BUILD_SHA || '').trim().slice(0, 12);
+  if (!gitHash) {
+    gitHash = execSync('git rev-parse --short HEAD').toString().trim();
+  }
 } catch {
   gitHash = 'nogit';
 }

@@ -134,10 +134,45 @@ Follow-up fix applied:
 - `docker-compose.prod.yml` now builds one backend image, `lms-backend:latest`, from `web`.
 - `asgi`, `worker`, `worker-tts`, `beat`, and `flower` reuse `lms-backend:latest` instead of each declaring an identical `build:`.
 - Production deploy now prunes stopped containers, Docker builder cache, and unused images before rebuilding. It does **not** prune volumes, preserving Postgres, Redis, media, and static volumes.
-- Production deploy now pulls the CI-built GHCR backend image for the pushed SHA and tags it as `lms-backend:latest`, then builds only `nginx` on the droplet.
+- Production deploy now pulls the CI-built GHCR backend image for the pushed SHA and tags it as `lms-backend:latest`.
 - `docker-compose.prod.yml` supports `BACKEND_IMAGE`, defaulting to `lms-backend:latest`, so future deploy paths can point all backend runtime services at the same immutable image.
 
 Claude should watch for this in future PRs: do not reintroduce duplicate backend image builds in production compose, do not make the droplet rebuild the backend image in normal CI deploys, and do not solve disk pressure by pruning Docker volumes. Longer-term, split optional heavy AI/TTS/transcription packages into dedicated worker images or CPU-only dependency constraints so `web`/`asgi` do not carry GPU-sized runtime layers.
+
+## Sixth CI Finding - Remaining Nginx/Frontend Droplet Build Hang
+
+Run `25903759085` on commit `feb4db5` proved the test/build jobs were green again:
+
+- Backend: green in `34m6s`.
+- Frontend tests/build: green in `3m28s`.
+- Local MAIC E2E smoke: green in `6m48s`.
+- Docker backend/frontend image build: green in `8m48s`.
+
+The production deploy then sat in the SSH step for over an hour, so Codex cancelled it instead of letting a silent deploy consume the full GitHub timeout. The broader sweep found the next infra root cause: the previous mitigation still built `nginx` on the droplet, and `nginx/Dockerfile` recompiles the full React app. A local Docker probe also showed the build context was `1.073GB` because the Dockerfile copied `.git` just to compute a service-worker build hash.
+
+Final deploy-hardening fix applied:
+
+- CI now builds the production frontend/nginx image from `nginx/Dockerfile` and pushes both `frontend:{sha,latest}` and `nginx:{sha,latest}` tags.
+- `docker-compose.prod.yml` now supports `NGINX_IMAGE`, defaulting to `lms-nginx:latest`, just like `BACKEND_IMAGE`.
+- Production deploy logs into GHCR with the ephemeral Actions token, pulls both `backend:$SHA` and `nginx:$SHA`, and tags them locally as `lms-backend:latest` and `lms-nginx:latest`.
+- The droplet no longer builds backend or frontend/nginx during normal CI deploys.
+- Deploy has a `40` minute job timeout and wraps SSH in a `35m` timeout.
+- The remote script now prints timestamped checkpoints for checkout sync, Docker prune, image pull, DB/Redis startup, migrations, collectstatic, restart, and origin health checks.
+- Rollback now attempts to pull/tag both backend and nginx images for the previous SHA.
+- `nginx/Dockerfile` and `frontend/Dockerfile` now use Node 20, not Node 18, matching current frontend package engine requirements.
+- The service-worker build hash now comes from a `BUILD_SHA` build arg before falling back to local git, so Docker no longer needs `.git`.
+- A root `.dockerignore` keeps the production nginx build context scoped to `frontend/` and `nginx/`.
+
+Local validation after this sweep:
+
+- `actionlint .github/workflows/ci.yml`: passed.
+- Workflow YAML parse: passed.
+- `git diff --check`: passed.
+- Production compose config with explicit `BACKEND_IMAGE` and `NGINX_IMAGE`: passed.
+- Local Docker build of `nginx/Dockerfile` final image: passed.
+- Docker context dropped from `1.073GB` to `10.12MB`.
+
+Claude should watch for this in future PRs: normal production deploys must not run `docker compose build web` or `docker compose build nginx` on the droplet. Build immutable deploy images in CI, pull them on the server, then migrate/restart/health-check.
 
 ## Hybrid OpenMAIC Direction
 

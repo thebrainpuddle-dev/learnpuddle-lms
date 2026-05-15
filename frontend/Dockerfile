@@ -1,9 +1,11 @@
 # ---------- Frontend Dockerfile ----------
 # Stage 1: build the React app
-FROM node:18-alpine AS build
+FROM node:20-alpine AS build
 WORKDIR /app
 # Limit Node memory (helps on 2GB Droplets; npm ci can OOM)
-ENV NODE_OPTIONS=--max-old-space-size=1536
+ARG BUILD_SHA=nogit
+ENV NODE_OPTIONS=--max-old-space-size=1536 \
+    BUILD_SHA=${BUILD_SHA}
 COPY package.json package-lock.json ./
 RUN npm ci --legacy-peer-deps
 COPY . .
