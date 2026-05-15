@@ -62,17 +62,18 @@ check_db_schema_uptodate() {
 
 check_nginx_path() {
   local path="$1"
-  # -L follow redirects (nginx HTTP→HTTPS rewrite), -k allow self-signed/local
-  # cert so the loopback HTTPS hop doesn't fail verification.
-  curl -fsSLk --max-time 10 -H "Host: $DOMAIN" "http://127.0.0.1${path}" >/dev/null
+  # Probe HTTPS directly on loopback so the check stays on the origin server.
+  # Following the HTTP->HTTPS redirect would jump to public DNS/Cloudflare and
+  # can report a Cloudflare 526 even when the local nginx/backend path works.
+  curl -fsSk --max-time 10 -H "Host: $DOMAIN" "https://127.0.0.1${path}" >/dev/null
 }
 
 check_login_endpoint_code() {
   local code
-  code="$(curl -sSLk --max-time 12 -o /tmp/login-check.json -w '%{http_code}' \
+  code="$(curl -sSk --max-time 12 -o /tmp/login-check.json -w '%{http_code}' \
     -H "Host: $DOMAIN" \
     -H "Content-Type: application/json" \
-    -X POST "http://127.0.0.1/api/users/auth/login/" \
+    -X POST "https://127.0.0.1/api/users/auth/login/" \
     --data '{"email":"healthcheck@example.test","password":"not-a-real-password","portal":"tenant"}')"
 
   case "$code" in

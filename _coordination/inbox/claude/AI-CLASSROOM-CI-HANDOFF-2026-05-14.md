@@ -199,6 +199,7 @@ Fix now queued:
 - `nginx/Dockerfile` also bakes a short-lived self-signed fallback certificate into the image so standalone smoke tests can run `nginx -t` without a host SSL mount.
 - Local production-config smoke also found duplicate `proxy_*_timeout` directives in the video upload and chatbot SSE locations. Those locations now set proxy headers directly instead of including `proxy_params` and then overriding the same timeout directives.
 - Production deploy now prints nginx `ps`, recent logs, and `nginx -t` diagnostics before rollback when origin health fails.
+- Run `25911669803` showed nginx was healthy, but the health script followed the origin HTTP->HTTPS redirect out through public Cloudflare and got a Cloudflare 526. `scripts/check-origin-health.sh` now probes `https://127.0.0.1` directly with the tenant `Host` header and `-k`, so origin checks stay on the droplet.
 
 Future review rule: any deploy cleanup (`git clean`, image pruning, bind mount changes) must explicitly preserve or regenerate non-repo operational secrets, especially nginx TLS material.
 
