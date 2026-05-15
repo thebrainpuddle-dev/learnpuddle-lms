@@ -183,8 +183,11 @@ jobs:
   # ── E2E tests (BLOCKING) ─────────────────────────────────────────────────
   # Preferred: set E2E_BASE_URL + credentials to run against staging/preview.
   # Fallback: when no external target is configured, CI starts a real local
-  # Django + Vite stack, seeds the demo tenant, and runs the MAIC Playwright
-  # suite. E2E_SKIP_BLOCKING=true remains a temporary emergency bypass only.
+  # Django + Vite stack, seeds the demo tenant, and runs the MAIC classroom
+  # playback smoke. The broader portal sweep belongs in the dedicated E2E
+  # workflow so main-push CI stays fast while still protecting the AI Classroom
+  # production path. E2E_SKIP_BLOCKING=true remains a temporary emergency
+  # bypass only.
   e2e-test:
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -356,9 +359,12 @@ jobs:
         run: npx playwright install --with-deps chromium
         working-directory: frontend
 
-      - name: Run local MAIC E2E tests
+      - name: Run local MAIC E2E smoke tests
         if: steps.e2e-mode.outputs.mode == 'local'
-        run: npm run e2e
+        run: |
+          npx playwright test --config=playwright.config.cjs \
+            e2e/maic-full-playback.spec.js \
+            e2e/maic-mobile-playback.spec.js
         working-directory: frontend
         env:
           E2E_LIVE: "1"
