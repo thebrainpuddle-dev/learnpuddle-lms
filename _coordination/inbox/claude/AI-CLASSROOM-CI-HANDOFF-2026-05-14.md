@@ -129,14 +129,15 @@ Production deploy still failed, but the old SSH heredoc and dirty-checkout failu
 - Path: `/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/...`
 - Trigger: production deploy locally rebuilt and exported the same heavy backend image separately for `web`, `asgi`, `worker`, and `beat`; the backend dependency set pulled large CUDA/NVIDIA `torch` transitive wheels through optional AI/media runtime packages.
 
-Follow-up fix in progress:
+Follow-up fix applied:
 
 - `docker-compose.prod.yml` now builds one backend image, `lms-backend:latest`, from `web`.
 - `asgi`, `worker`, `worker-tts`, `beat`, and `flower` reuse `lms-backend:latest` instead of each declaring an identical `build:`.
 - Production deploy now prunes stopped containers, Docker builder cache, and unused images before rebuilding. It does **not** prune volumes, preserving Postgres, Redis, media, and static volumes.
-- Production deploy now pulls only `db` and `redis`, then builds `nginx` and `web`.
+- Production deploy now pulls the CI-built GHCR backend image for the pushed SHA and tags it as `lms-backend:latest`, then builds only `nginx` on the droplet.
+- `docker-compose.prod.yml` supports `BACKEND_IMAGE`, defaulting to `lms-backend:latest`, so future deploy paths can point all backend runtime services at the same immutable image.
 
-Claude should watch for this in future PRs: do not reintroduce duplicate backend image builds in production compose, and do not solve disk pressure by pruning Docker volumes. Longer-term, split optional heavy AI/TTS/transcription packages into dedicated worker images or CPU-only dependency constraints so `web`/`asgi` do not carry GPU-sized runtime layers.
+Claude should watch for this in future PRs: do not reintroduce duplicate backend image builds in production compose, do not make the droplet rebuild the backend image in normal CI deploys, and do not solve disk pressure by pruning Docker volumes. Longer-term, split optional heavy AI/TTS/transcription packages into dedicated worker images or CPU-only dependency constraints so `web`/`asgi` do not carry GPU-sized runtime layers.
 
 ## Hybrid OpenMAIC Direction
 

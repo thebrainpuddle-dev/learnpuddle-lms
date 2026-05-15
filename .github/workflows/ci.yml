@@ -615,13 +615,15 @@ jobs:
           docker image prune -af || true
           docker system df || true
 
-          # ── Pull base services only, then build deploy images ─────────
-          # Backend runtime services all share lms-backend:latest. Building
-          # `web` once avoids exporting the same heavy Python image as web,
-          # asgi, worker, worker-tts, beat, and flower separately.
+          # ── Pull deploy images ───────────────────────────────────────
+          # Backend runtime services all share lms-backend:latest. Use the
+          # CI-built GHCR image instead of rebuilding the heavy Python/AI
+          # image on the droplet; this avoids containerd disk exhaustion.
+          REGISTRY="ghcr.io/${{ github.repository }}"
+          docker pull "${REGISTRY}/backend:${NEW_SHA}"
+          docker tag "${REGISTRY}/backend:${NEW_SHA}" "lms-backend:latest"
           docker compose -f docker-compose.prod.yml pull db redis
           docker compose -f docker-compose.prod.yml build --no-cache nginx
-          docker compose -f docker-compose.prod.yml build web
 
           # ── Run migrations BEFORE restarting (prevents schema mismatch) ─
           # IMPORTANT: every `docker compose run` below redirects stdin from
