@@ -29,9 +29,12 @@ if [ -n "$REPO_URL" ]; then
     if [ -d "$APP_DIR/.git" ]; then
         echo "Updating existing repo..."
         cd "$APP_DIR"
+        # Keep the production checkout deterministic. This removes non-ignored
+        # drift that can block deploys, while ignored secrets such as .env stay.
         git fetch origin "$BRANCH"
         git checkout "$BRANCH"
-        git pull --ff-only origin "$BRANCH"
+        git reset --hard "origin/$BRANCH"
+        git clean -fd
     else
         echo "Cloning repo..."
         mkdir -p "$(dirname $APP_DIR)"
@@ -69,6 +72,12 @@ if [ -z "$DEPLOY_SHA" ]; then
     DEPLOY_SHA="$(git rev-parse HEAD)"
 fi
 echo "Deploying commit: ${DEPLOY_SHA}"
+
+DOMAIN="$(awk -F= '/^PLATFORM_DOMAIN=/{print $2}' .env 2>/dev/null | tail -1 | tr -d '\r')"
+if [ -z "$DOMAIN" ]; then DOMAIN="localhost"; fi
+
+echo "Ensuring nginx SSL material..."
+./scripts/ensure-nginx-ssl.sh "$DOMAIN"
 
 # Step 4: Pull immutable CI-built app images by default. Set
 # BUILD_ON_DROPLET=true only for an explicit emergency fallback; normal
@@ -120,8 +129,6 @@ fi
 echo "Starting all services..."
 $COMPOSE up -d --remove-orphans
 
-DOMAIN="$(awk -F= '/^PLATFORM_DOMAIN=/{print $2}' .env 2>/dev/null | tail -1 | tr -d '\r')"
-if [ -z "$DOMAIN" ]; then DOMAIN="localhost"; fi
 echo "Running origin health checks via domain: $DOMAIN"
 ./scripts/check-origin-health.sh docker-compose.prod.yml "$DOMAIN"
 echo "Frontend bundle at origin:"

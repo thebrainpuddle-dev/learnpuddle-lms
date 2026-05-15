@@ -174,6 +174,32 @@ Local validation after this sweep:
 
 Claude should watch for this in future PRs: normal production deploys must not run `docker compose build web` or `docker compose build nginx` on the droplet. Build immutable deploy images in CI, pull them on the server, then migrate/restart/health-check.
 
+## Seventh CI Finding - Runbooks Can Reintroduce The Same Deploy Failure
+
+After moving backend/nginx image builds to CI, Codex did a repo sweep for stale deploy guidance and found multiple docs still telling operators to run `docker compose build --no-cache web nginx` or rebuild nginx on the droplet. That would bring back the same disk/context pressure and stale-checkout behavior even if the workflow stayed fixed.
+
+Follow-up fix now queued:
+
+- `scripts/deploy-droplet.sh` now syncs `/opt/lms` deterministically with `git fetch`, `git reset --hard origin/$BRANCH`, and `git clean -fd`; ignored secrets such as `.env` stay protected by `.gitignore`.
+- Production runbooks now point operators at CI-built `backend:$SHA` and `nginx:$SHA` images, tagged locally as `lms-backend:latest` and `lms-nginx:latest`.
+- Old one-line/manual deploy docs were updated to call `./scripts/deploy-droplet.sh` instead of building `web`/`nginx` on the server.
+
+Claude/Codex future review rule: any new production deployment instruction must preserve this invariant: CI builds immutable images; the droplet only pulls, tags, migrates, restarts, and health-checks.
+
+## Eighth CI Finding - Deterministic Clean Must Preserve Origin TLS Material
+
+Run `25906403827` proved the tests/image build were green, but production deploy failed because `git clean -fd` removed untracked `nginx/ssl/` on the droplet. The new CI-built nginx image then mounted the now-empty host SSL directory over `/etc/nginx/ssl`, production nginx could not load its certificate, and the container restarted until origin health checks failed.
+
+Fix now queued:
+
+- `nginx/ssl/` is ignored by Git and excluded from Docker build contexts so origin certificates are never committed or uploaded.
+- `scripts/ensure-nginx-ssl.sh` normalizes both certificate naming conventions used by the repo (`fullchain.pem`/`privkey.pem` and `origin.pem`/`origin-key.pem`), copies from Let's Encrypt if present, and otherwise creates a temporary self-signed origin certificate so nginx can start and health checks can identify the real next issue.
+- The production workflow and `scripts/deploy-droplet.sh` call this helper immediately after checkout sync and before app restart.
+- `nginx/Dockerfile` also bakes a short-lived self-signed fallback certificate into the image so standalone smoke tests can run `nginx -t` without a host SSL mount.
+- Local production-config smoke also found duplicate `proxy_*_timeout` directives in the video upload and chatbot SSE locations. Those locations now set proxy headers directly instead of including `proxy_params` and then overriding the same timeout directives.
+
+Future review rule: any deploy cleanup (`git clean`, image pruning, bind mount changes) must explicitly preserve or regenerate non-repo operational secrets, especially nginx TLS material.
+
 ## Hybrid OpenMAIC Direction
 
 The factual fastest path is not to rebuild the classroom engine from scratch and not to paste random UI components. Treat OpenMAIC as the classroom engine/reference contract and LearnPuddle as the SaaS shell:

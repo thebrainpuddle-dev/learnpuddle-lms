@@ -621,6 +621,9 @@ jobs:
           git reset --hard origin/main
           git clean -fd
 
+          log_step "Ensuring nginx SSL material"
+          ./scripts/ensure-nginx-ssl.sh "$DOMAIN"
+
           log_step "Pruning Docker cache without touching volumes"
           # Do not prune volumes here: postgres_data, redis_data, media_files,
           # and static_files are production data.

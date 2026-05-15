@@ -33,7 +33,18 @@ COPY nginx/proxy_params /etc/nginx/proxy_params
 # Fix ownership so nginx user can write to cache, logs, and pid file.
 # NET_BIND_SERVICE capability (granted by Docker by default) allows
 # the non-root nginx process to bind to privileged ports 80 and 443.
-RUN chown -R nginx:nginx /var/cache/nginx \
+RUN apk add --no-cache openssl \
+    && mkdir -p /etc/nginx/ssl \
+    && openssl req -x509 -nodes -newkey rsa:2048 -days 30 \
+        -subj "/CN=localhost" \
+        -keyout /etc/nginx/ssl/privkey.pem \
+        -out /etc/nginx/ssl/fullchain.pem \
+    && cp /etc/nginx/ssl/fullchain.pem /etc/nginx/ssl/origin.pem \
+    && cp /etc/nginx/ssl/privkey.pem /etc/nginx/ssl/origin-key.pem \
+    && chmod 644 /etc/nginx/ssl/fullchain.pem /etc/nginx/ssl/origin.pem \
+    && chmod 600 /etc/nginx/ssl/privkey.pem /etc/nginx/ssl/origin-key.pem \
+    && chown -R nginx:nginx /etc/nginx/ssl \
+    && chown -R nginx:nginx /var/cache/nginx \
     && chown -R nginx:nginx /var/log/nginx \
     && chown -R nginx:nginx /etc/nginx/conf.d \
     && touch /var/run/nginx.pid \

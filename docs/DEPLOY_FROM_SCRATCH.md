@@ -38,14 +38,20 @@ ss -tlnp | grep :80
 # Should show "docker-proxy" or "containerd", not "nginx"
 ```
 
-**If you see a blank white screen** (main.xxx.js and main.xxx.css return 404), the nginx image may have stale frontend. Rebuild nginx (frontend is baked into the image):
+**If you see a blank white screen** (main.xxx.js and main.xxx.css return 404), the nginx image may have stale frontend. Normal production deploys should pull the CI-built nginx image for the target commit, not rebuild frontend on the droplet:
 
 ```bash
 cd /opt/lms
-git pull
+git fetch origin main
+git reset --hard origin/main
+git clean -fd
 
-# Rebuild nginx (includes frontend build)
-docker compose -f docker-compose.prod.yml build --no-cache nginx
+REGISTRY=ghcr.io/thebrainpuddle-dev/learnpuddle-lms
+NEW_SHA="$(git rev-parse HEAD)"
+
+# If this fails with an auth error, run: docker login ghcr.io
+docker pull "${REGISTRY}/nginx:${NEW_SHA}"
+docker tag "${REGISTRY}/nginx:${NEW_SHA}" lms-nginx:latest
 
 # Restart nginx
 docker compose -f docker-compose.prod.yml up -d nginx
@@ -442,12 +448,8 @@ docker compose -f docker-compose.prod.yml logs -f
 # Restart all
 docker compose -f docker-compose.prod.yml restart
 
-# Pull latest and redeploy
-git pull
-docker compose -f docker-compose.prod.yml build --no-cache web nginx
-docker compose -f docker-compose.prod.yml run --rm web python manage.py migrate --noinput
-docker compose -f docker-compose.prod.yml run --rm -u root web python manage.py collectstatic --noinput
-docker compose -f docker-compose.prod.yml up -d --build
+# Pull latest CI-built images, run migrations, restart, and health-check
+./scripts/deploy-droplet.sh
 ```
 
 **Run full deploy from your Mac (one command):**

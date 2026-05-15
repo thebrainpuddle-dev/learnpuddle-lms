@@ -3,6 +3,8 @@
 !frontend/**
 !nginx
 !nginx/**
+nginx/ssl
+nginx/ssl/**
 
 frontend/node_modules
 frontend/build

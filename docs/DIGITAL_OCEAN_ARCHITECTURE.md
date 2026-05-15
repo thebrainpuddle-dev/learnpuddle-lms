@@ -385,15 +385,24 @@ jobs:
             # Login to container registry
             doctl registry login --expiry-seconds 120
 
-            # Pull latest images
-            docker compose -f docker-compose.prod.yml pull web worker beat flower nginx
+            # Pull immutable CI-built app images by commit SHA. Backend
+            # runtime services share lms-backend:latest; nginx/frontend uses
+            # lms-nginx:latest.
+            REGISTRY="ghcr.io/thebrainpuddle-dev/learnpuddle-lms"
+            NEW_SHA="${{ github.sha }}"
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+            docker pull "${REGISTRY}/backend:${NEW_SHA}"
+            docker tag "${REGISTRY}/backend:${NEW_SHA}" lms-backend:latest
+            docker pull "${REGISTRY}/nginx:${NEW_SHA}"
+            docker tag "${REGISTRY}/nginx:${NEW_SHA}" lms-nginx:latest
+            docker compose -f docker-compose.prod.yml pull db redis
 
             # Run migrations before restarting
-            docker compose -f docker-compose.prod.yml run --rm web \
+            docker compose -f docker-compose.prod.yml run --rm -T web \
               python manage.py migrate --noinput
 
             # Collect static files
-            docker compose -f docker-compose.prod.yml run --rm -u root web \
+            docker compose -f docker-compose.prod.yml run --rm -T -u root web \
               python manage.py collectstatic --noinput
 
             # Rolling restart (nginx last to minimize downtime)
@@ -1258,25 +1267,24 @@ MANAGED
 
 **Important**: Managed Redis on DO uses TLS (`rediss://` with double-s). The port is typically 25061.
 
-### Step 8: Build, Push, and Start
+### Step 8: Pull CI Images and Start
 
 ```bash
-# 8a. Log in to container registry
-doctl registry login
+# 8a. Log in to GHCR if needed
+docker login ghcr.io
 
-# 8b. Build images
-docker compose -f docker-compose.prod.yml build web nginx openmaic
+# 8b. Pull immutable images built by GitHub Actions
+REGISTRY=ghcr.io/thebrainpuddle-dev/learnpuddle-lms
+NEW_SHA="<commit-sha-to-deploy>"
+docker pull "${REGISTRY}/backend:${NEW_SHA}"
+docker tag "${REGISTRY}/backend:${NEW_SHA}" lms-backend:latest
+docker pull "${REGISTRY}/nginx:${NEW_SHA}"
+docker tag "${REGISTRY}/nginx:${NEW_SHA}" lms-nginx:latest
 
-# 8c. Push to registry (optional, for CI/CD later)
-docker tag lms-web registry.digitalocean.com/learnpuddle/backend:latest
-docker tag lms-nginx registry.digitalocean.com/learnpuddle/nginx:latest
-docker push registry.digitalocean.com/learnpuddle/backend:latest
-docker push registry.digitalocean.com/learnpuddle/nginx:latest
-
-# 8d. Start all services
+# 8c. Start all services
 docker compose -f docker-compose.prod.yml up -d
 
-# 8e. Watch logs for startup issues
+# 8d. Watch logs for startup issues
 docker compose -f docker-compose.prod.yml logs -f --tail=100
 ```
 
@@ -1403,11 +1411,8 @@ docker compose -f docker-compose.prod.yml exec web python manage.py shell_plus
 docker compose -f docker-compose.prod.yml exec web python manage.py dbshell
 
 # Pull latest code and redeploy
-git pull origin main
-docker compose -f docker-compose.prod.yml build --no-cache web nginx
-docker compose -f docker-compose.prod.yml run --rm web python manage.py migrate --noinput
-docker compose -f docker-compose.prod.yml run --rm -u root web python manage.py collectstatic --noinput
-docker compose -f docker-compose.prod.yml up -d
+cd /opt/lms
+./scripts/deploy-droplet.sh
 
 # Emergency: force recreate all containers
 docker compose -f docker-compose.prod.yml up -d --force-recreate

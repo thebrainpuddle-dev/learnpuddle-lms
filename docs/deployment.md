@@ -141,8 +141,8 @@ curl -s http://localhost/health/
 
 ## One-Line Deploy (after initial setup)
 
-For future deployments (pull latest and restart):
+For future deployments, pull the CI-built backend/nginx images for the latest commit and run the standard health-checked deploy. Do not build `web` or `nginx` on the droplet during a normal production deploy:
 
 ```bash
-cd /opt/lms && git pull && docker compose -f docker-compose.prod.yml build --no-cache web nginx && docker compose -f docker-compose.prod.yml run --rm web python manage.py migrate --noinput && docker compose -f docker-compose.prod.yml run --rm -u root web python manage.py collectstatic --noinput && docker compose -f docker-compose.prod.yml up -d --build && ./scripts/check-origin-health.sh docker-compose.prod.yml learnpuddle.com
+cd /opt/lms && ./scripts/deploy-droplet.sh
 ```

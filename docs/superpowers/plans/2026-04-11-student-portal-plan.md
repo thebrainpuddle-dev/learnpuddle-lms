@@ -793,20 +793,10 @@ ssh root@DROPLET_IP
 # Navigate to project
 cd /opt/lms
 
-# Pull latest code
-git pull origin main
-
-# Rebuild web + nginx (frontend included in nginx multi-stage build)
-docker compose -f docker-compose.prod.yml build --no-cache web nginx
-
-# Run migrations (creates student tables)
-docker compose -f docker-compose.prod.yml run --rm web python manage.py migrate
-
-# Collect static files
-docker compose -f docker-compose.prod.yml run --rm -u root web python manage.py collectstatic --noinput
-
-# Restart all services
-docker compose -f docker-compose.prod.yml up -d
+# Pull CI-built backend/nginx images for the latest commit, run migrations,
+# collect static files, restart, and health-check. Normal production deploys
+# should not build web or nginx on the droplet.
+./scripts/deploy-droplet.sh
 
 # Verify
 docker compose -f docker-compose.prod.yml ps

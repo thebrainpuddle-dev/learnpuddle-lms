@@ -46,6 +46,7 @@ media/
 .env.local
 .env.*.local
 .env.deploy
+nginx/ssl/
 
 # IDE
 .idea/
