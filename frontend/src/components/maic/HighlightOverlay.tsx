@@ -31,16 +31,37 @@ export const HighlightOverlay = React.memo<HighlightOverlayProps>(
     const [rect, setRect] = useState<DOMRect | null>(null);
 
     // ─── Locate the element and track its position ───────────────────────
+    //
+    // Chunk 5 fix: a `window.resize` + capture-`scroll` pair misses
+    // mid-playback layout changes that aren't viewport-level — image
+    // lazy-load, font swap, sibling element animation, slide transition.
+    // The highlight cutout then stays at the OLD rect while the target
+    // element has moved or grown, so the "spotlight" is visibly off.
+    //
+    // ResizeObserver on the target element catches its own size changes
+    // synchronously after layout, which is exactly the failure mode the
+    // agent-driven spotlight needs to be robust to. window listeners
+    // remain as the viewport-level fallback (covers fullscreen mode
+    // transitions, which fire resize but may not change the target's
+    // bounding rect by itself).
     useEffect(() => {
       if (!active || !elementId) {
         setRect(null);
         return;
       }
 
+      const el = document.getElementById(elementId);
+      if (!el) {
+        setRect(null);
+        return;
+      }
+
       const updateRect = () => {
-        const el = document.getElementById(elementId);
-        if (el) {
-          setRect(el.getBoundingClientRect());
+        // Element may have been removed (e.g. scene change) between
+        // observer fire and execution — re-query to stay defensive.
+        const current = document.getElementById(elementId);
+        if (current) {
+          setRect(current.getBoundingClientRect());
         } else {
           setRect(null);
         }
@@ -48,11 +69,16 @@ export const HighlightOverlay = React.memo<HighlightOverlayProps>(
 
       updateRect();
 
-      // Re-measure on resize or scroll
+      let observer: ResizeObserver | null = null;
+      if (typeof ResizeObserver !== 'undefined') {
+        observer = new ResizeObserver(updateRect);
+        observer.observe(el);
+      }
       window.addEventListener('resize', updateRect);
       window.addEventListener('scroll', updateRect, true);
 
       return () => {
+        observer?.disconnect();
         window.removeEventListener('resize', updateRect);
         window.removeEventListener('scroll', updateRect, true);
       };
