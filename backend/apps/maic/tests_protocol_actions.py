@@ -152,6 +152,53 @@ def test_validate_action_extra_fields_rejected():
         validate_action({"id": "a", "type": "speech", "text": "x", "speeed": 1.5})
 
 
+@pytest.mark.parametrize("widget_payload", [
+    pytest.param(
+        {"id": "w1", "type": "widget_highlight", "target": "#x",
+         "selectorr": "typo"},
+        id="widget_highlight-extra-field",
+    ),
+    pytest.param(
+        {"id": "w2", "type": "widget_setState", "state": {"k": 1},
+         "extraState": "should-go-inside-state"},
+        id="widget_setState-extra-field",
+    ),
+    pytest.param(
+        {"id": "w3", "type": "widget_annotation", "target": "#x",
+         "annotation": "no-such-key"},
+        id="widget_annotation-extra-field",
+    ),
+    pytest.param(
+        {"id": "w4", "type": "widget_reveal", "target": "#x",
+         "revealMode": "no-such-key"},
+        id="widget_reveal-extra-field",
+    ),
+])
+def test_widget_actions_reject_extra_fields(widget_payload):
+    """Audit Section B.1: a hallucinated key on widget_* must be caught
+    at parse time, not at the playback engine. Each of the four widget
+    actions inherits `extra='forbid'` from _ActionBase; this test pins
+    that contract so a future refactor cannot accidentally loosen it.
+    """
+    with pytest.raises(MaicProtocolError):
+        validate_action(widget_payload)
+
+
+def test_widget_setState_inner_dict_is_permissive_by_design():
+    """`state` is `dict[str, Any]` so widgets can carry arbitrary
+    simulation variables. This is intentional and matches upstream —
+    extras BELONG inside `state`, not as siblings of `state`. Asserted
+    so the reader does not confuse this with the extra-fields rejection
+    above.
+    """
+    a = validate_action({
+        "id": "w", "type": "widget_setState",
+        "state": {"temperature": 280, "pressure": 1.2, "running": True},
+    })
+    assert a.state["temperature"] == 280
+    assert a.state["running"] is True
+
+
 def test_validate_actions_failing_index_in_message():
     with pytest.raises(MaicProtocolError, match=r"actions\[1\]"):
         validate_actions([

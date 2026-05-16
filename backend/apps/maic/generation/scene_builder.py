@@ -35,6 +35,7 @@ import logging
 import secrets
 from typing import Any
 
+from apps.maic.exceptions import MaicProtocolError
 from apps.maic.generation.types import SceneOutline
 
 
@@ -248,11 +249,19 @@ async def resolve_scene_media(
       - **scene type != "slide"** → return unchanged (no media in quiz/PBL/interactive)
       - **tenant_config is None** → return unchanged (caller opted out / no tenant context)
       - **placeholder has no matching mediaGenerations entry with a prompt**
-        → preserve placeholder (the LLM emitted an unresolvable ref;
-        out-of-scope to fix here)
+        → raise ``MaicProtocolError`` (Chunk 2 closeout — audit Section B.1).
+        This is a data-integrity violation: the LLM emitted an element
+        referencing ``gen_img_X`` while the matching ``mediaGenerations``
+        entry is absent or its ``prompt`` is empty. Failing loud at
+        build time drops the bad scene at ``_run_one``'s exception
+        boundary in scene_generator.py and surfaces the error to the
+        teacher via ``on_error``, which is better than silently
+        persisting a scene that will render "Image unavailable".
       - **orchestrator raises (MaicConfigError, MaicProviderError, etc)**
         → preserve placeholder, log warning, continue with other
         elements. One bad image must NEVER fail the whole scene.
+        Provider failures are transient and Celery can retry; data-
+        integrity violations are not transient and must not retry.
       - All image + video tasks for a scene run in parallel via
         ``asyncio.gather`` — the orchestrator's own bounded-retry +
         timeout protects against any single hang.
@@ -283,9 +292,11 @@ async def resolve_scene_media(
         if isinstance(elem_id, str):
             prompts_by_id[elem_id] = mg
 
-    # Identify placeholder elements
+    # Identify placeholder elements + collect unresolvable ones for the
+    # strict pre-flight check (Chunk 2 closeout, audit Section B.1).
     image_tasks: list[tuple[int, str, str]] = []  # (idx, placeholder, prompt)
     video_tasks: list[tuple[int, str, str]] = []
+    unresolvable: list[str] = []  # element srcs with no resolvable prompt
     for idx, elem in enumerate(elements):
         if not isinstance(elem, dict):
             continue
@@ -297,11 +308,32 @@ async def resolve_scene_media(
             prompt = (mg or {}).get("prompt")
             if isinstance(prompt, str) and prompt:
                 image_tasks.append((idx, src, prompt))
+            else:
+                unresolvable.append(src)
         elif src.startswith("gen_vid_"):
             mg = prompts_by_id.get(src)
             prompt = (mg or {}).get("prompt")
             if isinstance(prompt, str) and prompt:
                 video_tasks.append((idx, src, prompt))
+            else:
+                unresolvable.append(src)
+
+    if unresolvable:
+        # Data-integrity violation — the scene_generator emitted slide
+        # elements referencing placeholders without matching prompts.
+        # Raise so scene_generator._run_one's exception boundary drops
+        # the scene and the teacher sees a generation error (instead of
+        # a silently-broken "Image unavailable" classroom). Mirrors the
+        # audit's stated fix in _coordination/inbox/reviewer/
+        # AI-CLASSROOM-PARITY-AUDIT-2026-05-16.md Section B.1.
+        raise MaicProtocolError(
+            "unresolvable media placeholder(s) in scene "
+            f"{scene.get('id', '?')!r}: {sorted(set(unresolvable))} — "
+            "element src references a gen_img_*/gen_vid_* placeholder "
+            "but the matching mediaGenerations entry is missing or has "
+            "no prompt. This is an LLM-output integrity violation; "
+            "regenerate this scene rather than ship it with broken refs."
+        )
 
     if not image_tasks and not video_tasks:
         return scene
