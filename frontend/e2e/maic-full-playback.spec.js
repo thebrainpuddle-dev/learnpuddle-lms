@@ -230,6 +230,38 @@ test.describe('MAIC Full Playback — TEST-P0-8', () => {
     await expect(stage).toBeVisible();
   });
 
+  // ── Chunk 4 — Media-lifecycle "Image unavailable" negative regression ─────
+  //
+  // Audit Section B.2 fix: a fresh READY classroom must never render the
+  // `image-empty-placeholder` (the "Image unavailable" + alt-text card from
+  // SlideRenderer.tsx around line 304). That placeholder fires when an
+  // <image> element's src is still a `gen_img_*` literal at playback time —
+  // i.e. the backend persisted a scene whose media placeholder was never
+  // resolved to a real URL.
+  //
+  // Chunk 2 (#35) closed this hole by raising MaicProtocolError on
+  // unresolvable placeholders at scene_builder.resolve_scene_media time,
+  // which causes scene_generator._run_one to drop the bad scene before
+  // persistence. This test pins that contract end-to-end.
+  //
+  // `image-failed-placeholder` (provider call genuinely failed mid-way) is
+  // a separate, intentional UX surface and is NOT asserted absent — it is
+  // the correct teacher signal when a transient provider hiccup occurred.
+
+  test('READY classroom renders zero "image-empty-placeholder" elements', async ({ page }) => {
+    test.skip(!process.env.E2E_LIVE, 'Set E2E_LIVE=1 to run e2e tests');
+
+    await page.goto(`${BASE_URL}/teacher/ai-classroom/${classroomId}`);
+    await page.waitForSelector('[data-testid="maic-stage"]', { timeout: 20_000 });
+
+    // No "broken-ref" placeholders anywhere in the initial scene render.
+    // A configured provider's transient failure surfaces as
+    // `image-failed-placeholder`, NOT `image-empty-placeholder`.
+    await expect(
+      page.locator('[data-testid="image-empty-placeholder"]'),
+    ).toHaveCount(0);
+  });
+
   // ── Test 5: Audio unlock — "Start Class" overlay appears before playback ───
   //
   // MOB-P0-5 context: browsers block AudioContext auto-play. The "Start Class"
