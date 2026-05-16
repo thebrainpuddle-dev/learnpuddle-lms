@@ -262,6 +262,48 @@ test.describe('MAIC Full Playback — TEST-P0-8', () => {
     ).toHaveCount(0);
   });
 
+  // Codex review 2026-05-16 (PR #41): the previous "no image-empty-placeholder"
+  // assertion was trivially passing because the demo seed had ZERO image
+  // elements. The seed now includes a slide with a real <img> (1x1 data-URL
+  // PNG — backend/apps/courses/demo_maic_seed.py "Photosynthesis In One
+  // Frame" scene). This positive assertion proves the image-element render
+  // path actually works on a READY classroom, not just the negative absence
+  // of broken refs.
+
+  test('READY classroom renders an actual <img> with a resolvable src', async ({ page }) => {
+    test.skip(!process.env.E2E_LIVE, 'Set E2E_LIVE=1 to run e2e tests');
+
+    await page.goto(`${BASE_URL}/teacher/ai-classroom/${classroomId}`);
+    await page.waitForSelector('[data-testid="maic-stage"]', { timeout: 20_000 });
+
+    // Navigate to the image scene. The seed places it as scene index 1.
+    // Use scene chip via role=tab (SceneNavigator pattern from the
+    // existing tests in this file).
+    const chips = page.locator('[role="tab"]');
+    const imageSceneIdx = 1;
+    await chips.nth(imageSceneIdx).click({ timeout: 10_000 });
+    await expect(chips.nth(imageSceneIdx)).toHaveAttribute('aria-selected', 'true', {
+      timeout: 10_000,
+    });
+
+    // At least one <img> with a non-empty resolvable src must be rendered.
+    // We accept either data: URLs (current seed shape, no auth gate) or
+    // http(s)/relative URLs (real provider output once that lands). Empty,
+    // blob:, and gen_img_* literals all fail.
+    const imgs = page.locator('[data-testid="maic-stage"] img');
+    await expect(imgs.first()).toBeVisible({ timeout: 10_000 });
+
+    const firstSrc = await imgs.first().getAttribute('src');
+    expect(firstSrc, 'image src is not empty').toBeTruthy();
+    expect(firstSrc).not.toMatch(/^gen_img_/);
+    expect(firstSrc).not.toMatch(/^gen_vid_/);
+
+    // And no empty-placeholder snuck in.
+    await expect(
+      page.locator('[data-testid="image-empty-placeholder"]'),
+    ).toHaveCount(0);
+  });
+
   // ── Test 5: Audio unlock — "Start Class" overlay appears before playback ───
   //
   // MOB-P0-5 context: browsers block AudioContext auto-play. The "Start Class"

@@ -211,6 +211,23 @@ Recorded verbatim from the handoff so subsequent PRs inherit them:
 - No direct code copy without `Source: THU-MAIC/OpenMAIC <commit-sha> <path>` traceability header.
 - No commit unless backend/frontend/e2e targeted validations pass or failures are documented.
 
+### Hard rule added 2026-05-16 (post Codex review of PR #41)
+
+**No self-skipping acceptance tests for AI-Classroom-critical flows.**
+
+For PBL, media lifecycle, audio sync, WebSocket events, agent handoff, fullscreen, and teacher-create flows: the test MUST either pass against required CI or be explicitly listed as manual-only debt. `test.skip()` based on fixture-shape detection is forbidden for these paths.
+
+Why: PR #41's first iteration shipped `maic-pbl-flow.spec.js` that gracefully skipped all 4 cases because the seed had no PBL scene. Codex's review called this out: "looks green but isn't real." A passing CI with all-skipped tests is worse than a red CI — it gives false confidence. Same trap on media: the "no image-empty-placeholder" assertion passed only because `image_provider: disabled` and the seed had zero image elements, so it proved "no placeholder when no images" rather than "image lifecycle works when configured."
+
+How to apply:
+- Tests assert behavior X → fixture must guarantee X is reachable. Seed deterministically (extend `create_demo_tenant` / `demo_maic_seed.py`) OR have the test create it via the real product flow before asserting.
+- Test names must say what behavior they prove, not what setup they require.
+- For media: assertions need a classroom with real image elements AND verification that `<img>` actually renders — not just absence of a broken placeholder.
+
+### Upstream-SHA pinning rule added 2026-05-16
+
+Each PR that lifts/adapts an OpenMAIC source file MUST cite the upstream SHA in effect when the port was made. The Chunk 1 audit referenced local OpenMAIC `10b1fc8`; upstream `THU-MAIC/OpenMAIC` main has since advanced to `47cc2a5`. Before the next port (Chunk 7, scene_generator.py cleanup), `cd /Volumes/CrucialX9/OpenMAIC && git fetch && git log -1 origin/main` to record the live upstream SHA and re-read the file there.
+
 ---
 
 ## Validation performed in this PR
@@ -226,5 +243,19 @@ The full backend/frontend/E2E suites are not re-run because no product code chan
 Next PR (Chunk 2) will carry the first batch of backend tests + the `scene_builder` placeholder strictness fix and will run the full backend suite locally before push.
 
 ---
+
+## Addendum — Codex review of PR #41 (2026-05-16)
+
+After Chunks 1–6 landed in the combined PR #41, Codex's review found two coverage-shaped problems and one CI-config bug that this audit failed to anticipate. Recorded here so the next PR planning isn't surprised by the same shape:
+
+1. **`maic-pbl-flow.spec.js` skipped all 4 cases in CI** because the seed (`create_demo_tenant` → `demo_maic_seed.build_demo_maic_content`) ships exactly one slide-type scene. The spec's `findPblSceneIndex` returned `null`, the spec called `test.skip()`, and CI showed green-with-zero-PBL-coverage. **Fix applied: the seed now ships a deterministic PBL scene matching the upstream `PBLProjectConfig` shape (4 agents, 3 issues, one active), and the spec now hard-fails instead of skipping.**
+
+2. **`"image-empty-placeholder" count = 0` was a tautology** because the seed had `image_provider: "disabled"` and zero image elements. **Fix applied: the seed now ships a slide with a real `<img>` element (1x1 data-URL PNG so no provider call required), and `maic-full-playback.spec.js` adds a positive `<img> renders` assertion after navigating to that scene.**
+
+3. **`e2e.yml` ran ALL 36 specs unfiltered on every PR**, contradicting the CI handoff's section 4 ratified direction that the wider `teacher-portal-live-harness.spec.js` should move to scheduled/manual. The harness has known WebSocket-routing failures on the local Vite stack (`/ws/notifications/` 404) and was reliably red on every PR. **Fix applied: `e2e.yml` now runs only the maic-* product-critical specs.** A separate scheduled workflow remains a follow-up.
+
+4. **Overlay fix is hardening, not parity.** Chunk 5's `ResizeObserver` addition fixes the real-world misalignment under mid-playback element resize but is NOT the OpenMAIC SVG-viewBox 0-100 percent geometry rewrite. Codex left this as known follow-up (Chunk 5b).
+
+5. **Next slice should be vertical, not horizontal.** Codex's product call: teacher wizard → v2/PBL generation → READY classroom → real playback → audio advances → agent handoff changes → media renders → PBL role/issue/chat works → fullscreen layout holds. One vertical product slice end-to-end, not another horizontal foundation slice.
 
 Codex, please review this PR before merge.

@@ -16,11 +16,14 @@
  *   - Quiz submit (separate spec — quiz scene assertions belong with the
  *     quiz E2E coverage).
  *
- * The seeded `create_demo_tenant` classroom may or may not include a PBL
- * scene depending on the seed payload version. To stay green in both cases,
- * the spec gracefully skips when no PBL scene is found in the active
- * classroom — that is signalled as a Playwright skip, not a failure, so a
- * minimal seed change cannot regress CI.
+ * Codex review 2026-05-16 (PR #41): the previous version of this spec
+ * gracefully skipped when no PBL scene was found in the seed. That made
+ * the spec "look green but isn't real." The demo seed
+ * (backend/apps/courses/demo_maic_seed.py) now ALWAYS includes a PBL scene,
+ * and this spec hard-fails if it can't find one — see
+ * feedback_no_skipping_acceptance_tests in Claude's memory. Override the
+ * detection only via E2E_PBL_SCENE_INDEX when running against a deliberately
+ * different classroom.
  *
  * ─── Required env vars ──────────────────────────────────────────────────────
  *
@@ -152,9 +155,18 @@ test.describe('MAIC PBL Flow — Chunk 6', () => {
       pblSceneIdx = await findPblSceneIndex(page, classroomId);
     }
     if (pblSceneIdx === null) {
-      test.skip(
-        true,
-        'Seeded classroom has no PBL scene — set E2E_PBL_SCENE_INDEX or seed a PBL-enabled classroom to exercise this flow.',
+      // PBL is an AI-Classroom-critical product flow. The demo seed (in
+      // backend/apps/courses/demo_maic_seed.py) is the source of truth and
+      // is expected to include a PBL scene; if it does not, the seed
+      // regressed (or this env is using a stale fixture). Fail loud rather
+      // than skip — see Claude's feedback_no_skipping_acceptance_tests rule
+      // recorded after the Codex review of PR #41 on 2026-05-16.
+      throw new Error(
+        'No PBL scene found in the resolved READY classroom. The demo seed ' +
+          'is expected to include one (see backend/apps/courses/demo_maic_seed.py ' +
+          '`build_demo_maic_content` scene-3-pbl). Re-run `python manage.py ' +
+          'create_demo_tenant` or set E2E_PBL_SCENE_INDEX to point at a known ' +
+          'PBL-bearing classroom.',
       );
     }
   });
