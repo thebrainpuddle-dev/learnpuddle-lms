@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from apps.maic.exceptions import MaicConfigError, MaicProviderError
+from apps.maic.exceptions import MaicConfigError, MaicProtocolError, MaicProviderError
 from apps.maic.generation.scene_builder import resolve_scene_media
 from apps.maic.media.types import (
     ImageGenerationResult,
@@ -107,16 +107,21 @@ async def test_resolver_no_op_when_no_placeholders():
 
 
 @pytest.mark.asyncio
-async def test_resolver_skips_placeholder_without_matching_media_generation():
+async def test_resolver_raises_on_placeholder_without_matching_media_generation():
     """Element has gen_img_xyz src but no matching mediaGenerations entry —
-    we don't know what prompt to use, so preserve the placeholder
-    (frontend renders a skeleton)."""
+    this is an LLM-output integrity violation. Raise MaicProtocolError
+    so scene_generator._run_one drops the scene and surfaces the error
+    to the teacher rather than persisting a classroom with broken refs.
+
+    Audit Section B.1 fix: the previous behavior silently preserved the
+    placeholder, which surfaced as "Image unavailable" in the player.
+    """
     scene = _slide_scene(elements=[
         {"type": "image", "src": "gen_img_orphan", "id": "el-1"},
     ])
     outline = _outline_with_media([])  # empty
-    result = await resolve_scene_media(scene, outline, _tenant_cfg())
-    assert result["content"]["canvas"]["elements"][0]["src"] == "gen_img_orphan"
+    with pytest.raises(MaicProtocolError, match="gen_img_orphan"):
+        await resolve_scene_media(scene, outline, _tenant_cfg())
 
 
 # ── Happy path: orchestrator returns real URLs ────────────────────────
@@ -318,10 +323,14 @@ async def test_resolver_partial_failure_isolates_to_failing_element(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_resolver_handles_missing_prompt_field(monkeypatch):
-    """mediaGenerations entry exists but has no prompt → skip
-    (don't call orchestrator with empty prompt; that would fail
-    Pydantic validation anyway)."""
+async def test_resolver_raises_on_placeholder_with_empty_prompt(monkeypatch):
+    """mediaGenerations entry exists but has no `prompt` key — same
+    integrity violation as a missing entry. Raise instead of silently
+    skipping (Chunk 2 closeout, audit Section B.1).
+
+    The orchestrator must NOT be called in this path (calling it with
+    an empty prompt would only surface the same error one layer later).
+    """
     scene = _slide_scene(elements=[
         {"type": "image", "src": "gen_img_noprompt", "id": "el-1"},
     ])
@@ -342,9 +351,53 @@ async def test_resolver_handles_missing_prompt_field(monkeypatch):
         "apps.maic.media.orchestrator.generate_image", _should_not_be_called,
     )
 
-    result = await resolve_scene_media(scene, outline, _tenant_cfg())
-    assert called is False
-    assert result["content"]["canvas"]["elements"][0]["src"] == "gen_img_noprompt"
+    with pytest.raises(MaicProtocolError, match="gen_img_noprompt"):
+        await resolve_scene_media(scene, outline, _tenant_cfg())
+    assert called is False  # short-circuited before orchestrator dispatch
+
+
+@pytest.mark.asyncio
+async def test_resolver_raises_on_placeholder_with_empty_string_prompt():
+    """Entry has `prompt=""` — same integrity violation. Empty-string
+    is no more a valid prompt than missing. Both must fail loud."""
+    scene = _slide_scene(elements=[
+        {"type": "image", "src": "gen_img_blank", "id": "el-1"},
+    ])
+    outline = _outline_with_media([
+        {"elementId": "gen_img_blank", "type": "image", "prompt": ""},
+    ])
+    with pytest.raises(MaicProtocolError, match="gen_img_blank"):
+        await resolve_scene_media(scene, outline, _tenant_cfg())
+
+
+@pytest.mark.asyncio
+async def test_resolver_raises_on_video_placeholder_without_media_generation():
+    """Parity with the image case for video placeholders."""
+    scene = _slide_scene(elements=[
+        {"type": "video", "src": "gen_vid_orphan", "id": "el-1"},
+    ])
+    outline = _outline_with_media([])
+    with pytest.raises(MaicProtocolError, match="gen_vid_orphan"):
+        await resolve_scene_media(scene, outline, _tenant_cfg())
+
+
+@pytest.mark.asyncio
+async def test_resolver_raise_message_lists_all_unresolvable_placeholders():
+    """When several placeholders are unresolvable, the error message
+    includes every offender so the teacher / log reader sees the full
+    scope, not just the first one."""
+    scene = _slide_scene(elements=[
+        {"type": "image", "src": "gen_img_a", "id": "1"},
+        {"type": "image", "src": "gen_img_b", "id": "2"},
+        {"type": "video", "src": "gen_vid_c", "id": "3"},
+    ])
+    outline = _outline_with_media([])
+    with pytest.raises(MaicProtocolError) as exc_info:
+        await resolve_scene_media(scene, outline, _tenant_cfg())
+    msg = str(exc_info.value)
+    assert "gen_img_a" in msg
+    assert "gen_img_b" in msg
+    assert "gen_vid_c" in msg
 
 
 @pytest.mark.asyncio
