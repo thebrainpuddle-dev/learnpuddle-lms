@@ -703,6 +703,16 @@ export function useMAICGeneration(): UseMAICGenerationReturn {
           subject: config.subject,
           syllabusBoard: config.syllabusBoard,
           classGuide: config.classGuide,
+          // Chunk 3a typed pedagogy targets — only included when populated so
+          // omission lands an origin/main-identical request payload.
+          learningObjective: config.learningObjective,
+          misconceptions: config.misconceptions?.length
+            ? config.misconceptions
+            : undefined,
+          successCriteria: config.successCriteria?.length
+            ? config.successCriteria
+            : undefined,
+          pblBrief: config.pblBrief,
           pdfText: config.pdfText,
           researchContext: config.enableWebSearch ? config.webSearchContext : undefined,
           agents: preSelectedAgents,

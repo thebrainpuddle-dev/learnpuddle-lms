@@ -203,15 +203,26 @@ Fix now queued:
 
 Future review rule: any deploy cleanup (`git clean`, image pruning, bind mount changes) must explicitly preserve or regenerate non-repo operational secrets, especially nginx TLS material.
 
-## Hybrid OpenMAIC Direction
+## Ratified Direction - Hybrid OpenMAIC-First, Not From-Scratch
 
-The factual fastest path is not to rebuild the classroom engine from scratch and not to paste random UI components. Treat OpenMAIC as the classroom engine/reference contract and LearnPuddle as the SaaS shell:
+Product decision: do **not** continue rebuilding every AI Classroom behavior from scratch. The factual fastest path to OpenMAIC-level quality is a hybrid adoption:
 
-- LearnPuddle owns tenant/auth/profile access, class ownership, DO Spaces keys, audit logs, publishing, and student/teacher permissions.
-- The OpenMAIC-style layer owns generation contracts, scene/action schemas, orchestration, playback/action execution, multi-agent/PBL flow, media actions, and eval harness.
-- Integration boundary: teacher creates in LearnPuddle; LearnPuddle sends a signed/tenant-scoped payload; the engine returns a validated classroom manifest/media manifest; LearnPuddle persists and serves it behind tenant/user authorization.
+- Use the THU-MAIC organization as the upstream reference set: https://github.com/THU-MAIC
+- Read the detailed repo-by-repo upstream map before editing: `_coordination/inbox/claude/THU-MAIC-UPSTREAM-MAP-2026-05-16.md`
+- Primary source: `THU-MAIC/OpenMAIC` for classroom generation, orchestration, action schema, playback, multi-agent/PBL flow, media actions, export/import, and eval harness.
+- Supporting references: `MAIC-Core` for algorithmic contracts, `MAIC-UI` only where its license/technical fit is explicitly accepted, and `SimClass` for classroom-agent behavior ideas.
+- LearnPuddle remains the SaaS shell and security boundary: tenant/auth/profile access, creator ownership, class ownership, school/course assignment, student/teacher permissions, DO Spaces tenant keys, audit logs, publishing, and admin controls.
+- Integration boundary: teacher creates in LearnPuddle; LearnPuddle sends a signed tenant/user/class payload; the OpenMAIC-style engine returns a validated classroom/media/action manifest; LearnPuddle persists and serves it behind tenant/user authorization.
 
-This should improve output quality and speed because the engine contract/action/playback discipline comes across intact while SaaS isolation remains native to LearnPuddle.
+License decision for Claude: the user has stated that LearnPuddle has permission/license access to use the OpenMAIC code and methods, and OpenMAIC is publicly available open-source software. The public repo currently advertises AGPL-3.0 and a commercial licensing path, while our Obsidian ADR-001a records that full OpenMAIC license rights were obtained. Therefore:
+
+- Do not treat licensing as a reason to keep doing clean-room rebuilds.
+- Do verify the internal license/ADR record before merging direct code lifts.
+- Every lifted frontend/source file must keep a traceability header: `Source: THU-MAIC/OpenMAIC <commit-sha> <relative-path>`.
+- Backend ports from TypeScript to Python should reference the upstream file path in module docstrings/tests.
+- Prefer lifting/adapting upstream contracts and engines over inventing new ones, unless LearnPuddle's SaaS boundary requires a deliberate adaptation.
+
+This should improve quality and speed because the proven engine contract/action/playback discipline comes across intact while LearnPuddle still owns multi-school isolation, storage, auth, and product workflows.
 
 ## Remaining AI Classroom Foundation Work For Claude
 
@@ -243,14 +254,14 @@ Priority 5 - Review and release discipline:
 
 ## Suggested Claude Prompt
 
-You are Claude working in `/Volumes/CrucialX9/learnpuddle-lms`. Pull latest `main` first. Your goal is to close the OpenMAIC gap for AI Classroom, not to create demo-only fixes. Use the Obsidian vault at `/Volumes/CrucialX9/obsidian-vault/agent-hq/projects/learnpuddle-lms/maic-rebuild/` as project memory, and compare implementation patterns against the open OpenMAIC repos at `https://github.com/THU-MAIC`.
+You are Claude working in `/Volumes/CrucialX9/learnpuddle-lms`. Pull latest `main` first. Your goal is to close the OpenMAIC gap for AI Classroom, not to create demo-only fixes. The product decision is **hybrid OpenMAIC-first**: use the THU-MAIC org repos at `https://github.com/THU-MAIC`, especially `THU-MAIC/OpenMAIC`, as the source implementation/reference contract rather than rebuilding every behavior from scratch. Before editing, read `_coordination/inbox/claude/THU-MAIC-UPSTREAM-MAP-2026-05-16.md` and the Obsidian copy in `maic-rebuild/reference/THU-MAIC-UPSTREAM-MAP-2026-05-16.md`. The user has stated that LearnPuddle has license/permission to use OpenMAIC code and methods; Obsidian ADR-001a records full OpenMAIC license rights. Verify that record, keep source traceability headers/docstrings, then lift/adapt upstream contracts and engines where technically fit.
 
 Work in production-real slices. Do not mock internal libraries, audio, websocket, LangGraph, media, tenant isolation, or generation paths. If a unit test cannot run production-real, move it to Playwright or document a manual live smoke.
 
 Start with:
 1. Audit the current teacher AI Classroom wizard, v2 generation path, PBL renderer, action engine, media resolver, audio timeline, websocket handoffs, and classroom playback layout.
 2. Produce a short file-level plan before editing.
-3. Implement strict schema/action validation, media lifecycle hardening, v2/PBL-first teacher wizard routing, and a live teacher regression harness in small commits.
+3. Implement strict schema/action validation, media lifecycle hardening, v2/PBL-first teacher wizard routing, and a live teacher regression harness by lifting/adapting the OpenMAIC contract/action/playback/generation patterns where possible.
 4. Validate with backend tests, frontend tests/build, and a real local teacher portal run.
 5. Open a PR and state that Codex must review the work before merge.
 

@@ -181,6 +181,57 @@ class MaicGenerationCreateView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Chunk 3a — typed pedagogy fields. These surface the things the
+        # planning contract already names ("misconceptions, checks,
+        # PBL/activity brief, discussion handoffs") as structured input
+        # rather than burying them in the free-form classGuide blob. All
+        # optional; absent → behaves exactly like origin/main.
+        learning_objective, lo_error = _optional_text(
+            _first_present(body, "learningObjective", "learning_objective"),
+            "learningObjective",
+            max_chars=500,
+        )
+        if lo_error:
+            return Response(
+                {"error": lo_error},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        misconceptions, mis_error = _optional_string_list(
+            _first_present(body, "misconceptions"),
+            "misconceptions",
+            max_items=5,
+            max_chars=200,
+        )
+        if mis_error:
+            return Response(
+                {"error": mis_error},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        success_criteria, sc_error = _optional_string_list(
+            _first_present(body, "successCriteria", "success_criteria"),
+            "successCriteria",
+            max_items=5,
+            max_chars=200,
+        )
+        if sc_error:
+            return Response(
+                {"error": sc_error},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        pbl_brief, pbl_brief_error = _optional_text(
+            _first_present(body, "pblBrief", "pbl_brief"),
+            "pblBrief",
+            max_chars=1000,
+        )
+        if pbl_brief_error:
+            return Response(
+                {"error": pbl_brief_error},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         pdf_text, pdf_error = _optional_text(
             _first_present(body, "pdfText", "pdf_text"),
             "pdfText",
@@ -318,6 +369,10 @@ class MaicGenerationCreateView(APIView):
             subject=subject,
             syllabus_board=syllabus_board,
             scene_count=scene_count,
+            learning_objective=learning_objective,
+            misconceptions=misconceptions,
+            success_criteria=success_criteria,
+            pbl_brief=pbl_brief,
         )
         requirement_text = _build_requirement_text(
             topic=topic,
@@ -354,6 +409,18 @@ class MaicGenerationCreateView(APIView):
             requirements["syllabusBoard"] = syllabus_board
         if class_guide:
             requirements["classGuide"] = class_guide
+        # Chunk 3a — persist typed pedagogy fields onto requirements so
+        # generation tasks downstream (outline / scene / pbl design) can
+        # consult them directly, not just through the rendered teacher
+        # context string.
+        if learning_objective:
+            requirements["learningObjective"] = learning_objective
+        if misconceptions:
+            requirements["misconceptions"] = misconceptions
+        if success_criteria:
+            requirements["successCriteria"] = success_criteria
+        if pbl_brief:
+            requirements["pblBrief"] = pbl_brief
         if teacher_context:
             requirements["teacherContext"] = teacher_context
         if pdf_text:
@@ -541,6 +608,48 @@ def _optional_agents(value: Any) -> tuple[list[dict[str, Any]], str | None]:
     return value, None
 
 
+def _optional_string_list(
+    value: Any,
+    field_name: str,
+    *,
+    max_items: int,
+    max_chars: int,
+) -> tuple[list[str], str | None]:
+    """Parse an optional `list[str]` field with per-item length cap.
+
+    Used by Chunk 3a pedagogy fields (misconceptions, successCriteria)
+    to surface structured class-guide intent on the v2 generate POST.
+    Empty / missing → empty list (no error). Non-string items, oversized
+    items, or oversized lists → 400-style error string for the view to
+    surface.
+
+    Mirrors `_optional_agents` shape and `_optional_text` length-limit
+    discipline so the surrounding parsing code stays uniform.
+    """
+    if value in (None, ""):
+        return [], None
+    if not isinstance(value, list):
+        return [], f"{field_name} must be a list of strings"
+    if len(value) > max_items:
+        return [], f"{field_name} must contain at most {max_items} items"
+    cleaned: list[str] = []
+    for idx, item in enumerate(value):
+        if not isinstance(item, str):
+            return [], f"{field_name}[{idx}] must be a string"
+        trimmed = item.strip()
+        if not trimmed:
+            # Blank entries are silently dropped — UI gives users 3-5
+            # always-rendered input rows; submitting with 2 filled is
+            # the common case, not an error.
+            continue
+        if len(trimmed) > max_chars:
+            return [], (
+                f"{field_name}[{idx}] must be at most {max_chars} characters"
+            )
+        cleaned.append(trimmed)
+    return cleaned, None
+
+
 def _language_label(language: str) -> str:
     value = language.strip()
     return _LANGUAGE_LABELS.get(value.lower(), value or "English")
@@ -594,6 +703,10 @@ def _build_teacher_context(
     subject: str | None,
     syllabus_board: str | None,
     scene_count: int | None,
+    learning_objective: str | None = None,
+    misconceptions: list[str] | None = None,
+    success_criteria: list[str] | None = None,
+    pbl_brief: str | None = None,
 ) -> str:
     lines: list[str] = []
     class_frame = [
@@ -606,6 +719,27 @@ def _build_teacher_context(
     if class_frame:
         lines.append("## Teacher Class Context")
         lines.extend(f"- {line}" for line in class_frame)
+    # Chunk 3a — typed pedagogy targets. Emit each populated field as
+    # an explicit, labeled bullet so the LLM can honor the planning
+    # contract's stated rules ("Reflect ... misconceptions, checks,
+    # PBL/activity brief, and discussion handoffs"). The teacher-class-
+    # guide free-text remains below as the human's narrative wrapper.
+    pedagogy: list[str] = []
+    if learning_objective:
+        pedagogy.append(f"Learning objective: {learning_objective}")
+    if misconceptions:
+        pedagogy.append("Misconceptions to address:")
+        pedagogy.extend(f"  - {item}" for item in misconceptions)
+    if success_criteria:
+        pedagogy.append("Success criteria:")
+        pedagogy.extend(f"  - {item}" for item in success_criteria)
+    if pbl_brief:
+        pedagogy.append(f"PBL brief: {pbl_brief}")
+    if pedagogy:
+        if lines:
+            lines.append("")
+        lines.append("## Pedagogy Targets")
+        lines.extend(f"- {line}" if not line.startswith(" ") else line for line in pedagogy)
     if class_guide:
         if lines:
             lines.append("")

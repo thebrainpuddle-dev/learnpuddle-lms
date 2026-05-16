@@ -33,6 +33,17 @@ export const LaserPointer = React.memo<LaserPointerProps>(
     const trailRef = useRef<TrailPoint[]>([]);
 
     // ─── Mouse tracking ──────────────────────────────────────────────────
+    //
+    // Chunk 5 fix: split agent-pinned mode and mouse-follow mode cleanly.
+    // Previously the mouse listener was attached unconditionally, so when
+    // the agent's `laser` action fired and pinned the dot to an element,
+    // any mouse-move on the page yanked the dot away from the element —
+    // a race the agent's intent always lost.
+    //
+    // New behavior:
+    //   - targetElementId set  → pin to that element via ResizeObserver,
+    //                            ignore mouse events
+    //   - targetElementId null → manual mouse-follow (presentation tool)
     const handleMouseMove = useCallback((e: MouseEvent) => {
       setPosition({ x: e.clientX, y: e.clientY });
       idRef.current += 1;
@@ -49,9 +60,17 @@ export const LaserPointer = React.memo<LaserPointerProps>(
       }
 
       if (targetElementId) {
+        // Agent-pinned mode — track the element via ResizeObserver +
+        // window.resize so the dot follows lazy-loaded image growth,
+        // font swaps, slide transitions, and fullscreen geometry
+        // changes. Mouse events are intentionally NOT attached here.
         const target = document.getElementById(targetElementId);
-        if (target) {
-          const rect = target.getBoundingClientRect();
+        if (!target) return;
+
+        const updatePos = () => {
+          const current = document.getElementById(targetElementId);
+          if (!current) return;
+          const rect = current.getBoundingClientRect();
           const next = {
             x: rect.left + rect.width / 2,
             y: rect.top + rect.height / 2,
@@ -61,9 +80,27 @@ export const LaserPointer = React.memo<LaserPointerProps>(
           const point: TrailPoint = { ...next, id: idRef.current };
           trailRef.current = [...trailRef.current.slice(-7), point];
           setTrail([...trailRef.current]);
+        };
+
+        updatePos();
+
+        let observer: ResizeObserver | null = null;
+        if (typeof ResizeObserver !== 'undefined') {
+          observer = new ResizeObserver(updatePos);
+          observer.observe(target);
         }
+        window.addEventListener('resize', updatePos);
+
+        return () => {
+          observer?.disconnect();
+          window.removeEventListener('resize', updatePos);
+          if (rafRef.current !== null) {
+            cancelAnimationFrame(rafRef.current);
+          }
+        };
       }
 
+      // Manual mouse-follow mode (presentation tool, no agent action).
       window.addEventListener('mousemove', handleMouseMove);
       return () => {
         window.removeEventListener('mousemove', handleMouseMove);

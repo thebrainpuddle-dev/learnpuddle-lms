@@ -13598,3 +13598,30 @@ No new security tasks assigned in `_coordination/tasks/` or
 `_coordination/inbox/backend-security/`. Standing by.
 
 — backend-security
+
+
+## 2026-05-16 — Claude — PR #41 overnight automode fixes
+
+**Reference:** `_coordination/inbox/claude/AI-CLASSROOM-OVERNIGHT-AUTOMODE-2026-05-16.md` (incoming) — backend-test red + e2e red on PR #41 (`codex/ai-classroom-full`).
+
+Pushed `<pending-sha>` with two focused fixes:
+
+1. **Backend seed assertion**: `backend/tests/courses/test_seed_maic_test_classroom.py` was pinning the OLD 1-scene contract. The seed now ships 3 deterministic scenes (slide bundle, image slide, PBL) — that contract is canonical per the PR #41 Codex review. Updated the test to assert:
+   - `len(content_scenes) == 3` with `["slide", "slide", "pbl"]` type sequence
+   - 3-entry `sceneSlideBounds` with correct per-scene boundaries
+   - ≥6 speech actions total (5 from scene-0 bundle + 1 from image-slide narration)
+   - Image scene has a real `<image>` element with non-placeholder src
+   - PBL scene's `projectConfig` parses against `PBLProjectConfig` Pydantic types AND has ≥1 selectable role + exactly 1 active issue + non-empty `generated_questions` on that issue
+   Per the rule "Do not shrink seed output" — widened the test instead.
+
+2. **PBL send-button selector**: `frontend/e2e/maic-pbl-flow.spec.js` was using a global `getByRole('button', { name: /send message/i })` which strict-mode-failed because the classroom-level chat panel also exposes a "Send message" button on the same page. Scoped the locator to `chatInput.locator('..')` — the immediate flex-row parent of the PBL textarea + send button, which uniquely contains both.
+
+Per the rule "Do not skip or loosen" — kept the assertions strict; only narrowed the locator.
+
+**Validation locally:**
+- Direct `PBLProjectConfig.model_validate()` smoke against `build_demo_maic_content()` output → parses clean. 3 scenes, 4 agents, 3 issues with exactly 1 active.
+- `playwright test --list e2e/maic-pbl-flow.spec.js` → 4 tests listed clean.
+
+CI should pick up the next push.
+
+— Claude

@@ -212,6 +212,56 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
     useDraftCache<string>('maic.draft.syllabusBoard.v2', 'Generic');
   const { value: classGuide, setValue: setClassGuide, clearDraft: clearClassGuideDraft } =
     useDraftCache<string>('maic.draft.classGuide.v1', '');
+  // Chunk 3b — typed pedagogy targets that mirror the backend's
+  // _build_teacher_context "## Pedagogy Targets" block. Each is optional;
+  // blanks are dropped before submit. Separate cache keys (not nested under
+  // classGuide) so the user's free-form guide and structured fields are
+  // independently restored across reloads.
+  const {
+    value: learningObjective,
+    setValue: setLearningObjective,
+    clearDraft: clearLearningObjectiveDraft,
+  } = useDraftCache<string>('maic.draft.learningObjective.v1', '');
+  const {
+    value: misconceptionsCsv,
+    setValue: setMisconceptionsCsv,
+    clearDraft: clearMisconceptionsDraft,
+  } = useDraftCache<string>('maic.draft.misconceptions.v1', '');
+  const {
+    value: successCriteriaCsv,
+    setValue: setSuccessCriteriaCsv,
+    clearDraft: clearSuccessCriteriaDraft,
+  } = useDraftCache<string>('maic.draft.successCriteria.v1', '');
+  const {
+    value: pblBrief,
+    setValue: setPblBrief,
+    clearDraft: clearPblBriefDraft,
+  } = useDraftCache<string>('maic.draft.pblBrief.v1', '');
+
+  /**
+   * Parse a newline-separated list, drop blank lines + trim each entry, then
+   * cap to the backend's `_optional_string_list` max-items (5) so the user
+   * cannot submit a request that the server would reject. Defense at the
+   * UI boundary; the server still validates.
+   */
+  const parseLinesList = useCallback(
+    (raw: string): string[] =>
+      raw
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .slice(0, 5),
+    [],
+  );
+
+  const misconceptionsList = useMemo(
+    () => parseLinesList(misconceptionsCsv),
+    [misconceptionsCsv, parseLinesList],
+  );
+  const successCriteriaList = useMemo(
+    () => parseLinesList(successCriteriaCsv),
+    [successCriteriaCsv, parseLinesList],
+  );
   const [pdfText, setPdfText] = useState<string | undefined>();
   const [language, setLanguage] = useState('en');
   const [agentCount, setAgentCount] = useState(3);
@@ -365,6 +415,13 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
         subject: subject.trim() || undefined,
         syllabusBoard: syllabusBoard.trim() || undefined,
         classGuide: guide || undefined,
+        // Chunk 3b — typed pedagogy targets; omit when empty so the request
+        // payload stays identical to origin/main for users who don't fill
+        // the new optional inputs.
+        learningObjective: learningObjective.trim() || undefined,
+        misconceptions: misconceptionsList.length ? misconceptionsList : undefined,
+        successCriteria: successCriteriaList.length ? successCriteriaList : undefined,
+        pblBrief: pblBrief.trim() || undefined,
       };
 
       if (useV2Generation) {
@@ -391,6 +448,10 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
       subject,
       syllabusBoard,
       resolvedClassGuide,
+      learningObjective,
+      misconceptionsList,
+      successCriteriaList,
+      pblBrief,
       useV2Generation,
       startV2Generation,
       startOutlineGeneration,
@@ -457,6 +518,10 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
       clearSubjectDraft();
       clearBoardDraft();
       clearClassGuideDraft();
+      clearLearningObjectiveDraft();
+      clearMisconceptionsDraft();
+      clearSuccessCriteriaDraft();
+      clearPblBriefDraft();
       onComplete?.(classroomId);
     }
   }, [
@@ -467,6 +532,10 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
     clearSubjectDraft,
     clearBoardDraft,
     clearClassGuideDraft,
+    clearLearningObjectiveDraft,
+    clearMisconceptionsDraft,
+    clearSuccessCriteriaDraft,
+    clearPblBriefDraft,
   ]);
 
   // ─── Outline change handler ───────────────────────────────────────────────
@@ -487,6 +556,10 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
     clearSubjectDraft();
     clearBoardDraft();
     clearClassGuideDraft();
+    clearLearningObjectiveDraft();
+    clearMisconceptionsDraft();
+    clearSuccessCriteriaDraft();
+    clearPblBriefDraft();
     setPdfText(undefined);
     setLanguage('en');
     setAgentCount(3);
@@ -503,6 +576,10 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
     clearSubjectDraft,
     clearBoardDraft,
     clearClassGuideDraft,
+    clearLearningObjectiveDraft,
+    clearMisconceptionsDraft,
+    clearSuccessCriteriaDraft,
+    clearPblBriefDraft,
   ]);
 
   // CG-P1-6 (2026-04-27): step 2 ("Meet your classroom") needs more
@@ -888,6 +965,86 @@ export const GenerationWizard: React.FC<GenerationWizardProps> = ({ courseId, on
                 </div>
               </div>
             </div>
+
+            {/* Chunk 3b — typed pedagogy targets. Collapsible so users who
+                lean on the free-form classGuide below aren't bothered, but
+                the inputs are direct fuel for the backend's
+                ## Pedagogy Targets block. Each is optional; blanks are
+                dropped client-side before submit. */}
+            <details className="mt-4 rounded-lg border border-indigo-100 bg-white/80 p-3 group">
+              <summary className="cursor-pointer text-sm font-medium text-slate-800 list-none flex items-center gap-2">
+                <ChevronRight className="h-3.5 w-3.5 transition-transform group-open:rotate-90" aria-hidden="true" />
+                Pedagogy targets <span className="text-xs font-normal text-slate-500">(optional, structured)</span>
+              </summary>
+              <div className="mt-3 space-y-3">
+                <div>
+                  <label htmlFor="maic-learning-objective" className="block text-xs font-semibold uppercase text-indigo-700">
+                    Learning objective
+                  </label>
+                  <input
+                    id="maic-learning-objective"
+                    data-testid="maic-learning-objective"
+                    type="text"
+                    value={learningObjective}
+                    onChange={(e) => setLearningObjective(e.target.value)}
+                    maxLength={500}
+                    placeholder="e.g. Students explain how leaves convert sunlight into stored chemical energy."
+                    className="mt-1 w-full rounded-lg border border-indigo-100 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="maic-misconceptions" className="block text-xs font-semibold uppercase text-indigo-700">
+                    Misconceptions to address <span className="text-[10px] font-normal normal-case text-slate-500">(one per line, up to 5)</span>
+                  </label>
+                  <textarea
+                    id="maic-misconceptions"
+                    data-testid="maic-misconceptions"
+                    value={misconceptionsCsv}
+                    onChange={(e) => setMisconceptionsCsv(e.target.value)}
+                    rows={3}
+                    maxLength={1500}
+                    placeholder={"Plants get food from the soil.\nPhotosynthesis happens only in flowers."}
+                    className="mt-1 w-full resize-y rounded-lg border border-indigo-100 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="maic-success-criteria" className="block text-xs font-semibold uppercase text-indigo-700">
+                    Success criteria <span className="text-[10px] font-normal normal-case text-slate-500">(one per line, up to 5)</span>
+                  </label>
+                  <textarea
+                    id="maic-success-criteria"
+                    data-testid="maic-success-criteria"
+                    value={successCriteriaCsv}
+                    onChange={(e) => setSuccessCriteriaCsv(e.target.value)}
+                    rows={3}
+                    maxLength={1500}
+                    placeholder={"Diagram the light reactions with arrows.\nPredict what happens to a plant left in the dark for 48 h."}
+                    className="mt-1 w-full resize-y rounded-lg border border-indigo-100 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="maic-pbl-brief" className="block text-xs font-semibold uppercase text-indigo-700">
+                    PBL brief
+                  </label>
+                  <textarea
+                    id="maic-pbl-brief"
+                    data-testid="maic-pbl-brief"
+                    value={pblBrief}
+                    onChange={(e) => setPblBrief(e.target.value)}
+                    rows={3}
+                    maxLength={1000}
+                    placeholder="e.g. Design a sealed terrarium experiment to test the role of light."
+                    className="mt-1 w-full resize-y rounded-lg border border-indigo-100 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+                  />
+                  <div className="mt-1 text-right text-[11px] text-slate-500">
+                    {pblBrief.length}/1000
+                  </div>
+                </div>
+              </div>
+            </details>
 
             <label htmlFor="maic-class-guide" className="mt-4 block text-sm font-medium text-slate-800">
               Class guide

@@ -90,6 +90,48 @@ Example: `course_content/tenant/88e163b6-a90b-4bdc-8335-847385a6ac37/documents/c
 - Reserved for thumbnail previews of media assets
 - Subfolders: `videos/`, `documents/`
 
+### 9. MAIC AI Classroom Generated Media
+**Path**: `maic/{tenant_id}/{kind}/{media_id}.{ext}` (no `scene_id`)
+**Path**: `maic/{tenant_id}/{kind}/{scene_id}__{media_id}.{ext}` (with `scene_id`)
+
+Examples:
+- `maic/88e163b6-a90b-4bdc-8335-847385a6ac37/image/abc12345.png`
+- `maic/88e163b6-a90b-4bdc-8335-847385a6ac37/image/scene-7__abc12345.png`
+- `maic/88e163b6-a90b-4bdc-8335-847385a6ac37/video/xyz67890.mp4`
+
+- Generated images/videos from the AI Classroom (MAIC v2) generation pipeline
+- `{kind}` is one of: `image`, `video`, `audio`
+- `{media_id}` is `secrets.token_urlsafe(8)` — ~48 bits of entropy, URL-safe
+- `{scene_id}` (optional) is embedded as a flat slug so storage listings can be greped by scene
+
+#### Tenant-prefix invariant
+
+Every generated MAIC media file MUST live under `maic/{tenant_id}/...`. The
+`upload_media()` helper in `backend/apps/maic/media/storage.py` enforces this:
+
+```python
+def upload_media(data, content_type, tenant_id, kind="image", scene_id=None):
+    if not tenant_id:
+        raise ValueError("upload_media requires a non-empty tenant_id")
+    key = f"maic/{tenant_id}/{kind}/{media_id}.{ext}"
+```
+
+This invariant is what guarantees a leaked classroom-media URL still respects
+the tenant boundary at the S3 ACL layer. **Do not** add a "default" or
+"global" fallback path; tenant-less writes are a programming error in the
+caller, not something to paper over.
+
+Related invariants:
+- **No `image-empty-placeholder` for newly generated classrooms** —
+  enforced by `apps/maic/generation/scene_builder.py::resolve_scene_media`
+  raising `MaicProtocolError` on unresolvable `gen_img_*`/`gen_vid_*` refs
+  (Chunk 2 fix, see `_coordination/inbox/reviewer/AI-CLASSROOM-PARITY-AUDIT-2026-05-16.md`).
+- **`ImageGenerationResult.url` / `VideoGenerationResult.url` have Pydantic `min_length=1`**
+  so the orchestrator never returns an empty-string URL to the scene builder.
+- **Frontend E2E negative assertion** at
+  `frontend/e2e/maic-full-playback.spec.js`
+  asserts `image-empty-placeholder` count = 0 in a READY classroom.
+
 ---
 
 ## DO Spaces Configuration Required

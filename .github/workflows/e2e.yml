@@ -174,7 +174,24 @@ jobs:
         working-directory: frontend
 
       - name: Run e2e suite
-        run: npm run e2e
+        # ── E2E spec scope (per CI handoff section 4 ratified direction) ─
+        # The broader teacher-portal-live-harness spec fails on every PR
+        # because the local Vite stack does not proxy WebSocket routes to
+        # Django/Daphne (`/ws/notifications/`, `/ws/maic/classrooms/...`
+        # both 404). The CI handoff says: "The wider teacher portal harness
+        # should move to a dedicated scheduled/manual E2E workflow after
+        # its local WebSocket routing and blank-section expectations are
+        # fixed." Until that infra work lands, the blocking PR path runs
+        # only the AI-Classroom-critical specs that pass against the
+        # local stack. Add new product-critical specs to this list as they
+        # land — do not silently widen the blocking surface to specs that
+        # are known broken.
+        run: |
+          npx playwright test --config=playwright.config.cjs \
+            e2e/maic-full-playback.spec.js \
+            e2e/maic-mobile-playback.spec.js \
+            e2e/maic-a11y-playback.spec.js \
+            e2e/maic-pbl-flow.spec.js
         working-directory: frontend
         env:
           E2E_LIVE: "1"

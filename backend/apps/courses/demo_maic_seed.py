@@ -19,6 +19,21 @@ DEMO_MAIC_TOPIC = "Photosynthesis"
 DEMO_MAIC_VOICE_ID = "en-IN-PrabhatNeural"
 
 
+# Real 1x1 transparent PNG as a data URL. Used by the demo classroom's
+# image-element scene so the player has an actual <img> with a real,
+# resolvable src to render — letting the
+# "no image-empty-placeholder" + "image element renders" E2E checks be
+# meaningful instead of trivial. Data URL is preferred over a
+# /media/-relative path because it has no auth gate and no filesystem
+# dependency in the test stack. See PR #41 Codex review (2026-05-16):
+# the previous seed had `image_provider: disabled` and zero image
+# elements, so the "no Image unavailable" assertion proved nothing.
+_DEMO_PNG_DATA_URL = (
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNgYGD4DwABBAEAfbLI3wAAAABJRU5ErkJggg=="
+)
+
+
 def ensure_demo_ai_config(tenant) -> TenantAIConfig:
     """Ensure MAIC is enabled with providers that work in local demo stacks."""
     config, _ = TenantAIConfig.objects.update_or_create(
@@ -154,6 +169,202 @@ def build_demo_maic_content() -> dict[str, Any]:
                 "duration": 250,
             })
 
+    # ── Scene 2: a slide that carries a real <img> element ────────────────
+    # Added 2026-05-16 (PR #41 Codex review). The previous seed had no image
+    # elements at all, so the "no image-empty-placeholder" E2E assertion was
+    # passing trivially. With this slide, both negative (no broken-ref
+    # placeholder) AND positive (the <img> renders) assertions become real
+    # signal. The src is a 1x1 data-URL PNG — no provider call required, no
+    # /media/ auth gate, no flake risk; it just resolves and renders.
+    image_slide_idx = len(slides)
+    image_slide = {
+        "id": f"slide-{image_slide_idx + 1}",
+        "title": "Photosynthesis In One Frame",
+        "background": "#F8FAFC",
+        "notes": (
+            "A single visual ties together inputs (light, water, CO2) and "
+            "outputs (glucose, oxygen)."
+        ),
+        "speakerScript": (
+            "Here is the whole process in one frame: light, water, and carbon "
+            "dioxide become glucose and oxygen."
+        ),
+        "elements": [
+            {
+                "id": f"slide-{image_slide_idx + 1}-title",
+                "type": "text",
+                "x": 8,
+                "y": 8,
+                "width": 84,
+                "height": 12,
+                "content": "Photosynthesis In One Frame",
+                "style": {"fontSize": 30, "fontWeight": 700, "color": "#111827"},
+            },
+            {
+                "id": f"slide-{image_slide_idx + 1}-image",
+                "type": "image",
+                "x": 22,
+                "y": 24,
+                "width": 56,
+                "height": 56,
+                "content": "Photosynthesis diagram",
+                "alt": "Photosynthesis diagram showing light, water, CO2, glucose, oxygen flow.",
+                "src": _DEMO_PNG_DATA_URL,
+            },
+        ],
+    }
+    slides.append(image_slide)
+    image_scene_actions: list[dict[str, Any]] = [
+        _speech_action(image_slide_idx, "agent-1", image_slide["speakerScript"]),
+    ]
+
+    # ── Scene 3: a PBL scene that exercises role / issueboard / chat ──────
+    # Added 2026-05-16 (PR #41 Codex review). Previously the seed had no PBL
+    # scene, so `maic-pbl-flow.spec.js` skipped all 4 cases. The new scene
+    # follows the upstream PBLProjectConfig shape (PBLAgent / PBLIssue /
+    # PBLChat fields exactly), with 4 agents (2 selectable + Question + Judge)
+    # and 3 issues (one active, two pending). The Question agent's
+    # `generated_questions` on the active issue gives the chat panel its
+    # welcome message so the panel is non-empty on first render.
+    pbl_project_config = {
+        "projectInfo": {
+            "title": "Build A Terrarium That Stays Alive",
+            "description": (
+                "Design and test a sealed terrarium that sustains a "
+                "small plant for one school week using only the inputs "
+                "of photosynthesis."
+            ),
+        },
+        "agents": [
+            {
+                "name": "Mentor",
+                "actor_role": "Question",
+                "role_division": "management",
+                "system_prompt": (
+                    "Guide students through scientific reasoning. Ask clarifying "
+                    "questions before approving the next step."
+                ),
+                "default_mode": "question",
+                "delay_time": 600,
+                "env": {},
+                "is_user_role": False,
+                "is_active": True,
+                "is_system_agent": True,
+            },
+            {
+                "name": "Reviewer",
+                "actor_role": "Judge",
+                "role_division": "management",
+                "system_prompt": (
+                    "Decide whether each milestone meets the success criteria. "
+                    "Be specific about what is missing or unclear."
+                ),
+                "default_mode": "judge",
+                "delay_time": 300,
+                "env": {},
+                "is_user_role": False,
+                "is_active": True,
+                "is_system_agent": True,
+            },
+            {
+                "name": "Lab Researcher",
+                "actor_role": "Investigates plant biology",
+                "role_division": "development",
+                "system_prompt": (
+                    "You research how plants survive sealed systems. You "
+                    "propose hypotheses and design experiments."
+                ),
+                "default_mode": "investigate",
+                "delay_time": 200,
+                "env": {},
+                "is_user_role": True,
+                "is_active": True,
+                "is_system_agent": False,
+            },
+            {
+                "name": "Field Engineer",
+                "actor_role": "Builds the terrarium and measures it",
+                "role_division": "development",
+                "system_prompt": (
+                    "You build the physical terrarium and log measurements "
+                    "(humidity, condensation, leaf colour)."
+                ),
+                "default_mode": "build",
+                "delay_time": 200,
+                "env": {},
+                "is_user_role": True,
+                "is_active": True,
+                "is_system_agent": False,
+            },
+        ],
+        "issueboard": {
+            "agent_ids": ["Mentor", "Reviewer", "Lab Researcher", "Field Engineer"],
+            "issues": [
+                {
+                    "id": "issue-1",
+                    "title": "State the hypothesis",
+                    "description": (
+                        "Write one sentence predicting whether the sealed "
+                        "terrarium will keep the plant alive for a week, and why."
+                    ),
+                    "person_in_charge": "Lab Researcher",
+                    "participants": ["Lab Researcher", "Mentor"],
+                    "notes": "",
+                    "parent_issue": None,
+                    "index": 0,
+                    "is_done": False,
+                    "is_active": True,
+                    "generated_questions": (
+                        "Welcome! Before we build anything, what do you predict "
+                        "will happen inside a sealed terrarium over a week, and "
+                        "what evidence are you basing that on?"
+                    ),
+                    "question_agent_name": "Mentor",
+                    "judge_agent_name": "Reviewer",
+                },
+                {
+                    "id": "issue-2",
+                    "title": "Design the experiment",
+                    "description": (
+                        "Sketch the terrarium contents, list the measurements "
+                        "you will take, and describe one control variable."
+                    ),
+                    "person_in_charge": "Field Engineer",
+                    "participants": ["Field Engineer", "Lab Researcher"],
+                    "notes": "",
+                    "parent_issue": None,
+                    "index": 1,
+                    "is_done": False,
+                    "is_active": False,
+                    "generated_questions": "",
+                    "question_agent_name": "Mentor",
+                    "judge_agent_name": "Reviewer",
+                },
+                {
+                    "id": "issue-3",
+                    "title": "Report the result",
+                    "description": (
+                        "After a week, write a short report comparing your "
+                        "hypothesis to what actually happened."
+                    ),
+                    "person_in_charge": "Lab Researcher",
+                    "participants": ["Lab Researcher", "Field Engineer"],
+                    "notes": "",
+                    "parent_issue": None,
+                    "index": 2,
+                    "is_done": False,
+                    "is_active": False,
+                    "generated_questions": "",
+                    "question_agent_name": "Mentor",
+                    "judge_agent_name": "Reviewer",
+                },
+            ],
+            "current_issue_id": "issue-1",
+        },
+        "chat": {"messages": []},
+        "selectedRole": None,
+    }
+
     scenes = [
         {
             "id": "scene-1",
@@ -172,15 +383,50 @@ def build_demo_maic_content() -> dict[str, Any]:
                 "agentIds": ["agent-1"],
             },
         },
+        {
+            "id": "scene-2-image",
+            "type": "slide",
+            "title": "Photosynthesis In One Frame",
+            "order": 1,
+            "content": {
+                "type": "slide",
+                "elements": image_slide["elements"],
+                "slides": slides,
+                "speakerScript": image_slide["speakerScript"],
+            },
+            "actions": image_scene_actions,
+            "multiAgent": {
+                "enabled": False,
+                "agentIds": ["agent-1"],
+            },
+        },
+        {
+            "id": "scene-3-pbl",
+            "type": "pbl",
+            "title": "Build A Terrarium That Stays Alive",
+            "order": 2,
+            "content": {
+                "type": "pbl",
+                "projectConfig": pbl_project_config,
+            },
+            "actions": [],
+        },
     ]
 
-    speech_count = sum(1 for action in actions if action.get("type") == "speech")
+    speech_count = sum(
+        1 for action in actions + image_scene_actions if action.get("type") == "speech"
+    )
     return {
         "agents": agents,
         "slides": slides,
         "scenes": scenes,
         "sceneSlideBounds": [
-            {"sceneIdx": 0, "startSlide": 0, "endSlide": len(slides) - 1},
+            {"sceneIdx": 0, "startSlide": 0, "endSlide": len(slides) - 2},
+            {"sceneIdx": 1, "startSlide": image_slide_idx, "endSlide": image_slide_idx},
+            # PBL scene has no slides; bound entry kept identical to the
+            # previous scene so the resolver's "find any bound" fallback in
+            # Stage.tsx maps stale currentSlideIndex sensibly during transit.
+            {"sceneIdx": 2, "startSlide": image_slide_idx, "endSlide": image_slide_idx},
         ],
         "audioManifest": {
             "status": "partial",

@@ -67,6 +67,16 @@ export interface MAICV2GenerationRequest {
   subject?: string;
   syllabusBoard?: string;
   classGuide?: string;
+  /**
+   * Chunk 3a typed pedagogy targets — see backend
+   * apps/maic/views_generation.py `_optional_string_list` / `_optional_text`
+   * for validation caps. Each field is optional; absent → request behaves
+   * identically to origin/main.
+   */
+  learningObjective?: string;
+  misconceptions?: string[];
+  successCriteria?: string[];
+  pblBrief?: string;
   pdfText?: string;
   researchContext?: string;
   agents?: MAICAgent[];

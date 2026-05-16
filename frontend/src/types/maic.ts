@@ -335,6 +335,21 @@ export interface MAICGenerationConfig {
    * stay consistent across the whole generated classroom.
    */
   classGuide?: string;
+  /**
+   * Chunk 3a typed pedagogy targets — structured equivalents of the things
+   * the backend's _teacher_planning_contract already names. These render as
+   * a labeled `## Pedagogy Targets` block in the teacher context that feeds
+   * outline / scene / PBL prompts, so the LLM honors them concretely rather
+   * than only when the teacher happens to restate them in the free-form
+   * classGuide blob. All four are optional.
+   *
+   * Caps mirror the backend: learningObjective ≤500 chars; misconceptions
+   * and successCriteria ≤5 items × ≤200 chars each; pblBrief ≤1000.
+   */
+  learningObjective?: string;
+  misconceptions?: string[];
+  successCriteria?: string[];
+  pblBrief?: string;
 }
 
 // ─── View Mode ────────────────────────────────────────────────────────────
