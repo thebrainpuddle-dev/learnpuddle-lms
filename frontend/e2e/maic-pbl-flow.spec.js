@@ -215,16 +215,23 @@ test.describe('MAIC PBL Flow — Chunk 6', () => {
     await navigateToScene(page, /** @type {number} */ (pblSceneIdx));
 
     // Chat input — aria-label="PBL chat input" (PBLRenderer.tsx line 593).
+    // This label is unique to the PBL renderer (the classroom-level chat
+    // panel uses a different label) so this anchor is safe.
     const chatInput = page.getByLabel('PBL chat input');
     await expect(chatInput).toBeVisible({ timeout: 10_000 });
 
     await chatInput.fill('What is the first step for the active issue?');
     await expect(chatInput).toHaveValue('What is the first step for the active issue?');
 
-    // Send button is reachable (we do not click + wait for LLM here — that's
-    // out of scope for a smoke test; this just proves the user input path
-    // and submit affordance are intact).
-    const sendBtn = page.getByRole('button', { name: /send message/i });
+    // Send button — scoped to the PBL chat panel via the chat input's
+    // immediate parent (the flex row that wraps textarea + send button in
+    // PBLRenderer.tsx around line 578). The bare global selector
+    // `getByRole('button', { name: /send message/i })` strict-mode-fails
+    // because the classroom-level ChatPanel also exposes a "Send message"
+    // button on the same page. See PR #41 Codex review 2026-05-16:
+    // "Fix test by scoping to PBL region/container."
+    const pblChatRow = chatInput.locator('..');
+    const sendBtn = pblChatRow.getByRole('button', { name: /send message/i });
     await expect(sendBtn).toBeVisible();
     await expect(sendBtn).toBeEnabled();
   });
