@@ -365,6 +365,146 @@ def test_post_stores_class_guide_and_v2_pbl_context(
     assert req["enableImageGeneration"] is True
 
 
+# Chunk 3a — typed pedagogy fields (audit Section B.3)
+
+
+def test_post_persists_typed_pedagogy_fields_into_requirements(
+    db, authed_client
+):
+    """learningObjective / misconceptions / successCriteria / pblBrief
+    are persisted onto MaicGenerationJob.requirements AND rendered into
+    the teacher context as labeled bullets so the LLM honors them at
+    outline/scene/PBL prompt time."""
+    with patch("apps.maic.generation.tasks.enqueue_generation_chain"):
+        res = authed_client.post(
+            "/api/maic/v2/generate/",
+            data={
+                "topic": "Photosynthesis",
+                "sceneCount": 6,
+                "learningObjective": (
+                    "Students explain how leaves convert sunlight into "
+                    "stored chemical energy."
+                ),
+                "misconceptions": [
+                    "Plants get food from the soil.",
+                    "Photosynthesis happens only in flowers.",
+                    "",  # blank entry silently dropped
+                ],
+                "successCriteria": [
+                    "Diagram the light reactions with arrows.",
+                    "Predict what happens to a plant left in the dark for 48 h.",
+                ],
+                "pblBrief": (
+                    "Design a sealed terrarium experiment to test the role of light."
+                ),
+            },
+            format="json",
+        )
+
+    assert res.status_code == 202, f"got {res.status_code}: {res.data}"
+    saved = MaicGenerationJob.objects.all_tenants().get(pk=res.data["job_id"])
+    req = saved.requirements
+    assert req["learningObjective"].startswith("Students explain")
+    assert req["misconceptions"] == [
+        "Plants get food from the soil.",
+        "Photosynthesis happens only in flowers.",
+    ]
+    assert req["successCriteria"][0].startswith("Diagram the light reactions")
+    assert req["pblBrief"].startswith("Design a sealed terrarium")
+    teacher_ctx = req["teacherContext"]
+    assert "## Pedagogy Targets" in teacher_ctx
+    assert "Learning objective: Students explain" in teacher_ctx
+    assert "Misconceptions to address:" in teacher_ctx
+    assert "Success criteria:" in teacher_ctx
+    assert "PBL brief: Design a sealed terrarium" in teacher_ctx
+
+
+def test_post_rejects_misconceptions_with_too_many_items(db, authed_client):
+    res = authed_client.post(
+        "/api/maic/v2/generate/",
+        data={
+            "topic": "T",
+            "misconceptions": [f"item {i}" for i in range(6)],  # 6 > 5 cap
+        },
+        format="json",
+    )
+    assert res.status_code == 400
+    assert "misconceptions" in res.data["error"]
+
+
+def test_post_rejects_misconceptions_with_non_string_item(db, authed_client):
+    res = authed_client.post(
+        "/api/maic/v2/generate/",
+        data={
+            "topic": "T",
+            "misconceptions": ["valid string", 42, "another"],
+        },
+        format="json",
+    )
+    assert res.status_code == 400
+    assert "misconceptions[1]" in res.data["error"]
+
+
+def test_post_rejects_pbl_brief_too_long(db, authed_client):
+    res = authed_client.post(
+        "/api/maic/v2/generate/",
+        data={
+            "topic": "T",
+            "pblBrief": "x" * 1001,  # > 1000 cap
+        },
+        format="json",
+    )
+    assert res.status_code == 400
+    assert "pblBrief" in res.data["error"]
+
+
+def test_post_rejects_learning_objective_too_long(db, authed_client):
+    res = authed_client.post(
+        "/api/maic/v2/generate/",
+        data={
+            "topic": "T",
+            "learningObjective": "x" * 501,  # > 500 cap
+        },
+        format="json",
+    )
+    assert res.status_code == 400
+    assert "learningObjective" in res.data["error"]
+
+
+def test_post_rejects_misconceptions_not_a_list(db, authed_client):
+    res = authed_client.post(
+        "/api/maic/v2/generate/",
+        data={
+            "topic": "T",
+            "misconceptions": "not-a-list",
+        },
+        format="json",
+    )
+    assert res.status_code == 400
+    assert "misconceptions" in res.data["error"]
+
+
+def test_post_omits_pedagogy_fields_when_absent(db, authed_client):
+    """Backward compat — requests without the new fields land identical
+    to origin/main: no pedagogy keys on requirements, no Pedagogy
+    Targets section in teacher context."""
+    with patch("apps.maic.generation.tasks.enqueue_generation_chain"):
+        res = authed_client.post(
+            "/api/maic/v2/generate/",
+            data={"topic": "Just a topic"},
+            format="json",
+        )
+    assert res.status_code == 202
+    saved = MaicGenerationJob.objects.all_tenants().get(pk=res.data["job_id"])
+    req = saved.requirements
+    assert "learningObjective" not in req
+    assert "misconceptions" not in req
+    assert "successCriteria" not in req
+    assert "pblBrief" not in req
+    if "teacherContext" in req:
+        assert "## Pedagogy Targets" not in req["teacherContext"]
+
+
 def test_post_rejects_cross_tenant_lms_target(db, authed_client, user):
     other = Tenant.objects.create(
         name="other",

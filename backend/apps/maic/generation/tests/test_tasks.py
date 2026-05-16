@@ -235,6 +235,101 @@ def test_outline_options_build_teacher_contract_from_class_guide():
     assert "Use one evidence-log PBL handoff" in teacher_context
 
 
+# Chunk 3a — typed pedagogy fields in teacher context
+
+
+def test_outline_options_emit_typed_pedagogy_fields_in_teacher_context():
+    """Audit Section B.3: typed learningObjective / misconceptions /
+    successCriteria / pblBrief must surface as explicit labeled bullets
+    in the teacher context. The planning contract already names these
+    categories — making them structured data (not buried in the free-
+    form class guide) is what gives the LLM something concrete to
+    consult."""
+    from apps.maic.generation.tasks import _outline_options_for_requirements
+
+    options = _outline_options_for_requirements(
+        {
+            "topic": "Photosynthesis",
+            "sceneCount": 6,
+            "gradeLevel": "Grade 6",
+            "subject": "Science",
+            "learningObjective": (
+                "Students explain how leaves convert sunlight into stored chemical energy."
+            ),
+            "misconceptions": [
+                "Plants get food from the soil.",
+                "Photosynthesis happens only in flowers.",
+            ],
+            "successCriteria": [
+                "Diagram the light reactions with arrows.",
+                "Predict what happens to a plant left in the dark for 48 h.",
+            ],
+            "pblBrief": "Design a sealed terrarium experiment to test the role of light.",
+        }
+    )
+
+    teacher_context = options["teacher_context"]
+    assert "## Pedagogy Targets" in teacher_context
+    assert "Learning objective: Students explain" in teacher_context
+    assert "Misconceptions to address:" in teacher_context
+    assert "Plants get food from the soil." in teacher_context
+    assert "Photosynthesis happens only in flowers." in teacher_context
+    assert "Success criteria:" in teacher_context
+    assert "Diagram the light reactions" in teacher_context
+    assert "PBL brief: Design a sealed terrarium" in teacher_context
+    # Pedagogy block precedes Teacher Class Guide section (when both exist);
+    # here there is no class guide so just confirm the structure.
+    assert teacher_context.index("Teacher Class Context") < teacher_context.index(
+        "Pedagogy Targets"
+    )
+
+
+def test_outline_options_omit_pedagogy_block_when_all_fields_empty():
+    """Backward-compatibility — when none of the new fields are set,
+    the rendered teacher context contains no `## Pedagogy Targets`
+    header, leaving downstream prompts byte-identical to origin/main."""
+    from apps.maic.generation.tasks import _outline_options_for_requirements
+
+    options = _outline_options_for_requirements(
+        {
+            "topic": "Photosynthesis",
+            "sceneCount": 6,
+            "gradeLevel": "Grade 6",
+            "subject": "Science",
+            "classGuide": "Use one evidence-log PBL handoff.",
+        }
+    )
+
+    teacher_context = options["teacher_context"]
+    assert "## Pedagogy Targets" not in teacher_context
+    # The old shape is still present and intact.
+    assert "## Teacher Class Context" in teacher_context
+    assert "## Teacher Class Guide" in teacher_context
+
+
+def test_outline_options_pedagogy_skips_blank_or_non_string_list_entries():
+    """Defense-in-depth — `misconceptions=["", None, "real"]` must
+    render only the real entry. The view layer strips these already,
+    but the tasks layer must not crash on a slightly-malformed
+    requirements blob (e.g. from a legacy job row)."""
+    from apps.maic.generation.tasks import _outline_options_for_requirements
+
+    options = _outline_options_for_requirements(
+        {
+            "topic": "T",
+            "misconceptions": ["", "   ", "real misconception", 12345],
+            "successCriteria": [None, "real criterion"],
+        }
+    )
+
+    teacher_context = options["teacher_context"]
+    assert "real misconception" in teacher_context
+    assert "real criterion" in teacher_context
+    # Blank / non-string entries are skipped, not rendered as empty bullets.
+    assert "- \n" not in teacher_context
+    assert "12345" not in teacher_context
+
+
 def test_outline_task_raises_on_pipeline_error(db, tenant):
     job = create_job_session(
         tenant_id=tenant.id,

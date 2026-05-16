@@ -659,6 +659,43 @@ def _scene_teacher_context_for_requirements(requirements: dict) -> str:
         lines.append("## Teacher Class Context")
         lines.extend(clean_frame)
 
+    # Chunk 3a — typed pedagogy targets injected as a labeled block so
+    # the LLM honors the planning contract's stated rules even when the
+    # teacher hasn't restated them in the free-form class guide below.
+    # Empty lists / missing fields → block is fully elided.
+    pedagogy: list[str] = []
+    learning_objective = requirements.get("learningObjective") or requirements.get(
+        "learning_objective"
+    )
+    if isinstance(learning_objective, str) and learning_objective.strip():
+        pedagogy.append(f"Learning objective: {learning_objective.strip()}")
+
+    misconceptions = requirements.get("misconceptions")
+    if isinstance(misconceptions, list):
+        misc_clean = [m.strip() for m in misconceptions if isinstance(m, str) and m.strip()]
+        if misc_clean:
+            pedagogy.append("Misconceptions to address:")
+            pedagogy.extend(f"  - {item}" for item in misc_clean)
+
+    success_criteria = requirements.get("successCriteria") or requirements.get(
+        "success_criteria"
+    )
+    if isinstance(success_criteria, list):
+        sc_clean = [s.strip() for s in success_criteria if isinstance(s, str) and s.strip()]
+        if sc_clean:
+            pedagogy.append("Success criteria:")
+            pedagogy.extend(f"  - {item}" for item in sc_clean)
+
+    pbl_brief = requirements.get("pblBrief") or requirements.get("pbl_brief")
+    if isinstance(pbl_brief, str) and pbl_brief.strip():
+        pedagogy.append(f"PBL brief: {pbl_brief.strip()}")
+
+    if pedagogy:
+        if lines:
+            lines.append("")
+        lines.append("## Pedagogy Targets")
+        lines.extend(f"- {line}" if not line.startswith(" ") else line for line in pedagogy)
+
     class_guide = requirements.get("classGuide") or requirements.get("class_guide")
     if isinstance(class_guide, str) and class_guide.strip():
         if lines:
