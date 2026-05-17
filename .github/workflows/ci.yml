@@ -364,7 +364,8 @@ jobs:
         run: |
           npx playwright test --config=playwright.config.cjs \
             e2e/maic-full-playback.spec.js \
-            e2e/maic-mobile-playback.spec.js
+            e2e/maic-mobile-playback.spec.js \
+            e2e/maic-teacher-create-contract.spec.js
         working-directory: frontend
         env:
           E2E_LIVE: "1"
