@@ -5,7 +5,7 @@
 # causing 404s when the volume had stale/wrong content.
 
 # Stage 1: Build React app
-FROM node:20-alpine AS frontend-build
+FROM node:26-alpine AS frontend-build
 WORKDIR /app
 ARG BUILD_SHA=nogit
 ENV NODE_OPTIONS=--max-old-space-size=1536 \
