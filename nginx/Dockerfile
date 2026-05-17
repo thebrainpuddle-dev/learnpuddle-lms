@@ -21,7 +21,7 @@ ENV GENERATE_SOURCEMAP=false \
 RUN npm run build
 
 # Stage 2: Nginx with frontend baked in
-FROM nginx:1.25-alpine
+FROM nginx:1.31-alpine
 COPY --from=frontend-build /app/build /usr/share/nginx/html
 COPY nginx/nginx.conf /etc/nginx/conf.d/default.conf
 # Bake in supporting config files so the image is self-contained.
