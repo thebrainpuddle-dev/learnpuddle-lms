@@ -16,7 +16,7 @@ ENV GENERATE_SOURCEMAP=false
 RUN npm run build
 
 # Stage 2: serve with nginx (non-root)
-FROM nginx:1.25-alpine
+FROM nginx:1.31-alpine
 COPY --from=build /app/build /usr/share/nginx/html
 
 # Run nginx as non-root
