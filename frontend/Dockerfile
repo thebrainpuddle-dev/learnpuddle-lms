@@ -1,6 +1,6 @@
 # ---------- Frontend Dockerfile ----------
 # Stage 1: build the React app
-FROM node:20-alpine AS build
+FROM node:26-alpine AS build
 WORKDIR /app
 # Limit Node memory (helps on 2GB Droplets; npm ci can OOM)
 ARG BUILD_SHA=nogit
