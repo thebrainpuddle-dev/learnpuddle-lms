@@ -24,7 +24,7 @@ are required for release approval.
 | Area | Status |
 |---|---|
 | LearnPuddle SaaS integration foundation | Implemented in draft PR #48 |
-| LearnPuddle implementation CI | Green at `faa4224049c70e1357fde6936a64a21abbdc62c9` before this documentation-only update |
+| LearnPuddle implementation CI | Green on draft PR #48; every new head must pass again |
 | Local OpenMAIC adapter fork | Implemented at `fbcf7efeca871221e82e2a229eebd5f805863638` |
 | Organization fork and immutable GHCR image | Blocked until an organization owner creates or grants access to `thebrainpuddle-dev/OpenMAIC` |
 | Live reference/candidate benchmark certification | Not yet run |
@@ -65,6 +65,8 @@ The following behavior is upstream-owned:
 - Prompt text and prompt assembly
 - Slide and element schemas
 - Stage renderers and playback state machine
+- OpenMAIC application shell, editor, player controls, styles, fonts, transitions, and responsive
+  behavior
 - Image and video request construction
 - TTS text splitting, synthesis, voice mapping, and action/audio association
 - Chat, interaction, deep-interactive mode, quiz behavior, and PBL
@@ -80,13 +82,16 @@ a new parity baseline.
 LearnPuddle may own only:
 
 - Tenant, user, role, entitlement, and launch context
-- Encrypted provider credential lookup
+- Encrypted LearnPuddle-managed provider credential lookup
 - Provider/model allowlists
 - Durable queueing and job status
 - Canonical classroom and media persistence
 - Course, section, assignment, visibility, and progress relationships
 - Usage, quota, billing, audit, metrics, and incident handling
 - Tenant branding and the return link
+
+School users do not configure providers. LearnPuddle operations provisions the exact certified
+profile and the school-admin surface exposes readiness and usage only.
 
 ### No hidden fallback
 
@@ -189,8 +194,9 @@ quota tier, and endpoint behavior.
 ## Phase 3: Configure a Pilot School
 
 1. Confirm the tenant subscription is active and AI Classroom is entitled.
-2. Add provider credentials through the school-admin settings page. Never use per-school process
-   environment variables.
+2. Have LearnPuddle operations provision a distinct encrypted tenant credential for each modality
+   through the restricted provisioning workflow. The school admin must never receive or submit
+   provider secrets.
 3. Set the exact provider IDs and model allowlists from the reference profile.
 4. Set one enabled/default provider per modality for the first pilot.
 5. Verify each provider with a real request. Do not mark a key verified from string shape alone.
@@ -201,6 +207,10 @@ quota tier, and endpoint behavior.
 
 Blank credential updates retain the existing secret. Removal must be explicit. A worker job carries
 only tenant/config IDs and fetches credentials at execution time.
+
+The school pays LearnPuddle, and LearnPuddle pays the providers. Before activation, confirm the
+tenant plan allowance, provider-side project/spend limit, overage policy, and invoice-reconciliation
+mapping. Provider account ownership must not change the certified model or generation profile.
 
 ## Phase 4: Build the Benchmark Corpus
 
@@ -282,6 +292,11 @@ Every candidate run must satisfy all of these conditions:
 
 ### Rendering and interaction
 
+- Load the same canonical artifact in vanilla and LearnPuddle mode, capture desktop and mobile
+  screenshots, and compare the OpenMAIC shell, editor, player, stage, controls, typography, spacing,
+  transitions, and responsive breakpoints. Only the approved return-to-school control may differ.
+- Confirm the browser loads OpenMAIC's renderer/player modules and assets. No legacy LearnPuddle
+  MAIC wizard, player, renderer, audio engine, voice resolver, or PBL bundle may execute.
 - Desktop and mobile render without blank stages, clipped primary controls, horizontal overflow,
   or uncaught console errors.
 - All slide/element types in the artifact render through OpenMAIC's actual renderers.

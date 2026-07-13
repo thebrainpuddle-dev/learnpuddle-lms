@@ -23,11 +23,10 @@ from .models import (
     TenantAIProviderCredential,
 )
 from .security import require_openmaic_service
-from .serializers import ProviderCredentialSerializer
+from .serializers import ProviderStatusSerializer
 from .services import (
     AIQuotaError,
     bind_session_classroom,
-    bump_provider_config_version,
     create_launch_code,
     confirm_media_upload,
     exchange_launch_code,
@@ -112,82 +111,14 @@ def launch_openmaic(request):
     return Response({"launch_url": launch_url, "expires_in": 60}, status=201)
 
 
-@api_view(["GET", "POST"])
+@api_view(["GET"])
 @permission_classes([IsAuthenticated])
 @admin_only
 @tenant_required
 def provider_credentials(request):
     runtime_config_for(request.tenant)
-    if request.method == "GET":
-        queryset = TenantAIProviderCredential.objects.filter(tenant=request.tenant)
-        return Response(ProviderCredentialSerializer(queryset, many=True).data)
-
-    serializer = ProviderCredentialSerializer(
-        data=request.data,
-        context={"tenant": request.tenant},
-    )
-    serializer.is_valid(raise_exception=True)
-    try:
-        credential = serializer.save()
-        bump_provider_config_version(request.tenant)
-    except IntegrityError:
-        return Response(
-            {"error": "This provider already exists or the modality already has a default"},
-            status=409,
-        )
-    log_audit(
-        "CREATE",
-        "TenantAIProviderCredential",
-        target_id=credential.id,
-        target_repr=f"{credential.modality}:{credential.provider_id}",
-        request=request,
-    )
-    return Response(ProviderCredentialSerializer(credential).data, status=201)
-
-
-@api_view(["PATCH", "DELETE"])
-@permission_classes([IsAuthenticated])
-@admin_only
-@tenant_required
-def provider_credential_detail(request, credential_id):
-    credential = get_object_or_404(
-        TenantAIProviderCredential.objects,
-        id=credential_id,
-        tenant=request.tenant,
-    )
-    if request.method == "DELETE":
-        target_repr = f"{credential.modality}:{credential.provider_id}"
-        credential.delete()
-        bump_provider_config_version(request.tenant)
-        log_audit(
-            "DELETE",
-            "TenantAIProviderCredential",
-            target_id=credential_id,
-            target_repr=target_repr,
-            request=request,
-        )
-        return Response(status=204)
-
-    serializer = ProviderCredentialSerializer(
-        credential,
-        data=request.data,
-        partial=True,
-        context={"tenant": request.tenant},
-    )
-    serializer.is_valid(raise_exception=True)
-    try:
-        credential = serializer.save()
-        bump_provider_config_version(request.tenant)
-    except IntegrityError:
-        return Response({"error": "The modality already has a default provider"}, status=409)
-    log_audit(
-        "UPDATE",
-        "TenantAIProviderCredential",
-        target_id=credential.id,
-        target_repr=f"{credential.modality}:{credential.provider_id}",
-        request=request,
-    )
-    return Response(ProviderCredentialSerializer(credential).data)
+    queryset = TenantAIProviderCredential.objects.filter(tenant=request.tenant)
+    return Response(ProviderStatusSerializer(queryset, many=True).data)
 
 
 @api_view(["GET"])

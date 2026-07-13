@@ -7,9 +7,6 @@ app_name = "ai_classroom"
 urlpatterns = [
     path("launch/", views.launch_openmaic, name="launch"),
     path("providers/", views.provider_credentials, name="providers"),
-    path(
-        "providers/<uuid:credential_id>/", views.provider_credential_detail, name="provider_detail"
-    ),
     path("usage/summary/", views.usage_summary, name="usage_summary"),
 ]
 

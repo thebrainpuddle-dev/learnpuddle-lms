@@ -8,6 +8,18 @@ from .models import TenantAIProviderCredential
 
 
 class ProviderCredentialSerializer(serializers.ModelSerializer):
+    SENSITIVE_CONFIG_KEYS = {
+        "api_key",
+        "apikey",
+        "token",
+        "access_token",
+        "refresh_token",
+        "secret",
+        "client_secret",
+        "password",
+        "credential",
+        "credentials",
+    }
     api_key = serializers.CharField(write_only=True, required=False, allow_blank=True)
     clear_api_key = serializers.BooleanField(write_only=True, required=False, default=False)
     api_key_set = serializers.SerializerMethodField()
@@ -67,6 +79,25 @@ class ProviderCredentialSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("At most 100 models may be enabled")
         return cleaned
 
+    def validate_provider_config(self, value):
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("provider_config must be an object")
+
+        def reject_secret_keys(node):
+            if isinstance(node, dict):
+                for key, child in node.items():
+                    if str(key).lower() in self.SENSITIVE_CONFIG_KEYS:
+                        raise serializers.ValidationError(
+                            f"Secret field {key!r} must use the encrypted api_key field"
+                        )
+                    reject_secret_keys(child)
+            elif isinstance(node, list):
+                for child in node:
+                    reject_secret_keys(child)
+
+        reject_secret_keys(value)
+        return value
+
     def validate(self, attrs):
         modality = attrs.get("modality", getattr(self.instance, "modality", None))
         provider_id = attrs.get(
@@ -119,3 +150,21 @@ class ProviderCredentialSerializer(serializers.ModelSerializer):
         instance.last_verified_at = None
         instance.save()
         return instance
+
+
+class ProviderStatusSerializer(serializers.ModelSerializer):
+    """Read-only school-facing view of LearnPuddle-managed AI capability."""
+
+    class Meta:
+        model = TenantAIProviderCredential
+        fields = [
+            "modality",
+            "provider_id",
+            "display_name",
+            "model_allowlist",
+            "is_enabled",
+            "is_default",
+            "verification_status",
+            "last_verified_at",
+        ]
+        read_only_fields = fields

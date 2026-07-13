@@ -89,13 +89,18 @@ LearnPuddle portal ── one-time launch code ──► classroom.learnpuddle.c
         ▼                                          ▼
      Django ◄── HMAC-authenticated private API ─ OpenMAIC web + BullMQ worker
         │                                          │
-        ├── Postgres metadata/usage/quota           └── school-owned AI providers
+        ├── Postgres metadata/usage/quota/billing   └── LearnPuddle-managed AI providers
         └── private DigitalOcean Spaces artifacts and media
 ```
 
 The fork baseline is immutable upstream commit
 `153195ca73e03e68893eace9823d0f7181772a87`. Production Compose accepts only a tagged GHCR
 image pinned by `@sha256` digest. It must never clone or build from a floating upstream branch.
+
+OpenMAIC owns the complete classroom product surface: creation UI, editor, scene and asset
+renderers, player, audio/voice behavior, interaction, and PBL. LearnPuddle supplies no replacement
+classroom components in fork mode. Schools buy a managed AI allowance from LearnPuddle;
+LearnPuddle operations provisions encrypted per-tenant provider credentials and reconciles usage.
 
 Tenant runtime selection is temporary during migration:
 

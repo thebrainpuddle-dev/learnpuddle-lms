@@ -12,7 +12,7 @@
 //               Two-Factor Authentication heading; 2FA toggle renders
 //   - Academic: heading, academic year input
 //   - Mode & Labels: Platform Mode heading, Education / Corporate mode buttons
-//   - AI Provider: LLM Provider heading
+//   - AI Provider: legacy settings and managed OpenMAIC service status
 //
 // SCIM token tests (24 tests) are in SettingsPage.SCIMTokenCard.test.tsx — not duplicated here.
 //
@@ -712,5 +712,48 @@ describe('SettingsPage — AI Provider tab', () => {
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /save ai settings/i })).toBeInTheDocument();
     });
+  });
+
+  it('shows managed service status without credential controls in OpenMAIC mode', async () => {
+    const state = {
+      features: { saml: false },
+      theme: { subdomain: 'greenfield', name: 'Greenfield Academy', primary_color: '#4f46e5' },
+      setTheme: vi.fn(),
+      setModeLabels: vi.fn(),
+      hasFeature: vi.fn(() => false),
+      mode: 'education',
+      modeLabels: MOCK_MODE_SETTINGS.mode_labels,
+      aiClassroomRuntime: 'openmaic_fork',
+    };
+    mockedUseTenantStore.mockImplementation((selector?: (value: typeof state) => unknown) =>
+      typeof selector === 'function' ? selector(state) : state,
+    );
+    mockedApi.get.mockImplementation(async (url: string) => {
+      if (url === '/tenants/settings/') return { data: MOCK_TENANT_SETTINGS };
+      if (url === '/tenants/settings/ai/providers/') {
+        return {
+          data: [{
+            modality: 'tts',
+            provider_id: 'openai',
+            display_name: 'LearnPuddle managed voice',
+            model_allowlist: ['gpt-4o-mini-tts'],
+            is_enabled: true,
+            is_default: true,
+            verification_status: 'verified',
+            last_verified_at: '2026-07-13T00:00:00Z',
+          }],
+        };
+      }
+      return { data: {} };
+    });
+
+    renderAt('ai');
+
+    expect(await screen.findByText('Managed AI services')).toBeInTheDocument();
+    expect(screen.getByText('Text to speech')).toBeInTheDocument();
+    expect(screen.getByText('Ready')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /add provider/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /rotate/i })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/api key/i)).not.toBeInTheDocument();
   });
 });

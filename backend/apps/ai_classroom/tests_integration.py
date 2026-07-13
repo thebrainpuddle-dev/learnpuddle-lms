@@ -37,7 +37,7 @@ from .services import (
     transition_reservation,
 )
 from .serializers import ProviderCredentialSerializer
-from .views import launch_openmaic
+from .views import launch_openmaic, provider_credentials
 
 
 TEST_CACHES = {
@@ -177,6 +177,74 @@ def test_provider_runtime_never_crosses_tenants_and_public_shape_masks_keys():
     assert second_payload["providers"][0]["api_key"] == "school-b-secret"
     assert first_credential.api_key_preview == "...cret"
     assert first_credential.api_key_encrypted != "school-a-secret"
+
+
+@pytest.mark.django_db
+def test_school_admin_provider_settings_are_read_only_and_never_expose_secret_metadata():
+    tenant = make_tenant("managed-provider-status")
+    admin = make_user(tenant, role="SCHOOL_ADMIN")
+    TenantAIRuntimeConfig.all_objects.create(tenant=tenant)
+    credential = TenantAIProviderCredential.all_objects.create(
+        tenant=tenant,
+        modality="llm",
+        provider_id="openai",
+        display_name="LearnPuddle managed language model",
+        model_allowlist=["openai:gpt-4o-mini"],
+        is_default=True,
+        verification_status="verified",
+    )
+    credential.set_api_key("platform-managed-secret")
+    credential.save(update_fields=["api_key_encrypted"])
+    set_current_tenant(tenant)
+
+    get_request = APIRequestFactory().get("/api/v1/tenants/settings/ai/providers/")
+    get_request.tenant = tenant
+    force_authenticate(get_request, user=admin)
+    get_response = provider_credentials(get_request)
+
+    assert get_response.status_code == 200
+    assert get_response.data[0]["provider_id"] == "openai"
+    assert "api_key" not in get_response.data[0]
+    assert "api_key_preview" not in get_response.data[0]
+    assert "base_url" not in get_response.data[0]
+    assert "provider_config" not in get_response.data[0]
+
+    post_request = APIRequestFactory().post(
+        "/api/v1/tenants/settings/ai/providers/",
+        {"provider_id": "anthropic"},
+        format="json",
+    )
+    post_request.tenant = tenant
+    force_authenticate(post_request, user=admin)
+
+    assert provider_credentials(post_request).status_code == 405
+
+
+@pytest.mark.django_db
+def test_managed_provider_command_reads_key_from_environment(monkeypatch):
+    tenant = make_tenant("managed-provider-command")
+    monkeypatch.setenv("LP_TEST_PROVIDER_KEY", "platform-provisioned-secret")
+
+    call_command(
+        "provision_openmaic_provider",
+        tenant=tenant.slug,
+        modality="llm",
+        provider="openai",
+        models="openai/gpt-4o-mini",
+        api_key_env="LP_TEST_PROVIDER_KEY",
+        confirm=True,
+        stdout=io.StringIO(),
+    )
+
+    credential = TenantAIProviderCredential.all_objects.get(
+        tenant=tenant,
+        modality="llm",
+        provider_id="openai",
+    )
+    assert credential.get_api_key() == "platform-provisioned-secret"
+    assert credential.model_allowlist == ["openai:gpt-4o-mini"]
+    assert credential.is_default is True
+    assert credential.verification_status == "unverified"
 
 
 @pytest.mark.django_db
@@ -521,6 +589,26 @@ def test_llm_provider_requires_an_explicit_model_allowlist():
     )
     assert normalized.is_valid(), normalized.errors
     assert normalized.validated_data["model_allowlist"] == ["openai:gpt-4o-mini"]
+
+
+@pytest.mark.django_db
+def test_provider_config_rejects_embedded_secrets():
+    tenant = make_tenant("provider-config-secret")
+    serializer = ProviderCredentialSerializer(
+        data={
+            "modality": "tts",
+            "provider_id": "openai",
+            "api_key": "encrypted-through-dedicated-field",
+            "provider_config": {
+                "voice": "alloy",
+                "nested": {"access_token": "must-not-live-in-json"},
+            },
+        },
+        context={"tenant": tenant},
+    )
+
+    assert serializer.is_valid() is False
+    assert "provider_config" in serializer.errors
 
 
 @pytest.mark.django_db

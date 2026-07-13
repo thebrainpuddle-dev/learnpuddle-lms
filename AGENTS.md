@@ -17,7 +17,7 @@ Multi-tenant SaaS LMS for teacher professional development. Schools (tenants) ge
 
 - **Backend:** Django 5.2 + DRF, Gunicorn (`web`), Daphne/Channels (`asgi`), Celery 5.3 + beat, Postgres 15, Redis 7, ffmpeg, faster-whisper, edge-tts/kokoro, Stripe, pgvector
 - **Frontend:** React 19 + TypeScript, Vite 6, TailwindCSS 3, Zustand 5, TanStack Query 5, react-router 6, hls.js, TipTap, recharts, @xyflow, Sentry, Playwright + Vitest
-- **Infra:** Docker Compose (12 services prod), Nginx wildcard SSL, GitHub Actions CI
+- **Infra:** Docker Compose (14 services prod), Nginx wildcard SSL, GitHub Actions CI
 
 ## Repo layout (one line each)
 
@@ -26,7 +26,6 @@ backend/         Django API; see backend/apps/ for the 24 domain apps
 frontend/        Vite + React SPA (admin, super-admin, teacher portals)
 e2e/             Playwright suites (also at frontend/e2e and backend/tests/e2e)
 nginx/           Prod + staging nginx confs, includes/, proxy_params
-openmaic/        Sidecar service Dockerfile (separate from web)
 projects/        Sub-project artifacts
 scripts/         Ops scripts: backup-db, deploy-droplet, check-origin-health, restart-celery-worker, restore-db, pre-deploy-check
 docs/            Deployment + DigitalOcean + Cloudflare runbooks; review notes
@@ -73,9 +72,9 @@ design-system/          Tokens + primitives
 hooks/   lib/   utils/   types/   i18n/
 ```
 
-## Docker Compose services (prod, 12)
+## Docker Compose services (prod, 14)
 
-`db, redis, web, asgi, worker, worker-tts, beat, flower, nginx, backend, frontend, (volumes)`
+`db, redis, web, asgi, worker, worker-tts, beat, flower, nginx, backend, frontend, openmaic-web, openmaic-worker, (volumes)`
 
 `worker-tts` is a separate Celery worker for text-to-speech (kokoro/edge-tts) — keep CPU-heavy TTS off the main worker queue.
 
