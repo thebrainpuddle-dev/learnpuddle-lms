@@ -1,5 +1,8 @@
 # OpenMAIC Replacement Runbook
 
+> Output quality is governed by `docs/OPENMAIC_OUTPUT_PARITY_RUNBOOK.md`. This architecture
+> runbook is not, by itself, evidence that the fork produces OpenMAIC-level classrooms.
+
 ## Decision
 
 LearnPuddle uses the complete OpenMAIC product behind a narrow SaaS integration boundary. The
