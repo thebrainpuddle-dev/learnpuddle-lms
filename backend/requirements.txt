@@ -1,5 +1,5 @@
 asgiref==3.8.1
-click==8.1.7
+click==8.3.3
 
 # Core
 Django==5.2.16
@@ -14,7 +14,7 @@ sqlparse==0.5.4
 
 # DB / media
 psycopg==3.1.18
-pillow==12.2.0
+pillow==12.3.0
 pytz==2024.1
 
 # PDF generation (certificates)
