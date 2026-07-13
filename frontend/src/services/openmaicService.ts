@@ -8,6 +8,14 @@ import type { MAICAction } from '../types/maic-actions';
 import type { MAICScene, SceneSlideBounds, AudioManifest } from '../types/maic-scenes';
 import type { AIChatbot, AIChatbotKnowledge, AIChatbotCreatePayload, ChatbotAnalytics, Conversation, TeacherSection } from '../types/chatbot';
 
+export const openmaicForkApi = {
+  launch: (input: {
+    action: 'library' | 'create' | 'classroom';
+    classroom_id?: string;
+    return_path: string;
+  }) => api.post<{ launch_url: string; expires_in: number }>('/v1/ai-classroom/launch/', input),
+};
+
 // ─── Shared MAIC types ──────────────────────────────────────────────────────
 
 export interface MAICRoleSlot {

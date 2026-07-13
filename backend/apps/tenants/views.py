@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.core.exceptions import ObjectDoesNotExist
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -123,6 +124,7 @@ def tenant_config_view(request):
 
     config = {
         "plan": tenant.plan,
+        "ai_classroom_runtime": "legacy",
         "features": {
             "video_upload": tenant.feature_video_upload,
             "auto_quiz": tenant.feature_auto_quiz,
@@ -142,6 +144,11 @@ def tenant_config_view(request):
             "maic_v2": tenant.feature_maic_v2,
         },
     }
+    try:
+        config["ai_classroom_runtime"] = tenant.ai_runtime_config.runtime
+    except ObjectDoesNotExist:
+        # Existing tenants remain on the rollback runtime until explicitly cut over.
+        pass
     if is_admin:
         config["limits"] = {
             "max_teachers": tenant.max_teachers,

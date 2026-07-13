@@ -66,6 +66,10 @@ app.conf.result_expires = 3600  # seconds — 1 hour
 # All tasks from the former settings.py CELERY_BEAT_SCHEDULE have been
 # merged here to fix the silent-drop bug (2026-04-28).
 app.conf.beat_schedule = {
+    "ai-classroom-reconcile-stale-jobs-5m": {
+        "task": "ai_classroom.reconcile_stale_openmaic_jobs",
+        "schedule": 300.0,
+    },
     # ── Tenant / subscription lifecycle ──────────────────────────────────
     "check-trial-expirations-daily": {
         "task": "tenants.check_trial_expirations",

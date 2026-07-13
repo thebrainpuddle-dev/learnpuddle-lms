@@ -2,6 +2,7 @@ from django.urls import path, include
 
 from . import views, domain_views, gdpr_views
 from apps.courses import maic_views as maic_views_ref
+from apps.ai_classroom import views as ai_classroom_views
 
 app_name = "tenants"
 
@@ -13,6 +14,21 @@ urlpatterns = [
     path("analytics/", views.tenant_analytics_view, name="tenant_analytics"),
     path("settings/", views.tenant_settings_view, name="tenant_settings"),
     path("settings/ai/", maic_views_ref.tenant_ai_config_view, name="tenant_ai_settings"),
+    path(
+        "settings/ai/providers/",
+        ai_classroom_views.provider_credentials,
+        name="tenant_ai_providers",
+    ),
+    path(
+        "settings/ai/providers/<uuid:credential_id>/",
+        ai_classroom_views.provider_credential_detail,
+        name="tenant_ai_provider_detail",
+    ),
+    path(
+        "settings/ai/usage/",
+        ai_classroom_views.usage_summary,
+        name="tenant_ai_usage",
+    ),
     
     # Custom domain management
     path("domain/", domain_views.domain_status, name="domain_status"),
@@ -29,4 +45,3 @@ urlpatterns = [
     # Accreditations & Rankings
     path("", include("apps.tenants.accreditation_urls")),
 ]
-

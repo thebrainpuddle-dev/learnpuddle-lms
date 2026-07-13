@@ -4,6 +4,7 @@
 
 - [System Overview](#system-overview)
 - [Architecture Diagram](#architecture-diagram)
+- [AI Classroom Runtime](#ai-classroom-runtime)
 - [Technology Stack](#technology-stack)
 - [Multi-Tenancy Model](#multi-tenancy-model)
 - [Backend Structure](#backend-structure)
@@ -75,6 +76,37 @@ Brain LMS is a multi-tenant SaaS Learning Management System for schools. Each sc
                                           └─────────────────────┘
 ```
 
+## AI Classroom Runtime
+
+AI Classroom is being moved from duplicated Django/React MAIC implementations to a pinned
+OpenMAIC fork. OpenMAIC owns classroom generation, playback, media, voice, interaction, and PBL;
+LearnPuddle owns the multi-tenant SaaS boundary.
+
+```
+LearnPuddle portal ── one-time launch code ──► classroom.learnpuddle.com
+        │                                          │
+        │ tenant/auth/course/billing               │ OpenMAIC UI + API
+        ▼                                          ▼
+     Django ◄── HMAC-authenticated private API ─ OpenMAIC web + BullMQ worker
+        │                                          │
+        ├── Postgres metadata/usage/quota           └── school-owned AI providers
+        └── private DigitalOcean Spaces artifacts and media
+```
+
+The fork baseline is immutable upstream commit
+`153195ca73e03e68893eace9823d0f7181772a87`. Production Compose accepts only a tagged GHCR
+image pinned by `@sha256` digest. It must never clone or build from a floating upstream branch.
+
+Tenant runtime selection is temporary during migration:
+
+- `legacy`: current LearnPuddle wizard/player remains active and becomes read-only at cutover.
+- `openmaic_fork`: portal routes exchange a single-use 60-second launch code for a secure
+  OpenMAIC session cookie.
+
+The switch is managed with `python manage.py set_openmaic_runtime`; direct database changes are
+not an approved cutover mechanism. See `docs/OPENMAIC_REPLACEMENT.md` for release gates and
+rollback instructions.
+
 ---
 
 ## Technology Stack
@@ -83,7 +115,7 @@ Brain LMS is a multi-tenant SaaS Learning Management System for schools. Each sc
 
 | Component | Technology | Purpose |
 |-----------|-----------|---------|
-| Framework | Django 5.0 + Django REST Framework | API server |
+| Framework | Django 5.2 + Django REST Framework | API server |
 | Database | PostgreSQL 15 | All application data |
 | Auth | Simple JWT (access + refresh tokens) | Stateless authentication |
 | Task Queue | Celery 5.3 + Redis 7 | Background jobs (video, email) |

@@ -33,6 +33,8 @@ import {
   ChevronUpIcon,
   ShieldCheckIcon,
   ArrowPathIcon,
+  PlusIcon,
+  TrashIcon,
 } from '@heroicons/react/24/outline';
 import { usePageTitle } from '../../hooks/usePageTitle';
 import {
@@ -2367,7 +2369,7 @@ function ModeSwitchSection() {
 
 // ── Section: AI Provider ─────────────────────────────────────────────────────
 
-function AIProviderSection() {
+function LegacyAIProviderSection() {
   const toast = useToast();
   const queryClient = useQueryClient();
 
@@ -2645,6 +2647,212 @@ function AIProviderSection() {
         </Button>
       </div>
     </div>
+  );
+}
+
+interface TenantAIProviderCredentialView {
+  id: string;
+  modality: 'llm' | 'tts' | 'asr' | 'image' | 'video' | 'pdf' | 'web_search';
+  provider_id: string;
+  display_name: string;
+  api_key_set: boolean;
+  api_key_preview: string;
+  base_url: string;
+  model_allowlist: string[];
+  is_enabled: boolean;
+  is_default: boolean;
+  verification_status: 'unverified' | 'verified' | 'failed';
+  verification_message: string;
+}
+
+const PROVIDER_MODALITIES = [
+  ['llm', 'Language model'],
+  ['tts', 'Text to speech'],
+  ['asr', 'Speech recognition'],
+  ['image', 'Image generation'],
+  ['video', 'Video generation'],
+  ['pdf', 'Document parsing'],
+  ['web_search', 'Web search'],
+] as const;
+
+function OpenMAICProviderCredentialsSection() {
+  const toast = useToast();
+  const queryClient = useQueryClient();
+  const [pendingDelete, setPendingDelete] = useState<TenantAIProviderCredentialView | null>(null);
+  const [rotationKeys, setRotationKeys] = useState<Record<string, string>>({});
+  const [draft, setDraft] = useState({
+    modality: 'llm',
+    provider_id: '',
+    display_name: '',
+    api_key: '',
+    base_url: '',
+    models: '',
+  });
+  const query = useQuery({
+    queryKey: ['tenantAIProviders'],
+    queryFn: async () =>
+      (await api.get<TenantAIProviderCredentialView[]>('/tenants/settings/ai/providers/')).data,
+  });
+
+  const refresh = () => queryClient.invalidateQueries({ queryKey: ['tenantAIProviders'] });
+  const createMutation = useMutation({
+    mutationFn: () =>
+      api.post('/tenants/settings/ai/providers/', {
+        modality: draft.modality,
+        provider_id: draft.provider_id.trim(),
+        display_name: draft.display_name.trim(),
+        api_key: draft.api_key,
+        base_url: draft.base_url.trim(),
+        model_allowlist: draft.models.split(',').map((value) => value.trim()).filter(Boolean),
+        is_enabled: true,
+        is_default: !(query.data ?? []).some((row) => row.modality === draft.modality),
+      }),
+    onSuccess: () => {
+      setDraft({ modality: 'llm', provider_id: '', display_name: '', api_key: '', base_url: '', models: '' });
+      refresh();
+      toast.success('Provider added', 'The encrypted credential is available to new AI jobs.');
+    },
+    onError: (error: any) =>
+      toast.error('Provider could not be added', error?.response?.data?.error || 'Check the provider settings.'),
+  });
+  const updateMutation = useMutation({
+    mutationFn: ({ id, patch }: { id: string; patch: Record<string, unknown> }) =>
+      api.patch(`/tenants/settings/ai/providers/${id}/`, patch),
+    onSuccess: (_data, variables) => {
+      setRotationKeys((current) => ({ ...current, [variables.id]: '' }));
+      refresh();
+      toast.success('Provider updated');
+    },
+    onError: () => toast.error('Provider could not be updated'),
+  });
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => api.delete(`/tenants/settings/ai/providers/${id}/`),
+    onSuccess: () => {
+      refresh();
+      toast.success('Provider removed');
+    },
+    onError: () => toast.error('Provider could not be removed'),
+  });
+
+  if (query.isLoading) return <div className="flex justify-center py-12"><Loading /></div>;
+
+  return (
+    <div className="space-y-6">
+      <section className="border-b border-gray-200 pb-6">
+        <h2 className="text-lg font-semibold text-gray-900">School AI providers</h2>
+        <p className="mt-1 text-sm text-gray-500">
+          Keys are encrypted and fetched by the OpenMAIC worker only when a school job starts.
+          Teachers can use enabled models but cannot view credentials.
+        </p>
+        <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2">
+          <select
+            value={draft.modality}
+            onChange={(event) => setDraft((value) => ({ ...value, modality: event.target.value }))}
+            className="border border-gray-300 px-3 py-2 text-sm"
+          >
+            {PROVIDER_MODALITIES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          </select>
+          <Input label="Provider ID" value={draft.provider_id} onChange={(event) => setDraft((value) => ({ ...value, provider_id: event.target.value }))} placeholder="openai, anthropic, elevenlabs-tts" />
+          <Input label="Display name" value={draft.display_name} onChange={(event) => setDraft((value) => ({ ...value, display_name: event.target.value }))} placeholder="School OpenAI account" />
+          <Input label="API key" type="password" value={draft.api_key} onChange={(event) => setDraft((value) => ({ ...value, api_key: event.target.value }))} placeholder="Stored encrypted" />
+          <Input label="Base URL (optional)" value={draft.base_url} onChange={(event) => setDraft((value) => ({ ...value, base_url: event.target.value }))} placeholder="https://api.example.com/v1" />
+          <Input label="Allowed models" value={draft.models} onChange={(event) => setDraft((value) => ({ ...value, models: event.target.value }))} placeholder="model-a, model-b" />
+        </div>
+        <Button
+          type="button"
+          variant="primary"
+          className="mt-4"
+          disabled={!draft.provider_id.trim() || createMutation.isPending}
+          onClick={() => createMutation.mutate()}
+        >
+          <PlusIcon className="h-4 w-4" />
+          Add provider
+        </Button>
+      </section>
+
+      <div className="divide-y divide-gray-200 border-y border-gray-200">
+        {(query.data ?? []).map((provider) => (
+          <section key={provider.id} className="py-5">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h3 className="font-medium text-gray-900">{provider.display_name || provider.provider_id}</h3>
+                <p className="text-xs text-gray-500">{provider.modality} · {provider.provider_id}</p>
+              </div>
+              <div className="flex items-center gap-3">
+                <label className="flex items-center gap-2 text-sm text-gray-700">
+                  <input
+                    type="checkbox"
+                    checked={provider.is_enabled}
+                    onChange={(event) => updateMutation.mutate({ id: provider.id, patch: { is_enabled: event.target.checked } })}
+                  />
+                  Enabled
+                </label>
+                <button
+                  type="button"
+                  title="Remove provider"
+                  onClick={() => setPendingDelete(provider)}
+                  className="p-2 text-gray-500 hover:text-red-600"
+                >
+                  <TrashIcon className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+            <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-[1fr_auto_auto]">
+              <Input
+                label={`Rotate key ${provider.api_key_preview || ''}`}
+                type="password"
+                value={rotationKeys[provider.id] || ''}
+                onChange={(event) => setRotationKeys((current) => ({ ...current, [provider.id]: event.target.value }))}
+                placeholder={provider.api_key_set ? 'Enter a replacement key' : 'Add a key'}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                className="self-end"
+                disabled={!rotationKeys[provider.id]}
+                onClick={() => updateMutation.mutate({ id: provider.id, patch: { api_key: rotationKeys[provider.id] } })}
+              >
+                Rotate
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="self-end"
+                disabled={!provider.api_key_set}
+                onClick={() => updateMutation.mutate({ id: provider.id, patch: { clear_api_key: true } })}
+              >
+                Remove key
+              </Button>
+            </div>
+            <p className="mt-3 text-xs text-gray-500">
+              Verification: {provider.verification_status}
+              {provider.verification_message ? ` — ${provider.verification_message}` : ''}
+            </p>
+          </section>
+        ))}
+        {(query.data ?? []).length === 0 && (
+          <p className="py-8 text-center text-sm text-gray-500">No school AI providers configured.</p>
+        )}
+      </div>
+      <ConfirmDialog
+        isOpen={Boolean(pendingDelete)}
+        onClose={() => setPendingDelete(null)}
+        onConfirm={() => pendingDelete && deleteMutation.mutate(pendingDelete.id)}
+        title="Remove AI provider?"
+        message="New jobs will no longer be able to use this provider. Existing provider invoices are unaffected."
+        confirmLabel="Remove provider"
+        loading={deleteMutation.isPending}
+      />
+    </div>
+  );
+}
+
+function AIProviderSection() {
+  const runtime = useTenantStore((state) => state.aiClassroomRuntime);
+  return runtime === 'openmaic_fork' ? (
+    <OpenMAICProviderCredentialsSection />
+  ) : (
+    <LegacyAIProviderSection />
   );
 }
 

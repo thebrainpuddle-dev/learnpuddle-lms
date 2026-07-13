@@ -102,6 +102,7 @@ INSTALLED_APPS = [
     'apps.billing',
     'apps.users',
     'apps.courses',
+    'apps.ai_classroom',            # OpenMAIC fork SaaS boundary adapters
     'apps.maic',                    # AI Classroom v2 (MAIC) — Phase 0+, see docs/AI_CLASSROOM_BLUEPRINT.md
     'apps.maic_pbl',                # AI Classroom v2 PBL — Phase 7, see phase-7-pbl/ in obsidian-vault brain
     'apps.progress',
@@ -672,6 +673,22 @@ CHANNEL_REDIS_URL = config(
     "CHANNEL_REDIS_URL",
     default=_redis_url_with_db(REDIS_URL, REDIS_CHANNEL_DB),
 )
+
+# OpenMAIC fork integration. Provider credentials remain tenant-scoped in
+# Postgres; these settings identify only the shared runtime and service-auth
+# boundary.
+OPENMAIC_PUBLIC_URL = config("OPENMAIC_PUBLIC_URL", default="http://localhost:3001")
+OPENMAIC_INTERNAL_URL = config("OPENMAIC_INTERNAL_URL", default="http://openmaic-web:3000")
+OPENMAIC_SERVICE_SECRET = config("OPENMAIC_SERVICE_SECRET", default="")
+OPENMAIC_LAUNCH_CODE_TTL = config("OPENMAIC_LAUNCH_CODE_TTL", default=60, cast=int)
+OPENMAIC_SESSION_TTL = config("OPENMAIC_SESSION_TTL", default=8 * 60 * 60, cast=int)
+OPENMAIC_MAX_ARTIFACT_BYTES = config(
+    "OPENMAIC_MAX_ARTIFACT_BYTES",
+    default=64 * 1024 * 1024,
+    cast=int,
+)
+OPENMAIC_MEDIA_UPLOAD_TTL = config("OPENMAIC_MEDIA_UPLOAD_TTL", default=900, cast=int)
+OPENMAIC_MEDIA_READ_TTL = config("OPENMAIC_MEDIA_READ_TTL", default=900, cast=int)
 
 CACHES = {
     "default": {

@@ -34,6 +34,10 @@ import { PageLoader } from './components/PageLoader';
 import { featureFlags } from './config/featureFlags';
 import MaicV2Probe from './pages/dev/MaicV2Probe';
 import MaicPBLDevPage from './pages/dev/MaicPBLDevPage';
+import {
+  MAICClassroomRuntimeRoute,
+  OpenMAICRuntimeRoute,
+} from './components/maic/OpenMAICRuntimeRoute';
 
 // ─── Lazy-loaded page components ────────────────────────────────────────────
 // Auth
@@ -407,7 +411,7 @@ function AppContent() {
     if (!isAuthenticated || user?.role === 'SUPER_ADMIN') return;
     api.get('/tenants/config/')
       .then((res) => setConfig(res.data))
-      .catch(() => {});
+      .catch(() => setConfig({ ai_classroom_runtime: 'legacy' }));
   }, [isAuthenticated, user?.role, setConfig]);
 
   // Fetch tenant mode labels from /tenants/me/ after login (FE-015 / TASK-020).
@@ -610,9 +614,9 @@ function AppContent() {
         <Route path="certifications" element={<RoutePage><MyCertificationsPage /></RoutePage>} />
         <Route path="study-notes" element={<RoutePage><TeacherStudyNotesPage /></RoutePage>} />
         {/* OpenMAIC Features */}
-        <Route path="ai-classroom" element={<RoutePage><MAICLibraryPage /></RoutePage>} />
-        <Route path="ai-classroom/new" element={<RoutePage><MAICCreatePage /></RoutePage>} />
-        <Route path="ai-classroom/:id" element={<RoutePage><MAICPlayerPage /></RoutePage>} />
+        <Route path="ai-classroom" element={<RoutePage><OpenMAICRuntimeRoute action="library" legacy={<MAICLibraryPage />} /></RoutePage>} />
+        <Route path="ai-classroom/new" element={<RoutePage><OpenMAICRuntimeRoute action="create" legacy={<MAICCreatePage />} /></RoutePage>} />
+        <Route path="ai-classroom/:id" element={<RoutePage><MAICClassroomRuntimeRoute legacy={<MAICPlayerPage />} /></RoutePage>} />
         <Route path="chatbots" element={<RoutePage><ChatbotListPage /></RoutePage>} />
         <Route path="chatbots/new" element={<RoutePage><ChatbotBuilderPage /></RoutePage>} />
         <Route path="chatbots/:id" element={<RoutePage><ChatbotBuilderPage /></RoutePage>} />
@@ -642,9 +646,9 @@ function AppContent() {
         <Route path="achievements" element={<RoutePage><StudentAchievementsPage /></RoutePage>} />
         <Route path="attendance" element={<RoutePage><StudentAttendancePage /></RoutePage>} />
         <Route path="study-notes" element={<RoutePage><StudyNotesPage /></RoutePage>} />
-        <Route path="ai-classroom" element={<RoutePage><MAICBrowsePage /></RoutePage>} />
-        <Route path="ai-classroom/new" element={<RoutePage><StudentMAICCreatePage /></RoutePage>} />
-        <Route path="ai-classroom/:id" element={<RoutePage><StudentMAICPlayerPage /></RoutePage>} />
+        <Route path="ai-classroom" element={<RoutePage><OpenMAICRuntimeRoute action="library" legacy={<MAICBrowsePage />} /></RoutePage>} />
+        <Route path="ai-classroom/new" element={<RoutePage><OpenMAICRuntimeRoute action="create" legacy={<StudentMAICCreatePage />} /></RoutePage>} />
+        <Route path="ai-classroom/:id" element={<RoutePage><MAICClassroomRuntimeRoute legacy={<StudentMAICPlayerPage />} /></RoutePage>} />
         <Route path="discussions" element={<RoutePage><StudentDiscussionPage /></RoutePage>} />
         <Route path="discussions/:threadId" element={<RoutePage><StudentDiscussionThreadPage /></RoutePage>} />
         <Route path="chatbots" element={<RoutePage><StudentChatbotsPage /></RoutePage>} />
