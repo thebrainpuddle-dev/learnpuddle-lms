@@ -14,7 +14,9 @@ The pinned reference is:
 - Repository: `https://github.com/THU-MAIC/OpenMAIC`
 - Commit: `153195ca73e03e68893eace9823d0f7181772a87`
 - License SHA-256: `ba252563743227138231604c9138dd400faca5a10c3cf206b466e5466c565a19`
-- LearnPuddle fork integration commit: `fbcf7efeca871221e82e2a229eebd5f805863638`
+- LearnPuddle fork integration commit: `72e6061fc8722efde395d896f789027d38758e6d`
+- Published image:
+  `ghcr.io/thebrainpuddle-dev/openmaic-learnpuddle:153195ca73e03e68893eace9823d0f7181772a87-lp.1@sha256:f5f7e5be683fdc8d5938d8c04f3215503c6b0a39ffc714ad8b5b0efa48ab4354`
 
 The architecture and rollout procedure remain in `docs/OPENMAIC_REPLACEMENT.md`. Both documents
 are required for release approval.
@@ -25,14 +27,15 @@ are required for release approval.
 |---|---|
 | LearnPuddle SaaS integration foundation | Implemented in draft PR #48 |
 | LearnPuddle implementation CI | Green on draft PR #48; every new head must pass again |
-| Local OpenMAIC adapter fork | Implemented at `fbcf7efeca871221e82e2a229eebd5f805863638` |
-| Organization fork and immutable GHCR image | Blocked until an organization owner creates or grants access to `thebrainpuddle-dev/OpenMAIC` |
+| OpenMAIC adapter fork | Published to `thebrainpuddle-dev/OpenMAIC` at `72e6061fc8722efde395d896f789027d38758e6d` |
+| Immutable GHCR image | Published and smoke-tested in Actions run `29600194620` |
 | Live reference/candidate benchmark certification | Not yet run |
 | Production load, migration, and rollback rehearsal | Not yet run |
 | Authorization to delete legacy MAIC | Not granted |
 
-Therefore, OpenMAIC-level output is the target and this document defines how it is proven. It is
-not yet a certified production property of the current draft release.
+Therefore, the fork/image gate is satisfied, but OpenMAIC-level output is still not certified for
+production until the managed provider/storage environment is provisioned and the real classroom,
+load, and parity gates below pass.
 
 ## What "OpenMAIC-Level Output" Means
 
@@ -126,13 +129,13 @@ Every candidate release must produce an immutable identity record containing:
 ```json
 {
   "upstream_sha": "153195ca73e03e68893eace9823d0f7181772a87",
-  "fork_sha": "REPLACE_WITH_FORK_COMMIT",
-  "fork_release": "153195ca73e03e68893eace9823d0f7181772a87-lp.N",
-  "image": "ghcr.io/thebrainpuddle-dev/openmaic-learnpuddle:TAG@sha256:DIGEST",
+  "fork_sha": "72e6061fc8722efde395d896f789027d38758e6d",
+  "fork_release": "153195ca73e03e68893eace9823d0f7181772a87-lp.1",
+  "image": "ghcr.io/thebrainpuddle-dev/openmaic-learnpuddle:153195ca73e03e68893eace9823d0f7181772a87-lp.1@sha256:f5f7e5be683fdc8d5938d8c04f3215503c6b0a39ffc714ad8b5b0efa48ab4354",
   "integration_schema": "1",
   "license_sha256": "ba252563743227138231604c9138dd400faca5a10c3cf206b466e5466c565a19",
-  "provider_profile_id": "REFERENCE_PROFILE_VERSION",
-  "benchmark_manifest_sha256": "REPLACE_WITH_SHA256"
+  "provider_profile_id": "openmaic-153195ca-default-v1",
+  "benchmark_manifest_sha256": "PENDING_REAL_PARITY_CERTIFICATION"
 }
 ```
 
@@ -142,19 +145,14 @@ the release record.
 
 ## Phase 1: Publish the Fork
 
-An owner of `thebrainpuddle-dev` must create or grant access to
-`thebrainpuddle-dev/OpenMAIC`. The active implementation commit currently exists only in the local
-fork worktree.
+Complete for release `153195ca73e03e68893eace9823d0f7181772a87-lp.1`:
 
-After the organization repository exists:
-
-```bash
-cd /Volumes/CrucialX9/OpenMAIC-learnpuddle
-git remote add origin https://github.com/thebrainpuddle-dev/OpenMAIC.git
-git push -u origin learnpuddle
-git tag lp-v1
-git push origin lp-v1
-```
+- Fork: `https://github.com/thebrainpuddle-dev/OpenMAIC`
+- Branch: `learnpuddle`
+- Fork commit: `72e6061fc8722efde395d896f789027d38758e6d`
+- Image workflow run: `https://github.com/thebrainpuddle-dev/OpenMAIC/actions/runs/29600194620`
+- Published image:
+  `ghcr.io/thebrainpuddle-dev/openmaic-learnpuddle:153195ca73e03e68893eace9823d0f7181772a87-lp.1@sha256:f5f7e5be683fdc8d5938d8c04f3215503c6b0a39ffc714ad8b5b0efa48ab4354`
 
 The `LearnPuddle immutable image` workflow must:
 

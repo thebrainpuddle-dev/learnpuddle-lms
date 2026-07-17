@@ -126,7 +126,7 @@ editing `tenant_ai_runtime_configs` directly.
 
 This foundation is not authorization to remove legacy MAIC yet. The remaining sequence is:
 
-1. Publish the organization fork and immutable image; record the image digest and license evidence.
+1. Deploy the published fork image to the demo/staging environment and record health evidence.
 2. Add real provider verification, provider-invoice reconciliation, and production egress pinning
    or an equivalent network policy. Runtime URL checks are present, but DNS rebinding must be
    closed before any operator-configured custom endpoint is allowed in the pilot.
@@ -142,8 +142,9 @@ This foundation is not authorization to remove legacy MAIC yet. The remaining se
 
 ## Release Blockers
 
-- The organization fork must exist and its image workflow must publish successfully.
-- Docker image and Nginx runtime validation must run on a host with Docker available.
+- The published image must be deployed with the exact digest
+  `ghcr.io/thebrainpuddle-dev/openmaic-learnpuddle:153195ca73e03e68893eace9823d0f7181772a87-lp.1@sha256:f5f7e5be683fdc8d5938d8c04f3215503c6b0a39ffc714ad8b5b0efa48ab4354`.
+- Docker image, Nginx, DNS, and TLS runtime validation must run on the staging/demo host.
 - Live provider certification and the initial 100-viewer/10-generation load target must pass.
 - Custom-provider egress must be resistant to DNS rebinding, not merely URL-validated.
 - Migration dry-run must account for every legacy classroom and retain original artifacts.

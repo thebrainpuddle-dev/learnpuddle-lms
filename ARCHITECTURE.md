@@ -94,8 +94,10 @@ LearnPuddle portal ── one-time launch code ──► classroom.learnpuddle.c
 ```
 
 The fork baseline is immutable upstream commit
-`153195ca73e03e68893eace9823d0f7181772a87`. Production Compose accepts only a tagged GHCR
-image pinned by `@sha256` digest. It must never clone or build from a floating upstream branch.
+`153195ca73e03e68893eace9823d0f7181772a87`. The current published fork release is
+`ghcr.io/thebrainpuddle-dev/openmaic-learnpuddle:153195ca73e03e68893eace9823d0f7181772a87-lp.1@sha256:f5f7e5be683fdc8d5938d8c04f3215503c6b0a39ffc714ad8b5b0efa48ab4354`.
+Production Compose accepts only a tagged GHCR image pinned by `@sha256` digest. It must never
+clone or build from a floating upstream branch.
 
 OpenMAIC owns the complete classroom product surface: creation UI, editor, scene and asset
 renderers, player, audio/voice behavior, interaction, and PBL. LearnPuddle supplies no replacement

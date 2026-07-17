@@ -157,7 +157,9 @@ fi
 if [ -f "$COMPOSE_FILE" ]; then
   pass "Compose file exists: $COMPOSE_FILE"
   # Validate compose file syntax
-  if docker compose -f "$COMPOSE_FILE" config --quiet 2>/dev/null; then
+  if grep -q './backend/.env' "$COMPOSE_FILE" && [ ! -f "backend/.env" ]; then
+    warn "Skipping compose syntax validation because backend/.env is missing"
+  elif docker compose -f "$COMPOSE_FILE" config --quiet 2>/dev/null; then
     pass "Compose file syntax is valid"
   else
     fail "Compose file has syntax errors (run: docker compose -f $COMPOSE_FILE config)"
@@ -301,6 +303,14 @@ if [ -f ".env" ]; then
   pass ".env file exists"
 else
   warn ".env file not found — environment variables must be set another way"
+fi
+
+if grep -q './backend/.env' "$COMPOSE_FILE" 2>/dev/null; then
+  if [ -f "backend/.env" ]; then
+    pass "backend/.env file exists for Compose env_file"
+  else
+    fail "backend/.env file is required by $COMPOSE_FILE"
+  fi
 fi
 
 # Check no .env file will be accidentally committed
