@@ -169,8 +169,23 @@ Do not deploy an image built locally, cloned from floating `main`, or lacking re
 
 ## Phase 2: Define the Reference Provider Profile
 
-Create one named reference profile for certification. It is configuration, never a credential
-dump. Store secret values only in the appropriate provider stores.
+The first certified profile is committed at
+`backend/apps/ai_classroom/reference_profiles/openmaic-153195ca-default-v1.json`. Its canonical
+SHA-256 is `cb99093bf90d58ac2b8ecb7bd1f4f38446e28e6dfa50ee7e8df3802e514b850e`.
+It is configuration, never a credential dump. Store secret values only in the appropriate provider
+stores.
+
+The profile pins OpenAI `gpt-5.5` with medium thinking, Seedream
+`doubao-seedream-5-0-260128`, Seedance `doubao-seedance-2-0-260128`, OpenAI TTS
+`gpt-4o-mini-tts` with voice `alloy` at speed `1.0`, OpenAI ASR
+`gpt-4o-mini-transcribe`, `unpdf`, Tavily, no model routes, and serial scene generation. The
+OpenMAIC adapter applies these settings after browser-state rehydration, so stale local settings
+cannot change the certified baseline.
+
+Media requests retain the upstream scene intelligence. A missing image aspect ratio defaults to
+`16:9`, and Seedream scales the scene-derived dimensions to its minimum accepted pixel count. A
+missing Seedance option normalizes through OpenMAIC's native provider table to `5s`, `16:9`, and
+`480p`. These values are release-profile assertions, not replacement media logic.
 
 The profile records:
 
@@ -194,9 +209,9 @@ quota tier, and endpoint behavior.
 ## Phase 3: Configure a Pilot School
 
 1. Confirm the tenant subscription is active and AI Classroom is entitled.
-2. Have LearnPuddle operations provision a distinct encrypted tenant credential for each modality
-   through the restricted provisioning workflow. The school admin must never receive or submit
-   provider secrets.
+2. Have LearnPuddle operations apply the atomic reference profile. It provisions distinct encrypted
+   tenant credentials for every required modality and disables non-profile providers. The school
+   admin must never receive or submit provider secrets.
 3. Set the exact provider IDs and model allowlists from the reference profile.
 4. Set one enabled/default provider per modality for the first pilot.
 5. Verify each provider with a real request. Do not mark a key verified from string shape alone.
@@ -204,6 +219,29 @@ quota tier, and endpoint behavior.
 7. Confirm image, video, and TTS modalities are included in the school's entitlements.
 8. Confirm quota and storage reservations can be created and released.
 9. Keep the tenant runtime on `legacy` until the parity report is approved.
+
+Apply the complete profile in one transaction:
+
+```bash
+read -rsp 'OpenAI key: ' LP_OPENMAIC_OPENAI_API_KEY; echo
+read -rsp 'Volcengine key: ' LP_OPENMAIC_VOLCENGINE_API_KEY; echo
+read -rsp 'Tavily key: ' LP_OPENMAIC_TAVILY_API_KEY; echo
+export LP_OPENMAIC_OPENAI_API_KEY LP_OPENMAIC_VOLCENGINE_API_KEY LP_OPENMAIC_TAVILY_API_KEY
+docker compose -f docker-compose.prod.yml exec -T \
+  -e LP_OPENMAIC_OPENAI_API_KEY \
+  -e LP_OPENMAIC_VOLCENGINE_API_KEY \
+  -e LP_OPENMAIC_TAVILY_API_KEY \
+  web python manage.py apply_openmaic_reference_profile \
+  --tenant demo --profile openmaic-153195ca-default-v1 --confirm
+unset LP_OPENMAIC_OPENAI_API_KEY LP_OPENMAIC_VOLCENGINE_API_KEY LP_OPENMAIC_TAVILY_API_KEY
+```
+
+The runtime switch refuses `openmaic_fork` activation until the tenant fingerprint, provider set,
+model allowlists, provider options, defaults, and encrypted secrets match this manifest.
+The certified profile uses OpenMAIC's built-in provider endpoints; custom base URLs are not allowed
+for this baseline. Generic provider edits clear the certification fingerprint. Rotate managed keys
+through `apply_openmaic_reference_profile` so unchanged secrets are retained and the full profile is
+revalidated atomically.
 
 Blank credential updates retain the existing secret. Removal must be explicit. A worker job carries
 only tenant/config IDs and fetches credentials at execution time.

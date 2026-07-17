@@ -4,6 +4,8 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
 from apps.ai_classroom.models import TenantAIRuntimeConfig
+from apps.ai_classroom.reference_profiles import assert_reference_profile_ready
+from apps.ai_classroom.services import runtime_config_for
 from apps.tenants.models import Tenant
 from utils.audit import log_audit
 
@@ -48,7 +50,14 @@ class Command(BaseCommand):
         if not tenant:
             raise CommandError(f"Tenant not found: {identifier}")
 
-        config, _created = TenantAIRuntimeConfig.all_objects.get_or_create(tenant=tenant)
+        config = runtime_config_for(tenant)
+
+        if options["runtime"] == TenantAIRuntimeConfig.RUNTIME_OPENMAIC:
+            try:
+                assert_reference_profile_ready(tenant)
+            except ValueError as exc:
+                raise CommandError(f"OpenMAIC reference profile is not ready: {exc}") from exc
+
         old_runtime = config.runtime
         old_student_generation = config.student_generation_enabled
         student_generation = options["student_generation"]
@@ -67,6 +76,11 @@ class Command(BaseCommand):
 
         with transaction.atomic():
             config = TenantAIRuntimeConfig.all_objects.select_for_update().get(pk=config.pk)
+            if options["runtime"] == TenantAIRuntimeConfig.RUNTIME_OPENMAIC:
+                try:
+                    assert_reference_profile_ready(tenant)
+                except ValueError as exc:
+                    raise CommandError(f"OpenMAIC reference profile is not ready: {exc}") from exc
             config.runtime = options["runtime"]
             config.student_generation_enabled = new_student_generation
             config.save(

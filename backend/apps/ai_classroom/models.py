@@ -33,6 +33,8 @@ class TenantAIRuntimeConfig(models.Model):
     )
     student_generation_enabled = models.BooleanField(default=False)
     provider_config_version = models.PositiveBigIntegerField(default=1)
+    reference_profile_id = models.CharField(max_length=100, blank=True, default="")
+    reference_profile_sha256 = models.CharField(max_length=64, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

@@ -27,6 +27,7 @@ from .models import (
     TenantAIProviderCredential,
     TenantAIRuntimeConfig,
 )
+from .reference_profiles import assert_reference_profile_ready, reference_profile_payload
 
 
 LAUNCH_PREFIX = "openmaic:launch:"
@@ -97,7 +98,16 @@ def bump_provider_config_version(tenant: Tenant) -> int:
     with transaction.atomic():
         config = TenantAIRuntimeConfig.all_objects.select_for_update().get(tenant=tenant)
         config.provider_config_version += 1
-        config.save(update_fields=["provider_config_version", "updated_at"])
+        config.reference_profile_id = ""
+        config.reference_profile_sha256 = ""
+        config.save(
+            update_fields=[
+                "provider_config_version",
+                "reference_profile_id",
+                "reference_profile_sha256",
+                "updated_at",
+            ]
+        )
         return config.provider_config_version
 
 
@@ -200,6 +210,8 @@ def bind_session_classroom(session_token: str, classroom: MAICClassroom) -> None
 
 def provider_runtime_payload(tenant: Tenant) -> dict:
     config = runtime_config_for(tenant)
+    if config.runtime == TenantAIRuntimeConfig.RUNTIME_OPENMAIC:
+        assert_reference_profile_ready(tenant)
     providers = []
     queryset = TenantAIProviderCredential.all_objects.filter(tenant=tenant, is_enabled=True)
     for credential in queryset.order_by("modality", "provider_id"):
@@ -215,7 +227,16 @@ def provider_runtime_payload(tenant: Tenant) -> dict:
                 "is_default": credential.is_default,
             }
         )
-    return {"version": config.provider_config_version, "providers": providers}
+    profile = None
+    if config.reference_profile_id:
+        profile = reference_profile_payload(config.reference_profile_id)
+        if profile["sha256"] != config.reference_profile_sha256:
+            raise ValueError("OpenMAIC reference-profile fingerprint mismatch")
+    return {
+        "version": config.provider_config_version,
+        "providers": providers,
+        "reference_profile": profile,
+    }
 
 
 @transaction.atomic

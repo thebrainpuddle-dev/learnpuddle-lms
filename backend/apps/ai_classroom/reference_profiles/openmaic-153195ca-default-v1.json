@@ -1,0 +1,124 @@
+{
+  "id": "openmaic-153195ca-default-v1",
+  "upstream_sha": "153195ca73e03e68893eace9823d0f7181772a87",
+  "integration_schema": 1,
+  "description": "Pinned OpenMAIC provider and runtime settings for the LearnPuddle parity pilot.",
+  "providers": [
+    {
+      "modality": "llm",
+      "provider_id": "openai",
+      "display_name": "OpenAI classroom intelligence",
+      "api_key_env": "LP_OPENMAIC_OPENAI_API_KEY",
+      "base_url": "",
+      "model_allowlist": ["gpt-5.5"],
+      "provider_config": {
+        "default_model": "gpt-5.5"
+      }
+    },
+    {
+      "modality": "tts",
+      "provider_id": "openai-tts",
+      "display_name": "OpenAI classroom voice",
+      "api_key_env": "LP_OPENMAIC_OPENAI_API_KEY",
+      "base_url": "",
+      "model_allowlist": ["gpt-4o-mini-tts"],
+      "provider_config": {
+        "model": "gpt-4o-mini-tts",
+        "voice": "alloy",
+        "speed": 1
+      }
+    },
+    {
+      "modality": "asr",
+      "provider_id": "openai-whisper",
+      "display_name": "OpenAI classroom transcription",
+      "api_key_env": "LP_OPENMAIC_OPENAI_API_KEY",
+      "base_url": "",
+      "model_allowlist": ["gpt-4o-mini-transcribe"],
+      "provider_config": {
+        "model": "gpt-4o-mini-transcribe",
+        "language": "en"
+      }
+    },
+    {
+      "modality": "image",
+      "provider_id": "seedream",
+      "display_name": "Seedream classroom imagery",
+      "api_key_env": "LP_OPENMAIC_VOLCENGINE_API_KEY",
+      "base_url": "",
+      "model_allowlist": ["doubao-seedream-5-0-260128"],
+      "provider_config": {
+        "model": "doubao-seedream-5-0-260128"
+      }
+    },
+    {
+      "modality": "video",
+      "provider_id": "seedance",
+      "display_name": "Seedance classroom video",
+      "api_key_env": "LP_OPENMAIC_VOLCENGINE_API_KEY",
+      "base_url": "",
+      "model_allowlist": ["doubao-seedance-2-0-260128"],
+      "provider_config": {
+        "model": "doubao-seedance-2-0-260128"
+      }
+    },
+    {
+      "modality": "web_search",
+      "provider_id": "tavily",
+      "display_name": "Tavily classroom research",
+      "api_key_env": "LP_OPENMAIC_TAVILY_API_KEY",
+      "base_url": "",
+      "model_allowlist": [],
+      "provider_config": {}
+    }
+  ],
+  "settings": {
+    "llm": {
+      "provider_id": "openai",
+      "model_id": "gpt-5.5",
+      "thinking": {
+        "enabled": true,
+        "effort": "medium"
+      }
+    },
+    "tts": {
+      "enabled": true,
+      "provider_id": "openai-tts",
+      "model_id": "gpt-4o-mini-tts",
+      "voice_id": "alloy",
+      "speed": 1
+    },
+    "asr": {
+      "enabled": true,
+      "provider_id": "openai-whisper",
+      "model_id": "gpt-4o-mini-transcribe",
+      "language": "en"
+    },
+    "pdf": {
+      "provider_id": "unpdf"
+    },
+    "image": {
+      "enabled": true,
+      "provider_id": "seedream",
+      "model_id": "doubao-seedream-5-0-260128",
+      "default_aspect_ratio": "16:9",
+      "size_policy": "scene_aspect_ratio_scaled_to_seedream_minimum"
+    },
+    "video": {
+      "enabled": true,
+      "provider_id": "seedance",
+      "model_id": "doubao-seedance-2-0-260128",
+      "default_aspect_ratio": "16:9",
+      "default_duration_seconds": 5,
+      "default_resolution": "480p"
+    },
+    "web_search": {
+      "provider_id": "tavily"
+    },
+    "generation": {
+      "parallel_scene_concurrency": 0,
+      "model_routes": {},
+      "review_outline_enabled": false
+    }
+  }
+}

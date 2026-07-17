@@ -51,7 +51,8 @@ for var in SECRET_KEY DB_PASSWORD REDIS_PASSWORD PLATFORM_DOMAIN; do
 done
 
 if [ "$COMPOSE_FILE" = "docker-compose.prod.yml" ]; then
-  for var in OPENMAIC_IMAGE OPENMAIC_FORK_RELEASE OPENMAIC_SERVICE_SECRET; do
+  for var in OPENMAIC_IMAGE OPENMAIC_FORK_RELEASE OPENMAIC_SERVICE_SECRET \
+    OPENMAIC_REFERENCE_PROFILE_ID OPENMAIC_REFERENCE_PROFILE_SHA256; do
     if [ -z "${!var:-}" ]; then
       fail "$var is not set"
     else
@@ -73,6 +74,18 @@ if [ "$COMPOSE_FILE" = "docker-compose.prod.yml" ]; then
 
   if [ -n "${OPENMAIC_SERVICE_SECRET:-}" ] && [ ${#OPENMAIC_SERVICE_SECRET} -lt 48 ]; then
     fail "OPENMAIC_SERVICE_SECRET is shorter than 48 characters"
+  fi
+
+  if [ "${OPENMAIC_REFERENCE_PROFILE_ID:-}" != "openmaic-153195ca-default-v1" ]; then
+    fail "OPENMAIC_REFERENCE_PROFILE_ID does not match the certified profile"
+  else
+    pass "OpenMAIC reference profile ID is certified"
+  fi
+
+  if [ "${OPENMAIC_REFERENCE_PROFILE_SHA256:-}" != "cb99093bf90d58ac2b8ecb7bd1f4f38446e28e6dfa50ee7e8df3802e514b850e" ]; then
+    fail "OPENMAIC_REFERENCE_PROFILE_SHA256 does not match the certified manifest"
+  else
+    pass "OpenMAIC reference profile fingerprint is certified"
   fi
 
   if [ "${STORAGE_BACKEND:-}" != "s3" ]; then

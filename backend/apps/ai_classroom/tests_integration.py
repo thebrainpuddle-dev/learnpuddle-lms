@@ -27,6 +27,12 @@ from .models import (
     TenantAIProviderCredential,
     TenantAIRuntimeConfig,
 )
+from .reference_profiles import (
+    REFERENCE_PROFILE_ID,
+    REFERENCE_PROFILE_SHA256,
+    load_reference_profile,
+    reference_profile_sha256,
+)
 from .services import (
     SESSION_PREFIX,
     confirm_media_upload,
@@ -88,6 +94,18 @@ def make_classroom(tenant: Tenant, user: User) -> MAICClassroom:
         creator=user,
         title="Tenant-scoped classroom",
         topic="Photosynthesis",
+    )
+
+
+def apply_reference_profile(tenant: Tenant, monkeypatch) -> None:
+    monkeypatch.setenv("LP_OPENMAIC_OPENAI_API_KEY", "openai-managed-secret")
+    monkeypatch.setenv("LP_OPENMAIC_VOLCENGINE_API_KEY", "volcengine-managed-secret")
+    monkeypatch.setenv("LP_OPENMAIC_TAVILY_API_KEY", "tavily-managed-secret")
+    call_command(
+        "apply_openmaic_reference_profile",
+        tenant=tenant.slug,
+        confirm=True,
+        stdout=io.StringIO(),
     )
 
 
@@ -245,6 +263,124 @@ def test_managed_provider_command_reads_key_from_environment(monkeypatch):
     assert credential.model_allowlist == ["openai:gpt-4o-mini"]
     assert credential.is_default is True
     assert credential.verification_status == "unverified"
+
+
+@pytest.mark.django_db
+def test_reference_profile_command_applies_exact_openmaic_defaults(monkeypatch):
+    tenant = make_tenant("reference-profile")
+
+    apply_reference_profile(tenant, monkeypatch)
+
+    profile = load_reference_profile()
+    config = TenantAIRuntimeConfig.all_objects.get(tenant=tenant)
+    assert config.reference_profile_id == REFERENCE_PROFILE_ID
+    assert reference_profile_sha256(profile) == REFERENCE_PROFILE_SHA256
+    assert config.reference_profile_sha256 == REFERENCE_PROFILE_SHA256
+    assert config.provider_config_version == 2
+    assert profile["settings"]["image"] == {
+        "enabled": True,
+        "provider_id": "seedream",
+        "model_id": "doubao-seedream-5-0-260128",
+        "default_aspect_ratio": "16:9",
+        "size_policy": "scene_aspect_ratio_scaled_to_seedream_minimum",
+    }
+    assert profile["settings"]["video"] == {
+        "enabled": True,
+        "provider_id": "seedance",
+        "model_id": "doubao-seedance-2-0-260128",
+        "default_aspect_ratio": "16:9",
+        "default_duration_seconds": 5,
+        "default_resolution": "480p",
+    }
+    credentials = TenantAIProviderCredential.all_objects.filter(tenant=tenant)
+    assert credentials.count() == 6
+    assert not credentials.exclude(base_url="").exists()
+    llm = credentials.get(modality="llm", provider_id="openai")
+    assert llm.get_api_key() == "openai-managed-secret"
+    assert llm.model_allowlist == ["gpt-5.5"]
+    assert llm.provider_config == {"default_model": "gpt-5.5"}
+    assert credentials.get(modality="tts").provider_config == {
+        "model": "gpt-4o-mini-tts",
+        "voice": "alloy",
+        "speed": 1.0,
+    }
+
+
+@pytest.mark.django_db
+def test_openmaic_runtime_fails_closed_when_certified_provider_drifts(monkeypatch):
+    tenant = make_tenant("reference-profile-drift")
+    apply_reference_profile(tenant, monkeypatch)
+    call_command(
+        "set_openmaic_runtime",
+        tenant=tenant.slug,
+        runtime="openmaic_fork",
+        confirm=True,
+        stdout=io.StringIO(),
+    )
+    TenantAIProviderCredential.all_objects.filter(
+        tenant=tenant,
+        modality="image",
+        provider_id="seedream",
+    ).update(base_url="https://unexpected.example.com")
+
+    with pytest.raises(ValueError, match="base URL does not match"):
+        provider_runtime_payload(tenant)
+
+
+@pytest.mark.django_db
+def test_generic_provider_edit_invalidates_reference_profile(monkeypatch):
+    tenant = make_tenant("reference-profile-invalidated")
+    apply_reference_profile(tenant, monkeypatch)
+
+    call_command(
+        "provision_openmaic_provider",
+        tenant=tenant.slug,
+        modality="llm",
+        provider="openai",
+        display_name="Rotated outside certified workflow",
+        confirm=True,
+        stdout=io.StringIO(),
+    )
+
+    config = TenantAIRuntimeConfig.all_objects.get(tenant=tenant)
+    assert config.reference_profile_id == ""
+    assert config.reference_profile_sha256 == ""
+
+
+@pytest.mark.django_db
+def test_reference_profile_command_is_atomic_when_a_secret_is_missing(monkeypatch):
+    tenant = make_tenant("reference-profile-missing")
+    monkeypatch.setenv("LP_OPENMAIC_OPENAI_API_KEY", "openai-managed-secret")
+    monkeypatch.setenv("LP_OPENMAIC_VOLCENGINE_API_KEY", "volcengine-managed-secret")
+
+    with pytest.raises(CommandError, match="LP_OPENMAIC_TAVILY_API_KEY"):
+        call_command(
+            "apply_openmaic_reference_profile",
+            tenant=tenant.slug,
+            confirm=True,
+            stdout=io.StringIO(),
+        )
+
+    config = TenantAIRuntimeConfig.all_objects.get(tenant=tenant)
+    assert config.reference_profile_id == ""
+    assert not TenantAIProviderCredential.all_objects.filter(tenant=tenant).exists()
+
+
+@pytest.mark.django_db
+def test_runtime_switch_rejects_tenant_without_certified_profile():
+    tenant = make_tenant("runtime-profile-gate")
+
+    with pytest.raises(CommandError, match="reference profile is not ready"):
+        call_command(
+            "set_openmaic_runtime",
+            tenant=tenant.slug,
+            runtime="openmaic_fork",
+            confirm=True,
+            stdout=io.StringIO(),
+        )
+
+    config = TenantAIRuntimeConfig.all_objects.get(tenant=tenant)
+    assert config.runtime == "legacy"
 
 
 @pytest.mark.django_db
@@ -522,8 +658,9 @@ def test_usage_event_ingestion_rejects_duplicate_billing_rows():
 
 
 @pytest.mark.django_db
-def test_runtime_switch_requires_confirmation_and_supports_rollback():
+def test_runtime_switch_requires_confirmation_and_supports_rollback(monkeypatch):
     tenant = make_tenant("runtime-switch")
+    apply_reference_profile(tenant, monkeypatch)
 
     with pytest.raises(CommandError, match="No changes applied"):
         call_command(

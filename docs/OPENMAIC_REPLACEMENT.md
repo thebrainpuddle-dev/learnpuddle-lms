@@ -75,19 +75,26 @@ setting is a different quality baseline and cannot inherit the previous parity r
 Before activation, verify the fork image digest, service secret, S3 storage, LearnPuddle-managed
 provider credentials, quota, DNS/TLS for `classroom.learnpuddle.com`, and all release gates below.
 
-Provisioning reads the secret from an operator-controlled environment variable so it never appears
-in shell history or a process argument:
+Provisioning reads secrets from operator-controlled environment variables so they never appear in
+shell history or process arguments. Apply the entire certified profile atomically:
 
 ```bash
+read -rsp 'OpenAI key: ' LP_OPENMAIC_OPENAI_API_KEY; echo
+read -rsp 'Volcengine key: ' LP_OPENMAIC_VOLCENGINE_API_KEY; echo
+read -rsp 'Tavily key: ' LP_OPENMAIC_TAVILY_API_KEY; echo
+export LP_OPENMAIC_OPENAI_API_KEY LP_OPENMAIC_VOLCENGINE_API_KEY LP_OPENMAIC_TAVILY_API_KEY
 docker compose -f docker-compose.prod.yml exec -T \
-  -e LP_PROVIDER_KEY web \
-  python manage.py provision_openmaic_provider \
-  --tenant demo --modality llm --provider openai \
-  --models openai:gpt-4o-mini --api-key-env LP_PROVIDER_KEY --confirm
+  -e LP_OPENMAIC_OPENAI_API_KEY \
+  -e LP_OPENMAIC_VOLCENGINE_API_KEY \
+  -e LP_OPENMAIC_TAVILY_API_KEY \
+  web python manage.py apply_openmaic_reference_profile \
+  --tenant demo --profile openmaic-153195ca-default-v1 --confirm
+unset LP_OPENMAIC_OPENAI_API_KEY LP_OPENMAIC_VOLCENGINE_API_KEY LP_OPENMAIC_TAVILY_API_KEY
 ```
 
 Provision and verify every modality in the certified reference profile before runtime activation.
-The provisioning command deliberately marks changed credentials unverified.
+The profile command deliberately marks changed credentials unverified. The runtime switch also
+refuses activation when the profile fingerprint or any provider/model setting is incomplete.
 
 Preview without changing data:
 
