@@ -507,6 +507,76 @@ def test_generation_creation_is_atomic_and_http_retry_is_idempotent():
 
 
 @pytest.mark.django_db
+@override_settings(CACHES=TEST_CACHES, OPENMAIC_SERVICE_SECRET="integration-secret")
+def test_job_status_read_is_bound_to_the_callers_tenant_session():
+    cache.clear()
+    tenant_a = make_tenant("job-read-a")
+    tenant_b = make_tenant("job-read-b")
+    user_a = make_user(tenant_a)
+    user_b = make_user(tenant_b)
+    classroom_a = make_classroom(tenant_a, user_a)
+    job_a = OpenMAICJob.all_objects.create(
+        tenant=tenant_a,
+        created_by=user_a,
+        classroom=classroom_a,
+        upstream_job_id="tenant-a-job",
+        idempotency_key="tenant-a-request",
+    )
+    session_a = "a" * 64
+    session_b = "b" * 64
+    for token, tenant, user in (
+        (session_a, tenant_a, user_a),
+        (session_b, tenant_b, user_b),
+    ):
+        cache.set(
+            f"{SESSION_PREFIX}{token}",
+            {
+                "tenant_id": str(tenant.id),
+                "user_id": str(user.id),
+                "role": user.role,
+                "action": "create",
+                "classroom_id": None,
+                "return_url": "https://school.example/",
+                "session_token": token,
+            },
+            timeout=300,
+        )
+
+    base_path = f"/api/internal/openmaic/jobs/{job_a.id}/"
+    own_body = json.dumps({"session_token": session_a}, separators=(",", ":")).encode()
+    own = Client().post(
+        base_path,
+        data=own_body,
+        content_type="application/json",
+        secure=True,
+        **service_headers(base_path, own_body),
+    )
+    assert own.status_code == 200
+    assert own.json()["job_id"] == str(job_a.id)
+
+    missing_body = b"{}"
+    missing = Client().post(
+        base_path,
+        data=missing_body,
+        content_type="application/json",
+        secure=True,
+        **service_headers(base_path, missing_body),
+    )
+    assert missing.status_code == 401
+
+    cross_tenant_body = json.dumps({"session_token": session_b}, separators=(",", ":")).encode()
+    cross_tenant = Client().post(
+        base_path,
+        data=cross_tenant_body,
+        content_type="application/json",
+        secure=True,
+        **service_headers(base_path, cross_tenant_body),
+    )
+    assert cross_tenant.status_code == 404
+    assert cross_tenant.json()["error"] == "OpenMAIC job not found"
+
+
+@pytest.mark.django_db
 @override_settings(STORAGES=TEST_STORAGES)
 def test_artifact_and_media_keys_are_tenant_prefixed_and_checksummed(tmp_path, settings):
     settings.MEDIA_ROOT = tmp_path

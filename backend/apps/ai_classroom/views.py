@@ -493,17 +493,21 @@ def internal_create_generation(request):
     )
 
 
-@api_view(["GET", "PATCH"])
+@api_view(["POST", "PATCH"])
 @permission_classes([AllowAny])
 @require_openmaic_service
 def internal_update_job(request, job_id):
     job = get_object_or_404(OpenMAICJob.all_objects, id=job_id)
-    session_token = request.data.get("session_token") if request.method == "PATCH" else None
+    session_token = request.data.get("session_token")
+    if request.method == "POST" and not session_token:
+        return Response({"error": "OpenMAIC session required"}, status=401)
     if session_token:
         resolved = resolve_session(session_token)
-        if not resolved or resolved[1].id != job.tenant_id:
+        if not resolved:
             return Response({"error": "Invalid or expired OpenMAIC session"}, status=401)
-    if request.method == "GET":
+        if resolved[1].id != job.tenant_id:
+            return Response({"error": "OpenMAIC job not found"}, status=404)
+    if request.method == "POST":
         return Response(
             {
                 "job_id": str(job.id),
