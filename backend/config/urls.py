@@ -13,6 +13,7 @@ from .views import health_live_view, health_ready_view, health_view
 from utils.media_views import protected_media_view, public_media_view
 from apps.tenants.webhook_views import cal_webhook
 from apps.billing.webhook_views import stripe_webhook
+from apps.ai_classroom.urls import internal_urlpatterns as ai_classroom_internal_urls
 
 # Course Templates library (TASK-049): one URL module, mounted under two roots.
 from apps.courses.template_urls import (
@@ -43,6 +44,7 @@ _api_patterns = [
     path('users/', include('apps.users.urls')),
     path('', include('apps.users.admin_urls')),
     path('courses/', include('apps.courses.urls')),
+    path('ai-classroom/', include('apps.ai_classroom.urls')),
     path('', include('apps.courses.group_urls')),
     # MAIC v2 sessions endpoint (Phase 1 MAIC-301).  WS routes are
     # mounted separately in config/asgi.py via apps.maic.routing.
@@ -160,6 +162,13 @@ urlpatterns = [
     # Public webhook endpoints (no JWT auth, signature-verified)
     path('api/webhooks/cal/', cal_webhook, name='cal_webhook'),
     path('api/webhooks/stripe/', stripe_webhook, name='stripe_webhook'),
+
+    # Private OpenMAIC integration API. Nginx denies this prefix externally;
+    # OpenMAIC calls Django over the Docker network with nonce-bound HMAC auth.
+    path(
+        'api/internal/openmaic/',
+        include((ai_classroom_internal_urls, 'ai_classroom_internal')),
+    ),
 
     # SCIM 2.0 provisioning protocol — outside /api/v1/ per RFC 7644.
     # IdPs (Okta, Azure AD, OneLogin) call /scim/v2/Users directly.

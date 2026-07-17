@@ -2367,7 +2367,7 @@ function ModeSwitchSection() {
 
 // ── Section: AI Provider ─────────────────────────────────────────────────────
 
-function AIProviderSection() {
+function LegacyAIProviderSection() {
   const toast = useToast();
   const queryClient = useQueryClient();
 
@@ -2645,6 +2645,85 @@ function AIProviderSection() {
         </Button>
       </div>
     </div>
+  );
+}
+
+interface TenantAIProviderCredentialView {
+  modality: 'llm' | 'tts' | 'asr' | 'image' | 'video' | 'pdf' | 'web_search';
+  provider_id: string;
+  display_name: string;
+  model_allowlist: string[];
+  is_enabled: boolean;
+  is_default: boolean;
+  verification_status: 'unverified' | 'verified' | 'failed';
+  last_verified_at: string | null;
+}
+
+const PROVIDER_MODALITIES = [
+  ['llm', 'Language model'],
+  ['tts', 'Text to speech'],
+  ['asr', 'Speech recognition'],
+  ['image', 'Image generation'],
+  ['video', 'Video generation'],
+  ['pdf', 'Document parsing'],
+  ['web_search', 'Web search'],
+] as const;
+
+function OpenMAICProviderCredentialsSection() {
+  const query = useQuery({
+    queryKey: ['tenantAIProviders'],
+    queryFn: async () =>
+      (await api.get<TenantAIProviderCredentialView[]>('/tenants/settings/ai/providers/')).data,
+  });
+
+  if (query.isLoading) return <div className="flex justify-center py-12"><Loading /></div>;
+
+  return (
+    <div className="space-y-6">
+      <section className="border-b border-gray-200 pb-6">
+        <h2 className="text-lg font-semibold text-gray-900">Managed AI services</h2>
+        <p className="mt-1 text-sm text-gray-500">
+          LearnPuddle provisions and secures the services included in your subscription. Provider
+          credentials and OpenMAIC model routing are managed by LearnPuddle and are never exposed
+          to school users.
+        </p>
+      </section>
+
+      <div className="divide-y divide-gray-200 border-y border-gray-200">
+        {(query.data ?? []).map((provider) => (
+          <section key={`${provider.modality}:${provider.provider_id}`} className="py-5">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h3 className="font-medium text-gray-900">
+                  {PROVIDER_MODALITIES.find(([value]) => value === provider.modality)?.[1] || provider.modality}
+                </h3>
+                <p className="text-xs text-gray-500">{provider.display_name || provider.provider_id}</p>
+              </div>
+              <span className={`text-sm font-medium ${provider.is_enabled && provider.verification_status === 'verified' ? 'text-green-700' : 'text-amber-700'}`}>
+                {provider.is_enabled && provider.verification_status === 'verified' ? 'Ready' : 'Provisioning'}
+              </span>
+            </div>
+            {provider.model_allowlist.length > 0 && (
+              <p className="mt-3 text-xs text-gray-500">Models: {provider.model_allowlist.join(', ')}</p>
+            )}
+          </section>
+        ))}
+        {(query.data ?? []).length === 0 && (
+          <p className="py-8 text-center text-sm text-gray-500">
+            Managed AI services are being provisioned for this subscription.
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AIProviderSection() {
+  const runtime = useTenantStore((state) => state.aiClassroomRuntime);
+  return runtime === 'openmaic_fork' ? (
+    <OpenMAICProviderCredentialsSection />
+  ) : (
+    <LegacyAIProviderSection />
   );
 }
 

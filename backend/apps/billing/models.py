@@ -37,6 +37,14 @@ class SubscriptionPlan(models.Model):
         default=list,
         help_text='List of human-readable feature strings, e.g. ["Up to 50 teachers", "Video uploads"]',
     )
+    ai_entitlements = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text=(
+            "Machine-readable BYOK AI Classroom limits: monthly generations, "
+            "concurrency, storage, student generation, and high-cost modalities."
+        ),
+    )
     is_custom_pricing = models.BooleanField(
         default=False,
         help_text="True for Enterprise — price negotiated per customer",

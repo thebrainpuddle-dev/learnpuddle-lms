@@ -9,7 +9,8 @@ class SubscriptionPlanSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'name', 'plan_code', 'description',
             'price_monthly_cents', 'price_yearly_cents', 'currency',
-            'is_recommended', 'is_custom_pricing', 'features_json', 'sort_order',
+            'is_recommended', 'is_custom_pricing', 'features_json',
+            'ai_entitlements', 'sort_order',
         ]
 
 

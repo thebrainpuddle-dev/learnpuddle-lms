@@ -118,6 +118,7 @@ interface TenantState {
   features: TenantFeatures;
   limits: TenantLimits | null;
   usage: TenantUsage | null;
+  aiClassroomRuntime: 'legacy' | 'openmaic_fork' | null;
   /** Active tenant mode (education | corporate). Defaults to 'education'. */
   mode: TenantMode;
   /**
@@ -131,6 +132,7 @@ interface TenantState {
     features?: TenantFeatures;
     limits?: TenantLimits;
     usage?: TenantUsage;
+    ai_classroom_runtime?: 'legacy' | 'openmaic_fork';
   }) => void;
   /** Update mode + labels after loading from `/tenants/me/` or `/tenants/settings/`. */
   setModeLabels: (mode: TenantMode, labels: ModeLabels) => void;
@@ -144,6 +146,7 @@ export const useTenantStore = create<TenantState>((set, get) => ({
   features: DEFAULT_FEATURES,
   limits: null,
   usage: null,
+  aiClassroomRuntime: null,
   mode: 'education',
   modeLabels: EDUCATION_DEFAULTS,
   setTheme: (theme) => set({ theme }),
@@ -152,6 +155,7 @@ export const useTenantStore = create<TenantState>((set, get) => ({
     features: config.features ?? get().features,
     limits: config.limits ?? get().limits,
     usage: config.usage ?? get().usage,
+    aiClassroomRuntime: config.ai_classroom_runtime ?? get().aiClassroomRuntime,
   }),
   setModeLabels: (mode, labels) => set({ mode, modeLabels: labels }),
   hasFeature: (feature) => get().features[feature] ?? false,
@@ -161,6 +165,7 @@ export const useTenantStore = create<TenantState>((set, get) => ({
     features: DEFAULT_FEATURES,
     limits: null,
     usage: null,
+    aiClassroomRuntime: null,
     mode: 'education',
     modeLabels: EDUCATION_DEFAULTS,
   }),

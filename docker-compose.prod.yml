@@ -68,6 +68,8 @@ services:
     environment:
       - DEBUG=False
       - DJANGO_SETTINGS_MODULE=config.settings
+      - OPENMAIC_PUBLIC_URL=${OPENMAIC_PUBLIC_URL:-https://classroom.learnpuddle.com}
+      - OPENMAIC_SERVICE_SECRET=${OPENMAIC_SERVICE_SECRET:?Set OPENMAIC_SERVICE_SECRET in .env}
     depends_on:
       db:
         condition: service_healthy
@@ -87,6 +89,87 @@ services:
     networks:
       - backend
       - frontend
+
+  openmaic-web:
+    <<: *common
+    image: ${OPENMAIC_IMAGE:?Set OPENMAIC_IMAGE to an immutable ghcr.io image digest}
+    command: pnpm start
+    environment:
+      - NODE_ENV=production
+      - DEPLOYMENT_MODE=learnpuddle
+      - OPENMAIC_UPSTREAM_SHA=153195ca73e03e68893eace9823d0f7181772a87
+      - OPENMAIC_FORK_RELEASE=${OPENMAIC_FORK_RELEASE:?Set OPENMAIC_FORK_RELEASE in .env}
+      - OPENMAIC_RUNTIME_VERSION=${OPENMAIC_FORK_RELEASE:?Set OPENMAIC_FORK_RELEASE in .env}
+      - OPENMAIC_REFERENCE_PROFILE_ID=${OPENMAIC_REFERENCE_PROFILE_ID:?Set OPENMAIC_REFERENCE_PROFILE_ID in .env}
+      - OPENMAIC_REFERENCE_PROFILE_SHA256=${OPENMAIC_REFERENCE_PROFILE_SHA256:?Set OPENMAIC_REFERENCE_PROFILE_SHA256 in .env}
+      - OPENMAIC_PUBLIC_URL=${OPENMAIC_PUBLIC_URL:-https://classroom.learnpuddle.com}
+      - LEARNPUDDLE_PUBLIC_URL=${LEARNPUDDLE_PUBLIC_URL:-https://learnpuddle.com}
+      - LEARNPUDDLE_INTERNAL_URL=http://web:8000
+      - LEARNPUDDLE_INTEGRATION_SCHEMA=1
+      - OPENMAIC_SERVICE_SECRET=${OPENMAIC_SERVICE_SECRET:?Set OPENMAIC_SERVICE_SECRET in .env}
+      - OPENMAIC_REDIS_URL=redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}@redis:6379/4
+      - DEFAULT_MODEL=openai:gpt-5.5
+      - MODEL_ROUTES=
+      - PARALLEL_SCENE_CONCURRENCY=0
+    depends_on:
+      web:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 3G
+    networks:
+      - backend
+      - frontend
+
+  openmaic-worker:
+    <<: *common
+    image: ${OPENMAIC_IMAGE:?Set OPENMAIC_IMAGE to an immutable ghcr.io image digest}
+    command: pnpm worker:learnpuddle
+    environment:
+      - NODE_ENV=production
+      - DEPLOYMENT_MODE=learnpuddle
+      - OPENMAIC_UPSTREAM_SHA=153195ca73e03e68893eace9823d0f7181772a87
+      - OPENMAIC_FORK_RELEASE=${OPENMAIC_FORK_RELEASE:?Set OPENMAIC_FORK_RELEASE in .env}
+      - OPENMAIC_RUNTIME_VERSION=${OPENMAIC_FORK_RELEASE:?Set OPENMAIC_FORK_RELEASE in .env}
+      - OPENMAIC_REFERENCE_PROFILE_ID=${OPENMAIC_REFERENCE_PROFILE_ID:?Set OPENMAIC_REFERENCE_PROFILE_ID in .env}
+      - OPENMAIC_REFERENCE_PROFILE_SHA256=${OPENMAIC_REFERENCE_PROFILE_SHA256:?Set OPENMAIC_REFERENCE_PROFILE_SHA256 in .env}
+      - OPENMAIC_PUBLIC_URL=${OPENMAIC_PUBLIC_URL:-https://classroom.learnpuddle.com}
+      - LEARNPUDDLE_INTERNAL_URL=http://web:8000
+      - LEARNPUDDLE_INTEGRATION_SCHEMA=1
+      - OPENMAIC_SERVICE_SECRET=${OPENMAIC_SERVICE_SECRET:?Set OPENMAIC_SERVICE_SECRET in .env}
+      - OPENMAIC_REDIS_URL=redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}@redis:6379/4
+      - OPENMAIC_WORKER_CONCURRENCY=${OPENMAIC_WORKER_CONCURRENCY:-1}
+      - DEFAULT_MODEL=openai:gpt-5.5
+      - MODEL_ROUTES=
+      - PARALLEL_SCENE_CONCURRENCY=0
+    depends_on:
+      web:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"const net=require('net');const s=net.connect(6379,'redis',()=>{s.end();process.exit(0)});s.on('error',()=>process.exit(1))\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 4G
+    networks:
+      - backend
 
   asgi:
     <<: *common
@@ -262,6 +345,7 @@ services:
     depends_on:
       - web
       - asgi
+      - openmaic-web
     healthcheck:
       # nginx -t validates config; pidof nginx confirms the daemon is actually running.
       # "nginx -t" alone does NOT detect a crashed nginx process (it reads files from disk).

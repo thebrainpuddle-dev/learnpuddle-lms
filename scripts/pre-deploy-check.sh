@@ -50,6 +50,51 @@ for var in SECRET_KEY DB_PASSWORD REDIS_PASSWORD PLATFORM_DOMAIN; do
   fi
 done
 
+if [ "$COMPOSE_FILE" = "docker-compose.prod.yml" ]; then
+  for var in OPENMAIC_IMAGE OPENMAIC_FORK_RELEASE OPENMAIC_SERVICE_SECRET \
+    OPENMAIC_REFERENCE_PROFILE_ID OPENMAIC_REFERENCE_PROFILE_SHA256; do
+    if [ -z "${!var:-}" ]; then
+      fail "$var is not set"
+    else
+      pass "$var is set"
+    fi
+  done
+
+  if [[ "${OPENMAIC_IMAGE:-}" =~ ^ghcr\.io/thebrainpuddle-dev/openmaic-learnpuddle:[^@]+@sha256:[0-9a-f]{64}$ ]]; then
+    pass "OPENMAIC_IMAGE is pinned by tag and sha256 digest"
+  elif [ -n "${OPENMAIC_IMAGE:-}" ]; then
+    fail "OPENMAIC_IMAGE must use the approved GHCR repository and an immutable @sha256 digest"
+  fi
+
+  if [[ "${OPENMAIC_IMAGE:-}" != *":${OPENMAIC_FORK_RELEASE:-missing}@sha256:"* ]]; then
+    fail "OPENMAIC_FORK_RELEASE must match the tag embedded in OPENMAIC_IMAGE"
+  else
+    pass "OpenMAIC release identifier matches the image tag"
+  fi
+
+  if [ -n "${OPENMAIC_SERVICE_SECRET:-}" ] && [ ${#OPENMAIC_SERVICE_SECRET} -lt 48 ]; then
+    fail "OPENMAIC_SERVICE_SECRET is shorter than 48 characters"
+  fi
+
+  if [ "${OPENMAIC_REFERENCE_PROFILE_ID:-}" != "openmaic-153195ca-default-v1" ]; then
+    fail "OPENMAIC_REFERENCE_PROFILE_ID does not match the certified profile"
+  else
+    pass "OpenMAIC reference profile ID is certified"
+  fi
+
+  if [ "${OPENMAIC_REFERENCE_PROFILE_SHA256:-}" != "cb99093bf90d58ac2b8ecb7bd1f4f38446e28e6dfa50ee7e8df3802e514b850e" ]; then
+    fail "OPENMAIC_REFERENCE_PROFILE_SHA256 does not match the certified manifest"
+  else
+    pass "OpenMAIC reference profile fingerprint is certified"
+  fi
+
+  if [ "${STORAGE_BACKEND:-}" != "s3" ]; then
+    fail "STORAGE_BACKEND must be s3 for OpenMAIC production media persistence"
+  else
+    pass "OpenMAIC media persistence uses S3-compatible storage"
+  fi
+fi
+
 # Optional but recommended variables
 for var in FLOWER_PASSWORD SENTRY_DSN EMAIL_HOST_PASSWORD; do
   if [ -z "${!var:-}" ]; then
@@ -112,7 +157,9 @@ fi
 if [ -f "$COMPOSE_FILE" ]; then
   pass "Compose file exists: $COMPOSE_FILE"
   # Validate compose file syntax
-  if docker compose -f "$COMPOSE_FILE" config --quiet 2>/dev/null; then
+  if grep -q './backend/.env' "$COMPOSE_FILE" && [ ! -f "backend/.env" ]; then
+    warn "Skipping compose syntax validation because backend/.env is missing"
+  elif docker compose -f "$COMPOSE_FILE" config --quiet 2>/dev/null; then
     pass "Compose file syntax is valid"
   else
     fail "Compose file has syntax errors (run: docker compose -f $COMPOSE_FILE config)"
@@ -258,6 +305,14 @@ else
   warn ".env file not found — environment variables must be set another way"
 fi
 
+if grep -q './backend/.env' "$COMPOSE_FILE" 2>/dev/null; then
+  if [ -f "backend/.env" ]; then
+    pass "backend/.env file exists for Compose env_file"
+  else
+    fail "backend/.env file is required by $COMPOSE_FILE"
+  fi
+fi
+
 # Check no .env file will be accidentally committed
 if [ -f ".gitignore" ]; then
   if grep -q '\.env' .gitignore 2>/dev/null; then
@@ -271,7 +326,7 @@ fi
 header "Docker Images"
 
 # Check if required images can be built or are already present
-for svc in web worker asgi; do
+for svc in web worker asgi openmaic-web openmaic-worker; do
   IMAGE=$(docker compose -f "$COMPOSE_FILE" config --format json 2>/dev/null | \
     python3 -c "import sys,json; c=json.load(sys.stdin); svc=c.get('services',{}).get('$svc',{}); print(svc.get('image','build-required'))" 2>/dev/null || echo "unknown")
   if [ "$IMAGE" = "build-required" ] || [ "$IMAGE" = "unknown" ]; then

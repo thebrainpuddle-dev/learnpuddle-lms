@@ -23,6 +23,14 @@ PLAN_SEEDS = [
                 "Basic reminders",
                 "Teacher groups",
             ],
+            "ai_entitlements": {
+                "monthly_generations": 0,
+                "max_concurrent_generations": 0,
+                "storage_bytes": 0,
+                "max_classrooms_per_teacher": 0,
+                "student_generation_enabled": False,
+                "high_cost_modalities": [],
+            },
         },
     },
     {
@@ -48,6 +56,14 @@ PLAN_SEEDS = [
                 "Teacher groups",
                 "Reminders",
             ],
+            "ai_entitlements": {
+                "monthly_generations": 25,
+                "max_concurrent_generations": 1,
+                "storage_bytes": 5368709120,
+                "max_classrooms_per_teacher": 20,
+                "student_generation_enabled": False,
+                "high_cost_modalities": [],
+            },
         },
     },
     {
@@ -77,6 +93,14 @@ PLAN_SEEDS = [
                 "Reminders",
                 "API access",
             ],
+            "ai_entitlements": {
+                "monthly_generations": 200,
+                "max_concurrent_generations": 3,
+                "storage_bytes": 53687091200,
+                "max_classrooms_per_teacher": 100,
+                "student_generation_enabled": False,
+                "high_cost_modalities": ["image"],
+            },
         },
     },
     {
@@ -110,6 +134,14 @@ PLAN_SEEDS = [
                 "Two-factor authentication",
                 "Dedicated support",
             ],
+            "ai_entitlements": {
+                "monthly_generations": 0,
+                "max_concurrent_generations": 10,
+                "storage_bytes": 536870912000,
+                "max_classrooms_per_teacher": 0,
+                "student_generation_enabled": True,
+                "high_cost_modalities": ["image", "video"],
+            },
         },
     },
 ]
